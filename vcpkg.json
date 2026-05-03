@@ -1,0 +1,15 @@
+{
+  "name": "terrain-editor",
+  "version-string": "0.1.0",
+  "dependencies": [
+    "imgui-node-editor",
+    "nlohmann-json",
+    {
+      "name": "imgui",
+      "features": [
+        "dx12-binding",
+        "win32-binding"
+      ]
+    }
+  ]
+}
