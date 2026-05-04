@@ -1288,6 +1288,18 @@ void NodeGraph::MarkDirty(std::string_view reason)
     evaluation_.status = std::string(reason);
 }
 
+void NodeGraph::SetEvaluationPending(std::string_view status)
+{
+    evaluation_.dirty = true;
+    evaluation_.status = std::string(status);
+}
+
+void NodeGraph::ApplyEvaluationResultFrom(const NodeGraph& evaluatedGraph)
+{
+    heightfieldCache_ = evaluatedGraph.heightfieldCache_;
+    evaluation_ = evaluatedGraph.evaluation_;
+}
+
 const Node* NodeGraph::FindFirstNode(NodeKind kind) const
 {
     const auto it = std::ranges::find_if(nodes_, [kind](const Node& node) {

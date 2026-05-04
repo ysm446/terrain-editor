@@ -351,6 +351,8 @@ public:
     SdfPipeline PreviewPipeline() const;
     SdfPipeline FinalPipeline() const;
     void MarkDirty(std::string_view reason);
+    void SetEvaluationPending(std::string_view status);
+    void ApplyEvaluationResultFrom(const NodeGraph& evaluatedGraph);
     void Evaluate(int previewMeshResolution = 0);
     void EvaluateFinal(GraphId outputNodeId = 0);
 

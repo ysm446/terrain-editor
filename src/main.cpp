@@ -12,6 +12,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <limits>
 #include <optional>
 #include <stdexcept>
@@ -95,6 +96,19 @@ rock::UiThemeManager g_themeManager;
 rock::GraphId g_selectedNodeId = 0;
 rock::GraphId g_lastFinalOutputNodeId = 0;
 rock::GraphId g_pendingPreviewPinId = 0;
+
+struct AsyncEvaluationResult
+{
+    uint64_t requestId = 0;
+    rock::NodeGraph graph;
+    std::string duration;
+};
+
+std::future<AsyncEvaluationResult> g_evaluationFuture;
+bool g_evaluationInFlight = false;
+bool g_evaluationPending = false;
+uint64_t g_nextEvaluationRequestId = 0;
+uint64_t g_activeEvaluationRequestId = 0;
 
 struct ClipboardNode
 {
@@ -1860,12 +1874,8 @@ int CurrentPreviewMeshResolution()
     return EffectiveMeshResolution(preview.resolution, preview.lod);
 }
 
-void EvaluateGraph()
+std::string FormatEvaluationDuration(std::chrono::steady_clock::time_point startedAt, std::chrono::steady_clock::time_point finishedAt)
 {
-    const auto startedAt = std::chrono::steady_clock::now();
-    const int meshResolution = CurrentPreviewMeshResolution();
-    g_graph.Evaluate(meshResolution);
-    const auto finishedAt = std::chrono::steady_clock::now();
     const double elapsedMs = std::chrono::duration<double, std::milli>(finishedAt - startedAt).count();
     char buffer[64]{};
     if (elapsedMs >= 1000.0)
@@ -1876,14 +1886,110 @@ void EvaluateGraph()
     {
         std::snprintf(buffer, sizeof(buffer), "Eval %.1f ms", elapsedMs);
     }
-    g_lastEvaluationDuration = buffer;
+    return buffer;
+}
+
+void EvaluateGraphSync()
+{
+    if (g_evaluationInFlight)
+    {
+        g_evaluationFuture.get();
+        g_evaluationInFlight = false;
+        g_evaluationPending = false;
+    }
+
+    const auto startedAt = std::chrono::steady_clock::now();
+    const int meshResolution = CurrentPreviewMeshResolution();
+    g_graph.Evaluate(meshResolution);
+    g_lastEvaluationDuration = FormatEvaluationDuration(startedAt, std::chrono::steady_clock::now());
+}
+
+void StartAsyncEvaluation()
+{
+    const uint64_t requestId = ++g_nextEvaluationRequestId;
+    const int meshResolution = CurrentPreviewMeshResolution();
+    rock::NodeGraph graphSnapshot = g_graph;
+    graphSnapshot.SetEvaluationPending("Evaluating preview...");
+
+    g_activeEvaluationRequestId = requestId;
+    g_evaluationInFlight = true;
+    g_evaluationPending = false;
+    g_lastEvaluationDuration = "Eval running...";
+    g_graph.SetEvaluationPending("Evaluating preview...");
+
+    g_evaluationFuture = std::async(std::launch::async, [requestId, meshResolution, graphSnapshot = std::move(graphSnapshot)]() mutable {
+        const auto startedAt = std::chrono::steady_clock::now();
+        graphSnapshot.Evaluate(meshResolution);
+        const auto finishedAt = std::chrono::steady_clock::now();
+        AsyncEvaluationResult result;
+        result.requestId = requestId;
+        result.graph = std::move(graphSnapshot);
+        result.duration = FormatEvaluationDuration(startedAt, finishedAt);
+        return result;
+    });
+}
+
+void EvaluateGraph()
+{
+    if (g_evaluationInFlight)
+    {
+        g_evaluationPending = true;
+        g_graph.SetEvaluationPending("Evaluation queued...");
+        g_lastEvaluationDuration = "Eval queued...";
+        return;
+    }
+
+    StartAsyncEvaluation();
+}
+
+void PollAsyncEvaluation()
+{
+    if (!g_evaluationInFlight)
+    {
+        return;
+    }
+
+    if (g_evaluationFuture.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+    {
+        return;
+    }
+
+    AsyncEvaluationResult result = g_evaluationFuture.get();
+    g_evaluationInFlight = false;
+    if (!g_evaluationPending && result.requestId == g_activeEvaluationRequestId)
+    {
+        g_graph.ApplyEvaluationResultFrom(result.graph);
+        g_lastEvaluationDuration = result.duration;
+    }
+
+    if (g_evaluationPending)
+    {
+        StartAsyncEvaluation();
+    }
+}
+
+void WaitForAsyncEvaluationForShutdown()
+{
+    if (!g_evaluationInFlight)
+    {
+        return;
+    }
+
+    AsyncEvaluationResult result = g_evaluationFuture.get();
+    g_evaluationInFlight = false;
+    if (!g_evaluationPending && result.requestId == g_activeEvaluationRequestId)
+    {
+        g_graph.ApplyEvaluationResultFrom(result.graph);
+        g_lastEvaluationDuration = result.duration;
+    }
+    g_evaluationPending = false;
 }
 
 void EnsureFinalMesh(rock::GraphId outputNodeId)
 {
     if (g_graph.Evaluation().dirty)
     {
-        EvaluateGraph();
+        EvaluateGraphSync();
     }
     if (g_graph.Evaluation().finalDirty)
     {
@@ -4842,7 +4948,15 @@ void DrawUi()
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 4.0f));
     ImGui::BeginChild("Status Bar", ImVec2(0.0f, statusBarHeight), true, fixedPaneFlags);
     const rock::EvaluationSummary& evaluation = g_graph.Evaluation();
-    ImGui::Text("%s | %s | %s | %s | %s", evaluation.dirty ? "Dirty" : "Evaluated", rock::ToString(evaluation.previewStage).data(), g_lastEvaluationDuration.c_str(), g_projectStatus.c_str(), g_exportStatus.c_str());
+    const char* evaluationState = g_evaluationInFlight
+        ? (g_evaluationPending ? "計算待ち" : "計算中")
+        : (evaluation.dirty ? "Dirty" : "Evaluated");
+    const ImVec4 stateColor = g_evaluationInFlight
+        ? ImVec4(0.90f, 0.72f, 0.34f, 1.0f)
+        : (evaluation.dirty ? ImVec4(0.90f, 0.64f, 0.30f, 1.0f) : ImVec4(0.54f, 0.78f, 0.58f, 1.0f));
+    ImGui::TextColored(stateColor, "%s", evaluationState);
+    ImGui::SameLine();
+    ImGui::Text("| %s | %s | %s | %s", rock::ToString(evaluation.previewStage).data(), g_lastEvaluationDuration.c_str(), g_projectStatus.c_str(), g_exportStatus.c_str());
     ImGui::EndChild();
     ImGui::PopStyleVar();
 
@@ -5013,11 +5127,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
             ImGui_ImplDX12_NewFrame();
             ImGui_ImplWin32_NewFrame();
             ImGui::NewFrame();
+            PollAsyncEvaluation();
             DrawUi();
             ImGui::Render();
             RenderFrame();
         }
 
+        WaitForAsyncEvaluationForShutdown();
         WaitForLastSubmittedFrame();
         SaveAppSettingsSilently();
         ed::DestroyEditor(g_nodeEditor);
