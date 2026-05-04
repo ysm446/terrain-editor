@@ -4238,6 +4238,42 @@ void EndInspectorTabContent()
     ImGui::Unindent(10.0f);
 }
 
+struct TabHeaderStyle
+{
+    ImVec2 framePadding = ImVec2(12.0f, 5.0f);
+    ImVec2 itemInnerSpacing = ImVec2(5.0f, 5.0f);
+    float fontScale = 1.08f;
+};
+
+void PushTabHeaderStyle(const TabHeaderStyle& style = {})
+{
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, style.framePadding);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, style.itemInnerSpacing);
+    ImGui::SetWindowFontScale(style.fontScale);
+}
+
+void PopTabHeaderStyle()
+{
+    ImGui::SetWindowFontScale(1.0f);
+    ImGui::PopStyleVar(2);
+}
+
+bool BeginStyledTabItem(const char* label)
+{
+    const bool open = ImGui::BeginTabItem(label);
+    if (open)
+    {
+        PopTabHeaderStyle();
+    }
+    return open;
+}
+
+void EndStyledTabItem(const TabHeaderStyle& style = {})
+{
+    PushTabHeaderStyle(style);
+    ImGui::EndTabItem();
+}
+
 bool DrawVerticalSplitter(const char* id, float* leftWidth, float totalWidth, float minLeftWidth, float minRightWidth, float height)
 {
     constexpr float splitterWidth = 7.0f;
@@ -4316,6 +4352,63 @@ bool DrawHorizontalSplitter(const char* id, float* topHeight, float totalHeight,
     const bool released = ImGui::IsItemDeactivated();
     ImGui::PopID();
     return released;
+}
+
+void DrawViewportTabs(float previewWidth, float workHeight, float timeSeconds, ImGuiWindowFlags childFlags)
+{
+    const TabHeaderStyle defaultTabStyle;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::BeginChild("Preview Viewport", ImVec2(previewWidth, workHeight), false, childFlags);
+    ImGui::Dummy(ImVec2(0.0f, 2.0f));
+    PushTabHeaderStyle(defaultTabStyle);
+    if (ImGui::BeginTabBar("ViewportTabs"))
+    {
+        if (BeginStyledTabItem("3Dビュー"))
+        {
+            const ImVec2 min = ImGui::GetCursorScreenPos();
+            const ImVec2 max(min.x + ImGui::GetContentRegionAvail().x, min.y + ImGui::GetContentRegionAvail().y);
+            DrawViewportCube(min, max, timeSeconds);
+            ImGui::Dummy(ImGui::GetContentRegionAvail());
+            EndStyledTabItem(defaultTabStyle);
+        }
+        if (BeginStyledTabItem("2Dビュー"))
+        {
+            const ImVec2 min = ImGui::GetCursorScreenPos();
+            const ImVec2 max(min.x + ImGui::GetContentRegionAvail().x, min.y + ImGui::GetContentRegionAvail().y);
+            DrawHeightfieldMapPreview(min, max);
+            ImGui::Dummy(ImGui::GetContentRegionAvail());
+            EndStyledTabItem(defaultTabStyle);
+        }
+        ImGui::EndTabBar();
+    }
+    PopTabHeaderStyle();
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+}
+
+void DrawNodeNetworkTabs(float nodePaneHeight, ImGuiWindowFlags childFlags)
+{
+    const TabHeaderStyle defaultTabStyle;
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 8.0f));
+    ImGui::BeginChild("Node Network", ImVec2(0.0f, nodePaneHeight), false, childFlags);
+    ImGui::Dummy(ImVec2(0.0f, 2.0f));
+    PushTabHeaderStyle(defaultTabStyle);
+    if (ImGui::BeginTabBar("NodeNetworkTabs"))
+    {
+        if (BeginStyledTabItem("ノードネットワーク"))
+        {
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 6.0f));
+            DrawNodeGraph();
+            ImGui::PopStyleVar();
+            EndStyledTabItem(defaultTabStyle);
+        }
+        ImGui::EndTabBar();
+    }
+    PopTabHeaderStyle();
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleVar();
 }
 
 void DrawUi()
@@ -4557,46 +4650,8 @@ void DrawUi()
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.0f);
 
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-    ImGui::BeginChild("Preview Viewport", ImVec2(previewWidth, workHeight), false, fixedPaneFlags);
-    ImGui::Dummy(ImVec2(0.0f, 2.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12.0f, 5.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(5.0f, 5.0f));
-    ImGui::SetWindowFontScale(1.08f);
-    if (ImGui::BeginTabBar("ViewportTabs"))
-    {
-        if (ImGui::BeginTabItem("3Dビュー"))
-        {
-            ImGui::SetWindowFontScale(1.0f);
-            ImGui::PopStyleVar(2);
-            const ImVec2 min = ImGui::GetCursorScreenPos();
-            const ImVec2 max(min.x + ImGui::GetContentRegionAvail().x, min.y + ImGui::GetContentRegionAvail().y);
-            DrawViewportCube(min, max, timeSeconds);
-            ImGui::Dummy(ImGui::GetContentRegionAvail());
-            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12.0f, 5.0f));
-            ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(5.0f, 5.0f));
-            ImGui::SetWindowFontScale(1.08f);
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem("2Dビュー"))
-        {
-            ImGui::SetWindowFontScale(1.0f);
-            ImGui::PopStyleVar(2);
-            const ImVec2 min = ImGui::GetCursorScreenPos();
-            const ImVec2 max(min.x + ImGui::GetContentRegionAvail().x, min.y + ImGui::GetContentRegionAvail().y);
-            DrawHeightfieldMapPreview(min, max);
-            ImGui::Dummy(ImGui::GetContentRegionAvail());
-            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12.0f, 5.0f));
-            ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(5.0f, 5.0f));
-            ImGui::SetWindowFontScale(1.08f);
-            ImGui::EndTabItem();
-        }
-        ImGui::EndTabBar();
-    }
-    ImGui::SetWindowFontScale(1.0f);
-    ImGui::PopStyleVar(2);
-    ImGui::EndChild();
-    ImGui::PopStyleVar();
+    const TabHeaderStyle defaultTabStyle;
+    DrawViewportTabs(previewWidth, workHeight, timeSeconds, fixedPaneFlags);
 
     if (DrawVerticalSplitter("MainLayoutSplitter", &previewWidth, content.x, paneMinWidth, paneMinWidth, workHeight))
     {
@@ -4615,105 +4670,55 @@ void DrawUi()
     }
     g_ui.nodePaneHeight = std::clamp(g_ui.nodePaneHeight, 160.0f, std::max(160.0f, rightColumnHeight - 160.0f - inspectorSplitterHeight));
 
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 8.0f));
-    ImGui::BeginChild("Node Network", ImVec2(0.0f, g_ui.nodePaneHeight), false, fixedPaneFlags);
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12.0f, 5.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(5.0f, 5.0f));
-    ImGui::Dummy(ImVec2(0.0f, 2.0f));
-    ImGui::SetWindowFontScale(1.08f);
-    if (ImGui::BeginTabBar("NodeNetworkTabs"))
-    {
-        if (ImGui::BeginTabItem("ノードネットワーク"))
-        {
-            ImGui::SetWindowFontScale(1.0f);
-            ImGui::PopStyleVar(2);
-            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 6.0f));
-            DrawNodeGraph();
-            ImGui::PopStyleVar();
-            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12.0f, 5.0f));
-            ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(5.0f, 5.0f));
-            ImGui::SetWindowFontScale(1.08f);
-            ImGui::EndTabItem();
-        }
-        ImGui::EndTabBar();
-    }
-    ImGui::SetWindowFontScale(1.0f);
-    ImGui::PopStyleVar(2);
-    ImGui::EndChild();
-    ImGui::PopStyleVar();
+    DrawNodeNetworkTabs(g_ui.nodePaneHeight, fixedPaneFlags);
 
     if (DrawHorizontalSplitter("InspectorLayoutSplitter", &g_ui.nodePaneHeight, rightColumnHeight, 160.0f, 160.0f))
     {
         SaveAppSettingsSilently();
     }
-    ImGui::PopStyleVar();
 
     ImGui::BeginChild("Inspector", ImVec2(0.0f, 0.0f), false);
-    const ImVec2 inspectorTabPadding(12.0f, 5.0f);
-    const ImVec2 inspectorTabInnerSpacing(5.0f, 5.0f);
-    const auto pushInspectorTabStyle = [&]() {
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, inspectorTabPadding);
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, inspectorTabInnerSpacing);
-        ImGui::SetWindowFontScale(1.08f);
-    };
-    const auto popInspectorTabStyleForContent = []() {
-        ImGui::SetWindowFontScale(1.0f);
-        ImGui::PopStyleVar(2);
-    };
-    const auto beginInspectorTabItem = [&](const char* label) {
-        const bool open = ImGui::BeginTabItem(label);
-        if (open)
-        {
-            popInspectorTabStyleForContent();
-        }
-        return open;
-    };
-    const auto endInspectorTabItem = [&]() {
-        pushInspectorTabStyle();
-        ImGui::EndTabItem();
-    };
-    pushInspectorTabStyle();
+    PushTabHeaderStyle(defaultTabStyle);
     if (ImGui::BeginTabBar("InspectorTabs"))
     {
-        if (beginInspectorTabItem("プロパティ"))
+        if (BeginStyledTabItem("プロパティ"))
         {
             BeginInspectorTabContent();
             DrawPropertiesPanel();
             EndInspectorTabContent();
-            endInspectorTabItem();
+            EndStyledTabItem(defaultTabStyle);
         }
-        if (beginInspectorTabItem("統計"))
+        if (BeginStyledTabItem("統計"))
         {
             BeginInspectorTabContent();
             DrawStatsPanel();
             EndInspectorTabContent();
-            endInspectorTabItem();
+            EndStyledTabItem(defaultTabStyle);
         }
-        if (beginInspectorTabItem("表示設定"))
+        if (BeginStyledTabItem("表示設定"))
         {
             BeginInspectorTabContent();
             DrawDisplaySettingsPanel();
             EndInspectorTabContent();
-            endInspectorTabItem();
+            EndStyledTabItem(defaultTabStyle);
         }
-        if (beginInspectorTabItem("カメラ"))
+        if (BeginStyledTabItem("カメラ"))
         {
             BeginInspectorTabContent();
             DrawCameraPanel();
             EndInspectorTabContent();
-            endInspectorTabItem();
+            EndStyledTabItem(defaultTabStyle);
         }
-        if (beginInspectorTabItem("エクスポート"))
+        if (BeginStyledTabItem("エクスポート"))
         {
             BeginInspectorTabContent();
             DrawAssetExportPanel();
             EndInspectorTabContent();
-            endInspectorTabItem();
+            EndStyledTabItem(defaultTabStyle);
         }
         ImGui::EndTabBar();
     }
-    popInspectorTabStyleForContent();
+    PopTabHeaderStyle();
     ImGui::EndChild();
     ImGui::EndChild();
     ImGui::PopStyleVar(2);
