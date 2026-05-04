@@ -5,6 +5,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <cfloat>
 #include <cstdint>
@@ -206,6 +207,7 @@ struct MeshPreviewConstants
     float shadowBias;
     float shadowEnabled;
     float padding;
+    float padding0;
     float lightRight[4];
     float lightUp[4];
     float lightForward[4];
@@ -215,6 +217,14 @@ struct MeshPreviewConstants
     float lightFarPlane;
     float padding2;
 };
+
+static_assert(offsetof(MeshPreviewConstants, lightRight) == 160);
+static_assert(offsetof(MeshPreviewConstants, lightUp) == 176);
+static_assert(offsetof(MeshPreviewConstants, lightForward) == 192);
+static_assert(offsetof(MeshPreviewConstants, lightCenter) == 208);
+static_assert(offsetof(MeshPreviewConstants, lightWorldRadius) == 224);
+static_assert(offsetof(MeshPreviewConstants, padding2) == 236);
+static_assert(sizeof(MeshPreviewConstants) == 240);
 
 struct GpuMeshPreview
 {
@@ -2548,6 +2558,9 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             boundsMax.y = std::max(boundsMax.y, vertex.y);
             boundsMax.z = std::max(boundsMax.z, vertex.z);
         }
+        const Vec3 boundsCenter = Scale(Add(boundsMin, boundsMax), 0.5f);
+        const float boundsDiagonal = Length(Subtract(boundsMax, boundsMin));
+        const float lightHalfXY = std::max(512.0f, boundsDiagonal * 1.25f);
         const Vec3 corners[] =
         {
             Vec3(boundsMin.x, boundsMin.y, boundsMin.z),
@@ -2559,37 +2572,25 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             Vec3(boundsMin.x, boundsMax.y, boundsMax.z),
             Vec3(boundsMax.x, boundsMax.y, boundsMax.z),
         };
-        float lightMinX = FLT_MAX, lightMinY = FLT_MAX, lightMinZ = FLT_MAX;
-        float lightMaxX = -FLT_MAX, lightMaxY = -FLT_MAX, lightMaxZ = -FLT_MAX;
+        float lightMinZ = FLT_MAX;
+        float lightMaxZ = -FLT_MAX;
         for (const Vec3& corner : corners)
         {
-            const float x = Dot(corner, lightRight);
-            const float y = Dot(corner, lightUp);
             const float z = Dot(corner, lightForward);
-            lightMinX = std::min(lightMinX, x);
-            lightMinY = std::min(lightMinY, y);
             lightMinZ = std::min(lightMinZ, z);
-            lightMaxX = std::max(lightMaxX, x);
-            lightMaxY = std::max(lightMaxY, y);
             lightMaxZ = std::max(lightMaxZ, z);
         }
-        const float boundsDiagonal = Length(Subtract(boundsMax, boundsMin));
-        const float kLightPadding = std::max(64.0f, boundsDiagonal * 0.08f);
-        const float kLightDepthPadding = std::max(512.0f, boundsDiagonal * 1.25f);
-        const float lightCenterX = (lightMinX + lightMaxX) * 0.5f;
-        const float lightCenterY = (lightMinY + lightMaxY) * 0.5f;
-        const float lightCenterZ = (lightMinZ + lightMaxZ) * 0.5f;
-        const Vec3 lightCenterWorld = Add(Add(Scale(lightRight, lightCenterX), Scale(lightUp, lightCenterY)), Scale(lightForward, lightCenterZ));
-        const float lightHalfX = std::max(1.0f, (lightMaxX - lightMinX) * 0.5f + kLightPadding);
-        const float lightHalfY = std::max(1.0f, (lightMaxY - lightMinY) * 0.5f + kLightPadding);
-        const float lightHalfZ = std::max(1.0f, (lightMaxZ - lightMinZ) * 0.5f + kLightDepthPadding);
+        const float lightDepthPadding = std::max(64.0f, boundsDiagonal * 0.08f);
+        const float lightDepthMin = lightMinZ - lightDepthPadding;
+        const float lightDepthRange = std::max(1.0f, (lightMaxZ - lightMinZ) + lightDepthPadding * 2.0f);
         constants.lightRight[0] = lightRight.x; constants.lightRight[1] = lightRight.y; constants.lightRight[2] = lightRight.z;
         constants.lightUp[0] = lightUp.x; constants.lightUp[1] = lightUp.y; constants.lightUp[2] = lightUp.z;
         constants.lightForward[0] = lightForward.x; constants.lightForward[1] = lightForward.y; constants.lightForward[2] = lightForward.z;
-        constants.lightCenter[0] = lightCenterWorld.x; constants.lightCenter[1] = lightCenterWorld.y; constants.lightCenter[2] = lightCenterWorld.z;
-        constants.lightWorldRadius = lightHalfX;
-        constants.lightNearPlane = lightHalfY;
-        constants.lightFarPlane = lightHalfZ;
+        constants.lightCenter[0] = boundsCenter.x; constants.lightCenter[1] = boundsCenter.y; constants.lightCenter[2] = boundsCenter.z;
+        constants.lightWorldRadius = lightHalfXY;
+        constants.lightNearPlane = lightHalfXY;
+        constants.lightFarPlane = lightDepthRange;
+        constants.padding2 = lightDepthMin;
 
         D3D12_VERTEX_BUFFER_VIEW vbv{};
         vbv.BufferLocation = g_gpuMeshPreview.vertexBuffer->GetGPUVirtualAddress();

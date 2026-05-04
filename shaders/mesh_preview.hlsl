@@ -34,6 +34,19 @@ cbuffer Constants : register(b0)
 Texture2D shadowMap : register(t0);
 SamplerState shadowSampler : register(s0);
 
+float3 LightSpace01(float3 worldPos)
+{
+    float3 view = worldPos - lightCenter.xyz;
+    float halfX = max(lightWorldRadius, 1.0);
+    float halfY = max(lightNearPlane, 1.0);
+    float depthRange = max(lightFarPlane, 1.0);
+    float depthMin = padding2;
+    return float3(
+        dot(view, lightRight.xyz) / (halfX * 2.0) + 0.5,
+        dot(view, lightUp.xyz) / (halfY * 2.0) + 0.5,
+        (dot(worldPos, lightForward.xyz) - depthMin) / depthRange);
+}
+
 struct VSIn
 {
     float3 pos : POSITION;
@@ -70,14 +83,8 @@ VSOut VSMain(VSIn i)
 
 float4 VSShadow(VSIn i) : SV_POSITION
 {
-    float3 view = i.pos - lightCenter.xyz;
-    float halfX = max(lightWorldRadius, 1.0);
-    float halfY = max(lightNearPlane, 1.0);
-    float halfZ = max(lightFarPlane, 1.0);
-    float x = dot(view, lightRight.xyz) / halfX;
-    float y = dot(view, lightUp.xyz) / halfY;
-    float z = dot(view, lightForward.xyz) / halfZ * 0.5 + 0.5;
-    return float4(x, y, saturate(z), 1.0);
+    float3 lightUv = LightSpace01(i.pos);
+    return float4(lightUv.x * 2.0 - 1.0, lightUv.y * 2.0 - 1.0, saturate(lightUv.z), 1.0);
 }
 
 float ComputeShadowVisibility(float3 worldPos)
@@ -87,14 +94,9 @@ float ComputeShadowVisibility(float3 worldPos)
         return 1.0;
     }
 
-    float3 view = worldPos - lightCenter.xyz;
-    float halfX = max(lightWorldRadius, 1.0);
-    float halfY = max(lightNearPlane, 1.0);
-    float halfZ = max(lightFarPlane, 1.0);
-    float2 uv = float2(
-        dot(view, lightRight.xyz) / (halfX * 2.0) + 0.5,
-        0.5 - dot(view, lightUp.xyz) / (halfY * 2.0));
-    float depth = dot(view, lightForward.xyz) / (halfZ * 2.0) + 0.5;
+    float3 lightUv = LightSpace01(worldPos);
+    float2 uv = float2(lightUv.x, 1.0 - lightUv.y);
+    float depth = lightUv.z;
 
     if (uv.x <= 0.0 || uv.x >= 1.0 || uv.y <= 0.0 || uv.y >= 1.0 || depth <= 0.0 || depth >= 1.0)
     {
@@ -118,23 +120,31 @@ float ComputeShadowVisibility(float3 worldPos)
 
 float3 DebugShadowColor(float3 worldPos)
 {
-    float3 view = worldPos - lightCenter.xyz;
-    float halfX = max(lightWorldRadius, 1.0);
-    float halfY = max(lightNearPlane, 1.0);
-    float halfZ = max(lightFarPlane, 1.0);
-    float2 uv = float2(
-        dot(view, lightRight.xyz) / (halfX * 2.0) + 0.5,
-        0.5 - dot(view, lightUp.xyz) / (halfY * 2.0));
-    float depth = dot(view, lightForward.xyz) / (halfZ * 2.0) + 0.5;
+    float3 lightUv = LightSpace01(worldPos);
+    float2 uv = float2(lightUv.x, 1.0 - lightUv.y);
+    float depth = lightUv.z;
 
-    float2 uvClamped = saturate(uv);
-    float depthClamped = saturate(depth);
+    float inRange = (uv.x > 0.0 && uv.x < 1.0 && uv.y > 0.0 && uv.y < 1.0 && depth > 0.0 && depth < 1.0) ? 1.0 : 0.0;
+    if (inRange < 0.5)
+    {
+        if (depth <= 0.0)
+        {
+            return float3(0.0, 0.0, 1.0);
+        }
+        if (depth >= 1.0)
+        {
+            return float3(1.0, 0.0, 1.0);
+        }
+        if (uv.x <= 0.0 || uv.x >= 1.0)
+        {
+            return float3(1.0, 0.0, 0.0);
+        }
+        return float3(0.0, 1.0, 0.0);
+    }
+
     if (uv.x <= 0.0 || uv.x >= 1.0 || uv.y <= 0.0 || uv.y >= 1.0 || depth <= 0.0 || depth >= 1.0)
     {
-        float outsideX = (uv.x <= 0.0 || uv.x >= 1.0) ? 1.0 : 0.0;
-        float outsideY = (uv.y <= 0.0 || uv.y >= 1.0) ? 1.0 : 0.0;
-        float outsideZ = (depth <= 0.0 || depth >= 1.0) ? 1.0 : 0.0;
-        return saturate(float3(outsideX, outsideY, outsideZ) * 0.75 + float3(uvClamped.x, uvClamped.y, depthClamped) * 0.25);
+        return float3(0.0, 0.0, 1.0);
     }
 
     float mapDepth = shadowMap.SampleLevel(shadowSampler, uv, 0).r;
