@@ -536,7 +536,7 @@ void ApplyGridErosionPass(HeightfieldGrid& grid, const FluvialErosionSettings& s
 
     const float wearSlope = std::tan(std::clamp(settings.wearAngleDegrees, 0.0f, 89.0f) * 3.14159265f / 180.0f);
     const float maxSlope = std::tan(std::clamp(settings.maxErosionAngleDegrees, 0.0f, 89.0f) * 3.14159265f / 180.0f);
-    const float strength = std::clamp(settings.erosionStrength, 0.0f, 2.0f) * strengthScale;
+    const float strength = std::clamp(settings.erosionStrength, 0.0f, 1.0f) * strengthScale;
     const float capacityScale = std::clamp(settings.sedimentCapacity, 0.0f, 2.0f);
     const float depositionRate = std::clamp(settings.depositionRate, 0.0f, 1.0f);
     const float channeling = std::clamp(settings.channeling, 0.0f, 1.0f);
@@ -903,6 +903,7 @@ void ApplyFluvialErosion(HeightfieldGrid& grid, const FluvialErosionSettings& se
     {
         const FluvialErosionSettings defaults;
         effectiveSettings.featureSize = defaults.featureSize;
+        effectiveSettings.channelLength = defaults.channelLength;
         effectiveSettings.channeling = defaults.channeling;
         effectiveSettings.friction = defaults.friction;
         effectiveSettings.wearAngleDegrees = 4.0f;

@@ -256,6 +256,7 @@ struct GpuMeshPreview
     uint64_t graphVersion = UINT64_MAX;
     bool showSurface = false;
     bool showWireframe = false;
+    bool showGrid = false;
     bool maskPreview = false;
     int lightingMode = 0;
     float sunAzimuthDegrees = 0.0f;
@@ -272,6 +273,7 @@ struct GpuMeshPreview
     ComPtr<ID3D12Resource> vertexBuffer;
     ComPtr<ID3D12Resource> indexBuffer;
     ComPtr<ID3D12Resource> edgeIndexBuffer;
+    ComPtr<ID3D12Resource> gridVertexBuffer;
     D3D12_CPU_DESCRIPTOR_HANDLE rtvCpu{};
     D3D12_CPU_DESCRIPTOR_HANDLE dsvCpu{};
     D3D12_CPU_DESCRIPTOR_HANDLE shadowDsvCpu{};
@@ -284,6 +286,7 @@ struct GpuMeshPreview
     UINT vertexCount = 0;
     UINT triIndexCount = 0;
     UINT edgeIndexCount = 0;
+    UINT gridVertexCount = 0;
     D3D12_RESOURCE_STATES colorState = D3D12_RESOURCE_STATE_COMMON;
     D3D12_RESOURCE_STATES shadowState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 };
@@ -610,6 +613,8 @@ void CleanupD3D()
     g_gpuMeshPreview.vertexBuffer.Reset();
     g_gpuMeshPreview.indexBuffer.Reset();
     g_gpuMeshPreview.edgeIndexBuffer.Reset();
+    g_gpuMeshPreview.gridVertexBuffer.Reset();
+    g_gpuMeshPreview.gridVertexCount = 0;
     g_meshPreviewSurfacePso.Reset();
     g_meshPreviewWirePso.Reset();
     g_meshPreviewRootSignature.Reset();
@@ -2044,8 +2049,6 @@ bool RunFluvialComputeSmokeTest(std::string* error)
     struct FluvialGridConstants
     {
         UINT resolution;
-        UINT cellCount;
-        UINT iteration;
         float terrainSizeMeters;
         float erosionStrength;
         float sedimentCapacity;
@@ -2055,13 +2058,13 @@ bool RunFluvialComputeSmokeTest(std::string* error)
         float wearSlope;
         float maxSlope;
         float strengthScale;
-    } constants{resolution, cellCount, 0, 8.0f, 1.0f, 0.8f, 0.35f, 0.25f, 8.0f / static_cast<float>(resolution - 1), 0.05f, 10.0f, 0.68f};
+    } constants{resolution, 8.0f, 1.0f, 0.8f, 0.35f, 0.25f, 8.0f / static_cast<float>(resolution - 1), 0.05f, 10.0f, 0.68f};
 
     ID3D12DescriptorHeap* heaps[] = {descriptorHeap.Get()};
     commandList->SetDescriptorHeaps(1, heaps);
     commandList->SetComputeRootSignature(g_fluvialComputeRootSignature.Get());
     commandList->SetPipelineState(g_fluvialGridErosionPso.Get());
-    commandList->SetComputeRoot32BitConstants(0, 12, &constants, 0);
+    commandList->SetComputeRoot32BitConstants(0, 10, &constants, 0);
     commandList->SetComputeRootDescriptorTable(1, descriptorHeap->GetGPUDescriptorHandleForHeapStart());
     commandList->Dispatch(1, 1, 1);
 
@@ -2125,15 +2128,16 @@ bool EnsureFluvialComputePipeline(std::string* error)
 {
     if (g_fluvialGridErosionPso && g_fluvialFlowAccumulationPso)
     {
-        if (RunFluvialComputeSmokeTest(error))
+        if (g_fluvialComputeSmokeTested)
         {
-            g_fluvialComputeStatus = "GPU Compute dispatch ready";
+            return true;
         }
-        else
+        if (!RunFluvialComputeSmokeTest(error))
         {
             g_fluvialComputeStatus = "GPU Compute dispatch failed";
             return false;
         }
+        g_fluvialComputeStatus = "GPU Compute dispatch ready";
         return true;
     }
     if (!g_device)
@@ -2154,7 +2158,7 @@ bool EnsureFluvialComputePipeline(std::string* error)
     rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     rootParams[0].Constants.ShaderRegister = 0;
     rootParams[0].Constants.RegisterSpace = 0;
-    rootParams[0].Constants.Num32BitValues = 12;
+    rootParams[0].Constants.Num32BitValues = 10;
     rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
@@ -2374,8 +2378,6 @@ bool RunFluvialComputeGridImmediate(rock::HeightfieldGrid& grid, const rock::Flu
     struct FluvialGridConstants
     {
         UINT resolution;
-        UINT cellCount;
-        UINT iteration;
         float terrainSizeMeters;
         float erosionStrength;
         float sedimentCapacity;
@@ -2387,8 +2389,6 @@ bool RunFluvialComputeGridImmediate(rock::HeightfieldGrid& grid, const rock::Flu
         float strengthScale;
     } constants{
         resolution,
-        static_cast<UINT>(cellCount),
-        0,
         grid.terrainSizeMeters,
         std::clamp(settings.erosionStrength, 0.0f, 2.0f),
         std::clamp(settings.sedimentCapacity, 0.0f, 2.0f),
@@ -2413,8 +2413,7 @@ bool RunFluvialComputeGridImmediate(rock::HeightfieldGrid& grid, const rock::Flu
     commandList->SetPipelineState(g_fluvialFlowAccumulationPso.Get());
     for (int pass = 0; pass < flowPassCount; ++pass)
     {
-        constants.iteration = static_cast<UINT>(pass);
-        commandList->SetComputeRoot32BitConstants(0, 12, &constants, 0);
+        commandList->SetComputeRoot32BitConstants(0, 10, &constants, 0);
         D3D12_GPU_DESCRIPTOR_HANDLE table = descriptorHeap->GetGPUDescriptorHandleForHeapStart();
         if ((pass % 2) != 0)
         {
@@ -2430,11 +2429,10 @@ bool RunFluvialComputeGridImmediate(rock::HeightfieldGrid& grid, const rock::Flu
     }
 
     commandList->SetPipelineState(g_fluvialGridErosionPso.Get());
-    const int iterationCount = std::clamp(std::max(1, settings.iterations / 2), 1, 200);
+    const int iterationCount = std::clamp(settings.iterations, 1, 200);
     for (int iteration = 0; iteration < iterationCount; ++iteration)
     {
-        constants.iteration = static_cast<UINT>(iteration);
-        commandList->SetComputeRoot32BitConstants(0, 12, &constants, 0);
+        commandList->SetComputeRoot32BitConstants(0, 10, &constants, 0);
         D3D12_GPU_DESCRIPTOR_HANDLE table = descriptorHeap->GetGPUDescriptorHandleForHeapStart();
         if ((iteration % 2) != 0)
         {
@@ -3017,6 +3015,43 @@ void UpdateMeshPreviewBuffers(const rock::MeshData& mesh)
     }
 }
 
+void EnsureGridPreviewBuffer()
+{
+    if (g_gpuMeshPreview.gridVertexBuffer && g_gpuMeshPreview.gridVertexCount > 0)
+    {
+        return;
+    }
+
+    constexpr int halfCellCount = 20;
+    constexpr float cellSizeMeters = 100.0f;
+    std::vector<rock::MeshVertex> vertices;
+    vertices.reserve(static_cast<size_t>(halfCellCount * 2 + 1) * 4u);
+    const auto addVertex = [&](float x, float z) {
+        vertices.push_back({x, 0.0f, z, 0.0f, 1.0f, 0.0f, 0.0f});
+    };
+    for (int i = -halfCellCount; i <= halfCellCount; ++i)
+    {
+        const float offset = static_cast<float>(i) * cellSizeMeters;
+        addVertex(-halfCellCount * cellSizeMeters, offset);
+        addVertex(halfCellCount * cellSizeMeters, offset);
+        addVertex(offset, -halfCellCount * cellSizeMeters);
+        addVertex(offset, halfCellCount * cellSizeMeters);
+    }
+
+    const D3D12_HEAP_PROPERTIES uploadHeap = HeapProperties(D3D12_HEAP_TYPE_UPLOAD);
+    const UINT64 vbSize = vertices.size() * sizeof(rock::MeshVertex);
+    const D3D12_RESOURCE_DESC vbDesc = BufferResourceDesc(vbSize);
+    ThrowIfFailed(g_device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE,
+        &vbDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+        IID_PPV_ARGS(&g_gpuMeshPreview.gridVertexBuffer)), "Create grid VB failed");
+    D3D12_RANGE readRange{};
+    void* mapped = nullptr;
+    g_gpuMeshPreview.gridVertexBuffer->Map(0, &readRange, &mapped);
+    std::memcpy(mapped, vertices.data(), static_cast<size_t>(vbSize));
+    g_gpuMeshPreview.gridVertexBuffer->Unmap(0, nullptr);
+    g_gpuMeshPreview.gridVertexCount = static_cast<UINT>(vertices.size());
+}
+
 void DrawSurfacePointPreview(ImDrawList* drawList, const ImVec2& min, const ImVec2& max, const rock::SdfPreviewStats& sdf)
 {
     if (sdf.surfacePoints.empty())
@@ -3223,7 +3258,8 @@ void DrawMeshEdgePreview(ImDrawList* drawList, const ImVec2& min, const ImVec2& 
 
 bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface, bool showWireframe, std::string* error)
 {
-    if (!showSurface && !showWireframe) return true;
+    const bool showGrid = g_graph.Settings().preview.showGrid;
+    if (!showSurface && !showWireframe && !showGrid) return true;
     if (!EnsureMeshPreviewPipeline(error)) return false;
 
     const float viewportWidth = std::max(1.0f, max.x - min.x);
@@ -3245,6 +3281,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.pan.y != g_viewport.pan.y ||
         g_gpuMeshPreview.showSurface != showSurface ||
         g_gpuMeshPreview.showWireframe != showWireframe ||
+        g_gpuMeshPreview.showGrid != showGrid ||
         g_gpuMeshPreview.maskPreview != g_graph.Evaluation().previewShowsMask ||
         g_gpuMeshPreview.lightingMode != g_graph.Settings().preview.lightingMode ||
         g_gpuMeshPreview.sunAzimuthDegrees != g_graph.Settings().preview.sunAzimuthDegrees ||
@@ -3254,6 +3291,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.shadowStrength != g_graph.Settings().preview.shadowStrength ||
         g_gpuMeshPreview.shadowBias != g_graph.Settings().preview.shadowBias ||
         g_gpuMeshPreview.pbrAlbedo != g_graph.Settings().preview.pbrAlbedo ||
+        (showGrid && !g_gpuMeshPreview.gridVertexBuffer) ||
         g_gpuMeshPreview.colorState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     if (!meshDirty && !viewportDirty) return true;
 
@@ -3263,6 +3301,10 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         {
             UpdateMeshPreviewBuffers(mesh);
             g_gpuMeshPreview.graphVersion = currentVersion;
+        }
+        if (showGrid)
+        {
+            EnsureGridPreviewBuffer();
         }
         if (g_gpuMeshPreview.vertexCount == 0)
         {
@@ -3444,6 +3486,18 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             commandList->DrawIndexedInstanced(g_gpuMeshPreview.triIndexCount, 1, 0, 0, 0);
         }
+        if (showGrid && g_gpuMeshPreview.gridVertexCount > 0)
+        {
+            D3D12_VERTEX_BUFFER_VIEW gridVbv{};
+            gridVbv.BufferLocation = g_gpuMeshPreview.gridVertexBuffer->GetGPUVirtualAddress();
+            gridVbv.SizeInBytes = g_gpuMeshPreview.gridVertexCount * static_cast<UINT>(sizeof(rock::MeshVertex));
+            gridVbv.StrideInBytes = static_cast<UINT>(sizeof(rock::MeshVertex));
+            commandList->IASetVertexBuffers(0, 1, &gridVbv);
+            commandList->SetPipelineState(g_meshPreviewWirePso.Get());
+            commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
+            commandList->DrawInstanced(g_gpuMeshPreview.gridVertexCount, 1, 0, 0);
+            commandList->IASetVertexBuffers(0, 1, &vbv);
+        }
         if (showWireframe && g_gpuMeshPreview.edgeIndexCount > 0)
         {
             D3D12_INDEX_BUFFER_VIEW ibv{g_gpuMeshPreview.edgeIndexBuffer->GetGPUVirtualAddress(), g_gpuMeshPreview.edgeIndexCount * sizeof(UINT), DXGI_FORMAT_R32_UINT};
@@ -3476,6 +3530,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.pan           = g_viewport.pan;
         g_gpuMeshPreview.showSurface   = showSurface;
         g_gpuMeshPreview.showWireframe = showWireframe;
+        g_gpuMeshPreview.showGrid      = showGrid;
         g_gpuMeshPreview.maskPreview   = g_graph.Evaluation().previewShowsMask;
         g_gpuMeshPreview.lightingMode  = g_graph.Settings().preview.lightingMode;
         g_gpuMeshPreview.sunAzimuthDegrees = g_graph.Settings().preview.sunAzimuthDegrees;
@@ -3524,7 +3579,7 @@ void DrawViewportCube(const ImVec2& min, const ImVec2& max, float timeSeconds)
 
     const std::array<float, 3>& viewportBackground = g_graph.Settings().preview.viewportBackground;
     drawList->AddRectFilled(min, max, ColorToU32(ImVec4(viewportBackground[0], viewportBackground[1], viewportBackground[2], 1.0f)));
-    if (g_graph.Settings().preview.showGrid)
+    if (g_graph.Settings().preview.showGrid && !g_ui.meshPreview)
     {
         DrawViewportGrid3D(drawList, min, max, center, scale);
     }
@@ -4857,7 +4912,7 @@ void DrawPropertiesPanel()
         erosion.seed = std::clamp(erosion.seed, 0, 999999);
 
         int backend = static_cast<int>(erosion.backend);
-        if (DrawPropertyComboRow("Backend", "FluvialBackend", &backend, "CPU Reference\0GPU Compute (planned)\0", "浸食計算の実行バックエンドです。現時点では GPU Compute は準備中で、CPU Reference へフォールバックします。", static_cast<int>(rock::FluvialErosionSettings{}.backend)))
+        if (DrawPropertyComboRow("Backend", "FluvialBackend", &backend, "CPU Reference\0GPU Compute\0", "浸食計算の実行バックエンドです。GPU Compute が利用できない場合は CPU Reference へフォールバックします。", static_cast<int>(rock::FluvialErosionSettings{}.backend)))
         {
             erosion.backend = static_cast<rock::FluvialBackend>(std::clamp(backend, 0, 1));
             g_graph.MarkDirty("Fluvial backend changed");
@@ -4872,7 +4927,7 @@ void DrawPropertiesPanel()
             ImGui::TextColored(computeReady ? ImVec4(0.50f, 0.78f, 0.50f, 1.0f) : ImVec4(0.90f, 0.45f, 0.36f, 1.0f), "%s", g_fluvialComputeStatus.c_str());
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(1);
-            ImGui::TextColored(ImVec4(0.90f, 0.70f, 0.36f, 1.0f), "実行接続は準備中です。現在は CPU Reference で計算します。");
+            ImGui::TextColored(ImVec4(0.90f, 0.70f, 0.36f, 1.0f), "GPU Compute が利用できない場合は CPU Reference で計算します。");
             if (!computeReady && !computeError.empty())
             {
                 ImGui::TableNextRow();

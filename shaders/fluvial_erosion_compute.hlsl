@@ -1,8 +1,6 @@
 cbuffer FluvialGridConstants : register(b0)
 {
     uint resolution;
-    uint cellCount;
-    uint iteration;
     float terrainSizeMeters;
     float erosionStrength;
     float sedimentCapacity;
@@ -64,7 +62,8 @@ uint BestReceiverIndex(int x, int z)
 
 float NormalizedFlowWeight(uint index)
 {
-    const float normalizedFlow = saturate(log(1.0f + max(FlowIn[index], 1.0f)) / log(1.0f + max((float)cellCount, 2.0f)));
+    const float flowReference = max((float)resolution * 2.0f, 8.0f);
+    const float normalizedFlow = saturate(log(1.0f + max(FlowIn[index], 1.0f)) / log(1.0f + flowReference));
     return pow(normalizedFlow, 1.35f);
 }
 
