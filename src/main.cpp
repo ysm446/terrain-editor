@@ -1380,6 +1380,10 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 node.id = nodeJson.value("id", 0);
                 node.kind = static_cast<rock::NodeKind>(std::clamp(nodeJson.value("kind", 0), 0, 5));
                 node.title = nodeJson.value("title", std::string(rock::ToString(node.kind)));
+                if (node.kind == rock::NodeKind::HeightmapLoad && node.title == "Load Heightmap")
+                {
+                    node.title = std::string(rock::ToString(node.kind));
+                }
                 const nlohmann::json nodePrimitiveJson = nodeJson.value("primitive", primitiveJson);
                 const nlohmann::json nodeNoiseJson = nodeJson.value("noise", noiseJson);
                 const nlohmann::json nodeCrackJson = nodeJson.value("crack", crackJson);
@@ -3196,7 +3200,10 @@ bool DrawPropertyPathRow(const char* label, const char* id, std::string* value, 
     char buffer[MAX_PATH]{};
     strncpy_s(buffer, value->c_str(), _TRUNCATE);
     const float buttonWidth = 82.0f;
-    const float inputWidth = std::max(120.0f, ImGui::GetContentRegionAvail().x - buttonWidth - ImGui::GetStyle().ItemInnerSpacing.x);
+    const float inputWidth = std::clamp(
+        ImGui::GetContentRegionAvail().x - buttonWidth - ImGui::GetStyle().ItemInnerSpacing.x,
+        120.0f,
+        260.0f);
     ImGui::SetNextItemWidth(inputWidth);
     if (ImGui::InputText("##path", buffer, IM_ARRAYSIZE(buffer)))
     {

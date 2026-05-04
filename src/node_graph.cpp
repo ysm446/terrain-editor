@@ -1313,7 +1313,7 @@ std::string_view ToString(NodeKind kind)
     case NodeKind::OutputMesh:
         return "Output Mesh";
     case NodeKind::HeightmapLoad:
-        return "Load Heightmap";
+        return "Import Heightmap";
     case NodeKind::FluvialErosion:
         return "Fluvial Erosion";
     default:

@@ -7,7 +7,7 @@
 
 | ノード候補 | 目的 | 入力 | 出力 | 最初に実装する設定 |
 | --- | --- | --- | --- | --- |
-| Heightmap Load | 画像から高さを読み込む | なし | Heightfield | File、Scale、Relative Vertical、Offset |
+| Import Heightmap | 画像から高さを読み込む | なし | Heightfield | File、Scale、Relative Vertical、Offset |
 | Adjust | 高さやマスク値を補正する | Heightfield | Heightfield | Field、Gain、Bias、Clamp、Invert |
 | Combine | 2 つの地形やマスクを合成する | Heightfield A/B | Heightfield | Add、Subtract、Multiply、Max、Min、Blend |
 | Transform | 地形フィールドを移動・回転・スケールする | Heightfield | Heightfield | Translate、Rotate Y、Scale |
@@ -99,7 +99,7 @@
 
 ## 実装順の提案
 
-1. `Heightmap Load`、`Adjust`、`Combine`、`Output/Mesher`
+1. `Import Heightmap`、`Adjust`、`Combine`、`Output/Mesher`
 2. `Mountain`、`Terrace`、`Thermal Erosion`
 3. `Flowlines`、`Lakes`、`Fluvial Erosion`
 4. `Displacement`、`Stamp`、`Strata Noise`
