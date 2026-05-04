@@ -9,6 +9,7 @@
 #include <cfloat>
 #include <cstdint>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -20,7 +21,9 @@
 
 #include <d3d12.h>
 #include <d3dcompiler.h>
+#include <dwmapi.h>
 #include <dxgi1_6.h>
+#include <wincodec.h>
 #include <wrl/client.h>
 
 #include <imgui.h>
@@ -152,6 +155,14 @@ struct ViewportState
 };
 
 ViewportState g_viewport;
+
+struct MapViewportState
+{
+    float zoom = 1.0f;
+    ImVec2 pan = ImVec2(0.0f, 0.0f);
+};
+
+MapViewportState g_mapViewport;
 
 struct Vec3
 {
@@ -556,6 +567,8 @@ void EnsureFinalMesh(rock::GraphId outputNodeId = 0);
 int CurrentPreviewMeshResolution();
 bool IsTerrainNodeKind(rock::NodeKind kind);
 void ResetViewport();
+void UpdateMapViewportInteraction(const ImVec2& min, const ImVec2& max);
+bool CaptureWindowScreenshot(std::filesystem::path* savedPath, std::string* error);
 ImVec2 InitialNodePosition(rock::NodeKind kind);
 
 std::optional<std::filesystem::path> ShowProjectFileDialog(bool save)
@@ -629,6 +642,217 @@ std::filesystem::path PathFromUtf8(const std::string& value)
 {
     const std::u8string utf8(value.begin(), value.end());
     return std::filesystem::path(utf8);
+}
+
+std::string ScreenshotTimestamp()
+{
+    const auto now = std::chrono::system_clock::now();
+    const std::time_t time = std::chrono::system_clock::to_time_t(now);
+    std::tm localTime{};
+    localtime_s(&localTime, &time);
+
+    char buffer[32]{};
+    std::strftime(buffer, sizeof(buffer), "%Y%m%d_%H%M%S", &localTime);
+    return buffer;
+}
+
+std::filesystem::path ScreenshotDirectory()
+{
+    if (!g_projectPath.empty())
+    {
+        const std::filesystem::path parent = g_projectPath.parent_path();
+        if (!parent.empty())
+        {
+            return parent;
+        }
+    }
+    return std::filesystem::current_path() / "screenshots";
+}
+
+bool SaveBitmapAsPng(HBITMAP bitmap, const std::filesystem::path& path, std::string* error)
+{
+    const HRESULT initHr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    const bool shouldUninitialize = SUCCEEDED(initHr);
+    if (FAILED(initHr) && initHr != RPC_E_CHANGED_MODE)
+    {
+        if (error != nullptr) *error = "COM initialization failed";
+        return false;
+    }
+
+    const auto finish = [&]() {
+        if (shouldUninitialize)
+        {
+            CoUninitialize();
+        }
+    };
+
+    ComPtr<IWICImagingFactory> factory;
+    HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory));
+    if (FAILED(hr))
+    {
+        if (error != nullptr) *error = "Failed to create WIC factory";
+        finish();
+        return false;
+    }
+
+    ComPtr<IWICBitmap> sourceBitmap;
+    hr = factory->CreateBitmapFromHBITMAP(bitmap, nullptr, WICBitmapIgnoreAlpha, &sourceBitmap);
+    if (FAILED(hr))
+    {
+        if (error != nullptr) *error = "Failed to create WIC bitmap";
+        finish();
+        return false;
+    }
+
+    ComPtr<IWICStream> stream;
+    hr = factory->CreateStream(&stream);
+    if (FAILED(hr))
+    {
+        if (error != nullptr) *error = "Failed to create WIC stream";
+        finish();
+        return false;
+    }
+    hr = stream->InitializeFromFilename(path.wstring().c_str(), GENERIC_WRITE);
+    if (FAILED(hr))
+    {
+        if (error != nullptr) *error = "Failed to open screenshot file";
+        finish();
+        return false;
+    }
+
+    ComPtr<IWICBitmapEncoder> encoder;
+    hr = factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder);
+    if (FAILED(hr))
+    {
+        if (error != nullptr) *error = "Failed to create PNG encoder";
+        finish();
+        return false;
+    }
+    hr = encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache);
+    if (FAILED(hr))
+    {
+        if (error != nullptr) *error = "Failed to initialize PNG encoder";
+        finish();
+        return false;
+    }
+
+    ComPtr<IWICBitmapFrameEncode> frame;
+    ComPtr<IPropertyBag2> propertyBag;
+    hr = encoder->CreateNewFrame(&frame, &propertyBag);
+    if (FAILED(hr))
+    {
+        if (error != nullptr) *error = "Failed to create PNG frame";
+        finish();
+        return false;
+    }
+    hr = frame->Initialize(propertyBag.Get());
+    if (FAILED(hr))
+    {
+        if (error != nullptr) *error = "Failed to initialize PNG frame";
+        finish();
+        return false;
+    }
+    hr = frame->WriteSource(sourceBitmap.Get(), nullptr);
+    if (FAILED(hr))
+    {
+        if (error != nullptr) *error = "Failed to write screenshot pixels";
+        finish();
+        return false;
+    }
+    hr = frame->Commit();
+    if (FAILED(hr))
+    {
+        if (error != nullptr) *error = "Failed to commit PNG frame";
+        finish();
+        return false;
+    }
+    hr = encoder->Commit();
+    if (FAILED(hr))
+    {
+        if (error != nullptr) *error = "Failed to commit PNG file";
+        finish();
+        return false;
+    }
+
+    finish();
+    return true;
+}
+
+bool CaptureWindowScreenshot(std::filesystem::path* savedPath, std::string* error)
+{
+    if (g_hwnd == nullptr)
+    {
+        if (error != nullptr) *error = "No window to capture";
+        return false;
+    }
+
+    RECT rect{};
+    HRESULT rectHr = DwmGetWindowAttribute(g_hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &rect, sizeof(rect));
+    if (FAILED(rectHr) && !GetWindowRect(g_hwnd, &rect))
+    {
+        if (error != nullptr) *error = "Failed to get window bounds";
+        return false;
+    }
+    const int width = static_cast<int>(rect.right - rect.left);
+    const int height = static_cast<int>(rect.bottom - rect.top);
+    if (width <= 0 || height <= 0)
+    {
+        if (error != nullptr) *error = "Window has invalid size";
+        return false;
+    }
+
+    HDC screenDc = GetDC(nullptr);
+    if (screenDc == nullptr)
+    {
+        if (error != nullptr) *error = "Failed to get screen device context";
+        return false;
+    }
+    HDC memoryDc = CreateCompatibleDC(screenDc);
+    HBITMAP bitmap = CreateCompatibleBitmap(screenDc, width, height);
+    if (memoryDc == nullptr || bitmap == nullptr)
+    {
+        if (bitmap != nullptr) DeleteObject(bitmap);
+        if (memoryDc != nullptr) DeleteDC(memoryDc);
+        ReleaseDC(nullptr, screenDc);
+        if (error != nullptr) *error = "Failed to create screenshot bitmap";
+        return false;
+    }
+
+    HGDIOBJ oldBitmap = SelectObject(memoryDc, bitmap);
+    const BOOL copied = BitBlt(memoryDc, 0, 0, width, height, screenDc, rect.left, rect.top, SRCCOPY | CAPTUREBLT);
+    SelectObject(memoryDc, oldBitmap);
+    DeleteDC(memoryDc);
+    ReleaseDC(nullptr, screenDc);
+
+    if (!copied)
+    {
+        DeleteObject(bitmap);
+        if (error != nullptr) *error = "Failed to capture window";
+        return false;
+    }
+
+    const std::filesystem::path directory = ScreenshotDirectory();
+    std::error_code ec;
+    std::filesystem::create_directories(directory, ec);
+    if (ec)
+    {
+        DeleteObject(bitmap);
+        if (error != nullptr) *error = "Failed to create screenshot directory";
+        return false;
+    }
+
+    const std::filesystem::path path = directory / ("terrain_editor_screenshot_" + ScreenshotTimestamp() + ".png");
+    const bool saved = SaveBitmapAsPng(bitmap, path, error);
+    DeleteObject(bitmap);
+    if (!saved)
+    {
+        return false;
+    }
+    if (savedPath != nullptr)
+    {
+        *savedPath = path;
+    }
+    return true;
 }
 
 std::filesystem::path NormalizedProjectPath(const std::filesystem::path& path)
@@ -776,6 +1000,10 @@ bool SaveAppSettings(std::string* error = nullptr)
             {"zoom", g_viewport.zoom},
             {"pan", {g_viewport.pan.x, g_viewport.pan.y}},
         };
+        root["mapViewport"] = {
+            {"zoom", g_mapViewport.zoom},
+            {"pan", {g_mapViewport.pan.x, g_mapViewport.pan.y}},
+        };
 
         const std::filesystem::path path = AppSettingsPath();
         if (path.has_parent_path())
@@ -911,6 +1139,13 @@ bool LoadAppSettings(std::string* error = nullptr)
         if (viewportJson.contains("pan") && viewportJson["pan"].is_array() && viewportJson["pan"].size() == 2)
         {
             g_viewport.pan = ImVec2(viewportJson["pan"][0].get<float>(), viewportJson["pan"][1].get<float>());
+        }
+
+        const nlohmann::json mapViewportJson = root.value("mapViewport", nlohmann::json::object());
+        g_mapViewport.zoom = std::clamp(mapViewportJson.value("zoom", g_mapViewport.zoom), 0.05f, 64.0f);
+        if (mapViewportJson.contains("pan") && mapViewportJson["pan"].is_array() && mapViewportJson["pan"].size() == 2)
+        {
+            g_mapViewport.pan = ImVec2(mapViewportJson["pan"][0].get<float>(), mapViewportJson["pan"][1].get<float>());
         }
 
         g_projectStatus = "Loaded app settings " + PathToUtf8(path);
@@ -2475,6 +2710,8 @@ ImU32 MapPreviewColor(float value, bool mask)
 
 void DrawHeightfieldMapPreview(const ImVec2& min, const ImVec2& max)
 {
+    UpdateMapViewportInteraction(min, max);
+
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     const std::array<float, 3>& viewportBackground = g_graph.Settings().preview.viewportBackground;
     drawList->AddRectFilled(min, max, ColorToU32(ImVec4(viewportBackground[0], viewportBackground[1], viewportBackground[2], 1.0f)));
@@ -2506,9 +2743,12 @@ void DrawHeightfieldMapPreview(const ImVec2& min, const ImVec2& max)
 
     const float availableWidth = std::max(1.0f, max.x - min.x - 32.0f);
     const float availableHeight = std::max(1.0f, max.y - min.y - 76.0f);
-    const float mapSize = std::max(1.0f, std::min(availableWidth, availableHeight));
-    const ImVec2 mapMin(min.x + 16.0f, min.y + 52.0f);
+    const float mapSize = std::max(1.0f, std::min(availableWidth, availableHeight)) * std::clamp(g_mapViewport.zoom, 0.05f, 64.0f);
+    const ImVec2 mapMin(
+        min.x + 16.0f + (std::max(1.0f, std::min(availableWidth, availableHeight)) - mapSize) * 0.5f + g_mapViewport.pan.x,
+        min.y + 52.0f + (std::max(1.0f, std::min(availableWidth, availableHeight)) - mapSize) * 0.5f + g_mapViewport.pan.y);
     const ImVec2 mapMax(mapMin.x + mapSize, mapMin.y + mapSize);
+    drawList->PushClipRect(ImVec2(min.x + 1.0f, min.y + 42.0f), ImVec2(max.x - 1.0f, max.y - 1.0f), true);
     drawList->AddRectFilled(mapMin, mapMax, IM_COL32(18, 20, 20, 255));
 
     const int samples = std::clamp(gridResolution, 2, 256);
@@ -2527,17 +2767,18 @@ void DrawHeightfieldMapPreview(const ImVec2& min, const ImVec2& max)
         }
     }
     drawList->AddRect(mapMin, mapMax, ThemeColor("border", ImVec4(0.20f, 0.23f, 0.22f, 0.85f)));
+    drawList->PopClipRect();
 
     char info[128]{};
     if (maskPreview)
     {
-        std::snprintf(info, sizeof(info), "%d x %d preview samples from selected mask output", samples, samples);
+        std::snprintf(info, sizeof(info), "%d x %d samples / zoom %.2fx", samples, samples, g_mapViewport.zoom);
     }
     else
     {
-        std::snprintf(info, sizeof(info), "%d x %d preview samples / height %.2f m to %.2f m", samples, samples, minHeight, maxHeight);
+        std::snprintf(info, sizeof(info), "%d x %d samples / zoom %.2fx / height %.2f m to %.2f m", samples, samples, g_mapViewport.zoom, minHeight, maxHeight);
     }
-    drawList->AddText(ImVec2(mapMin.x, mapMax.y + 10.0f), ThemeColor("mutedText", ImVec4(0.54f, 0.59f, 0.56f, 1.0f)), info);
+    drawList->AddText(ImVec2(min.x + 16.0f, max.y - 28.0f), ThemeColor("mutedText", ImVec4(0.54f, 0.59f, 0.56f, 1.0f)), info);
 }
 
 ImVec4 NodeAccentColor(rock::NodeKind kind)
@@ -2643,6 +2884,60 @@ ImVec4 PinTypeColor(rock::ValueType valueType)
     case rock::ValueType::Mesh:
     default:
         return ImVec4(0.52f, 0.58f, 0.56f, 1.0f);
+    }
+}
+
+void ResetMapViewport()
+{
+    g_mapViewport.zoom = 1.0f;
+    g_mapViewport.pan = ImVec2(0.0f, 0.0f);
+}
+
+void UpdateMapViewportInteraction(const ImVec2& min, const ImVec2& max)
+{
+    ImGuiIO& io = ImGui::GetIO();
+    if (g_layoutSplitterActive)
+    {
+        return;
+    }
+
+    const bool hovered = ImGui::IsMouseHoveringRect(min, max);
+    if (!hovered && !ImGui::IsMouseDragging(ImGuiMouseButton_Left) && !ImGui::IsMouseDragging(ImGuiMouseButton_Right) && !ImGui::IsMouseDragging(ImGuiMouseButton_Middle))
+    {
+        return;
+    }
+
+    if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+    {
+        ResetMapViewport();
+        SaveAppSettingsSilently();
+        return;
+    }
+
+    bool changed = false;
+    if (hovered && io.MouseWheel != 0.0f)
+    {
+        const float oldZoom = g_mapViewport.zoom;
+        const ImVec2 mouse = io.MousePos;
+        const ImVec2 center((min.x + max.x) * 0.5f + g_mapViewport.pan.x, (min.y + max.y) * 0.5f + g_mapViewport.pan.y);
+        g_mapViewport.zoom *= std::pow(1.12f, io.MouseWheel);
+        g_mapViewport.zoom = std::clamp(g_mapViewport.zoom, 0.05f, 64.0f);
+        const float zoomRatio = oldZoom > 0.0001f ? g_mapViewport.zoom / oldZoom : 1.0f;
+        g_mapViewport.pan.x += (center.x - mouse.x) * (zoomRatio - 1.0f);
+        g_mapViewport.pan.y += (center.y - mouse.y) * (zoomRatio - 1.0f);
+        changed = true;
+    }
+
+    if ((ImGui::IsMouseDragging(ImGuiMouseButton_Left) || ImGui::IsMouseDragging(ImGuiMouseButton_Right) || ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) && hovered)
+    {
+        g_mapViewport.pan.x += io.MouseDelta.x;
+        g_mapViewport.pan.y += io.MouseDelta.y;
+        changed = true;
+    }
+
+    if (changed && (ImGui::IsMouseReleased(ImGuiMouseButton_Left) || ImGui::IsMouseReleased(ImGuiMouseButton_Right) || ImGui::IsMouseReleased(ImGuiMouseButton_Middle) || io.MouseWheel != 0.0f))
+    {
+        SaveAppSettingsSilently();
     }
 }
 
@@ -4069,6 +4364,19 @@ void DrawUi()
     if (io.KeyCtrl && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Y, false))
     {
         RedoGraphEdit();
+    }
+    if (!io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F12, false))
+    {
+        std::filesystem::path screenshotPath;
+        std::string error;
+        if (CaptureWindowScreenshot(&screenshotPath, &error))
+        {
+            g_projectStatus = "Screenshot saved " + PathToUtf8(screenshotPath);
+        }
+        else
+        {
+            g_projectStatus = "Screenshot failed: " + error;
+        }
     }
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 8.0f));
