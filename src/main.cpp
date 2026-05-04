@@ -1360,6 +1360,7 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
                     {"simulationResolution", node.heightmap.simulationResolution},
                 }},
                 {"fluvialErosion", {
+                    {"useAdvancedParameters", node.fluvialErosion.useAdvancedParameters},
                     {"featureSize", node.fluvialErosion.featureSize},
                     {"iterations", node.fluvialErosion.iterations},
                     {"channelLength", node.fluvialErosion.channelLength},
@@ -1373,6 +1374,7 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
                     {"sedimentVelocity", node.fluvialErosion.sedimentVelocity},
                     {"sedimentCapacity", node.fluvialErosion.sedimentCapacity},
                     {"depositionRate", node.fluvialErosion.depositionRate},
+                    {"levelStrengths", node.fluvialErosion.levelStrengths},
                     {"seed", node.fluvialErosion.seed},
                 }},
             };
@@ -1545,6 +1547,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 node.heightmap.relativeVerticalScalePercent = std::clamp(nodeHeightmapJson.value("relativeVerticalScalePercent", node.heightmap.relativeVerticalScalePercent), 0.0f, 10000.0f);
                 node.heightmap.verticalOffsetMeters = std::clamp(nodeHeightmapJson.value("verticalOffsetMeters", node.heightmap.verticalOffsetMeters), -1000000.0f, 1000000.0f);
                 node.heightmap.simulationResolution = std::clamp(nodeHeightmapJson.value("simulationResolution", node.heightmap.simulationResolution), 2, 2048);
+                node.fluvialErosion.useAdvancedParameters = nodeFluvialJson.value("useAdvancedParameters", node.fluvialErosion.useAdvancedParameters);
                 node.fluvialErosion.featureSize = std::clamp(nodeFluvialJson.value("featureSize", node.fluvialErosion.featureSize), 1.0f, 64.0f);
                 node.fluvialErosion.iterations = std::clamp(nodeFluvialJson.value("iterations", node.fluvialErosion.iterations), 0, 200);
                 node.fluvialErosion.channelLength = std::clamp(nodeFluvialJson.value("channelLength", node.fluvialErosion.channelLength), 1.0f, 1024.0f);
@@ -1558,6 +1561,14 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 node.fluvialErosion.sedimentVelocity = std::clamp(nodeFluvialJson.value("sedimentVelocity", node.fluvialErosion.sedimentVelocity), 0.0f, 2.0f);
                 node.fluvialErosion.sedimentCapacity = std::clamp(nodeFluvialJson.value("sedimentCapacity", node.fluvialErosion.sedimentCapacity), 0.0f, 2.0f);
                 node.fluvialErosion.depositionRate = std::clamp(nodeFluvialJson.value("depositionRate", node.fluvialErosion.depositionRate), 0.0f, 1.0f);
+                if (nodeFluvialJson.contains("levelStrengths") && nodeFluvialJson["levelStrengths"].is_array())
+                {
+                    const nlohmann::json& levelStrengthsJson = nodeFluvialJson["levelStrengths"];
+                    for (size_t i = 0; i < node.fluvialErosion.levelStrengths.size() && i < levelStrengthsJson.size(); ++i)
+                    {
+                        node.fluvialErosion.levelStrengths[i] = std::clamp(levelStrengthsJson[i].get<float>(), 0.0f, 2.0f);
+                    }
+                }
                 node.fluvialErosion.seed = std::clamp(nodeFluvialJson.value("seed", node.fluvialErosion.seed), 0, 999999);
 
                 const auto readPins = [&](const nlohmann::json& pinsJson, rock::PinKind pinKind, std::vector<rock::Pin>& pins) {
@@ -4106,6 +4117,13 @@ void DrawPropertiesPanel()
         ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 210.0f);
         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
         rock::FluvialErosionSettings& erosion = editableNode->fluvialErosion;
+        const auto scaleAverage = [&](size_t first, size_t second) {
+            return (erosion.levelStrengths[first] + erosion.levelStrengths[second]) * 0.5f;
+        };
+        const auto setScalePair = [&](size_t first, size_t second, float value) {
+            erosion.levelStrengths[first] = value;
+            erosion.levelStrengths[second] = value;
+        };
         erosion.featureSize = std::clamp(erosion.featureSize, 1.0f, 64.0f);
         erosion.iterations = std::clamp(erosion.iterations, 0, 200);
         erosion.channelLength = std::clamp(erosion.channelLength, 1.0f, 1024.0f);
@@ -4119,12 +4137,12 @@ void DrawPropertiesPanel()
         erosion.sedimentVelocity = std::clamp(erosion.sedimentVelocity, 0.0f, 2.0f);
         erosion.sedimentCapacity = std::clamp(erosion.sedimentCapacity, 0.0f, 2.0f);
         erosion.depositionRate = std::clamp(erosion.depositionRate, 0.0f, 1.0f);
+        for (float& levelStrength : erosion.levelStrengths)
+        {
+            levelStrength = std::clamp(levelStrength, 0.0f, 2.0f);
+        }
         erosion.seed = std::clamp(erosion.seed, 0, 999999);
 
-        if (DrawPropertyFloatRow("Feature Size (m)", "FluvialFeatureSize", &erosion.featureSize, 1.0f, 64.0f, rock::FluvialErosionSettings{}.featureSize, "Fluvial feature size changed", true, "侵食で扱う地形特徴の大きさです。大きいほど広い起伏をなだらかに処理します。"))
-        {
-            EvaluateGraph();
-        }
         if (DrawPropertyIntRow("Iterations", "FluvialIterations", &erosion.iterations, 0, 200, rock::FluvialErosionSettings{}.iterations, "Fluvial iterations changed", true, "侵食シミュレーションの反復回数です。増やすほど効果が強くなりますが計算時間も増えます。"))
         {
             EvaluateGraph();
@@ -4134,6 +4152,50 @@ void DrawPropertiesPanel()
             EvaluateGraph();
         }
         if (DrawPropertyPercentRow("Erosion Strength (%)", "FluvialErosionStrength", &erosion.erosionStrength, 0.0f, 1.0f, rock::FluvialErosionSettings{}.erosionStrength, "Fluvial erosion strength changed", "地形を削る強さです。値を上げると谷や溝が深くなります。"))
+        {
+            EvaluateGraph();
+        }
+        float largeScaleStrength = scaleAverage(0, 1);
+        if (DrawPropertyPercentRow("Large Scale (%)", "FluvialLargeScale", &largeScaleStrength, 0.0f, 2.0f, (rock::FluvialErosionSettings{}.levelStrengths[0] + rock::FluvialErosionSettings{}.levelStrengths[1]) * 0.5f, "Fluvial large scale strength changed", "大きな谷筋や流域に効く低解像度レベルの強度です。"))
+        {
+            setScalePair(0, 1, largeScaleStrength);
+            EvaluateGraph();
+        }
+        float mediumScaleStrength = scaleAverage(2, 3);
+        if (DrawPropertyPercentRow("Medium Scale (%)", "FluvialMediumScale", &mediumScaleStrength, 0.0f, 2.0f, (rock::FluvialErosionSettings{}.levelStrengths[2] + rock::FluvialErosionSettings{}.levelStrengths[3]) * 0.5f, "Fluvial medium scale strength changed", "中規模の支流や斜面のまとまりに効くレベルの強度です。"))
+        {
+            setScalePair(2, 3, mediumScaleStrength);
+            EvaluateGraph();
+        }
+        float detailStrength = scaleAverage(4, 5);
+        if (DrawPropertyPercentRow("Detail Scale (%)", "FluvialDetailScale", &detailStrength, 0.0f, 2.0f, (rock::FluvialErosionSettings{}.levelStrengths[4] + rock::FluvialErosionSettings{}.levelStrengths[5]) * 0.5f, "Fluvial detail scale strength changed", "細かいリルや表面ディテールに効く高解像度レベルの強度です。"))
+        {
+            setScalePair(4, 5, detailStrength);
+            EvaluateGraph();
+        }
+        if (DrawPropertyPercentRow("Sediment Capacity (%)", "FluvialSedimentCapacity", &erosion.sedimentCapacity, 0.0f, 2.0f, rock::FluvialErosionSettings{}.sedimentCapacity, "Fluvial sediment capacity changed", "粒子が保持できる土砂量です。高いほど下流まで削った土砂を運びやすくなります。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyPercentRow("Deposition Rate (%)", "FluvialDepositionRate", &erosion.depositionRate, 0.0f, 1.0f, rock::FluvialErosionSettings{}.depositionRate, "Fluvial deposition rate changed", "土砂を堆積させる速さです。高いほど谷底や緩斜面に土砂が残りやすくなります。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyIntRow("Seed", "FluvialSeed", &erosion.seed, 0, 999999, rock::FluvialErosionSettings{}.seed, "Fluvial seed changed", true, "侵食パターンの乱数シードです。同じ値なら同じ結果を再現できます。"))
+        {
+            EvaluateGraph();
+        }
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextDisabled("Advanced");
+        ImGui::TableSetColumnIndex(1);
+        ImGui::SeparatorText("Advanced");
+        if (DrawPropertyBoolRow("Use Advanced", "FluvialUseAdvanced", &erosion.useAdvancedParameters, "Fluvial advanced mode changed", "有効にすると下の詳細パラメータを計算に使います。無効時は安定した内部デフォルトを使います。", rock::FluvialErosionSettings{}.useAdvancedParameters))
+        {
+            EvaluateGraph();
+        }
+        ImGui::BeginDisabled(!erosion.useAdvancedParameters);
+        if (DrawPropertyFloatRow("Feature Size (m)", "FluvialFeatureSize", &erosion.featureSize, 1.0f, 64.0f, rock::FluvialErosionSettings{}.featureSize, "Fluvial feature size changed", true, "侵食で扱う地形特徴の大きさです。大きいほど広い起伏をなだらかに処理します。"))
         {
             EvaluateGraph();
         }
@@ -4165,18 +4227,20 @@ void DrawPropertiesPanel()
         {
             EvaluateGraph();
         }
-        if (DrawPropertyPercentRow("Sediment Capacity (%)", "FluvialSedimentCapacity", &erosion.sedimentCapacity, 0.0f, 2.0f, rock::FluvialErosionSettings{}.sedimentCapacity, "Fluvial sediment capacity changed", "粒子が保持できる土砂量です。高いほど下流まで削った土砂を運びやすくなります。"))
+        for (size_t level = 0; level < erosion.levelStrengths.size(); ++level)
         {
-            EvaluateGraph();
+            const std::string label = std::format("Level {} Strength (%)", level + 1);
+            const std::string id = std::format("FluvialLevelStrength{}", level + 1);
+            const std::string tooltip = std::format(
+                "スケール別の侵食強度です。Level {} は{}に効きます。",
+                level + 1,
+                level < 2 ? "大きな谷筋や流域" : (level < 4 ? "中規模の支流" : "細かいリルや表面ディテール"));
+            if (DrawPropertyPercentRow(label.c_str(), id.c_str(), &erosion.levelStrengths[level], 0.0f, 2.0f, rock::FluvialErosionSettings{}.levelStrengths[level], "Fluvial level strength changed", tooltip.c_str()))
+            {
+                EvaluateGraph();
+            }
         }
-        if (DrawPropertyPercentRow("Deposition Rate (%)", "FluvialDepositionRate", &erosion.depositionRate, 0.0f, 1.0f, rock::FluvialErosionSettings{}.depositionRate, "Fluvial deposition rate changed", "土砂を堆積させる速さです。高いほど谷底や緩斜面に土砂が残りやすくなります。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyIntRow("Seed", "FluvialSeed", &erosion.seed, 0, 999999, rock::FluvialErosionSettings{}.seed, "Fluvial seed changed", true, "侵食パターンの乱数シードです。同じ値なら同じ結果を再現できます。"))
-        {
-            EvaluateGraph();
-        }
+        ImGui::EndDisabled();
 
         ImGui::EndTable();
         return;

@@ -4,6 +4,18 @@
 
 - なし
 
+## 0.15.1 - 2026-05-04 23:22
+
+- `Fluvial Erosion` のプロパティを Basic と Advanced に整理し、通常操作では `Large Scale` / `Medium Scale` / `Detail Scale` の3つでスケール別強度を調整できるようにしました。
+- `Use Advanced` を追加し、無効時は角度、摩擦、粒度などの詳細パラメータを計算に使わず、安定した内部デフォルトを使うようにしました。
+- `.terrainproj` の保存・読み込みに `useAdvancedParameters` を追加しました。
+
+## 0.15.0 - 2026-05-04 23:08
+
+- `Fluvial Erosion` に 6 段階の `Level Strength` を追加し、低解像度から高解像度へスケール別に浸食差分を重ねるマルチレベル処理を導入しました。
+- 低い Level は大きな谷筋や流域、高い Level は細かいリルや表面ディテールに効くよう、スケールごとに Feature Size、Channel Length、Channeling、Granularity を調整するようにしました。
+- `.terrainproj` の保存・読み込みに `levelStrengths` を追加しました。
+
 ## 0.14.5 - 2026-05-04 22:39
 
 - ハイトフィールドメッシュに外周の断面ポリゴンと底面を追加し、前面・背面・側面を持つ地形ブロックとして表示・出力できるようにしました。

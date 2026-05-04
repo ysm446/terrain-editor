@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -100,6 +101,9 @@ struct HeightmapLoadSettings
 
 struct FluvialErosionSettings
 {
+    static constexpr size_t LevelStrengthCount = 6;
+
+    bool useAdvancedParameters = false;
     float featureSize = 8.0f;
     int iterations = 25;
     float channelLength = 128.0f;
@@ -113,6 +117,7 @@ struct FluvialErosionSettings
     float sedimentVelocity = 1.0f;
     float sedimentCapacity = 0.6f;
     float depositionRate = 0.35f;
+    std::array<float, LevelStrengthCount> levelStrengths = {0.85f, 1.0f, 0.75f, 0.45f, 0.25f, 0.12f};
     int seed = 1;
 };
 

@@ -74,6 +74,7 @@ uint64_t HashHeightmapSettings(const HeightmapLoadSettings& settings, int resolu
 uint64_t HashFluvialSettings(const FluvialErosionSettings& settings, int resolution)
 {
     uint64_t hash = 1099511628211ull;
+    HashCombine(hash, static_cast<uint64_t>(settings.useAdvancedParameters));
     HashCombine(hash, HashFloat(settings.featureSize));
     HashCombine(hash, static_cast<uint64_t>(settings.iterations));
     HashCombine(hash, HashFloat(settings.channelLength));
@@ -87,6 +88,10 @@ uint64_t HashFluvialSettings(const FluvialErosionSettings& settings, int resolut
     HashCombine(hash, HashFloat(settings.sedimentVelocity));
     HashCombine(hash, HashFloat(settings.sedimentCapacity));
     HashCombine(hash, HashFloat(settings.depositionRate));
+    for (float levelStrength : settings.levelStrengths)
+    {
+        HashCombine(hash, HashFloat(levelStrength));
+    }
     HashCombine(hash, static_cast<uint64_t>(settings.seed));
     HashCombine(hash, static_cast<uint64_t>(resolution));
     return hash;
@@ -325,7 +330,81 @@ HeightfieldGrid BuildHeightfieldFromHeightmap(const HeightmapLoadSettings& setti
     return grid;
 }
 
-void ApplyFluvialErosion(HeightfieldGrid& grid, const FluvialErosionSettings& settings)
+HeightfieldGrid ResampleHeightfieldGrid(const HeightfieldGrid& source, int resolution)
+{
+    HeightfieldGrid result;
+    result.resolution = std::clamp(resolution, 2, std::max(2, source.resolution));
+    result.terrainSizeMeters = source.terrainSizeMeters;
+    const size_t cellCount = static_cast<size_t>(result.resolution) * static_cast<size_t>(result.resolution);
+    result.heights.reserve(cellCount);
+    result.mask.assign(cellCount, 0.0f);
+    for (int z = 0; z < result.resolution; ++z)
+    {
+        const float v = result.resolution > 1 ? static_cast<float>(z) / static_cast<float>(result.resolution - 1) : 0.0f;
+        for (int x = 0; x < result.resolution; ++x)
+        {
+            const float u = result.resolution > 1 ? static_cast<float>(x) / static_cast<float>(result.resolution - 1) : 0.0f;
+            result.heights.push_back(SampleHeightfieldValue(source.heights, source.resolution, u, v));
+        }
+    }
+    return result;
+}
+
+void AddResampledHeightDelta(HeightfieldGrid& target, const HeightfieldGrid& base, const HeightfieldGrid& eroded, float strength)
+{
+    const int n = target.resolution;
+    if (n < 2 || base.resolution != eroded.resolution || strength <= 0.0f)
+    {
+        return;
+    }
+
+    std::vector<float> delta(base.heights.size(), 0.0f);
+    for (size_t i = 0; i < delta.size(); ++i)
+    {
+        delta[i] = eroded.heights[i] - base.heights[i];
+    }
+
+    const size_t cellCount = static_cast<size_t>(n) * static_cast<size_t>(n);
+    if (target.mask.size() != cellCount)
+    {
+        target.mask.assign(cellCount, 0.0f);
+    }
+
+    for (int z = 0; z < n; ++z)
+    {
+        const float v = n > 1 ? static_cast<float>(z) / static_cast<float>(n - 1) : 0.0f;
+        for (int x = 0; x < n; ++x)
+        {
+            const float u = n > 1 ? static_cast<float>(x) / static_cast<float>(n - 1) : 0.0f;
+            const size_t index = static_cast<size_t>(z * n + x);
+            const float heightDelta = SampleHeightfieldValue(delta, base.resolution, u, v) * strength;
+            target.heights[index] += heightDelta;
+            target.mask[index] += std::min(std::abs(heightDelta) / std::max(target.terrainSizeMeters * 0.015f, 0.0001f), 1.0f);
+            if (!eroded.mask.empty())
+            {
+                target.mask[index] += SampleHeightfieldValue(eroded.mask, eroded.resolution, u, v) * strength;
+            }
+        }
+    }
+}
+
+void NormalizeHeightfieldMask(HeightfieldGrid& grid)
+{
+    float maxMask = 0.0f;
+    for (float value : grid.mask)
+    {
+        maxMask = std::max(maxMask, value);
+    }
+    if (maxMask > 0.000001f)
+    {
+        for (float& value : grid.mask)
+        {
+            value = std::clamp(value / maxMask, 0.0f, 1.0f);
+        }
+    }
+}
+
+void ApplyFluvialErosionSingleLevel(HeightfieldGrid& grid, const FluvialErosionSettings& settings)
 {
     const int n = grid.resolution;
     if (n < 3 || grid.heights.size() < static_cast<size_t>(n * n) || settings.iterations <= 0 || settings.erosionStrength <= 0.0f)
@@ -559,6 +638,62 @@ void ApplyFluvialErosion(HeightfieldGrid& grid, const FluvialErosionSettings& se
             grid.mask[i] = std::clamp(maskField[i] / maxMask, 0.0f, 1.0f);
         }
     }
+}
+
+void ApplyFluvialErosion(HeightfieldGrid& grid, const FluvialErosionSettings& settings)
+{
+    const int n = grid.resolution;
+    if (n < 3 || grid.heights.size() < static_cast<size_t>(n * n) || settings.iterations <= 0 || settings.erosionStrength <= 0.0f)
+    {
+        return;
+    }
+
+    const std::array<int, FluvialErosionSettings::LevelStrengthCount> levelResolutions = {16, 32, 64, 128, 256, 512};
+    FluvialErosionSettings effectiveSettings = settings;
+    if (!settings.useAdvancedParameters)
+    {
+        const FluvialErosionSettings defaults;
+        effectiveSettings.featureSize = defaults.featureSize;
+        effectiveSettings.channeling = defaults.channeling;
+        effectiveSettings.friction = defaults.friction;
+        effectiveSettings.wearAngleDegrees = 4.0f;
+        effectiveSettings.depositAngleDegrees = defaults.depositAngleDegrees;
+        effectiveSettings.maxErosionAngleDegrees = 80.0f;
+        effectiveSettings.erosionGranularity = defaults.erosionGranularity;
+        effectiveSettings.sedimentVelocity = defaults.sedimentVelocity;
+    }
+    grid.mask.assign(static_cast<size_t>(n) * static_cast<size_t>(n), 0.0f);
+    int previousResolution = 0;
+    for (size_t level = 0; level < effectiveSettings.levelStrengths.size(); ++level)
+    {
+        const float levelStrength = std::clamp(effectiveSettings.levelStrengths[level], 0.0f, 2.0f);
+        if (levelStrength <= 0.0001f)
+        {
+            continue;
+        }
+
+        const int levelResolution = std::clamp(levelResolutions[level], 16, n);
+        if (levelResolution == previousResolution && levelResolution != n)
+        {
+            continue;
+        }
+        previousResolution = levelResolution;
+
+        HeightfieldGrid base = ResampleHeightfieldGrid(grid, levelResolution);
+        HeightfieldGrid eroded = base;
+        FluvialErosionSettings levelSettings = effectiveSettings;
+        const float detailT = static_cast<float>(level) / static_cast<float>(std::max<size_t>(1, effectiveSettings.levelStrengths.size() - 1));
+        levelSettings.erosionStrength = std::clamp(effectiveSettings.erosionStrength * levelStrength, 0.0f, 2.0f);
+        levelSettings.iterations = std::max(1, static_cast<int>(std::round(static_cast<float>(effectiveSettings.iterations) * std::lerp(0.55f, 0.9f, detailT))));
+        levelSettings.channelLength = effectiveSettings.channelLength * std::lerp(2.8f, 0.75f, detailT);
+        levelSettings.featureSize = effectiveSettings.featureSize * std::lerp(4.0f, 0.75f, detailT);
+        levelSettings.channeling = std::clamp(effectiveSettings.channeling * std::lerp(1.65f, 0.85f, detailT), 0.0f, 1.0f);
+        levelSettings.erosionGranularity = std::clamp(effectiveSettings.erosionGranularity * std::lerp(0.45f, 1.2f, detailT), 1.0f, 100.0f);
+        levelSettings.seed = effectiveSettings.seed + static_cast<int>(level) * 1009;
+        ApplyFluvialErosionSingleLevel(eroded, levelSettings);
+        AddResampledHeightDelta(grid, base, eroded, 1.0f);
+    }
+    NormalizeHeightfieldMask(grid);
 }
 
 MeshData BuildMeshFromHeightfield(const HeightfieldGrid& grid, int meshResolution)
