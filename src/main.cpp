@@ -3184,6 +3184,29 @@ void DrawRoundPin(const rock::Pin& pin)
     ImGui::GetWindowDrawList()->AddCircle(center, 4.3f, ColorToU32(color), 16, 1.6f);
 }
 
+void DrawNodeEvaluationBadge(const rock::Node& node, float nodeWidth, const ImVec2& headerCursor)
+{
+    const rock::EvaluationSummary& evaluation = g_graph.Evaluation();
+    if (!g_evaluationInFlight || evaluation.previewNodeId != node.id)
+    {
+        return;
+    }
+
+    const char* label = g_evaluationPending ? "計算待ち" : "計算中";
+    const int dotCount = g_evaluationPending ? 0 : (static_cast<int>(ImGui::GetTime() * 3.0) % 4);
+    char text[32]{};
+    std::snprintf(text, sizeof(text), "%s%.*s", label, dotCount, "...");
+
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    const ImVec2 textSize = ImGui::CalcTextSize(text);
+    const ImVec2 padding(8.0f, 3.0f);
+    const ImVec2 badgeMax(headerCursor.x + nodeWidth - 4.0f, headerCursor.y + 20.0f);
+    const ImVec2 badgeMin(badgeMax.x - textSize.x - padding.x * 2.0f, headerCursor.y - 1.0f);
+    drawList->AddRectFilled(badgeMin, badgeMax, ColorToU32(ImVec4(0.18f, 0.14f, 0.07f, 0.96f)), 5.0f);
+    drawList->AddRect(badgeMin, badgeMax, ColorToU32(ImVec4(0.90f, 0.70f, 0.28f, 0.78f)), 5.0f, 0, 1.0f);
+    drawList->AddText(ImVec2(badgeMin.x + padding.x, badgeMin.y + padding.y - 1.0f), ColorToU32(ImVec4(0.96f, 0.80f, 0.38f, 1.0f)), text);
+}
+
 void DrawRockNode(const rock::Node& node)
 {
     constexpr float nodeWidth = 250.0f;
@@ -3208,6 +3231,7 @@ void DrawRockNode(const rock::Node& node)
     ImGui::TextUnformatted(node.title.c_str());
     ImGui::SetWindowFontScale(1.0f);
     ImGui::PopStyleColor();
+    DrawNodeEvaluationBadge(node, nodeWidth, headerCursor);
 
     ImGui::Dummy(ImVec2(nodeWidth, 10.0f));
     const float rowStartX = ImGui::GetCursorPosX();
