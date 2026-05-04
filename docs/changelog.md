@@ -4,6 +4,67 @@
 
 - なし
 
+## 0.15.12 - 2026-05-05 01:48
+
+- `Import Heightmap` で 16-bit grayscale、32-bit float grayscale、16-bit color の高さ情報を8bitへ潰さず読み込むようにしました。
+- ハイトマップ読み込み結果のメッセージに、読み込んだビット深度・形式を表示するようにしました。
+
+## 0.15.11 - 2026-05-05 01:34
+
+- `Fluvial Erosion` の GPU Compute に D8 近似の flow accumulation パスを追加しました。
+- GPU侵食シェーダで flow accumulation の重みを使い、水が集まる筋ほど侵食が強くなるようにしました。
+- GPU実行時に flow accumulation 用の追加バッファと compute pipeline state を使うようにしました。
+
+## 0.15.10 - 2026-05-05 01:18
+
+- `GPU Compute` がマルチレベル処理を迂回していた問題を修正しました。
+- GPU実行時も `Level Strength` の各レベルごとに計算し、低解像度の大きな浸食から高解像度の細部まで差分を重ねるようにしました。
+
+## 0.15.9 - 2026-05-05 01:05
+
+- `GPU Compute` の本番ハイトフィールド評価をメインスレッドへスケジュールする仕組みを追加しました。
+- バックグラウンド評価スレッドはGPUジョブをキューへ積み、メインループがD3D12上で実行して結果を返すようにしました。
+- 終了時にGPUジョブ待ちで固まらないよう、シャットダウン待機中もGPUジョブを処理するようにしました。
+
+## 0.15.8 - 2026-05-05 00:52
+
+- `GPU Compute` 選択時に、バックグラウンド評価スレッドから D3D12 の本番GPU評価を実行しない安全柵を追加しました。
+- GPU本番評価がメインスレッド実行スケジューラへ移るまで、非同期評価中は `CPU Reference` へフォールバックするようにしました。
+
+## 0.15.7 - 2026-05-05 00:43
+
+- `Fluvial Erosion` の GPU Compute シェーダで、セルサイズ、Wear Angle、Max Erosion Angle、Sediment Capacity、Channeling を使うようにしました。
+- GPU 版の侵食量計算を CPU 側のグリッド同期パスへ近づけ、CPU/GPU 差分検証へ進めやすくしました。
+
+## 0.15.6 - 2026-05-05 00:32
+
+- `Fluvial Erosion` の `GPU Compute` を本番のハイトフィールド評価へ接続しました。
+- GPU 実行時はハイトフィールドを GPU バッファへ転送し、compute shader を複数回 dispatch して、高さとマスクを CPU 側へ読み戻すようにしました。
+- GPU 実行に失敗した場合は `CPU Reference` へフォールバックするようにしました。
+
+## 0.15.5 - 2026-05-05 00:16
+
+- `Fluvial Erosion` の GPU Compute 経路で、小さなハイトフィールドを GPU バッファへ転送し、compute shader を dispatch して読み戻す自己診断を追加しました。
+- `GPU Compute` 選択時の状態表示を、シェーダ準備だけでなく dispatch 実行確認まで含む表示に更新しました。
+
+## 0.15.4 - 2026-05-04 23:59
+
+- `Fluvial Erosion` の GPU Compute 実装へ向けて、D3D12 compute shader、root signature、compute pipeline state の初期化を追加しました。
+- `GPU Compute` 選択時に compute shader の準備状態をプロパティへ表示するようにしました。
+- 現時点では GPU 実行はまだ CPU Reference へフォールバックします。
+
+## 0.15.3 - 2026-05-04 23:46
+
+- `Fluvial Erosion` に GPU Compute へ移行しやすいグリッド同期更新パスを追加しました。
+- 各レベルの前半を決定的なグリッドベースの侵食・堆積処理にし、後半の粒子パスを減らして、CPU/GPUで同じ処理構造へ寄せました。
+
+## 0.15.2 - 2026-05-04 23:36
+
+- `Fluvial Erosion` に `Backend` を追加し、将来の `GPU Compute` 実装へ向けた切り替えの土台を作りました。
+- 現時点の `GPU Compute` は未実装のため、選択時も `CPU Reference` へフォールバックする旨をUIに表示するようにしました。
+- `.terrainproj` の保存・読み込みに `backend` を追加しました。
+- `docs/fluvial_erosion_node.md` に CPU/GPU 一致方針を追記しました。
+
 ## 0.15.1 - 2026-05-04 23:22
 
 - `Fluvial Erosion` のプロパティを Basic と Advanced に整理し、通常操作では `Large Scale` / `Medium Scale` / `Detail Scale` の3つでスケール別強度を調整できるようにしました。

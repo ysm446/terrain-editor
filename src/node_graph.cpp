@@ -25,6 +25,8 @@ namespace
 {
 using Microsoft::WRL::ComPtr;
 
+FluvialGpuEvaluator g_fluvialGpuEvaluator = nullptr;
+
 std::string NoisePipelineSummary(const SdfPipeline& pipeline)
 {
     if (pipeline.noiseLayers.empty())
@@ -43,6 +45,7 @@ struct HeightmapImage
 {
     uint32_t width = 0;
     uint32_t height = 0;
+    std::string precision;
     std::vector<float> values;
 };
 
@@ -74,6 +77,7 @@ uint64_t HashHeightmapSettings(const HeightmapLoadSettings& settings, int resolu
 uint64_t HashFluvialSettings(const FluvialErosionSettings& settings, int resolution)
 {
     uint64_t hash = 1099511628211ull;
+    HashCombine(hash, static_cast<uint64_t>(settings.backend));
     HashCombine(hash, static_cast<uint64_t>(settings.useAdvancedParameters));
     HashCombine(hash, HashFloat(settings.featureSize));
     HashCombine(hash, static_cast<uint64_t>(settings.iterations));
@@ -186,51 +190,142 @@ bool LoadHeightmapImage(const std::string& path, HeightmapImage& image, std::str
         return false;
     }
 
-    ComPtr<IWICFormatConverter> converter;
-    hr = factory->CreateFormatConverter(&converter);
-    if (FAILED(hr))
-    {
-        cleanup();
-        if (error != nullptr)
-        {
-            *error = "Failed to create heightmap image converter";
-        }
-        return false;
-    }
-
-    hr = converter->Initialize(frame.Get(), GUID_WICPixelFormat32bppRGBA, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom);
-    if (FAILED(hr))
-    {
-        cleanup();
-        if (error != nullptr)
-        {
-            *error = "Failed to convert heightmap image";
-        }
-        return false;
-    }
-
-    std::vector<uint8_t> pixels(static_cast<size_t>(width) * static_cast<size_t>(height) * 4u);
-    hr = converter->CopyPixels(nullptr, width * 4u, static_cast<UINT>(pixels.size()), pixels.data());
-    cleanup();
-    if (FAILED(hr))
-    {
-        if (error != nullptr)
-        {
-            *error = "Failed to copy heightmap pixels";
-        }
-        return false;
-    }
-
     image.width = width;
     image.height = height;
     image.values.resize(static_cast<size_t>(width) * static_cast<size_t>(height));
-    for (size_t i = 0; i < image.values.size(); ++i)
+
+    WICPixelFormatGUID pixelFormat{};
+    frame->GetPixelFormat(&pixelFormat);
+
+    if (IsEqualGUID(pixelFormat, GUID_WICPixelFormat8bppGray))
     {
-        const uint8_t r = pixels[i * 4u + 0u];
-        const uint8_t g = pixels[i * 4u + 1u];
-        const uint8_t b = pixels[i * 4u + 2u];
-        image.values[i] = (0.2126f * static_cast<float>(r) + 0.7152f * static_cast<float>(g) + 0.0722f * static_cast<float>(b)) / 255.0f;
+        std::vector<uint8_t> pixels(static_cast<size_t>(width) * static_cast<size_t>(height));
+        hr = frame->CopyPixels(nullptr, width, static_cast<UINT>(pixels.size()), pixels.data());
+        cleanup();
+        if (FAILED(hr))
+        {
+            if (error != nullptr)
+            {
+                *error = "Failed to copy 8-bit heightmap pixels";
+            }
+            return false;
+        }
+        for (size_t i = 0; i < image.values.size(); ++i)
+        {
+            image.values[i] = static_cast<float>(pixels[i]) / 255.0f;
+        }
+        image.precision = "8-bit grayscale";
     }
+    else if (IsEqualGUID(pixelFormat, GUID_WICPixelFormat16bppGray))
+    {
+        std::vector<uint16_t> pixels(static_cast<size_t>(width) * static_cast<size_t>(height));
+        hr = frame->CopyPixels(nullptr, width * sizeof(uint16_t), static_cast<UINT>(pixels.size() * sizeof(uint16_t)), reinterpret_cast<BYTE*>(pixels.data()));
+        cleanup();
+        if (FAILED(hr))
+        {
+            if (error != nullptr)
+            {
+                *error = "Failed to copy 16-bit heightmap pixels";
+            }
+            return false;
+        }
+        for (size_t i = 0; i < image.values.size(); ++i)
+        {
+            image.values[i] = static_cast<float>(pixels[i]) / 65535.0f;
+        }
+        image.precision = "16-bit grayscale";
+    }
+    else if (IsEqualGUID(pixelFormat, GUID_WICPixelFormat32bppGrayFloat))
+    {
+        std::vector<float> pixels(static_cast<size_t>(width) * static_cast<size_t>(height));
+        hr = frame->CopyPixels(nullptr, width * sizeof(float), static_cast<UINT>(pixels.size() * sizeof(float)), reinterpret_cast<BYTE*>(pixels.data()));
+        cleanup();
+        if (FAILED(hr))
+        {
+            if (error != nullptr)
+            {
+                *error = "Failed to copy float heightmap pixels";
+            }
+            return false;
+        }
+        for (size_t i = 0; i < image.values.size(); ++i)
+        {
+            image.values[i] = std::clamp(pixels[i], 0.0f, 1.0f);
+        }
+        image.precision = "32-bit float grayscale";
+    }
+    else
+    {
+        ComPtr<IWICFormatConverter> converter;
+        hr = factory->CreateFormatConverter(&converter);
+        if (FAILED(hr))
+        {
+            cleanup();
+            if (error != nullptr)
+            {
+                *error = "Failed to create heightmap image converter";
+            }
+            return false;
+        }
+
+        hr = converter->Initialize(frame.Get(), GUID_WICPixelFormat64bppRGBA, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom);
+        if (SUCCEEDED(hr))
+        {
+            std::vector<uint16_t> pixels(static_cast<size_t>(width) * static_cast<size_t>(height) * 4u);
+            hr = converter->CopyPixels(nullptr, width * 4u * sizeof(uint16_t), static_cast<UINT>(pixels.size() * sizeof(uint16_t)), reinterpret_cast<BYTE*>(pixels.data()));
+            cleanup();
+            if (FAILED(hr))
+            {
+                if (error != nullptr)
+                {
+                    *error = "Failed to copy 16-bit color heightmap pixels";
+                }
+                return false;
+            }
+            for (size_t i = 0; i < image.values.size(); ++i)
+            {
+                const uint16_t r = pixels[i * 4u + 0u];
+                const uint16_t g = pixels[i * 4u + 1u];
+                const uint16_t b = pixels[i * 4u + 2u];
+                image.values[i] = (0.2126f * static_cast<float>(r) + 0.7152f * static_cast<float>(g) + 0.0722f * static_cast<float>(b)) / 65535.0f;
+            }
+            image.precision = "16-bit color";
+        }
+        else
+        {
+            hr = converter->Initialize(frame.Get(), GUID_WICPixelFormat32bppRGBA, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom);
+            if (FAILED(hr))
+            {
+                cleanup();
+                if (error != nullptr)
+                {
+                    *error = "Failed to convert heightmap image";
+                }
+                return false;
+            }
+
+            std::vector<uint8_t> pixels(static_cast<size_t>(width) * static_cast<size_t>(height) * 4u);
+            hr = converter->CopyPixels(nullptr, width * 4u, static_cast<UINT>(pixels.size()), pixels.data());
+            cleanup();
+            if (FAILED(hr))
+            {
+                if (error != nullptr)
+                {
+                    *error = "Failed to copy heightmap pixels";
+                }
+                return false;
+            }
+            for (size_t i = 0; i < image.values.size(); ++i)
+            {
+                const uint8_t r = pixels[i * 4u + 0u];
+                const uint8_t g = pixels[i * 4u + 1u];
+                const uint8_t b = pixels[i * 4u + 2u];
+                image.values[i] = (0.2126f * static_cast<float>(r) + 0.7152f * static_cast<float>(g) + 0.0722f * static_cast<float>(b)) / 255.0f;
+            }
+            image.precision = "8-bit color";
+        }
+    }
+
     if (error != nullptr)
     {
         error->clear();
@@ -320,9 +415,10 @@ HeightfieldGrid BuildHeightfieldFromHeightmap(const HeightmapLoadSettings& setti
     if (message != nullptr)
     {
         *message = std::format(
-            "heightmap {}x{} -> terrain {}x{} ({:.1f} m)",
+            "heightmap {}x{} {} -> terrain {}x{} ({:.1f} m)",
             image.width,
             image.height,
+            image.precision,
             grid.resolution,
             grid.resolution,
             settings.scaleMeters);
@@ -400,6 +496,141 @@ void NormalizeHeightfieldMask(HeightfieldGrid& grid)
         for (float& value : grid.mask)
         {
             value = std::clamp(value / maxMask, 0.0f, 1.0f);
+        }
+    }
+}
+
+void ApplyGridErosionPass(HeightfieldGrid& grid, const FluvialErosionSettings& settings, int iterationCount, float strengthScale, std::vector<float>& maskField)
+{
+    const int n = grid.resolution;
+    if (n < 3 || iterationCount <= 0)
+    {
+        return;
+    }
+
+    const float cellSize = grid.terrainSizeMeters / static_cast<float>(std::max(1, n - 1));
+    const size_t cellCount = static_cast<size_t>(n * n);
+    const auto indexAt = [n](int x, int z) {
+        return static_cast<size_t>(z * n + x);
+    };
+    const auto clampCoord = [n](int value) {
+        return std::clamp(value, 0, n - 1);
+    };
+
+    std::vector<int> receiver(cellCount, -1);
+    std::vector<float> receiverDistance(cellCount, 1.0f);
+    std::vector<float> flow(cellCount, 1.0f);
+    std::vector<float> delta(cellCount, 0.0f);
+    std::vector<size_t> sortedCells(cellCount, 0);
+    std::iota(sortedCells.begin(), sortedCells.end(), 0);
+
+    const float wearSlope = std::tan(std::clamp(settings.wearAngleDegrees, 0.0f, 89.0f) * 3.14159265f / 180.0f);
+    const float maxSlope = std::tan(std::clamp(settings.maxErosionAngleDegrees, 0.0f, 89.0f) * 3.14159265f / 180.0f);
+    const float strength = std::clamp(settings.erosionStrength, 0.0f, 2.0f) * strengthScale;
+    const float capacityScale = std::clamp(settings.sedimentCapacity, 0.0f, 2.0f);
+    const float depositionRate = std::clamp(settings.depositionRate, 0.0f, 1.0f);
+    const float channeling = std::clamp(settings.channeling, 0.0f, 1.0f);
+
+    for (int iteration = 0; iteration < iterationCount; ++iteration)
+    {
+        for (int z = 0; z < n; ++z)
+        {
+            for (int x = 0; x < n; ++x)
+            {
+                const size_t index = indexAt(x, z);
+                float steepestDrop = 0.0f;
+                int bestReceiver = -1;
+                float bestDistance = 1.0f;
+                const float currentHeight = grid.heights[index];
+                for (int dz = -1; dz <= 1; ++dz)
+                {
+                    for (int dx = -1; dx <= 1; ++dx)
+                    {
+                        if (dx == 0 && dz == 0)
+                        {
+                            continue;
+                        }
+                        const int nx = clampCoord(x + dx);
+                        const int nz = clampCoord(z + dz);
+                        if (nx == x && nz == z)
+                        {
+                            continue;
+                        }
+                        const float distance = (dx != 0 && dz != 0) ? 1.41421356f : 1.0f;
+                        const size_t neighborIndex = indexAt(nx, nz);
+                        const float drop = (currentHeight - grid.heights[neighborIndex]) / distance;
+                        if (drop > steepestDrop)
+                        {
+                            steepestDrop = drop;
+                            bestReceiver = static_cast<int>(neighborIndex);
+                            bestDistance = distance;
+                        }
+                    }
+                }
+                receiver[index] = bestReceiver;
+                receiverDistance[index] = bestDistance;
+            }
+        }
+
+        std::fill(flow.begin(), flow.end(), 1.0f);
+        std::ranges::sort(sortedCells, [&](size_t a, size_t b) {
+            return grid.heights[a] > grid.heights[b];
+        });
+        for (const size_t index : sortedCells)
+        {
+            const int next = receiver[index];
+            if (next >= 0)
+            {
+                flow[static_cast<size_t>(next)] += flow[index];
+            }
+        }
+
+        float maxFlow = 1.0f;
+        for (float value : flow)
+        {
+            maxFlow = std::max(maxFlow, value);
+        }
+        const float logMaxFlow = std::log1p(maxFlow);
+        for (float& value : flow)
+        {
+            value = logMaxFlow > 0.0001f ? std::log1p(value) / logMaxFlow : 0.0f;
+        }
+
+        std::fill(delta.begin(), delta.end(), 0.0f);
+        for (int z = 1; z < n - 1; ++z)
+        {
+            for (int x = 1; x < n - 1; ++x)
+            {
+                const size_t index = indexAt(x, z);
+                const int next = receiver[index];
+                if (next < 0)
+                {
+                    continue;
+                }
+                const size_t receiverIndex = static_cast<size_t>(next);
+                const float distanceMeters = std::max(cellSize * receiverDistance[index], 0.0001f);
+                const float drop = std::max(grid.heights[index] - grid.heights[receiverIndex], 0.0f);
+                const float slope = drop / distanceMeters;
+                if (slope > maxSlope)
+                {
+                    continue;
+                }
+
+                const float flowWeight = std::pow(std::clamp(flow[index], 0.0f, 1.0f), 1.35f);
+                const float wearGate = std::clamp((slope + flowWeight * 0.10f) / std::max(wearSlope + 0.10f, 0.0001f), 0.0f, 1.0f);
+                const float capacity = (drop * 0.16f + slope * cellSize * 0.08f) * (0.25f + flowWeight * 2.4f) * capacityScale;
+                const float erodeAmount = std::min(drop * 0.72f, capacity * strength * wearGate * (0.65f + channeling));
+                const float depositAmount = erodeAmount * depositionRate * std::lerp(0.18f, 0.42f, flowWeight);
+                delta[index] -= erodeAmount;
+                delta[receiverIndex] += depositAmount;
+                maskField[index] += erodeAmount;
+                maskField[receiverIndex] += depositAmount * 0.5f;
+            }
+        }
+
+        for (size_t i = 0; i < cellCount; ++i)
+        {
+            grid.heights[i] += delta[i];
         }
     }
 }
@@ -617,12 +848,20 @@ void ApplyFluvialErosionSingleLevel(HeightfieldGrid& grid, const FluvialErosionS
         }
     };
 
-    const int coarseIterations = std::max(1, settings.iterations / 3);
-    const int detailIterations = std::max(0, settings.iterations - coarseIterations);
-    runErosionPass(2.75f, 1.6f, 0.65f, coarseIterations, 13007);
+    const int gridIterations = std::max(1, settings.iterations / 2);
+    const int particleIterations = std::max(0, settings.iterations - gridIterations);
+    ApplyGridErosionPass(grid, settings, gridIterations, 0.68f, maskField);
+    updateFlowFields();
+
+    const int coarseIterations = particleIterations / 2;
+    const int detailIterations = std::max(0, particleIterations - coarseIterations);
+    if (coarseIterations > 0)
+    {
+        runErosionPass(2.75f, 1.6f, 0.45f, coarseIterations, 13007);
+    }
     if (detailIterations > 0)
     {
-        runErosionPass(0.75f, 0.85f, 0.9f, detailIterations, 29017);
+        runErosionPass(0.75f, 0.85f, 0.65f, detailIterations, 29017);
     }
 
     float maxMask = 0.0f;
@@ -662,6 +901,7 @@ void ApplyFluvialErosion(HeightfieldGrid& grid, const FluvialErosionSettings& se
         effectiveSettings.erosionGranularity = defaults.erosionGranularity;
         effectiveSettings.sedimentVelocity = defaults.sedimentVelocity;
     }
+
     grid.mask.assign(static_cast<size_t>(n) * static_cast<size_t>(n), 0.0f);
     int previousResolution = 0;
     for (size_t level = 0; level < effectiveSettings.levelStrengths.size(); ++level)
@@ -690,7 +930,16 @@ void ApplyFluvialErosion(HeightfieldGrid& grid, const FluvialErosionSettings& se
         levelSettings.channeling = std::clamp(effectiveSettings.channeling * std::lerp(1.65f, 0.85f, detailT), 0.0f, 1.0f);
         levelSettings.erosionGranularity = std::clamp(effectiveSettings.erosionGranularity * std::lerp(0.45f, 1.2f, detailT), 1.0f, 100.0f);
         levelSettings.seed = effectiveSettings.seed + static_cast<int>(level) * 1009;
-        ApplyFluvialErosionSingleLevel(eroded, levelSettings);
+        bool usedGpu = false;
+        if (effectiveSettings.backend == FluvialBackend::GpuCompute && g_fluvialGpuEvaluator != nullptr)
+        {
+            std::string gpuError;
+            usedGpu = g_fluvialGpuEvaluator(eroded, levelSettings, &gpuError);
+        }
+        if (!usedGpu)
+        {
+            ApplyFluvialErosionSingleLevel(eroded, levelSettings);
+        }
         AddResampledHeightDelta(grid, base, eroded, 1.0f);
     }
     NormalizeHeightfieldMask(grid);
@@ -1871,6 +2120,11 @@ PreviewStage PreviewStageFor(NodeKind kind)
     default:
         return PreviewStage::Output;
     }
+}
+
+void SetFluvialGpuEvaluator(FluvialGpuEvaluator evaluator)
+{
+    g_fluvialGpuEvaluator = evaluator;
 }
 
 } // namespace rock

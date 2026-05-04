@@ -14,9 +14,12 @@
 #include <fstream>
 #include <future>
 #include <limits>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -289,9 +292,33 @@ ComPtr<ID3D12RootSignature> g_meshPreviewRootSignature;
 ComPtr<ID3D12PipelineState> g_meshPreviewSurfacePso;
 ComPtr<ID3D12PipelineState> g_meshPreviewWirePso;
 ComPtr<ID3D12PipelineState> g_meshPreviewShadowPso;
+ComPtr<ID3D12RootSignature> g_fluvialComputeRootSignature;
+ComPtr<ID3D12PipelineState> g_fluvialGridErosionPso;
+ComPtr<ID3D12PipelineState> g_fluvialFlowAccumulationPso;
 ComPtr<ID3D12DescriptorHeap> g_meshPreviewRtvHeap;
 ComPtr<ID3D12DescriptorHeap> g_meshPreviewDsvHeap;
 GpuMeshPreview g_gpuMeshPreview;
+std::string g_fluvialComputeStatus = "GPU Compute not initialized";
+bool g_fluvialComputeSmokeTested = false;
+std::mutex g_fluvialComputeMutex;
+std::mutex g_fluvialGpuRequestMutex;
+std::thread::id g_mainThreadId;
+
+struct FluvialGpuRequestResult
+{
+    bool success = false;
+    rock::HeightfieldGrid grid;
+    std::string error;
+};
+
+struct FluvialGpuRequest
+{
+    rock::HeightfieldGrid grid;
+    rock::FluvialErosionSettings settings;
+    std::promise<FluvialGpuRequestResult> promise;
+};
+
+std::vector<std::shared_ptr<FluvialGpuRequest>> g_pendingFluvialGpuRequests;
 
 std::string MakeWindowTitleText()
 {
@@ -586,6 +613,10 @@ void CleanupD3D()
     g_meshPreviewSurfacePso.Reset();
     g_meshPreviewWirePso.Reset();
     g_meshPreviewRootSignature.Reset();
+    g_fluvialGridErosionPso.Reset();
+    g_fluvialFlowAccumulationPso.Reset();
+    g_fluvialComputeRootSignature.Reset();
+    g_fluvialComputeSmokeTested = false;
     g_meshPreviewRtvHeap.Reset();
     g_meshPreviewDsvHeap.Reset();
     if (g_fenceEvent)
@@ -617,7 +648,13 @@ std::filesystem::path MeshPreviewShaderPath()
     return ShaderPath("mesh_preview.hlsl");
 }
 
+std::filesystem::path FluvialComputeShaderPath()
+{
+    return ShaderPath("fluvial_erosion_compute.hlsl");
+}
+
 void EvaluateGraph();
+void ProcessPendingFluvialGpuRequests();
 void EnsureFinalMesh(rock::GraphId outputNodeId = 0);
 int CurrentPreviewMeshResolution();
 bool IsTerrainNodeKind(rock::NodeKind kind);
@@ -1360,6 +1397,7 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
                     {"simulationResolution", node.heightmap.simulationResolution},
                 }},
                 {"fluvialErosion", {
+                    {"backend", static_cast<int>(node.fluvialErosion.backend)},
                     {"useAdvancedParameters", node.fluvialErosion.useAdvancedParameters},
                     {"featureSize", node.fluvialErosion.featureSize},
                     {"iterations", node.fluvialErosion.iterations},
@@ -1547,6 +1585,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 node.heightmap.relativeVerticalScalePercent = std::clamp(nodeHeightmapJson.value("relativeVerticalScalePercent", node.heightmap.relativeVerticalScalePercent), 0.0f, 10000.0f);
                 node.heightmap.verticalOffsetMeters = std::clamp(nodeHeightmapJson.value("verticalOffsetMeters", node.heightmap.verticalOffsetMeters), -1000000.0f, 1000000.0f);
                 node.heightmap.simulationResolution = std::clamp(nodeHeightmapJson.value("simulationResolution", node.heightmap.simulationResolution), 2, 2048);
+                node.fluvialErosion.backend = static_cast<rock::FluvialBackend>(std::clamp(nodeFluvialJson.value("backend", static_cast<int>(node.fluvialErosion.backend)), 0, 1));
                 node.fluvialErosion.useAdvancedParameters = nodeFluvialJson.value("useAdvancedParameters", node.fluvialErosion.useAdvancedParameters);
                 node.fluvialErosion.featureSize = std::clamp(nodeFluvialJson.value("featureSize", node.fluvialErosion.featureSize), 1.0f, 64.0f);
                 node.fluvialErosion.iterations = std::clamp(nodeFluvialJson.value("iterations", node.fluvialErosion.iterations), 0, 200);
@@ -1869,6 +1908,627 @@ bool EnsureMeshPreviewPipeline(std::string* error)
     return true;
 }
 
+bool RunFluvialComputeSmokeTest(std::string* error)
+{
+    if (g_fluvialComputeSmokeTested)
+    {
+        return true;
+    }
+    if (!g_device || !g_commandQueue || !g_fluvialComputeRootSignature || !g_fluvialGridErosionPso || !g_fluvialFlowAccumulationPso)
+    {
+        if (error) *error = "GPU Compute pipeline not initialized";
+        return false;
+    }
+
+    constexpr UINT resolution = 8;
+    constexpr UINT cellCount = resolution * resolution;
+    constexpr UINT64 bufferSize = cellCount * sizeof(float);
+    std::array<float, cellCount> inputHeights{};
+    std::array<float, cellCount> zeroData{};
+    for (UINT z = 0; z < resolution; ++z)
+    {
+        for (UINT x = 0; x < resolution; ++x)
+        {
+            inputHeights[z * resolution + x] = static_cast<float>(resolution - z) * 0.1f + static_cast<float>(x) * 0.01f;
+        }
+    }
+
+    const D3D12_HEAP_PROPERTIES defaultHeap = HeapProperties(D3D12_HEAP_TYPE_DEFAULT);
+    const D3D12_HEAP_PROPERTIES uploadHeap = HeapProperties(D3D12_HEAP_TYPE_UPLOAD);
+    const D3D12_HEAP_PROPERTIES readbackHeap = HeapProperties(D3D12_HEAP_TYPE_READBACK);
+    const D3D12_RESOURCE_DESC gpuDesc = BufferResourceDesc(bufferSize, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    const D3D12_RESOURCE_DESC cpuDesc = BufferResourceDesc(bufferSize);
+
+    ComPtr<ID3D12Resource> heightIn;
+    ComPtr<ID3D12Resource> heightOut;
+    ComPtr<ID3D12Resource> maskOut;
+    ComPtr<ID3D12Resource> flowIn;
+    ComPtr<ID3D12Resource> flowOut;
+    ComPtr<ID3D12Resource> uploadHeights;
+    ComPtr<ID3D12Resource> uploadZero;
+    ComPtr<ID3D12Resource> uploadOne;
+    ComPtr<ID3D12Resource> readbackHeights;
+    ComPtr<ID3D12Resource> readbackMask;
+
+    HRESULT hr = g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &gpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&heightIn));
+    if (FAILED(hr)) { if (error) *error = "Create fluvial smoke height input failed"; return false; }
+    hr = g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &gpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&heightOut));
+    if (FAILED(hr)) { if (error) *error = "Create fluvial smoke height output failed"; return false; }
+    hr = g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &gpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&maskOut));
+    if (FAILED(hr)) { if (error) *error = "Create fluvial smoke mask output failed"; return false; }
+    hr = g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &gpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&flowIn));
+    if (FAILED(hr)) { if (error) *error = "Create fluvial smoke flow input failed"; return false; }
+    hr = g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &gpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&flowOut));
+    if (FAILED(hr)) { if (error) *error = "Create fluvial smoke flow output failed"; return false; }
+    hr = g_device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &cpuDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&uploadHeights));
+    if (FAILED(hr)) { if (error) *error = "Create fluvial smoke height upload failed"; return false; }
+    hr = g_device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &cpuDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&uploadZero));
+    if (FAILED(hr)) { if (error) *error = "Create fluvial smoke zero upload failed"; return false; }
+    hr = g_device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &cpuDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&uploadOne));
+    if (FAILED(hr)) { if (error) *error = "Create fluvial smoke one upload failed"; return false; }
+    hr = g_device->CreateCommittedResource(&readbackHeap, D3D12_HEAP_FLAG_NONE, &cpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readbackHeights));
+    if (FAILED(hr)) { if (error) *error = "Create fluvial smoke height readback failed"; return false; }
+    hr = g_device->CreateCommittedResource(&readbackHeap, D3D12_HEAP_FLAG_NONE, &cpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readbackMask));
+    if (FAILED(hr)) { if (error) *error = "Create fluvial smoke mask readback failed"; return false; }
+
+    void* mapped = nullptr;
+    D3D12_RANGE readRange{0, 0};
+    ThrowIfFailed(uploadHeights->Map(0, &readRange, &mapped), "Map fluvial smoke height upload failed");
+    std::memcpy(mapped, inputHeights.data(), bufferSize);
+    uploadHeights->Unmap(0, nullptr);
+    ThrowIfFailed(uploadZero->Map(0, &readRange, &mapped), "Map fluvial smoke zero upload failed");
+    std::memcpy(mapped, zeroData.data(), bufferSize);
+    uploadZero->Unmap(0, nullptr);
+    std::array<float, cellCount> oneData{};
+    oneData.fill(1.0f);
+    ThrowIfFailed(uploadOne->Map(0, &readRange, &mapped), "Map fluvial smoke one upload failed");
+    std::memcpy(mapped, oneData.data(), bufferSize);
+    uploadOne->Unmap(0, nullptr);
+
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    heapDesc.NumDescriptors = 5;
+    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    ComPtr<ID3D12DescriptorHeap> descriptorHeap;
+    hr = g_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&descriptorHeap));
+    if (FAILED(hr)) { if (error) *error = "Create fluvial smoke descriptor heap failed"; return false; }
+
+    D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+    uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+    uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+    uavDesc.Buffer.NumElements = cellCount;
+    uavDesc.Buffer.StructureByteStride = sizeof(float);
+    D3D12_CPU_DESCRIPTOR_HANDLE descriptor = descriptorHeap->GetCPUDescriptorHandleForHeapStart();
+    g_device->CreateUnorderedAccessView(heightIn.Get(), nullptr, &uavDesc, descriptor);
+    descriptor.ptr += g_srvDescriptorSize;
+    g_device->CreateUnorderedAccessView(heightOut.Get(), nullptr, &uavDesc, descriptor);
+    descriptor.ptr += g_srvDescriptorSize;
+    g_device->CreateUnorderedAccessView(maskOut.Get(), nullptr, &uavDesc, descriptor);
+    descriptor.ptr += g_srvDescriptorSize;
+    g_device->CreateUnorderedAccessView(flowIn.Get(), nullptr, &uavDesc, descriptor);
+    descriptor.ptr += g_srvDescriptorSize;
+    g_device->CreateUnorderedAccessView(flowOut.Get(), nullptr, &uavDesc, descriptor);
+
+    ComPtr<ID3D12CommandAllocator> allocator;
+    ComPtr<ID3D12GraphicsCommandList> commandList;
+    ThrowIfFailed(g_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)), "Create fluvial smoke command allocator failed");
+    ThrowIfFailed(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&commandList)), "Create fluvial smoke command list failed");
+
+    commandList->CopyBufferRegion(heightIn.Get(), 0, uploadHeights.Get(), 0, bufferSize);
+    commandList->CopyBufferRegion(heightOut.Get(), 0, uploadZero.Get(), 0, bufferSize);
+    commandList->CopyBufferRegion(maskOut.Get(), 0, uploadZero.Get(), 0, bufferSize);
+    commandList->CopyBufferRegion(flowIn.Get(), 0, uploadOne.Get(), 0, bufferSize);
+    commandList->CopyBufferRegion(flowOut.Get(), 0, uploadOne.Get(), 0, bufferSize);
+
+    D3D12_RESOURCE_BARRIER toUav[5]{};
+    ID3D12Resource* uavResources[5] = {heightIn.Get(), heightOut.Get(), maskOut.Get(), flowIn.Get(), flowOut.Get()};
+    for (int i = 0; i < 5; ++i)
+    {
+        toUav[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        toUav[i].Transition.pResource = uavResources[i];
+        toUav[i].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+        toUav[i].Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        toUav[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    }
+    commandList->ResourceBarrier(5, toUav);
+
+    struct FluvialGridConstants
+    {
+        UINT resolution;
+        UINT cellCount;
+        UINT iteration;
+        float terrainSizeMeters;
+        float erosionStrength;
+        float sedimentCapacity;
+        float depositionRate;
+        float channeling;
+        float cellSizeMeters;
+        float wearSlope;
+        float maxSlope;
+        float strengthScale;
+    } constants{resolution, cellCount, 0, 8.0f, 1.0f, 0.8f, 0.35f, 0.25f, 8.0f / static_cast<float>(resolution - 1), 0.05f, 10.0f, 0.68f};
+
+    ID3D12DescriptorHeap* heaps[] = {descriptorHeap.Get()};
+    commandList->SetDescriptorHeaps(1, heaps);
+    commandList->SetComputeRootSignature(g_fluvialComputeRootSignature.Get());
+    commandList->SetPipelineState(g_fluvialGridErosionPso.Get());
+    commandList->SetComputeRoot32BitConstants(0, 12, &constants, 0);
+    commandList->SetComputeRootDescriptorTable(1, descriptorHeap->GetGPUDescriptorHandleForHeapStart());
+    commandList->Dispatch(1, 1, 1);
+
+    D3D12_RESOURCE_BARRIER uavBarrier{};
+    uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    uavBarrier.UAV.pResource = nullptr;
+    commandList->ResourceBarrier(1, &uavBarrier);
+
+    D3D12_RESOURCE_BARRIER toCopy[2]{};
+    ID3D12Resource* copyResources[2] = {heightOut.Get(), maskOut.Get()};
+    for (int i = 0; i < 2; ++i)
+    {
+        toCopy[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        toCopy[i].Transition.pResource = copyResources[i];
+        toCopy[i].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        toCopy[i].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+        toCopy[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    }
+    commandList->ResourceBarrier(2, toCopy);
+    commandList->CopyBufferRegion(readbackHeights.Get(), 0, heightOut.Get(), 0, bufferSize);
+    commandList->CopyBufferRegion(readbackMask.Get(), 0, maskOut.Get(), 0, bufferSize);
+    ThrowIfFailed(commandList->Close(), "Close fluvial smoke command list failed");
+
+    ID3D12CommandList* lists[] = {commandList.Get()};
+    g_commandQueue->ExecuteCommandLists(1, lists);
+    const UINT64 fenceValue = ++g_fenceLastSignaledValue;
+    ThrowIfFailed(g_commandQueue->Signal(g_fence.Get(), fenceValue), "Signal fluvial smoke fence failed");
+    WaitForFenceValue(fenceValue);
+
+    void* mappedHeights = nullptr;
+    void* mappedMask = nullptr;
+    D3D12_RANGE outputReadRange{0, static_cast<SIZE_T>(bufferSize)};
+    ThrowIfFailed(readbackHeights->Map(0, &outputReadRange, &mappedHeights), "Map fluvial smoke height readback failed");
+    ThrowIfFailed(readbackMask->Map(0, &outputReadRange, &mappedMask), "Map fluvial smoke mask readback failed");
+    const float* outputHeights = static_cast<const float*>(mappedHeights);
+    const float* outputMask = static_cast<const float*>(mappedMask);
+
+    bool changed = false;
+    bool maskWritten = false;
+    for (UINT i = 0; i < cellCount; ++i)
+    {
+        changed = changed || std::abs(outputHeights[i] - inputHeights[i]) > 0.000001f;
+        maskWritten = maskWritten || outputMask[i] > 0.000001f;
+    }
+
+    D3D12_RANGE emptyWriteRange{0, 0};
+    readbackHeights->Unmap(0, &emptyWriteRange);
+    readbackMask->Unmap(0, &emptyWriteRange);
+
+    if (!changed || !maskWritten)
+    {
+        if (error) *error = "GPU Compute smoke dispatch produced no erosion output";
+        return false;
+    }
+
+    g_fluvialComputeSmokeTested = true;
+    return true;
+}
+
+bool EnsureFluvialComputePipeline(std::string* error)
+{
+    if (g_fluvialGridErosionPso && g_fluvialFlowAccumulationPso)
+    {
+        if (RunFluvialComputeSmokeTest(error))
+        {
+            g_fluvialComputeStatus = "GPU Compute dispatch ready";
+        }
+        else
+        {
+            g_fluvialComputeStatus = "GPU Compute dispatch failed";
+            return false;
+        }
+        return true;
+    }
+    if (!g_device)
+    {
+        if (error) *error = "D3D12 device not initialized";
+        g_fluvialComputeStatus = "GPU Compute unavailable";
+        return false;
+    }
+
+    D3D12_DESCRIPTOR_RANGE uavRange{};
+    uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    uavRange.NumDescriptors = 5;
+    uavRange.BaseShaderRegister = 0;
+    uavRange.RegisterSpace = 0;
+    uavRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_ROOT_PARAMETER rootParams[2]{};
+    rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    rootParams[0].Constants.ShaderRegister = 0;
+    rootParams[0].Constants.RegisterSpace = 0;
+    rootParams[0].Constants.Num32BitValues = 12;
+    rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[1].DescriptorTable.pDescriptorRanges = &uavRange;
+    rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    D3D12_ROOT_SIGNATURE_DESC rsDesc{};
+    rsDesc.NumParameters = 2;
+    rsDesc.pParameters = rootParams;
+    rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+    ComPtr<ID3DBlob> sigBlob, errBlob;
+    HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
+    if (FAILED(hr))
+    {
+        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Serialize fluvial compute root sig failed";
+        g_fluvialComputeStatus = "GPU Compute root signature failed";
+        return false;
+    }
+    hr = g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_fluvialComputeRootSignature));
+    if (FAILED(hr))
+    {
+        if (error) *error = "Create fluvial compute root sig failed";
+        g_fluvialComputeStatus = "GPU Compute root signature failed";
+        return false;
+    }
+
+    const std::filesystem::path shaderPath = FluvialComputeShaderPath();
+    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
+#if defined(_DEBUG)
+    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+#endif
+    ComPtr<ID3DBlob> flowBlob, erosionBlob;
+    hr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "CSFlowAccumulation", "cs_5_0", compileFlags, 0, &flowBlob, &errBlob);
+    if (FAILED(hr))
+    {
+        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile fluvial flow CS failed";
+        g_fluvialComputeStatus = "GPU Compute flow shader compile failed";
+        return false;
+    }
+    errBlob.Reset();
+    hr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "CSGridErosion", "cs_5_0", compileFlags, 0, &erosionBlob, &errBlob);
+    if (FAILED(hr))
+    {
+        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile fluvial erosion CS failed";
+        g_fluvialComputeStatus = "GPU Compute shader compile failed";
+        return false;
+    }
+
+    D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{};
+    psoDesc.pRootSignature = g_fluvialComputeRootSignature.Get();
+    psoDesc.CS = {flowBlob->GetBufferPointer(), flowBlob->GetBufferSize()};
+    hr = g_device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&g_fluvialFlowAccumulationPso));
+    if (FAILED(hr))
+    {
+        if (error) *error = "Create fluvial flow PSO failed";
+        g_fluvialComputeStatus = "GPU Compute flow PSO failed";
+        return false;
+    }
+    psoDesc.CS = {erosionBlob->GetBufferPointer(), erosionBlob->GetBufferSize()};
+    hr = g_device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&g_fluvialGridErosionPso));
+    if (FAILED(hr))
+    {
+        if (error) *error = "Create fluvial compute PSO failed";
+        g_fluvialComputeStatus = "GPU Compute PSO failed";
+        return false;
+    }
+
+    if (!RunFluvialComputeSmokeTest(error))
+    {
+        g_fluvialComputeStatus = "GPU Compute dispatch failed";
+        return false;
+    }
+
+    g_fluvialComputeStatus = "GPU Compute dispatch ready";
+    return true;
+}
+
+bool RunFluvialComputeGridImmediate(rock::HeightfieldGrid& grid, const rock::FluvialErosionSettings& settings, std::string* error)
+{
+    std::lock_guard<std::mutex> lock(g_fluvialComputeMutex);
+    if (!EnsureFluvialComputePipeline(error))
+    {
+        return false;
+    }
+
+    const UINT resolution = static_cast<UINT>(std::clamp(grid.resolution, 0, 4096));
+    const UINT64 cellCount = static_cast<UINT64>(resolution) * static_cast<UINT64>(resolution);
+    if (resolution < 3 || grid.heights.size() < cellCount)
+    {
+        if (error) *error = "Invalid heightfield for GPU Compute";
+        return false;
+    }
+
+    const UINT64 bufferSize = cellCount * sizeof(float);
+    std::vector<float> zeroData(static_cast<size_t>(cellCount), 0.0f);
+
+    const D3D12_HEAP_PROPERTIES defaultHeap = HeapProperties(D3D12_HEAP_TYPE_DEFAULT);
+    const D3D12_HEAP_PROPERTIES uploadHeap = HeapProperties(D3D12_HEAP_TYPE_UPLOAD);
+    const D3D12_HEAP_PROPERTIES readbackHeap = HeapProperties(D3D12_HEAP_TYPE_READBACK);
+    const D3D12_RESOURCE_DESC gpuDesc = BufferResourceDesc(bufferSize, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    const D3D12_RESOURCE_DESC cpuDesc = BufferResourceDesc(bufferSize);
+
+    ComPtr<ID3D12Resource> heightA;
+    ComPtr<ID3D12Resource> heightB;
+    ComPtr<ID3D12Resource> maskOut;
+    ComPtr<ID3D12Resource> flowA;
+    ComPtr<ID3D12Resource> flowB;
+    ComPtr<ID3D12Resource> uploadHeights;
+    ComPtr<ID3D12Resource> uploadZero;
+    ComPtr<ID3D12Resource> uploadOne;
+    ComPtr<ID3D12Resource> readbackHeights;
+    ComPtr<ID3D12Resource> readbackMask;
+
+    HRESULT hr = g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &gpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&heightA));
+    if (FAILED(hr)) { if (error) *error = "Create GPU height A failed"; return false; }
+    hr = g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &gpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&heightB));
+    if (FAILED(hr)) { if (error) *error = "Create GPU height B failed"; return false; }
+    hr = g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &gpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&maskOut));
+    if (FAILED(hr)) { if (error) *error = "Create GPU mask failed"; return false; }
+    hr = g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &gpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&flowA));
+    if (FAILED(hr)) { if (error) *error = "Create GPU flow A failed"; return false; }
+    hr = g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &gpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&flowB));
+    if (FAILED(hr)) { if (error) *error = "Create GPU flow B failed"; return false; }
+    hr = g_device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &cpuDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&uploadHeights));
+    if (FAILED(hr)) { if (error) *error = "Create GPU height upload failed"; return false; }
+    hr = g_device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &cpuDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&uploadZero));
+    if (FAILED(hr)) { if (error) *error = "Create GPU zero upload failed"; return false; }
+    hr = g_device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &cpuDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&uploadOne));
+    if (FAILED(hr)) { if (error) *error = "Create GPU one upload failed"; return false; }
+    hr = g_device->CreateCommittedResource(&readbackHeap, D3D12_HEAP_FLAG_NONE, &cpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readbackHeights));
+    if (FAILED(hr)) { if (error) *error = "Create GPU height readback failed"; return false; }
+    hr = g_device->CreateCommittedResource(&readbackHeap, D3D12_HEAP_FLAG_NONE, &cpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readbackMask));
+    if (FAILED(hr)) { if (error) *error = "Create GPU mask readback failed"; return false; }
+
+    void* mapped = nullptr;
+    D3D12_RANGE emptyReadRange{0, 0};
+    ThrowIfFailed(uploadHeights->Map(0, &emptyReadRange, &mapped), "Map GPU height upload failed");
+    std::memcpy(mapped, grid.heights.data(), bufferSize);
+    uploadHeights->Unmap(0, nullptr);
+    ThrowIfFailed(uploadZero->Map(0, &emptyReadRange, &mapped), "Map GPU zero upload failed");
+    std::memcpy(mapped, zeroData.data(), bufferSize);
+    uploadZero->Unmap(0, nullptr);
+    std::vector<float> oneData(static_cast<size_t>(cellCount), 1.0f);
+    ThrowIfFailed(uploadOne->Map(0, &emptyReadRange, &mapped), "Map GPU one upload failed");
+    std::memcpy(mapped, oneData.data(), bufferSize);
+    uploadOne->Unmap(0, nullptr);
+
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    heapDesc.NumDescriptors = 15;
+    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    ComPtr<ID3D12DescriptorHeap> descriptorHeap;
+    hr = g_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&descriptorHeap));
+    if (FAILED(hr)) { if (error) *error = "Create GPU descriptor heap failed"; return false; }
+
+    D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+    uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+    uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+    uavDesc.Buffer.NumElements = static_cast<UINT>(cellCount);
+    uavDesc.Buffer.StructureByteStride = sizeof(float);
+
+    D3D12_CPU_DESCRIPTOR_HANDLE descriptor = descriptorHeap->GetCPUDescriptorHandleForHeapStart();
+    g_device->CreateUnorderedAccessView(heightA.Get(), nullptr, &uavDesc, descriptor);
+    descriptor.ptr += g_srvDescriptorSize;
+    g_device->CreateUnorderedAccessView(heightB.Get(), nullptr, &uavDesc, descriptor);
+    descriptor.ptr += g_srvDescriptorSize;
+    g_device->CreateUnorderedAccessView(maskOut.Get(), nullptr, &uavDesc, descriptor);
+    descriptor.ptr += g_srvDescriptorSize;
+    g_device->CreateUnorderedAccessView(flowA.Get(), nullptr, &uavDesc, descriptor);
+    descriptor.ptr += g_srvDescriptorSize;
+    g_device->CreateUnorderedAccessView(flowB.Get(), nullptr, &uavDesc, descriptor);
+    descriptor.ptr += g_srvDescriptorSize;
+    g_device->CreateUnorderedAccessView(heightA.Get(), nullptr, &uavDesc, descriptor);
+    descriptor.ptr += g_srvDescriptorSize;
+    g_device->CreateUnorderedAccessView(heightB.Get(), nullptr, &uavDesc, descriptor);
+    descriptor.ptr += g_srvDescriptorSize;
+    g_device->CreateUnorderedAccessView(maskOut.Get(), nullptr, &uavDesc, descriptor);
+    descriptor.ptr += g_srvDescriptorSize;
+    g_device->CreateUnorderedAccessView(flowB.Get(), nullptr, &uavDesc, descriptor);
+    descriptor.ptr += g_srvDescriptorSize;
+    g_device->CreateUnorderedAccessView(flowA.Get(), nullptr, &uavDesc, descriptor);
+    descriptor.ptr += g_srvDescriptorSize;
+    g_device->CreateUnorderedAccessView(heightB.Get(), nullptr, &uavDesc, descriptor);
+    descriptor.ptr += g_srvDescriptorSize;
+    g_device->CreateUnorderedAccessView(heightA.Get(), nullptr, &uavDesc, descriptor);
+    descriptor.ptr += g_srvDescriptorSize;
+    g_device->CreateUnorderedAccessView(maskOut.Get(), nullptr, &uavDesc, descriptor);
+    descriptor.ptr += g_srvDescriptorSize;
+    g_device->CreateUnorderedAccessView(flowA.Get(), nullptr, &uavDesc, descriptor);
+    descriptor.ptr += g_srvDescriptorSize;
+    g_device->CreateUnorderedAccessView(flowB.Get(), nullptr, &uavDesc, descriptor);
+
+    ComPtr<ID3D12CommandAllocator> allocator;
+    ComPtr<ID3D12GraphicsCommandList> commandList;
+    ThrowIfFailed(g_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)), "Create GPU fluvial command allocator failed");
+    ThrowIfFailed(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&commandList)), "Create GPU fluvial command list failed");
+
+    commandList->CopyBufferRegion(heightA.Get(), 0, uploadHeights.Get(), 0, bufferSize);
+    commandList->CopyBufferRegion(heightB.Get(), 0, uploadHeights.Get(), 0, bufferSize);
+    commandList->CopyBufferRegion(maskOut.Get(), 0, uploadZero.Get(), 0, bufferSize);
+    commandList->CopyBufferRegion(flowA.Get(), 0, uploadOne.Get(), 0, bufferSize);
+    commandList->CopyBufferRegion(flowB.Get(), 0, uploadOne.Get(), 0, bufferSize);
+
+    D3D12_RESOURCE_BARRIER toUav[5]{};
+    ID3D12Resource* uavResources[5] = {heightA.Get(), heightB.Get(), maskOut.Get(), flowA.Get(), flowB.Get()};
+    for (int i = 0; i < 5; ++i)
+    {
+        toUav[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        toUav[i].Transition.pResource = uavResources[i];
+        toUav[i].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+        toUav[i].Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        toUav[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    }
+    commandList->ResourceBarrier(5, toUav);
+
+    struct FluvialGridConstants
+    {
+        UINT resolution;
+        UINT cellCount;
+        UINT iteration;
+        float terrainSizeMeters;
+        float erosionStrength;
+        float sedimentCapacity;
+        float depositionRate;
+        float channeling;
+        float cellSizeMeters;
+        float wearSlope;
+        float maxSlope;
+        float strengthScale;
+    } constants{
+        resolution,
+        static_cast<UINT>(cellCount),
+        0,
+        grid.terrainSizeMeters,
+        std::clamp(settings.erosionStrength, 0.0f, 2.0f),
+        std::clamp(settings.sedimentCapacity, 0.0f, 2.0f),
+        std::clamp(settings.depositionRate, 0.0f, 1.0f),
+        std::clamp(settings.channeling, 0.0f, 1.0f),
+        grid.terrainSizeMeters / static_cast<float>(std::max<UINT>(1, resolution - 1)),
+        std::tan(std::clamp(settings.wearAngleDegrees, 0.0f, 89.0f) * 3.14159265f / 180.0f),
+        std::tan(std::clamp(settings.maxErosionAngleDegrees, 0.0f, 89.0f) * 3.14159265f / 180.0f),
+        0.68f
+    };
+
+    ID3D12DescriptorHeap* heaps[] = {descriptorHeap.Get()};
+    commandList->SetDescriptorHeaps(1, heaps);
+    commandList->SetComputeRootSignature(g_fluvialComputeRootSignature.Get());
+
+    const UINT groupCount = (resolution + 7u) / 8u;
+    int flowPassCount = std::clamp(static_cast<int>(resolution / 16u), 4, 48);
+    if ((flowPassCount % 2) != 0)
+    {
+        ++flowPassCount;
+    }
+    commandList->SetPipelineState(g_fluvialFlowAccumulationPso.Get());
+    for (int pass = 0; pass < flowPassCount; ++pass)
+    {
+        constants.iteration = static_cast<UINT>(pass);
+        commandList->SetComputeRoot32BitConstants(0, 12, &constants, 0);
+        D3D12_GPU_DESCRIPTOR_HANDLE table = descriptorHeap->GetGPUDescriptorHandleForHeapStart();
+        if ((pass % 2) != 0)
+        {
+            table.ptr += static_cast<UINT64>(5) * g_srvDescriptorSize;
+        }
+        commandList->SetComputeRootDescriptorTable(1, table);
+        commandList->Dispatch(groupCount, groupCount, 1);
+
+        D3D12_RESOURCE_BARRIER uavBarrier{};
+        uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+        uavBarrier.UAV.pResource = nullptr;
+        commandList->ResourceBarrier(1, &uavBarrier);
+    }
+
+    commandList->SetPipelineState(g_fluvialGridErosionPso.Get());
+    const int iterationCount = std::clamp(settings.iterations, 1, 200);
+    for (int iteration = 0; iteration < iterationCount; ++iteration)
+    {
+        constants.iteration = static_cast<UINT>(iteration);
+        commandList->SetComputeRoot32BitConstants(0, 12, &constants, 0);
+        D3D12_GPU_DESCRIPTOR_HANDLE table = descriptorHeap->GetGPUDescriptorHandleForHeapStart();
+        if ((iteration % 2) != 0)
+        {
+            table.ptr += static_cast<UINT64>(10) * g_srvDescriptorSize;
+        }
+        commandList->SetComputeRootDescriptorTable(1, table);
+        commandList->Dispatch(groupCount, groupCount, 1);
+
+        D3D12_RESOURCE_BARRIER uavBarrier{};
+        uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+        uavBarrier.UAV.pResource = nullptr;
+        commandList->ResourceBarrier(1, &uavBarrier);
+    }
+
+    ID3D12Resource* finalHeight = (iterationCount % 2) == 0 ? heightA.Get() : heightB.Get();
+    D3D12_RESOURCE_BARRIER toCopy[2]{};
+    ID3D12Resource* copyResources[2] = {finalHeight, maskOut.Get()};
+    for (int i = 0; i < 2; ++i)
+    {
+        toCopy[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        toCopy[i].Transition.pResource = copyResources[i];
+        toCopy[i].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        toCopy[i].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+        toCopy[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    }
+    commandList->ResourceBarrier(2, toCopy);
+    commandList->CopyBufferRegion(readbackHeights.Get(), 0, finalHeight, 0, bufferSize);
+    commandList->CopyBufferRegion(readbackMask.Get(), 0, maskOut.Get(), 0, bufferSize);
+    ThrowIfFailed(commandList->Close(), "Close GPU fluvial command list failed");
+
+    ID3D12CommandList* lists[] = {commandList.Get()};
+    g_commandQueue->ExecuteCommandLists(1, lists);
+    const UINT64 fenceValue = ++g_fenceLastSignaledValue;
+    ThrowIfFailed(g_commandQueue->Signal(g_fence.Get(), fenceValue), "Signal GPU fluvial fence failed");
+    WaitForFenceValue(fenceValue);
+
+    void* mappedHeights = nullptr;
+    void* mappedMask = nullptr;
+    D3D12_RANGE readRange{0, static_cast<SIZE_T>(bufferSize)};
+    ThrowIfFailed(readbackHeights->Map(0, &readRange, &mappedHeights), "Map GPU height readback failed");
+    ThrowIfFailed(readbackMask->Map(0, &readRange, &mappedMask), "Map GPU mask readback failed");
+    const float* heightValues = static_cast<const float*>(mappedHeights);
+    const float* maskValues = static_cast<const float*>(mappedMask);
+    grid.heights.assign(heightValues, heightValues + cellCount);
+    grid.mask.assign(maskValues, maskValues + cellCount);
+    D3D12_RANGE emptyWriteRange{0, 0};
+    readbackHeights->Unmap(0, &emptyWriteRange);
+    readbackMask->Unmap(0, &emptyWriteRange);
+
+    g_fluvialComputeStatus = "GPU Compute evaluated heightfield";
+    return true;
+}
+
+bool RunFluvialComputeGrid(rock::HeightfieldGrid& grid, const rock::FluvialErosionSettings& settings, std::string* error)
+{
+    if (std::this_thread::get_id() == g_mainThreadId)
+    {
+        return RunFluvialComputeGridImmediate(grid, settings, error);
+    }
+
+    auto request = std::make_shared<FluvialGpuRequest>();
+    request->grid = grid;
+    request->settings = settings;
+    std::future<FluvialGpuRequestResult> future = request->promise.get_future();
+    {
+        std::lock_guard<std::mutex> lock(g_fluvialGpuRequestMutex);
+        g_pendingFluvialGpuRequests.push_back(request);
+    }
+    g_fluvialComputeStatus = "GPU Compute queued on main thread";
+
+    FluvialGpuRequestResult result = future.get();
+    if (!result.success)
+    {
+        if (error) *error = result.error;
+        return false;
+    }
+
+    grid = std::move(result.grid);
+    return true;
+}
+
+void ProcessPendingFluvialGpuRequests()
+{
+    if (std::this_thread::get_id() != g_mainThreadId)
+    {
+        return;
+    }
+
+    std::vector<std::shared_ptr<FluvialGpuRequest>> requests;
+    {
+        std::lock_guard<std::mutex> lock(g_fluvialGpuRequestMutex);
+        requests.swap(g_pendingFluvialGpuRequests);
+    }
+
+    for (const std::shared_ptr<FluvialGpuRequest>& request : requests)
+    {
+        FluvialGpuRequestResult result;
+        result.grid = std::move(request->grid);
+        result.success = RunFluvialComputeGridImmediate(result.grid, request->settings, &result.error);
+        request->promise.set_value(std::move(result));
+    }
+}
+
 int EffectiveMeshResolution(int resolution, int lod)
 {
     return std::clamp(resolution / (1 << std::clamp(lod, 0, 4)), 16, 512);
@@ -1984,6 +2644,12 @@ void WaitForAsyncEvaluationForShutdown()
     if (!g_evaluationInFlight)
     {
         return;
+    }
+
+    while (g_evaluationFuture.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+    {
+        ProcessPendingFluvialGpuRequests();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 
     AsyncEvaluationResult result = g_evaluationFuture.get();
@@ -4143,6 +4809,30 @@ void DrawPropertiesPanel()
         }
         erosion.seed = std::clamp(erosion.seed, 0, 999999);
 
+        int backend = static_cast<int>(erosion.backend);
+        if (DrawPropertyComboRow("Backend", "FluvialBackend", &backend, "CPU Reference\0GPU Compute (planned)\0", "浸食計算の実行バックエンドです。現時点では GPU Compute は準備中で、CPU Reference へフォールバックします。", static_cast<int>(rock::FluvialErosionSettings{}.backend)))
+        {
+            erosion.backend = static_cast<rock::FluvialBackend>(std::clamp(backend, 0, 1));
+            g_graph.MarkDirty("Fluvial backend changed");
+            EvaluateGraph();
+        }
+        if (erosion.backend == rock::FluvialBackend::GpuCompute)
+        {
+            std::string computeError;
+            const bool computeReady = EnsureFluvialComputePipeline(&computeError);
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(1);
+            ImGui::TextColored(computeReady ? ImVec4(0.50f, 0.78f, 0.50f, 1.0f) : ImVec4(0.90f, 0.45f, 0.36f, 1.0f), "%s", g_fluvialComputeStatus.c_str());
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(1);
+            ImGui::TextColored(ImVec4(0.90f, 0.70f, 0.36f, 1.0f), "実行接続は準備中です。現在は CPU Reference で計算します。");
+            if (!computeReady && !computeError.empty())
+            {
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(1);
+                ImGui::TextWrapped("%s", computeError.c_str());
+            }
+        }
         if (DrawPropertyIntRow("Iterations", "FluvialIterations", &erosion.iterations, 0, 200, rock::FluvialErosionSettings{}.iterations, "Fluvial iterations changed", true, "侵食シミュレーションの反復回数です。増やすほど効果が強くなりますが計算時間も増えます。"))
         {
             EvaluateGraph();
@@ -5138,6 +5828,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
 {
     try
     {
+        g_mainThreadId = std::this_thread::get_id();
+
         WNDCLASSEXW wc{};
         wc.cbSize = sizeof(wc);
         wc.style = CS_CLASSDC;
@@ -5158,6 +5850,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
             throw std::runtime_error("CreateWindow failed");
         }
         InitD3D(g_hwnd);
+        rock::SetFluvialGpuEvaluator(RunFluvialComputeGrid);
 
         ShowWindow(g_hwnd, showCommand);
         UpdateWindow(g_hwnd);
@@ -5215,6 +5908,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
             ImGui_ImplDX12_NewFrame();
             ImGui_ImplWin32_NewFrame();
             ImGui::NewFrame();
+            ProcessPendingFluvialGpuRequests();
             PollAsyncEvaluation();
             DrawUi();
             ImGui::Render();
@@ -5229,6 +5923,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         ImGui_ImplDX12_Shutdown();
         ImGui_ImplWin32_Shutdown();
         ImGui::DestroyContext();
+        rock::SetFluvialGpuEvaluator(nullptr);
         CleanupD3D();
         DestroyWindow(g_hwnd);
         UnregisterClassW(wc.lpszClassName, wc.hInstance);

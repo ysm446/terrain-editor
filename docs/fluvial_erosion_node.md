@@ -14,6 +14,18 @@
 | 0.7.1 | 本メモへ更新履歴と現状アップデートを追記しました。 |
 | 0.8.0 | sediment capacity と deposit field を追加し、粒子が削った土砂を保持して谷底や緩斜面へ堆積できるようにしました。 |
 | 0.9.0 | `Fluvial Erosion` に `Heightmap` と `Fluvial Mask` の 2 出力を追加し、出力ピンをクリックして地形プレビューとマスクプレビューを切り替えられるようにしました。 |
+| 0.15.0 | `Level Strength` を追加し、低解像度から高解像度へスケール別に浸食差分を重ねるマルチレベル処理を導入しました。 |
+| 0.15.1 | Basic / Advanced を分け、通常操作では `Large Scale` / `Medium Scale` / `Detail Scale` を中心に調整できるようにしました。 |
+| 0.15.2 | 将来の GPU Compute 実装に向けて、`Backend` と CPU/GPU 一致方針を追加しました。 |
+| 0.15.3 | GPU Compute へ移行しやすい、決定的なグリッド同期更新パスを CPU 側へ追加しました。 |
+| 0.15.4 | D3D12 compute shader と compute pipeline state の初期化を追加し、GPU Compute の準備状態を UI に表示するようにしました。 |
+| 0.15.5 | 小さなハイトフィールドを GPU バッファへ転送し、compute shader を dispatch して読み戻す自己診断を追加しました。 |
+| 0.15.6 | `GPU Compute` を本番のハイトフィールド評価へ接続し、GPUで高さとマスクを更新して読み戻せるようにしました。 |
+| 0.15.7 | GPU Compute の侵食量計算へセルサイズ、角度ゲート、Sediment Capacity、Channeling を反映し、CPUグリッドパスに近づけました。 |
+| 0.15.8 | 非同期評価スレッドから本番GPU評価を実行しない安全柵を追加し、メインスレッドスケジューラ実装までCPUへフォールバックするようにしました。 |
+| 0.15.9 | バックグラウンド評価スレッドからGPUジョブをキューへ積み、メインスレッドでD3D12実行して結果を返すスケジューラを追加しました。 |
+| 0.15.10 | GPU Compute がマルチレベル処理を迂回していた問題を修正し、LevelごとにGPU計算するようにしました。 |
+| 0.15.11 | GPU Compute にD8近似の flow accumulation パスを追加し、水が集まる筋ほど侵食が強くなるようにしました。 |
 
 ## 現在のアップデート
 
@@ -28,6 +40,8 @@
 - 粒子ごとに `sediment` を持ち、流速、斜面、流量から求めた capacity と比較して、削剥と堆積を切り替えます。
 - `depositField` を内部に持ち、土砂がどこに堆積したかを蓄積します。
 - `Fluvial Mask` 出力ピンを選ぶと、侵食・堆積の内部マスクを地形メッシュ上へ色付きで表示します。
+- `Level Strength` により、低解像度の大きな谷筋から高解像度の細かいリルまで、スケールごとに強度を変えられます。
+- Basic UI では `Large Scale` / `Medium Scale` / `Detail Scale` を使い、Advanced UI では個別 Level や角度系パラメータを確認できます。
 - ただし hardness mask、flow line input、マスクの外部テクスチャ書き出しはまだ未実装です。
 
 そのため、現状は「水が集まる場所ほど削れる」だけでなく、「削った土砂を運び、谷底や緩斜面へ堆積させる」初期段階まで入りました。さらに `Fluvial Mask` プレビューで、どこに侵食・堆積が出ているか確認できます。次の大きな改善点は、flow / wear / deposit の個別可視化、D-infinity flow、hardness / erodibility です。
@@ -186,4 +200,22 @@ Terrain Editor では D3D12 を使っているため、将来的には compute s
 - wear / deposit の蓄積
 - smoothing / detail pass
 
-ただし、まずは CPU 版でアルゴリズムと見た目を固める方が安全です。見た目の正解が定まる前に GPU 化すると、調整とデバッグが難しくなります。
+### CPU / GPU 一致方針
+
+最終的なゴールは、`Backend` で `CPU Reference` と `GPU Compute` を切り替えられ、同じ入力、同じパラメータ、同じ Seed ならできるだけ同じ結果になることです。
+
+そのため、GPU 版だけを別物として作るのではなく、まず CPU/GPU の両方で実装しやすいグリッドベースのパス構成へ寄せます。
+
+方針:
+
+1. `CPU Reference` を正しさ確認用として残す。
+2. `GPU Compute` は D3D12 compute shader で追加する。
+3. 並列実行順序で結果が変わりやすい粒子のランダム加算は減らし、固定順序のグリッド更新、ping-pong バッファ、決定的な乱数を優先する。
+4. CPU 版にも GPU と同じパス構成を持たせ、比較できるようにする。
+5. 将来的に `CPU vs GPU Difference Mask` を追加し、差分を視覚的に確認できるようにする。
+
+現時点の `GPU Compute` は compute shader と pipeline state の初期化に加えて、本番の `HeightfieldGrid` を GPU バッファへ転送し、compute shader を複数回 dispatch して CPU 側へ読み戻すところまで実装済みです。失敗した場合は `CPU Reference` へフォールバックします。
+
+ただし、GPU 版はまだ CPU Reference と同じ完全なアルゴリズムではありません。現段階では、GPU実行の配線、バッファ往復、ping-pong 更新、マスク読み戻しを確認するための最初の実装です。`0.15.7` でセルサイズ、角度ゲート、Sediment Capacity、Channeling は反映し、`0.15.10` でマルチレベル処理にも接続しました。`0.15.11` ではD8近似の flow accumulation を追加しましたが、CPU版と同じ順序付きの集水計算や堆積の散布はまだ一致していません。
+
+また、ノード評価はバックグラウンドスレッドで走るため、D3D12の本番GPU評価をそのまま非同期評価スレッドから実行すると描画側と競合する可能性があります。`0.15.9` では、バックグラウンド評価スレッドがGPUジョブをキューへ積み、メインスレッドがD3D12上で実行して結果を返す形にしました。これで描画キューの所有をメインスレッド側へ寄せたまま、非同期評価からGPU計算を要求できます。

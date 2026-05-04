@@ -45,6 +45,12 @@ enum class PrimitiveKind
     RockBlob,
 };
 
+enum class FluvialBackend
+{
+    CpuReference,
+    GpuCompute,
+};
+
 enum class PreviewStage
 {
     Primitive,
@@ -103,6 +109,7 @@ struct FluvialErosionSettings
 {
     static constexpr size_t LevelStrengthCount = 6;
 
+    FluvialBackend backend = FluvialBackend::CpuReference;
     bool useAdvancedParameters = false;
     float featureSize = 8.0f;
     int iterations = 25;
@@ -237,6 +244,8 @@ struct HeightfieldGrid
     std::vector<float> heights;
     std::vector<float> mask;
 };
+
+using FluvialGpuEvaluator = bool (*)(HeightfieldGrid& grid, const FluvialErosionSettings& settings, std::string* error);
 
 struct SdfPreviewStats
 {
@@ -398,5 +407,6 @@ std::string_view ToString(NodeKind kind);
 std::string_view ToString(PreviewStage stage);
 std::string_view ToString(ValueType type);
 PreviewStage PreviewStageFor(NodeKind kind);
+void SetFluvialGpuEvaluator(FluvialGpuEvaluator evaluator);
 
 } // namespace rock
