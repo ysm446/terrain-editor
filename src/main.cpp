@@ -3013,12 +3013,30 @@ void DrawNodeGraph()
     ed::SetCurrentEditor(nullptr);
 }
 
-bool DrawPropertyComboRow(const char* label, const char* id, int* value, const char* items)
+void DrawPropertyLabel(const char* label, const char* tooltip = nullptr)
+{
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(label);
+    if (tooltip != nullptr && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+    {
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, 6.0f);
+        ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(0.22f, 0.22f, 0.22f, 0.97f));
+        ImGui::BeginTooltip();
+        ImGui::PushTextWrapPos(ImGui::GetFontSize() * 24.0f);
+        ImGui::TextUnformatted(tooltip);
+        ImGui::PopTextWrapPos();
+        ImGui::EndTooltip();
+        ImGui::PopStyleColor();
+        ImGui::PopStyleVar(2);
+    }
+}
+
+bool DrawPropertyComboRow(const char* label, const char* id, int* value, const char* items, const char* tooltip = nullptr)
 {
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(label);
+    DrawPropertyLabel(label, tooltip);
     ImGui::TableSetColumnIndex(1);
     ImGui::PushID(id);
     const float comboWidth = std::min(220.0f, ImGui::GetContentRegionAvail().x);
@@ -3053,13 +3071,12 @@ bool DrawResetToDefaultButton(const char* id)
     return pressed;
 }
 
-bool DrawPropertyFloatRow(const char* label, const char* id, float* value, float minValue, float maxValue, float defaultValue, const char* dirtyReason, bool recordUndo = true)
+bool DrawPropertyFloatRow(const char* label, const char* id, float* value, float minValue, float maxValue, float defaultValue, const char* dirtyReason, bool recordUndo = true, const char* tooltip = nullptr)
 {
     bool editEnded = false;
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(label);
+    DrawPropertyLabel(label, tooltip);
     ImGui::TableSetColumnIndex(1);
 
     ImGui::PushID(id);
@@ -3111,13 +3128,27 @@ bool DrawPropertyFloatRow(const char* label, const char* id, float* value, float
     return editEnded;
 }
 
-bool DrawPropertyIntRow(const char* label, const char* id, int* value, int minValue, int maxValue, int defaultValue, const char* dirtyReason, bool recordUndo = true)
+bool DrawPropertyPercentRow(const char* label, const char* id, float* value, float minValue, float maxValue, float defaultValue, const char* dirtyReason, const char* tooltip = nullptr)
+{
+    float percentValue = *value * 100.0f;
+    const float minPercent = minValue * 100.0f;
+    const float maxPercent = maxValue * 100.0f;
+    const float defaultPercent = defaultValue * 100.0f;
+    const bool editEnded = DrawPropertyFloatRow(label, id, &percentValue, minPercent, maxPercent, defaultPercent, dirtyReason, true, tooltip);
+    const float nextValue = std::clamp(percentValue / 100.0f, minValue, maxValue);
+    if (nextValue != *value)
+    {
+        *value = nextValue;
+    }
+    return editEnded;
+}
+
+bool DrawPropertyIntRow(const char* label, const char* id, int* value, int minValue, int maxValue, int defaultValue, const char* dirtyReason, bool recordUndo = true, const char* tooltip = nullptr)
 {
     bool editEnded = false;
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(label);
+    DrawPropertyLabel(label, tooltip);
     ImGui::TableSetColumnIndex(1);
 
     ImGui::PushID(id);
@@ -3169,12 +3200,11 @@ bool DrawPropertyIntRow(const char* label, const char* id, int* value, int minVa
     return editEnded;
 }
 
-bool DrawPropertyBoolRow(const char* label, const char* id, bool* value, const char* dirtyReason)
+bool DrawPropertyBoolRow(const char* label, const char* id, bool* value, const char* dirtyReason, const char* tooltip = nullptr)
 {
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(label);
+    DrawPropertyLabel(label, tooltip);
     ImGui::TableSetColumnIndex(1);
 
     ImGui::PushID(id);
@@ -3187,13 +3217,12 @@ bool DrawPropertyBoolRow(const char* label, const char* id, bool* value, const c
     return changed;
 }
 
-bool DrawPropertyPathRow(const char* label, const char* id, std::string* value, const char* dirtyReason)
+bool DrawPropertyPathRow(const char* label, const char* id, std::string* value, const char* dirtyReason, const char* tooltip = nullptr)
 {
     bool editEnded = false;
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(label);
+    DrawPropertyLabel(label, tooltip);
     ImGui::TableSetColumnIndex(1);
 
     ImGui::PushID(id);
@@ -3325,19 +3354,19 @@ void DrawPropertiesPanel()
         editableNode->heightmap.relativeVerticalScalePercent = std::clamp(editableNode->heightmap.relativeVerticalScalePercent, 0.0f, 100.0f);
         editableNode->heightmap.verticalOffsetMeters = std::clamp(editableNode->heightmap.verticalOffsetMeters, -4096.0f, 4096.0f);
 
-        if (DrawPropertyPathRow("File", "HeightmapFile", &editableNode->heightmap.path, "Heightmap file changed"))
+        if (DrawPropertyPathRow("File", "HeightmapFile", &editableNode->heightmap.path, "Heightmap file changed", "読み込むハイトマップ画像です。明るいピクセルほど高い地形として扱います。"))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyFloatRow("Scale (m)", "HeightmapScaleMeters", &editableNode->heightmap.scaleMeters, 1.0f, 8096.0f, rock::HeightmapLoadSettings{}.scaleMeters, "Heightmap scale changed"))
+        if (DrawPropertyFloatRow("Scale (m)", "HeightmapScaleMeters", &editableNode->heightmap.scaleMeters, 1.0f, 8096.0f, rock::HeightmapLoadSettings{}.scaleMeters, "Heightmap scale changed", true, "地形の横幅と奥行きです。1 unit = 1 m として描画します。"))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyFloatRow("Relative Vertical (%)", "HeightmapRelativeVerticalScale", &editableNode->heightmap.relativeVerticalScalePercent, 0.0f, 100.0f, rock::HeightmapLoadSettings{}.relativeVerticalScalePercent, "Heightmap vertical scale changed"))
+        if (DrawPropertyFloatRow("Relative Vertical (%)", "HeightmapRelativeVerticalScale", &editableNode->heightmap.relativeVerticalScalePercent, 0.0f, 100.0f, rock::HeightmapLoadSettings{}.relativeVerticalScalePercent, "Heightmap vertical scale changed", true, "高さ方向の相対倍率です。実際の高さ範囲は Scale (m) x この値 / 100 になります。"))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyFloatRow("Offset (m)", "HeightmapVerticalOffset", &editableNode->heightmap.verticalOffsetMeters, -4096.0f, 4096.0f, rock::HeightmapLoadSettings{}.verticalOffsetMeters, "Heightmap vertical offset changed"))
+        if (DrawPropertyFloatRow("Offset (m)", "HeightmapVerticalOffset", &editableNode->heightmap.verticalOffsetMeters, -4096.0f, 4096.0f, rock::HeightmapLoadSettings{}.verticalOffsetMeters, "Heightmap vertical offset changed", true, "地形全体を上下に移動する高さオフセットです。"))
         {
             EvaluateGraph();
         }
@@ -3348,7 +3377,7 @@ void DrawPropertiesPanel()
 
     if (selectedNode->kind == rock::NodeKind::FluvialErosion && ImGui::BeginTable("FluvialErosionRows", 2, ImGuiTableFlags_SizingStretchProp))
     {
-        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 154.0f);
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 190.0f);
         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
         rock::FluvialErosionSettings& erosion = editableNode->fluvialErosion;
         erosion.featureSize = std::clamp(erosion.featureSize, 1.0f, 64.0f);
@@ -3364,51 +3393,51 @@ void DrawPropertiesPanel()
         erosion.sedimentVelocity = std::clamp(erosion.sedimentVelocity, 0.0f, 2.0f);
         erosion.seed = std::clamp(erosion.seed, 0, 999999);
 
-        if (DrawPropertyFloatRow("Feature Size", "FluvialFeatureSize", &erosion.featureSize, 1.0f, 64.0f, rock::FluvialErosionSettings{}.featureSize, "Fluvial feature size changed"))
+        if (DrawPropertyFloatRow("Feature Size (m)", "FluvialFeatureSize", &erosion.featureSize, 1.0f, 64.0f, rock::FluvialErosionSettings{}.featureSize, "Fluvial feature size changed", true, "侵食で扱う地形特徴の大きさです。大きいほど広い起伏をなだらかに処理します。"))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyIntRow("Iterations", "FluvialIterations", &erosion.iterations, 0, 200, rock::FluvialErosionSettings{}.iterations, "Fluvial iterations changed"))
+        if (DrawPropertyIntRow("Iterations", "FluvialIterations", &erosion.iterations, 0, 200, rock::FluvialErosionSettings{}.iterations, "Fluvial iterations changed", true, "侵食シミュレーションの反復回数です。増やすほど効果が強くなりますが計算時間も増えます。"))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyFloatRow("Channel Length", "FluvialChannelLength", &erosion.channelLength, 1.0f, 1024.0f, rock::FluvialErosionSettings{}.channelLength, "Fluvial channel length changed"))
+        if (DrawPropertyFloatRow("Channel Length (m)", "FluvialChannelLength", &erosion.channelLength, 1.0f, 1024.0f, rock::FluvialErosionSettings{}.channelLength, "Fluvial channel length changed", true, "水の流れが影響する距離です。大きいほど長い流路が形成されやすくなります。"))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyFloatRow("Erosion Strength", "FluvialErosionStrength", &erosion.erosionStrength, 0.0f, 1.0f, rock::FluvialErosionSettings{}.erosionStrength, "Fluvial erosion strength changed"))
+        if (DrawPropertyPercentRow("Erosion Strength (%)", "FluvialErosionStrength", &erosion.erosionStrength, 0.0f, 1.0f, rock::FluvialErosionSettings{}.erosionStrength, "Fluvial erosion strength changed", "地形を削る強さです。値を上げると谷や溝が深くなります。"))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyFloatRow("Channeling", "FluvialChanneling", &erosion.channeling, 0.0f, 1.0f, rock::FluvialErosionSettings{}.channeling, "Fluvial channeling changed"))
+        if (DrawPropertyPercentRow("Channeling (%)", "FluvialChanneling", &erosion.channeling, 0.0f, 1.0f, rock::FluvialErosionSettings{}.channeling, "Fluvial channeling changed", "流れを細い水路へ集中させる度合いです。高いほど筋状の侵食が出やすくなります。"))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyFloatRow("Friction", "FluvialFriction", &erosion.friction, 0.0f, 1.0f, rock::FluvialErosionSettings{}.friction, "Fluvial friction changed"))
+        if (DrawPropertyPercentRow("Friction (%)", "FluvialFriction", &erosion.friction, 0.0f, 1.0f, rock::FluvialErosionSettings{}.friction, "Fluvial friction changed", "水流の勢いを抑える度合いです。高いほど侵食が落ち着き、短い流れになります。"))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyFloatRow("Wear Angle", "FluvialWearAngle", &erosion.wearAngleDegrees, 0.0f, 90.0f, rock::FluvialErosionSettings{}.wearAngleDegrees, "Fluvial wear angle changed"))
+        if (DrawPropertyFloatRow("Wear Angle (deg)", "FluvialWearAngle", &erosion.wearAngleDegrees, 0.0f, 90.0f, rock::FluvialErosionSettings{}.wearAngleDegrees, "Fluvial wear angle changed", true, "削れ始める斜面角度の目安です。低いほど緩い斜面にも侵食が入りやすくなります。"))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyFloatRow("Deposit Angle", "FluvialDepositAngle", &erosion.depositAngleDegrees, 0.0f, 90.0f, rock::FluvialErosionSettings{}.depositAngleDegrees, "Fluvial deposit angle changed"))
+        if (DrawPropertyFloatRow("Deposit Angle (deg)", "FluvialDepositAngle", &erosion.depositAngleDegrees, 0.0f, 90.0f, rock::FluvialErosionSettings{}.depositAngleDegrees, "Fluvial deposit angle changed", true, "土砂が堆積しやすくなる斜面角度の目安です。低いほど平坦部に土砂が残りやすくなります。"))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyFloatRow("Max Erosion Angle", "FluvialMaxErosionAngle", &erosion.maxErosionAngleDegrees, 0.0f, 90.0f, rock::FluvialErosionSettings{}.maxErosionAngleDegrees, "Fluvial max erosion angle changed"))
+        if (DrawPropertyFloatRow("Max Erosion Angle (deg)", "FluvialMaxErosionAngle", &erosion.maxErosionAngleDegrees, 0.0f, 90.0f, rock::FluvialErosionSettings{}.maxErosionAngleDegrees, "Fluvial max erosion angle changed", true, "侵食を許可する最大斜面角度です。急すぎる斜面への影響を抑えるときに使います。"))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyFloatRow("Granularity", "FluvialGranularity", &erosion.erosionGranularity, 1.0f, 100.0f, rock::FluvialErosionSettings{}.erosionGranularity, "Fluvial granularity changed"))
+        if (DrawPropertyFloatRow("Granularity (%)", "FluvialGranularity", &erosion.erosionGranularity, 1.0f, 100.0f, rock::FluvialErosionSettings{}.erosionGranularity, "Fluvial granularity changed", true, "侵食パターンの細かさです。高いほど細かい溝やノイズ感が出やすくなります。"))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyFloatRow("Sediment Velocity", "FluvialSedimentVelocity", &erosion.sedimentVelocity, 0.0f, 2.0f, rock::FluvialErosionSettings{}.sedimentVelocity, "Fluvial sediment velocity changed"))
+        if (DrawPropertyFloatRow("Sediment Velocity (x)", "FluvialSedimentVelocity", &erosion.sedimentVelocity, 0.0f, 2.0f, rock::FluvialErosionSettings{}.sedimentVelocity, "Fluvial sediment velocity changed", true, "削られた土砂が下流へ運ばれる強さです。高いほど堆積位置が流れ方向へ伸びます。"))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyIntRow("Seed", "FluvialSeed", &erosion.seed, 0, 999999, rock::FluvialErosionSettings{}.seed, "Fluvial seed changed"))
+        if (DrawPropertyIntRow("Seed", "FluvialSeed", &erosion.seed, 0, 999999, rock::FluvialErosionSettings{}.seed, "Fluvial seed changed", true, "侵食パターンの乱数シードです。同じ値なら同じ結果を再現できます。"))
         {
             EvaluateGraph();
         }
@@ -3423,7 +3452,7 @@ void DrawPropertiesPanel()
         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
 
         int primitive = static_cast<int>(editableNode->primitive.kind);
-        if (DrawPropertyComboRow("Primitive", "Primitive", &primitive, "Sphere\0Box\0Capsule\0Ellipsoid\0Rock Blob\0"))
+        if (DrawPropertyComboRow("Primitive", "Primitive", &primitive, "Sphere\0Box\0Capsule\0Ellipsoid\0Rock Blob\0", "生成する基本形状です。現在は古い SDF 系ノードとの互換用です。"))
         {
             PushUndoSnapshot();
             editableNode->primitive.kind = static_cast<rock::PrimitiveKind>(primitive);
@@ -3440,19 +3469,19 @@ void DrawPropertiesPanel()
         ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 112.0f);
         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
 
-        if (DrawPropertyFloatRow("Amplitude", "NoiseAmplitude", &editableNode->noise.amplitude, 0.0f, 2.0f, rock::NoiseSettings{}.amplitude, "Noise amplitude changed"))
+        if (DrawPropertyFloatRow("Amplitude", "NoiseAmplitude", &editableNode->noise.amplitude, 0.0f, 2.0f, rock::NoiseSettings{}.amplitude, "Noise amplitude changed", true, "ノイズ変形の強さです。値を上げるほど形状が大きく歪みます。"))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyFloatRow("Frequency", "NoiseFrequency", &editableNode->noise.frequency, 0.1f, 12.0f, rock::NoiseSettings{}.frequency, "Noise frequency changed"))
+        if (DrawPropertyFloatRow("Frequency", "NoiseFrequency", &editableNode->noise.frequency, 0.1f, 12.0f, rock::NoiseSettings{}.frequency, "Noise frequency changed", true, "ノイズの細かさです。値を上げるほど細かい変化になります。"))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyIntRow("Octaves", "NoiseOctaves", &editableNode->noise.octaves, 1, 8, rock::NoiseSettings{}.octaves, "Noise octaves changed"))
+        if (DrawPropertyIntRow("Octaves", "NoiseOctaves", &editableNode->noise.octaves, 1, 8, rock::NoiseSettings{}.octaves, "Noise octaves changed", true, "重ねるノイズ階層の数です。増やすとディテールが増えます。"))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyIntRow("Seed", "NoiseSeed", &editableNode->noise.seed, 0, 999999, rock::NoiseSettings{}.seed, "Noise seed changed"))
+        if (DrawPropertyIntRow("Seed", "NoiseSeed", &editableNode->noise.seed, 0, 999999, rock::NoiseSettings{}.seed, "Noise seed changed", true, "ノイズパターンの乱数シードです。同じ値なら同じ結果を再現できます。"))
         {
             EvaluateGraph();
         }
@@ -3466,15 +3495,15 @@ void DrawPropertiesPanel()
         ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 112.0f);
         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
 
-        if (DrawPropertyFloatRow("Width", "CrackWidth", &editableNode->crack.width, 0.0f, 0.2f, rock::CrackSettings{}.width, "Crack width changed"))
+        if (DrawPropertyFloatRow("Width", "CrackWidth", &editableNode->crack.width, 0.0f, 0.2f, rock::CrackSettings{}.width, "Crack width changed", true, "亀裂の太さです。値を上げるほど広い割れ目になります。"))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyFloatRow("Depth", "CrackDepth", &editableNode->crack.depth, 0.0f, 1.0f, rock::CrackSettings{}.depth, "Crack depth changed"))
+        if (DrawPropertyFloatRow("Depth", "CrackDepth", &editableNode->crack.depth, 0.0f, 1.0f, rock::CrackSettings{}.depth, "Crack depth changed", true, "亀裂の深さです。値を上げるほど強く彫り込まれます。"))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyFloatRow("Roughness", "CrackRoughness", &editableNode->crack.roughness, 0.0f, 1.0f, rock::CrackSettings{}.roughness, "Crack roughness changed"))
+        if (DrawPropertyFloatRow("Roughness", "CrackRoughness", &editableNode->crack.roughness, 0.0f, 1.0f, rock::CrackSettings{}.roughness, "Crack roughness changed", true, "亀裂境界の荒さです。高いほど不規則な割れ目になります。"))
         {
             EvaluateGraph();
         }
@@ -3491,15 +3520,15 @@ void DrawPropertiesPanel()
             ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 112.0f);
             ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
 
-            if (DrawPropertyIntRow("Resolution", "OutputMeshResolution", &outputMesh->resolution, 16, 512, rock::OutputMeshSettings{}.resolution, "Output mesh resolution changed"))
+            if (DrawPropertyIntRow("Resolution", "OutputMeshResolution", &outputMesh->resolution, 16, 512, rock::OutputMeshSettings{}.resolution, "Output mesh resolution changed", true, "出力メッシュの分割数です。高いほど細かくなりますが処理負荷も増えます。"))
             {
                 EvaluateGraph();
             }
-            if (DrawPropertyIntRow("LOD", "OutputMeshLod", &outputMesh->lod, 0, 4, rock::OutputMeshSettings{}.lod, "Output mesh LOD changed"))
+            if (DrawPropertyIntRow("LOD", "OutputMeshLod", &outputMesh->lod, 0, 4, rock::OutputMeshSettings{}.lod, "Output mesh LOD changed", true, "表示や出力時の簡略化レベルです。値を上げるほど軽くなりますがディテールは減ります。"))
             {
                 EvaluateGraph();
             }
-            if (DrawPropertyFloatRow("Iso Value", "OutputMeshIsoValue", &outputMesh->isoValue, -0.2f, 0.2f, rock::OutputMeshSettings{}.isoValue, "Output mesh iso value changed"))
+            if (DrawPropertyFloatRow("Iso Value", "OutputMeshIsoValue", &outputMesh->isoValue, -0.2f, 0.2f, rock::OutputMeshSettings{}.isoValue, "Output mesh iso value changed", true, "SDF 互換用の等値面しきい値です。ハイトフィールドの通常出力ではほぼ使いません。"))
             {
                 EvaluateGraph();
             }
