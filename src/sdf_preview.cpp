@@ -402,90 +402,10 @@ void BuildSurfaceNetGeometry(SdfPreviewStats& stats, const std::vector<float>& s
     }
 }
 
-void BuildVoxelFaceGeometry(SdfPreviewStats& stats, const std::vector<float>& sdfValues)
-{
-    constexpr size_t kMaxSurfaceSegments = 60000;
-    constexpr size_t kMaxSurfaceTriangles = 60000;
-
-    const auto addSegment = [&](Vec3 a, Vec3 b) {
-        if (stats.surfaceSegments.size() < kMaxSurfaceSegments)
-        {
-            stats.surfaceSegments.push_back({a.x, a.y, a.z, b.x, b.y, b.z});
-        }
-    };
-
-    const auto addQuad = [&](Vec3 a, Vec3 b, Vec3 c, Vec3 d) {
-        if (stats.surfaceTriangles.size() + 2 > kMaxSurfaceTriangles)
-        {
-            return;
-        }
-        stats.surfaceTriangles.push_back({a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z});
-        stats.surfaceTriangles.push_back({a.x, a.y, a.z, c.x, c.y, c.z, d.x, d.y, d.z});
-    };
-
-    for (int z = 0; z < stats.resolution - 1; ++z)
-    {
-        for (int y = 0; y < stats.resolution - 1; ++y)
-        {
-            for (int x = 0; x < stats.resolution - 1; ++x)
-            {
-                if (((x + y + z) % 2) != 0)
-                {
-                    continue;
-                }
-
-                const float center = sdfValues[GridIndex(x, y, z, stats.resolution)];
-                const Vec3 p = GridPoint(x, y, z, stats.voxelSize);
-                const float half = stats.voxelSize * 0.42f;
-                const float sx = sdfValues[GridIndex(x + 1, y, z, stats.resolution)];
-                const float sy = sdfValues[GridIndex(x, y + 1, z, stats.resolution)];
-                const float sz = sdfValues[GridIndex(x, y, z + 1, stats.resolution)];
-
-                if ((center < 0.0f) != (sx < 0.0f))
-                {
-                    addSegment({p.x + half, p.y - half, p.z}, {p.x + half, p.y + half, p.z});
-                    addSegment({p.x + half, p.y, p.z - half}, {p.x + half, p.y, p.z + half});
-                    addQuad(
-                        {p.x + half, p.y - half, p.z - half},
-                        {p.x + half, p.y + half, p.z - half},
-                        {p.x + half, p.y + half, p.z + half},
-                        {p.x + half, p.y - half, p.z + half});
-                }
-                if ((center < 0.0f) != (sy < 0.0f))
-                {
-                    addSegment({p.x - half, p.y + half, p.z}, {p.x + half, p.y + half, p.z});
-                    addSegment({p.x, p.y + half, p.z - half}, {p.x, p.y + half, p.z + half});
-                    addQuad(
-                        {p.x - half, p.y + half, p.z - half},
-                        {p.x + half, p.y + half, p.z - half},
-                        {p.x + half, p.y + half, p.z + half},
-                        {p.x - half, p.y + half, p.z + half});
-                }
-                if ((center < 0.0f) != (sz < 0.0f))
-                {
-                    addSegment({p.x - half, p.y, p.z + half}, {p.x + half, p.y, p.z + half});
-                    addSegment({p.x, p.y - half, p.z + half}, {p.x, p.y + half, p.z + half});
-                    addQuad(
-                        {p.x - half, p.y - half, p.z + half},
-                        {p.x + half, p.y - half, p.z + half},
-                        {p.x + half, p.y + half, p.z + half},
-                        {p.x - half, p.y + half, p.z + half});
-                }
-            }
-        }
-    }
-}
-
 void BuildPreviewGeometry(SdfPreviewStats& stats, const std::vector<float>& sdfValues, const GraphSettings& settings)
 {
-    if (settings.preview.displayMode == MeshDisplayMode::Voxels)
-    {
-        BuildVoxelFaceGeometry(stats, sdfValues);
-    }
-    else
-    {
-        BuildSurfaceNetGeometry(stats, sdfValues);
-    }
+    (void)settings;
+    BuildSurfaceNetGeometry(stats, sdfValues);
 }
 } // namespace
 
@@ -548,58 +468,4 @@ SdfPreviewStats BuildDenseSdfPreview(const GraphSettings& settings, const SdfPip
     return stats;
 }
 
-SdfPreviewStats BuildDenseSdfPreviewFromValues(const GraphSettings& settings, int resolution, const std::vector<float>& sdfValues)
-{
-    SdfPreviewStats stats;
-    stats.resolution = std::max(8, resolution);
-    stats.sliceResolution = stats.resolution;
-    stats.totalVoxels = stats.resolution * stats.resolution * stats.resolution;
-    stats.voxelSize = 2.0f / static_cast<float>(stats.resolution - 1);
-    stats.minSdf = std::numeric_limits<float>::max();
-    stats.maxSdf = std::numeric_limits<float>::lowest();
-    stats.centerSlice.assign(static_cast<size_t>(stats.sliceResolution * stats.sliceResolution), 0.0f);
-    stats.surfacePoints.reserve(2200);
-    stats.surfaceSegments.reserve(4200);
-    stats.surfaceTriangles.reserve(3600);
-    const int sliceZ = stats.resolution / 2;
-    const float surfaceBand = stats.voxelSize * 0.82f;
-    constexpr size_t kMaxSurfacePoints = 2200;
-
-    if (sdfValues.size() < static_cast<size_t>(stats.totalVoxels))
-    {
-        return stats;
-    }
-
-    for (int z = 0; z < stats.resolution; ++z)
-    {
-        for (int y = 0; y < stats.resolution; ++y)
-        {
-            for (int x = 0; x < stats.resolution; ++x)
-            {
-                const Vec3 p = GridPoint(x, y, z, stats.voxelSize);
-                const float sdf = sdfValues[GridIndex(x, y, z, stats.resolution)];
-                stats.minSdf = std::min(stats.minSdf, sdf);
-                stats.maxSdf = std::max(stats.maxSdf, sdf);
-                if (z == sliceZ)
-                {
-                    stats.centerSlice[static_cast<size_t>(y * stats.sliceResolution + x)] = sdf;
-                }
-                if (sdf < 0.0f)
-                {
-                    ++stats.insideVoxels;
-                }
-                if (std::fabs(sdf) <= surfaceBand && stats.surfacePoints.size() < kMaxSurfacePoints && ((x + y * 3 + z * 5) % 3 == 0))
-                {
-                    stats.surfacePoints.push_back({p.x, p.y, p.z, sdf});
-                }
-            }
-        }
-    }
-
-    BuildPreviewGeometry(stats, sdfValues, settings);
-
-    stats.fillRatio = stats.totalVoxels > 0 ? static_cast<float>(stats.insideVoxels) / static_cast<float>(stats.totalVoxels) : 0.0f;
-    stats.estimatedVolume = static_cast<float>(stats.insideVoxels) * stats.voxelSize * stats.voxelSize * stats.voxelSize;
-    return stats;
-}
 } // namespace rock

@@ -49,19 +49,6 @@ enum class PreviewStage
     Output,
 };
 
-enum class ComputeBackend
-{
-    Cpu,
-    GpuPreview,
-    Auto,
-};
-
-enum class MeshDisplayMode
-{
-    Mesh,
-    Voxels,
-};
-
 struct Pin
 {
     GraphId id = 0;
@@ -131,7 +118,6 @@ struct PreviewSettings
 {
     int resolution = 48;
     int lod = 0;
-    MeshDisplayMode displayMode = MeshDisplayMode::Mesh;
     bool showSurface = true;
     bool showWireframe = true;
     bool showPoints = false;
@@ -142,7 +128,6 @@ struct PreviewSettings
 struct GraphSettings
 {
     PreviewSettings preview;
-    ComputeBackend previewBackend = ComputeBackend::Cpu;
 };
 
 struct SurfacePoint
@@ -250,6 +235,7 @@ struct SdfPipeline
     CrackSettings crack;
     bool applyOutputIso = false;
     float outputIsoValue = 0.0f;
+    bool hasSource = false;
     bool useHeightmap = false;
     HeightmapLoadSettings heightmap;
 };
@@ -263,9 +249,6 @@ struct EvaluationSummary
     std::string status = "Graph has not been evaluated";
     PreviewStage previewStage = PreviewStage::Output;
     GraphId previewNodeId = 0;
-    ComputeBackend requestedPreviewBackend = ComputeBackend::Cpu;
-    ComputeBackend effectivePreviewBackend = ComputeBackend::Cpu;
-    bool previewBackendFallback = false;
     bool previewIsHeightmap = false;
     std::string previewMessage;
     SdfPreviewStats previewSdf;
@@ -311,7 +294,6 @@ public:
     void MarkDirty(std::string_view reason);
     void Evaluate(int previewMeshResolution = 0);
     void EvaluateFinal(GraphId outputNodeId = 0);
-    void EvaluateWithPreview(SdfPreviewStats previewSdf, ComputeBackend requestedBackend, ComputeBackend effectiveBackend, bool fallback);
 
 private:
     GraphId AddNode(NodeKind kind, std::string title);
@@ -336,8 +318,6 @@ std::string_view ToString(PrimitiveKind kind);
 std::string_view ToString(NodeKind kind);
 std::string_view ToString(PreviewStage stage);
 std::string_view ToString(ValueType type);
-std::string_view ToString(ComputeBackend backend);
-std::string_view ToString(MeshDisplayMode mode);
 PreviewStage PreviewStageFor(NodeKind kind);
 
 } // namespace rock

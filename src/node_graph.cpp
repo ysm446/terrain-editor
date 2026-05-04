@@ -381,10 +381,9 @@ MeshData BuildMeshFromHeightmap(const HeightmapLoadSettings& settings, int resol
     }
 
     const int gridResolution = std::clamp(resolution, 2, 256);
-    const float previewUnitsPerMeter = 1.0f / 512.0f;
-    const float terrainSize = std::max(1.0f, settings.scaleMeters) * previewUnitsPerMeter;
+    const float terrainSize = std::max(1.0f, settings.scaleMeters);
     const float verticalRange = terrainSize * std::max(0.0f, settings.relativeVerticalScalePercent) / 100.0f;
-    const float verticalOffset = settings.verticalOffsetMeters * previewUnitsPerMeter;
+    const float verticalOffset = settings.verticalOffsetMeters;
     const float halfSize = terrainSize * 0.5f;
 
     mesh.vertices.reserve(static_cast<size_t>(gridResolution) * static_cast<size_t>(gridResolution));
@@ -489,24 +488,7 @@ MeshData BuildMeshFromHeightmap(const HeightmapLoadSettings& settings, int resol
 NodeGraph NodeGraph::CreateDefaultTerrainGraph()
 {
     NodeGraph graph;
-
-    const GraphId primitive = graph.AddNode(NodeKind::PrimitiveSdf, "Primitive SDF");
-    const GraphId noise = graph.AddNode(NodeKind::NoiseWarp, "Noise Warp");
-    const GraphId crack = graph.AddNode(NodeKind::CrackField, "Crack Field");
-    const GraphId output = graph.AddNode(NodeKind::OutputMesh, "Output Mesh");
-
-    const GraphId primitiveOut = graph.AddPin(primitive, PinKind::Output, ValueType::SdfGrid, "SDFGrid");
-    const GraphId noiseIn = graph.AddPin(noise, PinKind::Input, ValueType::SdfGrid, "SDFGrid");
-    const GraphId noiseOut = graph.AddPin(noise, PinKind::Output, ValueType::SdfGrid, "SDFGrid");
-    const GraphId crackIn = graph.AddPin(crack, PinKind::Input, ValueType::SdfGrid, "SDFGrid");
-    const GraphId crackOut = graph.AddPin(crack, PinKind::Output, ValueType::SdfGrid, "SDFGrid");
-    const GraphId outputIn = graph.AddPin(output, PinKind::Input, ValueType::SdfGrid, "SDFGrid");
-
-    graph.AddInitialLink(primitiveOut, noiseIn);
-    graph.AddInitialLink(noiseOut, crackIn);
-    graph.AddInitialLink(crackOut, outputIn);
     graph.Evaluate();
-
     return graph;
 }
 
@@ -922,11 +904,13 @@ SdfPipeline NodeGraph::PipelineToNode(const Node& targetNode) const
         }
         else if (node->kind == NodeKind::PrimitiveSdf)
         {
+            pipeline.hasSource = true;
             pipeline.primitiveKind = node->primitive.kind;
             break;
         }
         else if (node->kind == NodeKind::HeightmapLoad)
         {
+            pipeline.hasSource = true;
             pipeline.useHeightmap = true;
             pipeline.heightmap = node->heightmap;
             break;
@@ -952,12 +936,15 @@ void NodeGraph::Evaluate(int previewMeshResolution)
     }
     const SdfPipeline previewPipeline = PreviewPipeline();
     const SdfPipeline finalPipeline = FinalPipeline();
-    evaluation_.requestedPreviewBackend = settings_.previewBackend;
-    evaluation_.effectivePreviewBackend = ComputeBackend::Cpu;
-    evaluation_.previewBackendFallback = settings_.previewBackend != ComputeBackend::Cpu;
     evaluation_.previewIsHeightmap = previewPipeline.useHeightmap;
     evaluation_.previewMessage.clear();
-    if (previewPipeline.useHeightmap)
+    if (!previewPipeline.hasSource)
+    {
+        evaluation_.previewSdf = {};
+        evaluation_.previewMesh = {};
+        evaluation_.previewMessage = "No source node";
+    }
+    else if (previewPipeline.useHeightmap)
     {
         evaluation_.previewSdf = {};
         evaluation_.previewMesh = BuildMeshFromHeightmap(previewPipeline.heightmap, previewMeshResolution, &evaluation_.previewMessage);
@@ -969,7 +956,11 @@ void NodeGraph::Evaluate(int previewMeshResolution)
     }
     ++evaluation_.version;
     evaluation_.dirty = false;
-    if (previewPipeline.useHeightmap)
+    if (!previewPipeline.hasSource)
+    {
+        evaluation_.status = "No source node";
+    }
+    else if (previewPipeline.useHeightmap)
     {
         evaluation_.status = std::format(
             "Heightmap preview [{}] -> {} verts / {} tris{}{}",
@@ -982,10 +973,8 @@ void NodeGraph::Evaluate(int previewMeshResolution)
     else
     {
         evaluation_.status = std::format(
-            "{} preview [{}{}] -> {}{}{} -> preview LOD {} / output LOD {} / iso {:.3f} -> {} verts / {} tris{}",
+            "{} preview -> {}{}{} -> preview LOD {} / output LOD {} / iso {:.3f} -> {} verts / {} tris{}",
             ToString(evaluation_.previewStage),
-            ToString(evaluation_.effectivePreviewBackend),
-            evaluation_.previewBackendFallback ? " fallback" : "",
             ToString(previewPipeline.primitiveKind),
             OperationPipelineSummary(finalPipeline),
             "",
@@ -1018,8 +1007,12 @@ void NodeGraph::EvaluateFinal(GraphId outputNodeId)
         }
     }
     GraphSettings finalSettings = settings_;
-    finalSettings.preview.displayMode = MeshDisplayMode::Mesh;
-    if (finalPipeline.useHeightmap)
+    if (!finalPipeline.hasSource)
+    {
+        evaluation_.finalSdf = {};
+        evaluation_.finalMesh = {};
+    }
+    else if (finalPipeline.useHeightmap)
     {
         evaluation_.finalSdf = {};
         evaluation_.finalMesh = BuildMeshFromHeightmap(finalPipeline.heightmap, outputMeshResolution, nullptr);
@@ -1032,44 +1025,13 @@ void NodeGraph::EvaluateFinal(GraphId outputNodeId)
     ++evaluation_.finalVersion;
     evaluation_.finalDirty = false;
     evaluation_.status = std::format(
-        "{} preview [{}{}] / output mesh {}^3 LOD {} iso {:.3f} -> {} verts / {} tris",
+        "{} preview / output mesh {}^3 LOD {} iso {:.3f} -> {} verts / {} tris",
         ToString(evaluation_.previewStage),
-        ToString(evaluation_.effectivePreviewBackend),
-        evaluation_.previewBackendFallback ? " fallback" : "",
         evaluation_.finalSdf.resolution,
         outputMesh.lod,
         outputMesh.isoValue,
         evaluation_.finalMesh.vertices.size(),
         evaluation_.finalMesh.triangles.size());
-}
-
-void NodeGraph::EvaluateWithPreview(SdfPreviewStats previewSdf, ComputeBackend requestedBackend, ComputeBackend effectiveBackend, bool fallback)
-{
-    const SdfPipeline previewPipeline = PreviewPipeline();
-    const SdfPipeline finalPipeline = FinalPipeline();
-    evaluation_.requestedPreviewBackend = requestedBackend;
-    evaluation_.effectivePreviewBackend = effectiveBackend;
-    evaluation_.previewBackendFallback = fallback;
-    evaluation_.previewIsHeightmap = false;
-    evaluation_.previewMessage.clear();
-    evaluation_.previewSdf = std::move(previewSdf);
-    evaluation_.previewMesh = BuildMeshFromSdf(settings_, previewPipeline, evaluation_.previewSdf);
-    ++evaluation_.version;
-    evaluation_.dirty = false;
-    evaluation_.status = std::format(
-        "{} preview [{}{}] -> {}{}{} -> preview LOD {} / output LOD {} / iso {:.3f} -> {} verts / {} tris{}",
-        ToString(evaluation_.previewStage),
-        ToString(evaluation_.effectivePreviewBackend),
-        evaluation_.previewBackendFallback ? " fallback" : "",
-        ToString(previewPipeline.primitiveKind),
-        OperationPipelineSummary(finalPipeline),
-        "",
-        settings_.preview.lod,
-        OutputMeshSettingsFor().lod,
-        OutputMeshSettingsFor().isoValue,
-        evaluation_.previewMesh.vertices.size(),
-        evaluation_.previewMesh.triangles.size(),
-        evaluation_.finalDirty ? " / output mesh pending" : "");
 }
 
 GraphId NodeGraph::AddNode(NodeKind kind, std::string title)
@@ -1179,34 +1141,6 @@ std::string_view ToString(ValueType type)
         return "Mesh";
     case ValueType::HeightField:
         return "HeightField";
-    default:
-        return "Unknown";
-    }
-}
-
-std::string_view ToString(ComputeBackend backend)
-{
-    switch (backend)
-    {
-    case ComputeBackend::Cpu:
-        return "CPU";
-    case ComputeBackend::GpuPreview:
-        return "GPU Preview";
-    case ComputeBackend::Auto:
-        return "Auto";
-    default:
-        return "Unknown";
-    }
-}
-
-std::string_view ToString(MeshDisplayMode mode)
-{
-    switch (mode)
-    {
-    case MeshDisplayMode::Mesh:
-        return "Mesh";
-    case MeshDisplayMode::Voxels:
-        return "Voxels";
     default:
         return "Unknown";
     }

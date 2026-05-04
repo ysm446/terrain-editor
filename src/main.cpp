@@ -69,11 +69,6 @@ UINT64 g_fenceLastSignaledValue = 0;
 UINT g_frameIndex = 0;
 UINT g_rtvDescriptorSize = 0;
 UINT g_srvDescriptorSize = 0;
-ComPtr<ID3D12RootSignature> g_sdfComputeRootSignature;
-ComPtr<ID3D12PipelineState> g_sdfComputePipelineState;
-ComPtr<ID3D12RootSignature> g_raymarchComputeRootSignature;
-ComPtr<ID3D12PipelineState> g_raymarchComputePipelineState;
-
 std::array<FrameContext, kFrameCount> g_frameContexts;
 std::array<ComPtr<ID3D12Resource>, kFrameCount> g_renderTargets;
 std::array<bool, kSrvDescriptorCount> g_srvDescriptorUsed{};
@@ -136,7 +131,6 @@ struct UiState
     float crackDepth = 0.42f;
     float crackRoughness = 0.65f;
     bool meshPreview = true;
-    bool sdfPreview = false;
     float rightPaneWidth = 0.0f;
     float nodePaneHeight = 0.0f;
 };
@@ -175,47 +169,6 @@ struct ProjectedPoint
     ImVec2 screen;
     float depth = 0.0f;
 };
-
-struct RaymarchPreviewCache
-{
-    int width = 0;
-    int height = 0;
-    float yaw = 0.0f;
-    float pitch = 0.0f;
-    float fovDegrees = 0.0f;
-    float orbitDistance = 0.0f;
-    float zoom = 0.0f;
-    ImVec2 pan = ImVec2(0.0f, 0.0f);
-    uint64_t graphVersion = 0;
-    rock::PreviewStage previewStage = rock::PreviewStage::Output;
-    std::vector<ImU32> pixels;
-};
-
-struct GpuRaymarchPreview
-{
-    int width = 0;
-    int height = 0;
-    float yaw = 0.0f;
-    float pitch = 0.0f;
-    float fovDegrees = 0.0f;
-    float orbitDistance = 0.0f;
-    float zoom = 0.0f;
-    ImVec2 pan = ImVec2(0.0f, 0.0f);
-    uint64_t graphVersion = 0;
-    rock::PreviewStage previewStage = rock::PreviewStage::Output;
-    ComPtr<ID3D12Resource> texture;
-    D3D12_CPU_DESCRIPTOR_HANDLE srvCpu{};
-    D3D12_GPU_DESCRIPTOR_HANDLE srvGpu{};
-    D3D12_CPU_DESCRIPTOR_HANDLE uavCpu{};
-    D3D12_GPU_DESCRIPTOR_HANDLE uavGpu{};
-    bool srvAllocated = false;
-    bool uavAllocated = false;
-    D3D12_RESOURCE_STATES state = D3D12_RESOURCE_STATE_COMMON;
-    std::string status;
-};
-
-RaymarchPreviewCache g_raymarchPreviewCache;
-GpuRaymarchPreview g_gpuRaymarchPreview;
 
 struct MeshPreviewConstants
 {
@@ -267,34 +220,6 @@ ComPtr<ID3D12PipelineState> g_meshPreviewWirePso;
 ComPtr<ID3D12DescriptorHeap> g_meshPreviewRtvHeap;
 ComPtr<ID3D12DescriptorHeap> g_meshPreviewDsvHeap;
 GpuMeshPreview g_gpuMeshPreview;
-
-struct SdfComputeConstants
-{
-    UINT resolution = 48;
-    UINT primitiveKind = 0;
-    UINT sdfOperationCount = 0;
-    UINT padding0 = 0;
-};
-
-struct RaymarchComputeConstants
-{
-    UINT width = 0;
-    UINT height = 0;
-    UINT primitiveKind = 0;
-    UINT sdfOperationCount = 0;
-    float preCameraPadding = 0.0f;
-    float cameraPadding[3]{};
-    float cameraPosition[4]{};
-    float cameraRight[4]{};
-    float cameraUp[4]{};
-    float cameraForward[4]{};
-    float viewportMin[2]{};
-    float viewportMax[2]{};
-    float viewportCenter[2]{};
-    float focalLength = 1.0f;
-    float projectionScale = 1.0f;
-    float padding[2]{};
-};
 
 std::string MakeWindowTitleText()
 {
@@ -576,21 +501,6 @@ void CleanupD3D()
 {
     WaitForLastSubmittedFrame();
     CleanupRenderTarget();
-    g_sdfComputePipelineState.Reset();
-    g_sdfComputeRootSignature.Reset();
-    g_raymarchComputePipelineState.Reset();
-    g_raymarchComputeRootSignature.Reset();
-    if (g_gpuRaymarchPreview.srvAllocated)
-    {
-        FreeSrvDescriptor(nullptr, g_gpuRaymarchPreview.srvCpu, g_gpuRaymarchPreview.srvGpu);
-        g_gpuRaymarchPreview.srvAllocated = false;
-    }
-    if (g_gpuRaymarchPreview.uavAllocated)
-    {
-        FreeSrvDescriptor(nullptr, g_gpuRaymarchPreview.uavCpu, g_gpuRaymarchPreview.uavGpu);
-        g_gpuRaymarchPreview.uavAllocated = false;
-    }
-    g_gpuRaymarchPreview.texture.Reset();
     if (g_gpuMeshPreview.srvAllocated)
     {
         FreeSrvDescriptor(nullptr, g_gpuMeshPreview.srvCpu, g_gpuMeshPreview.srvGpu);
@@ -628,16 +538,6 @@ std::filesystem::path ShaderPath(const char* fileName)
     }
 
     return cwdPath;
-}
-
-std::filesystem::path SdfPreviewShaderPath()
-{
-    return ShaderPath("sdf_preview_cs.hlsl");
-}
-
-std::filesystem::path RaymarchPreviewShaderPath()
-{
-    return ShaderPath("raymarch_preview_cs.hlsl");
 }
 
 std::filesystem::path MeshPreviewShaderPath()
@@ -830,11 +730,8 @@ bool SaveAppSettings(std::string* error = nullptr)
         root["formatVersion"] = 1;
         root["appVersion"] = TERRAIN_EDITOR_VERSION_STRING;
         root["uiTheme"] = g_themeManager.CurrentThemeId();
-        root["previewBackend"] = static_cast<int>(settings.previewBackend);
         root["previewVisibility"] = {
             {"mesh", g_ui.meshPreview},
-            {"raymarch", g_ui.sdfPreview},
-            {"meshDisplayMode", static_cast<int>(settings.preview.displayMode)},
             {"meshSurface", settings.preview.showSurface},
             {"meshWireframe", settings.preview.showWireframe},
             {"surfacePoints", settings.preview.showPoints},
@@ -904,72 +801,6 @@ void SaveAppSettingsSilently()
     }
 }
 
-struct GpuSdfOperation
-{
-    float params[4]{};
-    float extra[4]{};
-};
-
-std::vector<rock::SdfPipeline::Operation> SdfOperationsForGpu(const rock::SdfPipeline& pipeline)
-{
-    std::vector<rock::SdfPipeline::Operation> operations = pipeline.operations;
-    if (operations.empty())
-    {
-        if (!pipeline.noiseLayers.empty())
-        {
-            for (const rock::NoiseSettings& noise : pipeline.noiseLayers)
-            {
-                operations.push_back({rock::SdfPipeline::OperationKind::NoiseWarp, 0, noise, {}, 0.0f});
-            }
-        }
-        else if (pipeline.useNoise)
-        {
-            operations.push_back({rock::SdfPipeline::OperationKind::NoiseWarp, 0, pipeline.noise, {}, 0.0f});
-        }
-        if (pipeline.useCrack)
-        {
-            operations.push_back({rock::SdfPipeline::OperationKind::CrackField, 0, {}, pipeline.crack, 0.0f});
-        }
-        if (pipeline.applyOutputIso)
-        {
-            operations.push_back({rock::SdfPipeline::OperationKind::OutputIso, 0, {}, {}, pipeline.outputIsoValue});
-        }
-    }
-    return operations;
-}
-
-std::vector<GpuSdfOperation> BuildGpuSdfOperations(const rock::SdfPipeline& pipeline)
-{
-    const std::vector<rock::SdfPipeline::Operation> operations = SdfOperationsForGpu(pipeline);
-    std::vector<GpuSdfOperation> gpuOperations;
-    gpuOperations.reserve(operations.size());
-    for (size_t index = 0; index < operations.size(); ++index)
-    {
-        const rock::SdfPipeline::Operation& operation = operations[index];
-        GpuSdfOperation gpuOperation{};
-        gpuOperation.params[0] = static_cast<float>(static_cast<int>(operation.kind));
-        switch (operation.kind)
-        {
-        case rock::SdfPipeline::OperationKind::NoiseWarp:
-            gpuOperation.params[1] = operation.noise.amplitude;
-            gpuOperation.params[2] = operation.noise.frequency;
-            gpuOperation.params[3] = static_cast<float>(std::clamp(operation.noise.octaves, 1, 8));
-            gpuOperation.extra[0] = static_cast<float>(std::clamp(operation.noise.seed, 0, 999999));
-            break;
-        case rock::SdfPipeline::OperationKind::CrackField:
-            gpuOperation.params[1] = operation.crack.width;
-            gpuOperation.params[2] = operation.crack.depth;
-            gpuOperation.params[3] = operation.crack.roughness;
-            break;
-        case rock::SdfPipeline::OperationKind::OutputIso:
-            gpuOperation.params[1] = operation.isoValue;
-            break;
-        }
-        gpuOperations.push_back(gpuOperation);
-    }
-    return gpuOperations;
-}
-
 ComPtr<ID3D12Resource> CreateUploadBuffer(const void* data, UINT64 byteSize, const char* message)
 {
     const D3D12_HEAP_PROPERTIES uploadHeap = HeapProperties(D3D12_HEAP_TYPE_UPLOAD);
@@ -1019,12 +850,9 @@ bool LoadAppSettings(std::string* error = nullptr)
         }
 
         rock::GraphSettings& settings = g_graph.Settings();
-        settings.previewBackend = static_cast<rock::ComputeBackend>(std::clamp(root.value("previewBackend", static_cast<int>(settings.previewBackend)), 0, 2));
 
         const nlohmann::json visibilityJson = root.value("previewVisibility", nlohmann::json::object());
         g_ui.meshPreview = visibilityJson.value("mesh", g_ui.meshPreview);
-        g_ui.sdfPreview = visibilityJson.value("raymarch", g_ui.sdfPreview);
-        settings.preview.displayMode = static_cast<rock::MeshDisplayMode>(std::clamp(visibilityJson.value("meshDisplayMode", static_cast<int>(settings.preview.displayMode)), 0, 1));
         settings.preview.showSurface = visibilityJson.value("meshSurface", settings.preview.showSurface);
         settings.preview.showWireframe = visibilityJson.value("meshWireframe", settings.preview.showWireframe);
         settings.preview.showPoints = visibilityJson.value("surfacePoints", settings.preview.showPoints);
@@ -1063,8 +891,16 @@ bool LoadAppSettings(std::string* error = nullptr)
         g_viewport.yaw = viewportJson.value("yaw", g_viewport.yaw);
         g_viewport.pitch = std::clamp(viewportJson.value("pitch", g_viewport.pitch), -1.25f, 1.25f);
         g_viewport.fovDegrees = std::clamp(viewportJson.value("fovDegrees", g_viewport.fovDegrees), 15.0f, 90.0f);
-        g_viewport.orbitDistance = std::clamp(viewportJson.value("orbitDistance", g_viewport.orbitDistance), 1.0f, 40.0f);
-        g_viewport.zoom = std::clamp(viewportJson.value("zoom", g_viewport.zoom), 0.35f, 4.0f);
+        g_viewport.orbitDistance = std::clamp(viewportJson.value("orbitDistance", g_viewport.orbitDistance), 1.0f, 10000.0f);
+        g_viewport.zoom = std::clamp(viewportJson.value("zoom", g_viewport.zoom), 0.05f, 20.0f);
+        const std::string savedAppVersion = root.value("appVersion", std::string());
+        if ((savedAppVersion.empty() || savedAppVersion.rfind("0.1.", 0) == 0 || savedAppVersion.rfind("0.2.", 0) == 0) &&
+            g_viewport.orbitDistance <= 40.0f)
+        {
+            g_viewport.pitch = 0.72f;
+            g_viewport.orbitDistance = 1800.0f;
+            g_viewport.zoom = 1.0f;
+        }
         if (viewportJson.contains("pan") && viewportJson["pan"].is_array() && viewportJson["pan"].size() == 2)
         {
             g_viewport.pan = ImVec2(viewportJson["pan"][0].get<float>(), viewportJson["pan"][1].get<float>());
@@ -1325,7 +1161,6 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
 {
     try
     {
-        const rock::GraphSettings& settings = g_graph.Settings();
         nlohmann::json root;
         root["format"] = "terrain_editor_project";
         root["formatVersion"] = 1;
@@ -1334,9 +1169,7 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
         root["selectedNodeIds"] = nlohmann::json::array();
         root["previewStage"] = static_cast<int>(g_graph.Preview());
 
-        root["settings"] = {
-            {"previewBackend", static_cast<int>(settings.previewBackend)},
-        };
+        root["settings"] = nlohmann::json::object();
 
         root["nodeSettings"] = nlohmann::json::object();
         for (const rock::Node& node : g_graph.Nodes())
@@ -1518,7 +1351,6 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
             return false;
         }
 
-        rock::GraphSettings& settings = g_graph.Settings();
         const nlohmann::json settingsJson = root.value("settings", nlohmann::json::object());
         const nlohmann::json primitiveJson = settingsJson.value("primitive", nlohmann::json::object());
         const nlohmann::json noiseJson = settingsJson.value("noise", nlohmann::json::object());
@@ -1627,8 +1459,6 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 nodeOutputMesh->isoValue = std::clamp(nodeOutputMeshJson.value("isoValue", nodeOutputMesh->isoValue), -0.2f, 0.2f);
             }
         }
-        settings.previewBackend = static_cast<rock::ComputeBackend>(std::clamp(settingsJson.value("previewBackend", static_cast<int>(settings.previewBackend)), 0, 2));
-
         const nlohmann::json viewportJson = root.value("viewport", nlohmann::json::object());
         g_viewport.yaw = viewportJson.value("yaw", g_viewport.yaw);
         g_viewport.pitch = viewportJson.value("pitch", g_viewport.pitch);
@@ -1719,179 +1549,6 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
     }
 }
 
-bool EnsureSdfComputePipeline(std::string* error)
-{
-    if (g_sdfComputeRootSignature && g_sdfComputePipelineState)
-    {
-        return true;
-    }
-
-    if (!g_device)
-    {
-        if (error) *error = "D3D12 device is not initialized";
-        return false;
-    }
-
-    D3D12_ROOT_PARAMETER rootParameters[3]{};
-    rootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    rootParameters[0].Constants.ShaderRegister = 0;
-    rootParameters[0].Constants.RegisterSpace = 0;
-    rootParameters[0].Constants.Num32BitValues = sizeof(SdfComputeConstants) / sizeof(UINT);
-    rootParameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    rootParameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
-    rootParameters[1].Descriptor.ShaderRegister = 0;
-    rootParameters[1].Descriptor.RegisterSpace = 0;
-    rootParameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    rootParameters[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
-    rootParameters[2].Descriptor.ShaderRegister = 0;
-    rootParameters[2].Descriptor.RegisterSpace = 0;
-    rootParameters[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-
-    D3D12_ROOT_SIGNATURE_DESC rootDesc{};
-    rootDesc.NumParameters = 3;
-    rootDesc.pParameters = rootParameters;
-    rootDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
-
-    ComPtr<ID3DBlob> signatureBlob;
-    ComPtr<ID3DBlob> errorBlob;
-    HRESULT hr = D3D12SerializeRootSignature(&rootDesc, D3D_ROOT_SIGNATURE_VERSION_1, &signatureBlob, &errorBlob);
-    if (FAILED(hr))
-    {
-        if (error)
-        {
-            *error = errorBlob ? static_cast<const char*>(errorBlob->GetBufferPointer()) : "D3D12SerializeRootSignature failed";
-        }
-        return false;
-    }
-
-    hr = g_device->CreateRootSignature(0, signatureBlob->GetBufferPointer(), signatureBlob->GetBufferSize(), IID_PPV_ARGS(&g_sdfComputeRootSignature));
-    if (FAILED(hr))
-    {
-        if (error) *error = "CreateRootSignature failed";
-        return false;
-    }
-
-    const std::filesystem::path shaderPath = SdfPreviewShaderPath();
-    ComPtr<ID3DBlob> shaderBlob;
-    errorBlob.Reset();
-    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
-#if defined(_DEBUG)
-    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-#endif
-    hr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "main", "cs_5_0", compileFlags, 0, &shaderBlob, &errorBlob);
-    if (FAILED(hr))
-    {
-        if (error)
-        {
-            *error = errorBlob ? static_cast<const char*>(errorBlob->GetBufferPointer()) : "D3DCompileFromFile failed";
-        }
-        return false;
-    }
-
-    D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{};
-    psoDesc.pRootSignature = g_sdfComputeRootSignature.Get();
-    psoDesc.CS.pShaderBytecode = shaderBlob->GetBufferPointer();
-    psoDesc.CS.BytecodeLength = shaderBlob->GetBufferSize();
-    hr = g_device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&g_sdfComputePipelineState));
-    if (FAILED(hr))
-    {
-        if (error) *error = "CreateComputePipelineState failed";
-        return false;
-    }
-
-    return true;
-}
-
-bool EnsureRaymarchComputePipeline(std::string* error)
-{
-    if (g_raymarchComputeRootSignature && g_raymarchComputePipelineState)
-    {
-        return true;
-    }
-
-    if (!g_device)
-    {
-        if (error) *error = "D3D12 device is not initialized";
-        return false;
-    }
-
-    D3D12_DESCRIPTOR_RANGE uavRange{};
-    uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-    uavRange.NumDescriptors = 1;
-    uavRange.BaseShaderRegister = 0;
-    uavRange.RegisterSpace = 0;
-    uavRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-
-    D3D12_ROOT_PARAMETER rootParameters[3]{};
-    rootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    rootParameters[0].Constants.ShaderRegister = 0;
-    rootParameters[0].Constants.RegisterSpace = 0;
-    rootParameters[0].Constants.Num32BitValues = sizeof(RaymarchComputeConstants) / sizeof(UINT);
-    rootParameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    rootParameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    rootParameters[1].DescriptorTable.NumDescriptorRanges = 1;
-    rootParameters[1].DescriptorTable.pDescriptorRanges = &uavRange;
-    rootParameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    rootParameters[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
-    rootParameters[2].Descriptor.ShaderRegister = 0;
-    rootParameters[2].Descriptor.RegisterSpace = 0;
-    rootParameters[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-
-    D3D12_ROOT_SIGNATURE_DESC rootDesc{};
-    rootDesc.NumParameters = 3;
-    rootDesc.pParameters = rootParameters;
-    rootDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
-
-    ComPtr<ID3DBlob> signatureBlob;
-    ComPtr<ID3DBlob> errorBlob;
-    HRESULT hr = D3D12SerializeRootSignature(&rootDesc, D3D_ROOT_SIGNATURE_VERSION_1, &signatureBlob, &errorBlob);
-    if (FAILED(hr))
-    {
-        if (error)
-        {
-            *error = errorBlob ? static_cast<const char*>(errorBlob->GetBufferPointer()) : "D3D12SerializeRootSignature failed";
-        }
-        return false;
-    }
-
-    hr = g_device->CreateRootSignature(0, signatureBlob->GetBufferPointer(), signatureBlob->GetBufferSize(), IID_PPV_ARGS(&g_raymarchComputeRootSignature));
-    if (FAILED(hr))
-    {
-        if (error) *error = "Create raymarch root signature failed";
-        return false;
-    }
-
-    const std::filesystem::path shaderPath = RaymarchPreviewShaderPath();
-    ComPtr<ID3DBlob> shaderBlob;
-    errorBlob.Reset();
-    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
-#if defined(_DEBUG)
-    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-#endif
-    hr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "main", "cs_5_0", compileFlags, 0, &shaderBlob, &errorBlob);
-    if (FAILED(hr))
-    {
-        if (error)
-        {
-            *error = errorBlob ? static_cast<const char*>(errorBlob->GetBufferPointer()) : "D3DCompileFromFile failed";
-        }
-        return false;
-    }
-
-    D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{};
-    psoDesc.pRootSignature = g_raymarchComputeRootSignature.Get();
-    psoDesc.CS.pShaderBytecode = shaderBlob->GetBufferPointer();
-    psoDesc.CS.BytecodeLength = shaderBlob->GetBufferSize();
-    hr = g_device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&g_raymarchComputePipelineState));
-    if (FAILED(hr))
-    {
-        if (error) *error = "Create raymarch compute pipeline failed";
-        return false;
-    }
-
-    return true;
-}
-
 bool EnsureMeshPreviewPipeline(std::string* error)
 {
     if (g_meshPreviewSurfacePso) return true;
@@ -1974,85 +1631,6 @@ bool EnsureMeshPreviewPipeline(std::string* error)
     return true;
 }
 
-bool TryBuildGpuPreviewSdf(const rock::GraphSettings& settings, const rock::SdfPipeline& pipeline, int resolution, rock::SdfPreviewStats& outStats, std::string* error)
-{
-    if (!EnsureSdfComputePipeline(error))
-    {
-        return false;
-    }
-
-    try
-    {
-        const UINT clampedResolution = static_cast<UINT>(std::clamp(resolution, 8, 128));
-        const UINT64 valueCount = static_cast<UINT64>(clampedResolution) * clampedResolution * clampedResolution;
-        const UINT64 bufferSize = valueCount * sizeof(float);
-
-        ComPtr<ID3D12Resource> outputBuffer;
-        ComPtr<ID3D12Resource> readbackBuffer;
-        const D3D12_HEAP_PROPERTIES defaultHeap = HeapProperties(D3D12_HEAP_TYPE_DEFAULT);
-        const D3D12_HEAP_PROPERTIES readbackHeap = HeapProperties(D3D12_HEAP_TYPE_READBACK);
-        const D3D12_RESOURCE_DESC outputDesc = BufferResourceDesc(bufferSize, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-        const D3D12_RESOURCE_DESC readbackDesc = BufferResourceDesc(bufferSize);
-        ThrowIfFailed(g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &outputDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&outputBuffer)), "Create GPU SDF output failed");
-        ThrowIfFailed(g_device->CreateCommittedResource(&readbackHeap, D3D12_HEAP_FLAG_NONE, &readbackDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readbackBuffer)), "Create GPU SDF readback failed");
-
-        ComPtr<ID3D12CommandAllocator> allocator;
-        ComPtr<ID3D12GraphicsCommandList> commandList;
-        ThrowIfFailed(g_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)), "Create compute allocator failed");
-        ThrowIfFailed(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&commandList)), "Create compute command list failed");
-
-        SdfComputeConstants constants{};
-        constants.resolution = clampedResolution;
-        constants.primitiveKind = static_cast<UINT>(pipeline.primitiveKind);
-        const std::vector<GpuSdfOperation> operations = BuildGpuSdfOperations(pipeline);
-        constants.sdfOperationCount = static_cast<UINT>(operations.size());
-        const ComPtr<ID3D12Resource> operationBuffer = CreateUploadBuffer(
-            operations.data(),
-            static_cast<UINT64>(operations.size() * sizeof(GpuSdfOperation)),
-            "Create SDF operation buffer failed");
-
-        commandList->SetComputeRootSignature(g_sdfComputeRootSignature.Get());
-        commandList->SetPipelineState(g_sdfComputePipelineState.Get());
-        commandList->SetComputeRoot32BitConstants(0, sizeof(SdfComputeConstants) / sizeof(UINT), &constants, 0);
-        commandList->SetComputeRootUnorderedAccessView(1, outputBuffer->GetGPUVirtualAddress());
-        commandList->SetComputeRootShaderResourceView(2, operationBuffer->GetGPUVirtualAddress());
-        const UINT groups = (clampedResolution + 7) / 8;
-        commandList->Dispatch(groups, groups, groups);
-
-        D3D12_RESOURCE_BARRIER barrier{};
-        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        barrier.Transition.pResource = outputBuffer.Get();
-        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-        barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
-        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        commandList->ResourceBarrier(1, &barrier);
-        commandList->CopyResource(readbackBuffer.Get(), outputBuffer.Get());
-        ThrowIfFailed(commandList->Close(), "Close compute command list failed");
-
-        ID3D12CommandList* commandLists[] = {commandList.Get()};
-        g_commandQueue->ExecuteCommandLists(1, commandLists);
-        const UINT64 fenceValue = ++g_fenceLastSignaledValue;
-        ThrowIfFailed(g_commandQueue->Signal(g_fence.Get(), fenceValue), "Signal compute queue failed");
-        WaitForFenceValue(fenceValue);
-
-        std::vector<float> sdfValues(static_cast<size_t>(valueCount));
-        void* mapped = nullptr;
-        D3D12_RANGE readRange{0, static_cast<SIZE_T>(bufferSize)};
-        ThrowIfFailed(readbackBuffer->Map(0, &readRange, &mapped), "Map GPU SDF readback failed");
-        std::memcpy(sdfValues.data(), mapped, static_cast<size_t>(bufferSize));
-        D3D12_RANGE writeRange{0, 0};
-        readbackBuffer->Unmap(0, &writeRange);
-
-        outStats = rock::BuildDenseSdfPreviewFromValues(settings, static_cast<int>(clampedResolution), sdfValues);
-        return true;
-    }
-    catch (const std::exception& ex)
-    {
-        if (error) *error = ex.what();
-        return false;
-    }
-}
-
 int EffectiveMeshResolution(int resolution, int lod)
 {
     return std::clamp(resolution / (1 << std::clamp(lod, 0, 4)), 16, 96);
@@ -2073,23 +1651,7 @@ int CurrentPreviewMeshResolution()
 
 void EvaluateGraph()
 {
-    const rock::GraphSettings& settings = g_graph.Settings();
     const int meshResolution = CurrentPreviewMeshResolution();
-    const rock::SdfPipeline previewPipeline = g_graph.PreviewPipeline();
-    if (settings.previewBackend == rock::ComputeBackend::Cpu || previewPipeline.useHeightmap)
-    {
-        g_graph.Evaluate(meshResolution);
-        return;
-    }
-
-    rock::SdfPreviewStats gpuPreview;
-    std::string error;
-    if (TryBuildGpuPreviewSdf(settings, previewPipeline, meshResolution, gpuPreview, &error))
-    {
-        g_graph.EvaluateWithPreview(std::move(gpuPreview), settings.previewBackend, rock::ComputeBackend::GpuPreview, false);
-        return;
-    }
-
     g_graph.Evaluate(meshResolution);
 }
 
@@ -2109,9 +1671,9 @@ void ResetViewport()
 {
     g_viewport = {};
     g_viewport.yaw = 0.0f;
-    g_viewport.pitch = 0.0f;
+    g_viewport.pitch = 0.72f;
     g_viewport.fovDegrees = 45.0f;
-    g_viewport.orbitDistance = 8.0f;
+    g_viewport.orbitDistance = 1800.0f;
     g_viewport.zoom = 1.0f;
 }
 
@@ -2153,7 +1715,7 @@ void UpdateViewportInteraction(const ImVec2& min, const ImVec2& max)
     if (hovered && io.MouseWheel != 0.0f)
     {
         g_viewport.zoom *= std::pow(1.12f, io.MouseWheel);
-        g_viewport.zoom = std::clamp(g_viewport.zoom, 0.35f, 4.0f);
+        g_viewport.zoom = std::clamp(g_viewport.zoom, 0.05f, 20.0f);
     }
 
     if (ImGui::IsMouseDragging(ImGuiMouseButton_Left) && hovered)
@@ -2215,7 +1777,7 @@ Vec3 Normalize(Vec3 value, Vec3 fallback)
 
 CameraBasis BuildCameraBasis()
 {
-    const float distance = std::clamp(g_viewport.orbitDistance, 1.0f, 40.0f);
+    const float distance = std::clamp(g_viewport.orbitDistance, 1.0f, 10000.0f);
     const float cosPitch = std::cos(g_viewport.pitch);
     const float sinPitch = std::sin(g_viewport.pitch);
     const float cosYaw = std::cos(g_viewport.yaw);
@@ -2265,177 +1827,6 @@ ImVec2 RotatePoint(float x, float y, float z, float, float)
 
 ImU32 ColorToU32(const ImVec4& color);
 ImU32 ThemeColor(const std::string& name, const ImVec4& fallback);
-
-bool IntersectUnitBounds(Vec3 origin, Vec3 direction, float& nearT, float& farT)
-{
-    nearT = 0.0f;
-    farT = 1000.0f;
-    const float originValues[3] = {origin.x, origin.y, origin.z};
-    const float directionValues[3] = {direction.x, direction.y, direction.z};
-
-    for (int axis = 0; axis < 3; ++axis)
-    {
-        const float rayOrigin = originValues[axis];
-        const float rayDirection = directionValues[axis];
-        if (std::fabs(rayDirection) < 0.00001f)
-        {
-            if (rayOrigin < -1.05f || rayOrigin > 1.05f)
-            {
-                return false;
-            }
-            continue;
-        }
-
-        float t0 = (-1.05f - rayOrigin) / rayDirection;
-        float t1 = (1.05f - rayOrigin) / rayDirection;
-        if (t0 > t1)
-        {
-            std::swap(t0, t1);
-        }
-        nearT = std::max(nearT, t0);
-        farT = std::min(farT, t1);
-        if (nearT > farT)
-        {
-            return false;
-        }
-    }
-
-    return farT > 0.0f;
-}
-
-Vec3 EstimateSdfNormal(const rock::GraphSettings& settings, const rock::SdfPipeline& pipeline, Vec3 p)
-{
-    constexpr float e = 0.012f;
-    const float dx = rock::EvaluateSdfAt(settings, pipeline, p.x + e, p.y, p.z) - rock::EvaluateSdfAt(settings, pipeline, p.x - e, p.y, p.z);
-    const float dy = rock::EvaluateSdfAt(settings, pipeline, p.x, p.y + e, p.z) - rock::EvaluateSdfAt(settings, pipeline, p.x, p.y - e, p.z);
-    const float dz = rock::EvaluateSdfAt(settings, pipeline, p.x, p.y, p.z + e) - rock::EvaluateSdfAt(settings, pipeline, p.x, p.y, p.z - e);
-    return Normalize(Vec3(dx, dy, dz), Vec3(0.0f, 1.0f, 0.0f));
-}
-
-ImU32 ShadeRaymarchHit(Vec3 point, Vec3 normal, Vec3 viewDirection, int steps)
-{
-    const Vec3 lightDirection = Normalize(Vec3(-0.45f, 0.78f, 0.42f), Vec3(0.0f, 1.0f, 0.0f));
-    const float diffuse = std::clamp(Dot(normal, lightDirection) * 0.5f + 0.5f, 0.0f, 1.0f);
-    const float fresnel = std::pow(std::clamp(1.0f - std::fabs(Dot(normal, Scale(viewDirection, -1.0f))), 0.0f, 1.0f), 2.0f);
-    const float height = std::clamp(point.y * 0.5f + 0.5f, 0.0f, 1.0f);
-    const float stepShade = std::clamp(1.0f - static_cast<float>(steps) / 64.0f, 0.0f, 1.0f);
-
-    const int r = static_cast<int>(95.0f + diffuse * 70.0f + fresnel * 36.0f + height * 14.0f);
-    const int g = static_cast<int>(104.0f + diffuse * 82.0f + fresnel * 28.0f + height * 12.0f);
-    const int b = static_cast<int>(94.0f + diffuse * 62.0f + fresnel * 20.0f + stepShade * 14.0f);
-    return IM_COL32(std::clamp(r, 0, 255), std::clamp(g, 0, 255), std::clamp(b, 0, 255), 235);
-}
-
-void RebuildRaymarchPreviewCache(const ImVec2& min, const ImVec2& max)
-{
-    const float viewportWidth = std::max(1.0f, max.x - min.x);
-    const float viewportHeight = std::max(1.0f, max.y - min.y);
-    g_raymarchPreviewCache.width = std::clamp(static_cast<int>(viewportWidth / 6.0f), 96, 180);
-    g_raymarchPreviewCache.height = std::clamp(static_cast<int>(viewportHeight / 6.0f), 72, 140);
-    g_raymarchPreviewCache.yaw = g_viewport.yaw;
-    g_raymarchPreviewCache.pitch = g_viewport.pitch;
-    g_raymarchPreviewCache.fovDegrees = g_viewport.fovDegrees;
-    g_raymarchPreviewCache.orbitDistance = g_viewport.orbitDistance;
-    g_raymarchPreviewCache.zoom = g_viewport.zoom;
-    g_raymarchPreviewCache.pan = g_viewport.pan;
-    g_raymarchPreviewCache.graphVersion = g_graph.Evaluation().version;
-    g_raymarchPreviewCache.previewStage = g_graph.Preview();
-    g_raymarchPreviewCache.pixels.assign(static_cast<size_t>(g_raymarchPreviewCache.width * g_raymarchPreviewCache.height), 0);
-
-    const CameraBasis basis = BuildCameraBasis();
-    const rock::GraphSettings& settings = g_graph.Settings();
-    const rock::SdfPipeline pipeline = g_graph.PreviewPipeline();
-    const ImVec2 center((min.x + max.x) * 0.5f + g_viewport.pan.x, (min.y + max.y) * 0.5f + g_viewport.pan.y);
-    const float viewportSize = std::min(viewportWidth, viewportHeight);
-    const float projectionScale = viewportSize * 1.20f * g_viewport.zoom;
-    const float fovRadians = std::clamp(g_viewport.fovDegrees, 15.0f, 90.0f) * 3.1415926535f / 180.0f;
-    const float focalLength = 1.0f / std::tan(fovRadians * 0.5f);
-
-    for (int y = 0; y < g_raymarchPreviewCache.height; ++y)
-    {
-        for (int x = 0; x < g_raymarchPreviewCache.width; ++x)
-        {
-            const float screenX = std::lerp(min.x, max.x, (static_cast<float>(x) + 0.5f) / static_cast<float>(g_raymarchPreviewCache.width));
-            const float screenY = std::lerp(min.y, max.y, (static_cast<float>(y) + 0.5f) / static_cast<float>(g_raymarchPreviewCache.height));
-            const float cameraXOverDepth = (screenX - center.x) / std::max(focalLength * projectionScale, 0.001f);
-            const float cameraYOverDepth = -(screenY - center.y) / std::max(focalLength * projectionScale, 0.001f);
-            Vec3 direction = Add(basis.forward, Add(Scale(basis.right, cameraXOverDepth), Scale(basis.up, cameraYOverDepth)));
-            direction = Normalize(direction, basis.forward);
-
-            float nearT = 0.0f;
-            float farT = 0.0f;
-            if (!IntersectUnitBounds(basis.position, direction, nearT, farT))
-            {
-                continue;
-            }
-
-            float t = std::max(nearT, 0.0f);
-            int step = 0;
-            for (; step < 72 && t <= farT; ++step)
-            {
-                const Vec3 p = Add(basis.position, Scale(direction, t));
-                const float sdf = rock::EvaluateSdfAt(settings, pipeline, p.x, p.y, p.z);
-                if (std::fabs(sdf) < 0.0045f)
-                {
-                    const Vec3 normal = EstimateSdfNormal(settings, pipeline, p);
-                    g_raymarchPreviewCache.pixels[static_cast<size_t>(y * g_raymarchPreviewCache.width + x)] = ShadeRaymarchHit(p, normal, direction, step);
-                    break;
-                }
-                t += std::max(std::fabs(sdf) * 0.82f, 0.004f);
-            }
-        }
-    }
-}
-
-bool EnsureGpuRaymarchTexture(int width, int height, std::string* error)
-{
-    if (g_gpuRaymarchPreview.texture && g_gpuRaymarchPreview.width == width && g_gpuRaymarchPreview.height == height)
-    {
-        return true;
-    }
-
-    try
-    {
-        WaitForLastSubmittedFrame();
-        g_gpuRaymarchPreview.texture.Reset();
-        g_gpuRaymarchPreview.width = width;
-        g_gpuRaymarchPreview.height = height;
-        g_gpuRaymarchPreview.state = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-
-        if (!g_gpuRaymarchPreview.srvAllocated)
-        {
-            AllocateSrvDescriptor(nullptr, &g_gpuRaymarchPreview.srvCpu, &g_gpuRaymarchPreview.srvGpu);
-            g_gpuRaymarchPreview.srvAllocated = true;
-        }
-        if (!g_gpuRaymarchPreview.uavAllocated)
-        {
-            AllocateSrvDescriptor(nullptr, &g_gpuRaymarchPreview.uavCpu, &g_gpuRaymarchPreview.uavGpu);
-            g_gpuRaymarchPreview.uavAllocated = true;
-        }
-
-        const D3D12_HEAP_PROPERTIES defaultHeap = HeapProperties(D3D12_HEAP_TYPE_DEFAULT);
-        const D3D12_RESOURCE_DESC textureDesc = Texture2DResourceDesc(static_cast<UINT>(width), static_cast<UINT>(height), DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-        ThrowIfFailed(g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &textureDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&g_gpuRaymarchPreview.texture)), "Create raymarch texture failed");
-
-        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-        srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        srvDesc.Texture2D.MipLevels = 1;
-        g_device->CreateShaderResourceView(g_gpuRaymarchPreview.texture.Get(), &srvDesc, g_gpuRaymarchPreview.srvCpu);
-
-        D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
-        uavDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-        uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-        g_device->CreateUnorderedAccessView(g_gpuRaymarchPreview.texture.Get(), nullptr, &uavDesc, g_gpuRaymarchPreview.uavCpu);
-        return true;
-    }
-    catch (const std::exception& ex)
-    {
-        if (error) *error = ex.what();
-        return false;
-    }
-}
 
 bool EnsureMeshPreviewRenderTarget(int width, int height, std::string* error)
 {
@@ -2574,190 +1965,6 @@ void UpdateMeshPreviewBuffers(const rock::MeshData& mesh)
     }
 }
 
-bool RenderGpuRaymarchPreview(const ImVec2& min, const ImVec2& max, std::string* error)
-{
-    if (!EnsureRaymarchComputePipeline(error))
-    {
-        return false;
-    }
-
-    const float viewportWidth = std::max(1.0f, max.x - min.x);
-    const float viewportHeight = std::max(1.0f, max.y - min.y);
-    const int targetWidth = std::clamp(static_cast<int>(viewportWidth), 160, 960);
-    const int targetHeight = std::clamp(static_cast<int>(viewportHeight), 120, 720);
-    if (!EnsureGpuRaymarchTexture(targetWidth, targetHeight, error))
-    {
-        return false;
-    }
-
-    const bool dirty =
-        g_gpuRaymarchPreview.yaw != g_viewport.yaw ||
-        g_gpuRaymarchPreview.pitch != g_viewport.pitch ||
-        g_gpuRaymarchPreview.fovDegrees != g_viewport.fovDegrees ||
-        g_gpuRaymarchPreview.orbitDistance != g_viewport.orbitDistance ||
-        g_gpuRaymarchPreview.zoom != g_viewport.zoom ||
-        g_gpuRaymarchPreview.pan.x != g_viewport.pan.x ||
-        g_gpuRaymarchPreview.pan.y != g_viewport.pan.y ||
-        g_gpuRaymarchPreview.graphVersion != g_graph.Evaluation().version ||
-        g_gpuRaymarchPreview.previewStage != g_graph.Preview() ||
-        g_gpuRaymarchPreview.state != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-    if (!dirty)
-    {
-        return true;
-    }
-
-    try
-    {
-        ComPtr<ID3D12CommandAllocator> allocator;
-        ComPtr<ID3D12GraphicsCommandList> commandList;
-        ThrowIfFailed(g_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)), "Create raymarch allocator failed");
-        ThrowIfFailed(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&commandList)), "Create raymarch command list failed");
-
-        if (g_gpuRaymarchPreview.state != D3D12_RESOURCE_STATE_UNORDERED_ACCESS)
-        {
-            D3D12_RESOURCE_BARRIER toUav{};
-            toUav.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            toUav.Transition.pResource = g_gpuRaymarchPreview.texture.Get();
-            toUav.Transition.StateBefore = g_gpuRaymarchPreview.state;
-            toUav.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-            toUav.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            commandList->ResourceBarrier(1, &toUav);
-        }
-
-        const CameraBasis basis = BuildCameraBasis();
-        const float viewportSize = std::min(viewportWidth, viewportHeight);
-        const ImVec2 center((min.x + max.x) * 0.5f + g_viewport.pan.x, (min.y + max.y) * 0.5f + g_viewport.pan.y);
-        const float fovRadians = std::clamp(g_viewport.fovDegrees, 15.0f, 90.0f) * 3.1415926535f / 180.0f;
-
-        RaymarchComputeConstants constants{};
-        constants.width = static_cast<UINT>(targetWidth);
-        constants.height = static_cast<UINT>(targetHeight);
-        const rock::SdfPipeline pipeline = g_graph.PreviewPipeline();
-        constants.primitiveKind = static_cast<UINT>(pipeline.primitiveKind);
-        const std::vector<GpuSdfOperation> operations = BuildGpuSdfOperations(pipeline);
-        constants.sdfOperationCount = static_cast<UINT>(operations.size());
-        const ComPtr<ID3D12Resource> operationBuffer = CreateUploadBuffer(
-            operations.data(),
-            static_cast<UINT64>(operations.size() * sizeof(GpuSdfOperation)),
-            "Create raymarch operation buffer failed");
-        constants.cameraPosition[0] = basis.position.x;
-        constants.cameraPosition[1] = basis.position.y;
-        constants.cameraPosition[2] = basis.position.z;
-        constants.cameraRight[0] = basis.right.x;
-        constants.cameraRight[1] = basis.right.y;
-        constants.cameraRight[2] = basis.right.z;
-        constants.cameraUp[0] = basis.up.x;
-        constants.cameraUp[1] = basis.up.y;
-        constants.cameraUp[2] = basis.up.z;
-        constants.cameraForward[0] = basis.forward.x;
-        constants.cameraForward[1] = basis.forward.y;
-        constants.cameraForward[2] = basis.forward.z;
-        constants.viewportMin[0] = min.x;
-        constants.viewportMin[1] = min.y;
-        constants.viewportMax[0] = max.x;
-        constants.viewportMax[1] = max.y;
-        constants.viewportCenter[0] = center.x;
-        constants.viewportCenter[1] = center.y;
-        constants.focalLength = 1.0f / std::tan(fovRadians * 0.5f);
-        constants.projectionScale = viewportSize * 1.20f * g_viewport.zoom;
-
-        ID3D12DescriptorHeap* heaps[] = {g_srvHeap.Get()};
-        commandList->SetDescriptorHeaps(1, heaps);
-        commandList->SetComputeRootSignature(g_raymarchComputeRootSignature.Get());
-        commandList->SetPipelineState(g_raymarchComputePipelineState.Get());
-        commandList->SetComputeRoot32BitConstants(0, sizeof(RaymarchComputeConstants) / sizeof(UINT), &constants, 0);
-        commandList->SetComputeRootDescriptorTable(1, g_gpuRaymarchPreview.uavGpu);
-        commandList->SetComputeRootShaderResourceView(2, operationBuffer->GetGPUVirtualAddress());
-        commandList->Dispatch((static_cast<UINT>(targetWidth) + 7) / 8, (static_cast<UINT>(targetHeight) + 7) / 8, 1);
-
-        D3D12_RESOURCE_BARRIER toSrv{};
-        toSrv.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        toSrv.Transition.pResource = g_gpuRaymarchPreview.texture.Get();
-        toSrv.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-        toSrv.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-        toSrv.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        commandList->ResourceBarrier(1, &toSrv);
-        ThrowIfFailed(commandList->Close(), "Close raymarch command list failed");
-
-        ID3D12CommandList* commandLists[] = {commandList.Get()};
-        g_commandQueue->ExecuteCommandLists(1, commandLists);
-        const UINT64 fenceValue = ++g_fenceLastSignaledValue;
-        ThrowIfFailed(g_commandQueue->Signal(g_fence.Get(), fenceValue), "Signal raymarch queue failed");
-        WaitForFenceValue(fenceValue);
-
-        g_gpuRaymarchPreview.yaw = g_viewport.yaw;
-        g_gpuRaymarchPreview.pitch = g_viewport.pitch;
-        g_gpuRaymarchPreview.fovDegrees = g_viewport.fovDegrees;
-        g_gpuRaymarchPreview.orbitDistance = g_viewport.orbitDistance;
-        g_gpuRaymarchPreview.zoom = g_viewport.zoom;
-        g_gpuRaymarchPreview.pan = g_viewport.pan;
-        g_gpuRaymarchPreview.graphVersion = g_graph.Evaluation().version;
-        g_gpuRaymarchPreview.previewStage = g_graph.Preview();
-        g_gpuRaymarchPreview.state = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-        g_gpuRaymarchPreview.status = "GPU Raymarch";
-        return true;
-    }
-    catch (const std::exception& ex)
-    {
-        if (error) *error = ex.what();
-        return false;
-    }
-}
-
-void DrawRaymarchPreview(ImDrawList* drawList, const ImVec2& min, const ImVec2& max)
-{
-    std::string gpuError;
-    if (RenderGpuRaymarchPreview(min, max, &gpuError))
-    {
-        drawList->PushClipRect(min, max, true);
-        drawList->AddImage(static_cast<ImTextureID>(g_gpuRaymarchPreview.srvGpu.ptr), min, max);
-        drawList->PopClipRect();
-        return;
-    }
-
-    g_gpuRaymarchPreview.status = "GPU Raymarch failed: " + gpuError;
-
-    const int targetWidth = std::clamp(static_cast<int>((max.x - min.x) / 6.0f), 96, 180);
-    const int targetHeight = std::clamp(static_cast<int>((max.y - min.y) / 6.0f), 72, 140);
-    const bool dirty =
-        g_raymarchPreviewCache.width != targetWidth ||
-        g_raymarchPreviewCache.height != targetHeight ||
-        g_raymarchPreviewCache.yaw != g_viewport.yaw ||
-        g_raymarchPreviewCache.pitch != g_viewport.pitch ||
-        g_raymarchPreviewCache.fovDegrees != g_viewport.fovDegrees ||
-        g_raymarchPreviewCache.orbitDistance != g_viewport.orbitDistance ||
-        g_raymarchPreviewCache.zoom != g_viewport.zoom ||
-        g_raymarchPreviewCache.pan.x != g_viewport.pan.x ||
-        g_raymarchPreviewCache.pan.y != g_viewport.pan.y ||
-        g_raymarchPreviewCache.graphVersion != g_graph.Evaluation().version ||
-        g_raymarchPreviewCache.previewStage != g_graph.Preview() ||
-        g_raymarchPreviewCache.pixels.empty();
-
-    if (dirty)
-    {
-        RebuildRaymarchPreviewCache(min, max);
-    }
-
-    const float cellWidth = (max.x - min.x) / static_cast<float>(std::max(1, g_raymarchPreviewCache.width));
-    const float cellHeight = (max.y - min.y) / static_cast<float>(std::max(1, g_raymarchPreviewCache.height));
-    drawList->PushClipRect(min, max, true);
-    for (int y = 0; y < g_raymarchPreviewCache.height; ++y)
-    {
-        for (int x = 0; x < g_raymarchPreviewCache.width; ++x)
-        {
-            const ImU32 color = g_raymarchPreviewCache.pixels[static_cast<size_t>(y * g_raymarchPreviewCache.width + x)];
-            if ((color >> IM_COL32_A_SHIFT) == 0)
-            {
-                continue;
-            }
-            const ImVec2 a(min.x + static_cast<float>(x) * cellWidth, min.y + static_cast<float>(y) * cellHeight);
-            const ImVec2 b(a.x + cellWidth + 0.75f, a.y + cellHeight + 0.75f);
-            drawList->AddRectFilled(a, b, color);
-        }
-    }
-    drawList->PopClipRect();
-}
-
 void DrawSurfacePointPreview(ImDrawList* drawList, const ImVec2& min, const ImVec2& max, const rock::SdfPreviewStats& sdf)
 {
     if (sdf.surfacePoints.empty())
@@ -2822,8 +2029,8 @@ void DrawViewportGrid3D(ImDrawList* drawList, const ImVec2& min, const ImVec2& m
     const ImU32 minorColor = ThemeColor("viewportGrid", ImVec4(0.24f, 0.27f, 0.25f, 0.35f));
     const ImU32 axisXColor = IM_COL32(210, 76, 76, 210);
     const ImU32 axisZColor = IM_COL32(76, 130, 220, 210);
-    constexpr int halfCellCount = 5;
-    constexpr float cellSizeMeters = 1.0f;
+    constexpr int halfCellCount = 10;
+    constexpr float cellSizeMeters = 100.0f;
 
     drawList->PushClipRect(min, max, true);
     for (int i = -halfCellCount; i <= halfCellCount; ++i)
@@ -2921,7 +2128,7 @@ void DrawMeshPreview(ImDrawList* drawList, const ImVec2& min, const ImVec2& max,
             continue;
         }
 
-        if (showSurface && !showWireframe)
+        if (showSurface)
         {
             drawList->AddTriangleFilled(a, b, c, ThemeColor("surfaceFill", ImVec4(0.42f, 0.42f, 0.42f, 1.0f)));
         }
@@ -3043,7 +2250,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         constants.panNdcX    = g_viewport.pan.x * 2.0f / viewportWidth;
         constants.panNdcY    = -g_viewport.pan.y * 2.0f / viewportHeight;
         constants.nearPlane  = 0.05f;
-        constants.farPlane   = 100.0f;
+        constants.farPlane   = 20000.0f;
 
         D3D12_VERTEX_BUFFER_VIEW vbv{};
         vbv.BufferLocation = g_gpuMeshPreview.vertexBuffer->GetGPUVirtualAddress();
@@ -3053,7 +2260,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         commandList->SetGraphicsRootSignature(g_meshPreviewRootSignature.Get());
         commandList->SetGraphicsRoot32BitConstants(0, sizeof(constants) / 4, &constants, 0);
 
-        if (showSurface && !showWireframe && g_gpuMeshPreview.triIndexCount > 0)
+        if (showSurface && g_gpuMeshPreview.triIndexCount > 0)
         {
             D3D12_INDEX_BUFFER_VIEW ibv{g_gpuMeshPreview.indexBuffer->GetGPUVirtualAddress(), g_gpuMeshPreview.triIndexCount * sizeof(UINT), DXGI_FORMAT_R32_UINT};
             commandList->IASetIndexBuffer(&ibv);
@@ -3109,8 +2316,7 @@ void DrawGpuMeshPreview(ImDrawList* drawList, const ImVec2& min, const ImVec2& m
     std::string error;
     if (!RenderGpuMeshPreview(min, max, showSurface, showWireframe, &error))
     {
-        DrawMeshPreview(drawList, min, max, mesh, showSurface && !showWireframe, false);
-        if (showWireframe) DrawMeshEdgePreview(drawList, min, max, mesh);
+        DrawMeshPreview(drawList, min, max, mesh, showSurface, showWireframe);
         return;
     }
     if (g_gpuMeshPreview.srvAllocated && g_gpuMeshPreview.colorState == D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)
@@ -3138,10 +2344,6 @@ void DrawViewportCube(const ImVec2& min, const ImVec2& max, float timeSeconds)
         DrawViewportGrid3D(drawList, min, max, center, scale);
     }
 
-    if (g_ui.sdfPreview)
-    {
-        DrawRaymarchPreview(drawList, min, max);
-    }
     if (g_ui.meshPreview)
     {
         const rock::PreviewSettings& preview = g_graph.Settings().preview;
@@ -3157,7 +2359,7 @@ void DrawViewportCube(const ImVec2& min, const ImVec2& max, float timeSeconds)
         ? "Heightmap Preview"
         : "SDF Preview: " + std::string(rock::ToString(g_graph.Preview()));
     drawList->AddText(ImVec2(min.x + 16.0f, min.y + 14.0f), ThemeColor("accentText", ImVec4(0.86f, 0.88f, 0.85f, 1.0f)), title.c_str());
-    drawList->AddText(ImVec2(min.x + 16.0f, min.y + 36.0f), ThemeColor("mutedText", ImVec4(0.54f, 0.59f, 0.56f, 1.0f)), "Right-handed, Y-up, 10 x 10 m grid");
+    drawList->AddText(ImVec2(min.x + 16.0f, min.y + 36.0f), ThemeColor("mutedText", ImVec4(0.54f, 0.59f, 0.56f, 1.0f)), "Right-handed, Y-up, 100 m cells");
     char fpsText[32]{};
     std::snprintf(fpsText, sizeof(fpsText), "FPS %.1f", ImGui::GetIO().Framerate);
     const ImVec2 fpsSize = ImGui::CalcTextSize(fpsText);
@@ -4079,20 +3281,23 @@ void DrawPropertiesPanel()
     {
         ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 148.0f);
         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+        editableNode->heightmap.scaleMeters = std::clamp(editableNode->heightmap.scaleMeters, 1.0f, 8096.0f);
+        editableNode->heightmap.relativeVerticalScalePercent = std::clamp(editableNode->heightmap.relativeVerticalScalePercent, 0.0f, 100.0f);
+        editableNode->heightmap.verticalOffsetMeters = std::clamp(editableNode->heightmap.verticalOffsetMeters, -4096.0f, 4096.0f);
 
         if (DrawPropertyPathRow("File", "HeightmapFile", &editableNode->heightmap.path, "Heightmap file changed"))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyFloatRow("Scale (m)", "HeightmapScaleMeters", &editableNode->heightmap.scaleMeters, 1.0f, 1000000.0f, rock::HeightmapLoadSettings{}.scaleMeters, "Heightmap scale changed"))
+        if (DrawPropertyFloatRow("Scale (m)", "HeightmapScaleMeters", &editableNode->heightmap.scaleMeters, 1.0f, 8096.0f, rock::HeightmapLoadSettings{}.scaleMeters, "Heightmap scale changed"))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyFloatRow("Relative Vertical (%)", "HeightmapRelativeVerticalScale", &editableNode->heightmap.relativeVerticalScalePercent, 0.0f, 10000.0f, rock::HeightmapLoadSettings{}.relativeVerticalScalePercent, "Heightmap vertical scale changed"))
+        if (DrawPropertyFloatRow("Relative Vertical (%)", "HeightmapRelativeVerticalScale", &editableNode->heightmap.relativeVerticalScalePercent, 0.0f, 100.0f, rock::HeightmapLoadSettings{}.relativeVerticalScalePercent, "Heightmap vertical scale changed"))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyFloatRow("Offset (m)", "HeightmapVerticalOffset", &editableNode->heightmap.verticalOffsetMeters, -1000000.0f, 1000000.0f, rock::HeightmapLoadSettings{}.verticalOffsetMeters, "Heightmap vertical offset changed"))
+        if (DrawPropertyFloatRow("Offset (m)", "HeightmapVerticalOffset", &editableNode->heightmap.verticalOffsetMeters, -4096.0f, 4096.0f, rock::HeightmapLoadSettings{}.verticalOffsetMeters, "Heightmap vertical offset changed"))
         {
             EvaluateGraph();
         }
@@ -4214,10 +3419,6 @@ void DrawDisplaySettingsPanel()
         {
             SaveAppSettingsSilently();
         }
-        if (DrawPropertyBoolRow("Raymarch", "DisplayRaymarch", &g_ui.sdfPreview, "Raymarch preview visibility changed"))
-        {
-            SaveAppSettingsSilently();
-        }
         if (DrawPropertyIntRow("Resolution", "DisplayPreviewResolution", &settings.preview.resolution, 16, 96, rock::PreviewSettings{}.resolution, "Preview resolution changed", false))
         {
             EvaluateGraph();
@@ -4229,14 +3430,6 @@ void DrawDisplaySettingsPanel()
             SaveAppSettingsSilently();
         }
 
-        int displayMode = static_cast<int>(settings.preview.displayMode);
-        if (DrawPropertyComboRow("Display", "DisplayMeshMode", &displayMode, "Mesh\0Voxels\0"))
-        {
-            settings.preview.displayMode = static_cast<rock::MeshDisplayMode>(displayMode);
-            g_graph.MarkDirty("Preview display mode changed");
-            EvaluateGraph();
-            SaveAppSettingsSilently();
-        }
         if (DrawPropertyBoolRow("Surface", "DisplaySurface", &settings.preview.showSurface, "Surface visibility changed"))
         {
             SaveAppSettingsSilently();
@@ -4282,8 +3475,8 @@ void DrawCameraPanel()
         {
             g_viewport.fovDegrees = CameraFovYDegreesFromFocalLengthMm(focalLengthMm);
         }
-        DrawCameraFloatRow("Distance", "OrbitDistance", &g_viewport.orbitDistance, 1.0f, 40.0f, 8.0f, "%.2f");
-        DrawCameraFloatRow("Zoom", "ViewportZoom", &g_viewport.zoom, 0.35f, 4.0f, 1.0f, "%.2f");
+        DrawCameraFloatRow("Distance", "OrbitDistance", &g_viewport.orbitDistance, 1.0f, 10000.0f, 1800.0f, "%.1f");
+        DrawCameraFloatRow("Zoom", "ViewportZoom", &g_viewport.zoom, 0.05f, 20.0f, 1.0f, "%.2f");
         DrawCameraFloatRow("Yaw", "ViewportYaw", &g_viewport.yaw, -3.14159f, 3.14159f, 0.0f, "%.3f");
         DrawCameraFloatRow("Pitch", "ViewportPitch", &g_viewport.pitch, -1.25f, 1.25f, 0.0f, "%.3f");
 
@@ -4292,39 +3485,7 @@ void DrawCameraPanel()
 
     ImGui::Spacing();
     ImGui::TextDisabled("Right-handed / Y-up");
-    ImGui::TextDisabled("Grid: 10 x 10 m, 1 m cells");
-}
-
-void DrawComputePanel()
-{
-    rock::GraphSettings& settings = g_graph.Settings();
-    int backend = static_cast<int>(settings.previewBackend);
-    if (ImGui::BeginTable("ComputeRows", 2, ImGuiTableFlags_SizingStretchProp))
-    {
-        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 112.0f);
-        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-
-        if (DrawPropertyComboRow("Preview", "PreviewBackend", &backend, "CPU\0GPU Preview\0Auto\0"))
-        {
-            settings.previewBackend = static_cast<rock::ComputeBackend>(backend);
-            g_graph.MarkDirty("Preview compute backend changed");
-            EvaluateGraph();
-            SaveAppSettingsSilently();
-        }
-
-        ImGui::EndTable();
-    }
-
-    const rock::EvaluationSummary& evaluation = g_graph.Evaluation();
-    ImGui::Spacing();
-    ImGui::Text("Requested: %s", rock::ToString(evaluation.requestedPreviewBackend).data());
-    ImGui::Text("Effective: %s", rock::ToString(evaluation.effectivePreviewBackend).data());
-    if (evaluation.previewBackendFallback)
-    {
-        ImGui::TextColored(ImVec4(0.90f, 0.64f, 0.30f, 1.0f), "GPU preview is not wired yet; using CPU.");
-    }
-    ImGui::SeparatorText("Policy");
-    ImGui::TextWrapped("GPU is reserved for viewport preview. Final output and OBJ export currently use the CPU path.");
+    ImGui::TextDisabled("Grid: 20 x 20, 100 m cells");
 }
 
 void DrawStatsPanel()
@@ -4630,36 +3791,9 @@ void DrawUi()
         if (ImGui::BeginMenu("表示"))
         {
             rock::GraphSettings& settings = g_graph.Settings();
-            const auto toggleMeshDisplayMode = [&](rock::MeshDisplayMode mode) {
-                if (g_ui.meshPreview && settings.preview.displayMode == mode)
-                {
-                    g_ui.meshPreview = false;
-                    SaveAppSettingsSilently();
-                    return;
-                }
-
-                g_ui.meshPreview = true;
-                if (settings.preview.displayMode != mode)
-                {
-                    settings.preview.displayMode = mode;
-                    g_graph.MarkDirty("Preview display mode changed");
-                    EvaluateGraph();
-                }
-                SaveAppSettingsSilently();
-            };
-
-            const bool meshSelected = g_ui.meshPreview && settings.preview.displayMode == rock::MeshDisplayMode::Mesh;
-            if (ImGui::MenuItem("Mesh", nullptr, meshSelected))
+            if (ImGui::MenuItem("Mesh", nullptr, g_ui.meshPreview))
             {
-                toggleMeshDisplayMode(rock::MeshDisplayMode::Mesh);
-            }
-            const bool voxelSelected = g_ui.meshPreview && settings.preview.displayMode == rock::MeshDisplayMode::Voxels;
-            if (ImGui::MenuItem("Voxels", nullptr, voxelSelected))
-            {
-                toggleMeshDisplayMode(rock::MeshDisplayMode::Voxels);
-            }
-            if (ImGui::MenuItem("Raymarch", nullptr, &g_ui.sdfPreview))
-            {
+                g_ui.meshPreview = !g_ui.meshPreview;
                 SaveAppSettingsSilently();
             }
             if (ImGui::MenuItem("Wireframe", nullptr, &settings.preview.showWireframe))
@@ -4670,24 +3804,6 @@ void DrawUi()
         }
         if (ImGui::BeginMenu("設定"))
         {
-            if (ImGui::BeginMenu("計算バックエンド"))
-            {
-                rock::GraphSettings& settings = g_graph.Settings();
-                const auto drawBackendItem = [&](const char* label, rock::ComputeBackend backend) {
-                    const bool selected = settings.previewBackend == backend;
-                    if (ImGui::MenuItem(label, nullptr, selected))
-                    {
-                        settings.previewBackend = backend;
-                        g_graph.MarkDirty("Preview compute backend changed");
-                        EvaluateGraph();
-                        SaveAppSettingsSilently();
-                    }
-                };
-                drawBackendItem("CPU", rock::ComputeBackend::Cpu);
-                drawBackendItem("GPU Preview", rock::ComputeBackend::GpuPreview);
-                drawBackendItem("Auto", rock::ComputeBackend::Auto);
-                ImGui::EndMenu();
-            }
             if (ImGui::BeginMenu("UIテーマ"))
             {
                 for (const rock::UiThemeInfo& themeInfo : g_themeManager.ThemeInfos())
@@ -4851,13 +3967,6 @@ void DrawUi()
         {
             BeginInspectorTabContent();
             DrawCameraPanel();
-            EndInspectorTabContent();
-            endInspectorTabItem();
-        }
-        if (beginInspectorTabItem("計算"))
-        {
-            BeginInspectorTabContent();
-            DrawComputePanel();
             EndInspectorTabContent();
             endInspectorTabItem();
         }
