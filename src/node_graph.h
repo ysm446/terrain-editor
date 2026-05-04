@@ -20,6 +20,7 @@ enum class NodeKind
     OutputMesh,
     HeightmapLoad,
     FluvialErosion,
+    HeightmapBlur,
 };
 
 enum class PinKind
@@ -58,6 +59,7 @@ enum class PreviewStage
     Crack,
     Fluvial,
     Output,
+    HeightmapBlur,
 };
 
 struct Pin
@@ -128,6 +130,13 @@ struct FluvialErosionSettings
     int seed = 1;
 };
 
+struct HeightmapBlurSettings
+{
+    float radius = 3.0f;
+    float strength = 1.0f;
+    int iterations = 1;
+};
+
 struct Node
 {
     GraphId id = 0;
@@ -141,6 +150,7 @@ struct Node
     OutputMeshSettings outputMesh;
     HeightmapLoadSettings heightmap;
     FluvialErosionSettings fluvialErosion;
+    HeightmapBlurSettings heightmapBlur;
 };
 
 struct Link
@@ -287,11 +297,13 @@ struct SdfPipeline
         enum class Kind
         {
             FluvialErosion,
+            HeightmapBlur,
         };
 
         Kind kind = Kind::FluvialErosion;
         GraphId nodeId = 0;
         FluvialErosionSettings fluvialErosion;
+        HeightmapBlurSettings heightmapBlur;
     };
 
     PrimitiveKind primitiveKind = PrimitiveKind::RockBlob;

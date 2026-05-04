@@ -101,6 +101,16 @@ uint64_t HashFluvialSettings(const FluvialErosionSettings& settings, int resolut
     return hash;
 }
 
+uint64_t HashHeightmapBlurSettings(const HeightmapBlurSettings& settings, int resolution)
+{
+    uint64_t hash = 2166136261ull;
+    HashCombine(hash, HashFloat(settings.radius));
+    HashCombine(hash, HashFloat(settings.strength));
+    HashCombine(hash, static_cast<uint64_t>(settings.iterations));
+    HashCombine(hash, static_cast<uint64_t>(resolution));
+    return hash;
+}
+
 std::wstring Utf8ToWidePath(const std::string& value)
 {
     if (value.empty())
@@ -945,6 +955,82 @@ void ApplyFluvialErosion(HeightfieldGrid& grid, const FluvialErosionSettings& se
     NormalizeHeightfieldMask(grid);
 }
 
+void ApplyHeightmapBlur(HeightfieldGrid& grid, const HeightmapBlurSettings& settings)
+{
+    const int n = grid.resolution;
+    if (n < 2 || grid.heights.size() < static_cast<size_t>(n * n) || settings.radius <= 0.0f || settings.strength <= 0.0f || settings.iterations <= 0)
+    {
+        return;
+    }
+
+    const float radius = std::clamp(settings.radius, 0.0f, 128.0f);
+    const float strength = std::clamp(settings.strength, 0.0f, 1.0f);
+    const int iterations = std::clamp(settings.iterations, 0, 64);
+    const int kernelRadius = std::clamp(static_cast<int>(std::ceil(radius)), 1, std::max(1, n - 1));
+    const float sigma = std::max(radius * 0.5f, 0.5f);
+
+    std::vector<float> weights(static_cast<size_t>(kernelRadius) + 1u);
+    float weightSum = 0.0f;
+    for (int offset = 0; offset <= kernelRadius; ++offset)
+    {
+        const float x = static_cast<float>(offset) / sigma;
+        const float weight = std::exp(-0.5f * x * x);
+        weights[static_cast<size_t>(offset)] = weight;
+        weightSum += offset == 0 ? weight : weight * 2.0f;
+    }
+    for (float& weight : weights)
+    {
+        weight /= weightSum;
+    }
+
+    std::vector<float> temp(grid.heights.size(), 0.0f);
+    std::vector<float> blurred(grid.heights.size(), 0.0f);
+    const auto indexAt = [n](int x, int z) {
+        return static_cast<size_t>(z) * static_cast<size_t>(n) + static_cast<size_t>(x);
+    };
+
+    for (int iteration = 0; iteration < iterations; ++iteration)
+    {
+        const std::vector<float>& source = grid.heights;
+        for (int z = 0; z < n; ++z)
+        {
+            for (int x = 0; x < n; ++x)
+            {
+                float value = source[indexAt(x, z)] * weights[0];
+                for (int offset = 1; offset <= kernelRadius; ++offset)
+                {
+                    const int left = std::clamp(x - offset, 0, n - 1);
+                    const int right = std::clamp(x + offset, 0, n - 1);
+                    const float weight = weights[static_cast<size_t>(offset)];
+                    value += (source[indexAt(left, z)] + source[indexAt(right, z)]) * weight;
+                }
+                temp[indexAt(x, z)] = value;
+            }
+        }
+
+        for (int z = 0; z < n; ++z)
+        {
+            for (int x = 0; x < n; ++x)
+            {
+                float value = temp[indexAt(x, z)] * weights[0];
+                for (int offset = 1; offset <= kernelRadius; ++offset)
+                {
+                    const int up = std::clamp(z - offset, 0, n - 1);
+                    const int down = std::clamp(z + offset, 0, n - 1);
+                    const float weight = weights[static_cast<size_t>(offset)];
+                    value += (temp[indexAt(x, up)] + temp[indexAt(x, down)]) * weight;
+                }
+                blurred[indexAt(x, z)] = value;
+            }
+        }
+
+        for (size_t i = 0; i < grid.heights.size(); ++i)
+        {
+            grid.heights[i] = std::lerp(source[i], blurred[i], strength);
+        }
+    }
+}
+
 MeshData BuildMeshFromHeightfield(const HeightfieldGrid& grid, int meshResolution)
 {
     MeshData mesh;
@@ -1280,6 +1366,10 @@ MeshData BuildMeshFromHeightPipeline(const SdfPipeline& pipeline, int resolution
         {
             ApplyFluvialErosion(grid, operation.fluvialErosion);
         }
+        else if (operation.kind == SdfPipeline::HeightfieldOperation::Kind::HeightmapBlur)
+        {
+            ApplyHeightmapBlur(grid, operation.heightmapBlur);
+        }
     }
     if (message != nullptr && !pipeline.heightfieldOperations.empty())
     {
@@ -1328,16 +1418,22 @@ MeshData NodeGraph::BuildMeshFromHeightPipelineCached(const SdfPipeline& pipelin
 
     for (const SdfPipeline::HeightfieldOperation& operation : pipeline.heightfieldOperations)
     {
-        if (operation.kind != SdfPipeline::HeightfieldOperation::Kind::FluvialErosion || operation.nodeId == 0)
+        if (operation.nodeId == 0)
         {
             if (operation.kind == SdfPipeline::HeightfieldOperation::Kind::FluvialErosion)
             {
                 ApplyFluvialErosion(grid, operation.fluvialErosion);
             }
+            else if (operation.kind == SdfPipeline::HeightfieldOperation::Kind::HeightmapBlur)
+            {
+                ApplyHeightmapBlur(grid, operation.heightmapBlur);
+            }
             continue;
         }
 
-        const uint64_t parameterHash = HashFluvialSettings(operation.fluvialErosion, simulationResolution);
+        const uint64_t parameterHash = operation.kind == SdfPipeline::HeightfieldOperation::Kind::FluvialErosion
+            ? HashFluvialSettings(operation.fluvialErosion, simulationResolution)
+            : HashHeightmapBlurSettings(operation.heightmapBlur, simulationResolution);
         HeightfieldNodeCache& operationCache = heightfieldCache_[operation.nodeId];
         if (!operationCache.valid ||
             operationCache.resolution != simulationResolution ||
@@ -1345,7 +1441,14 @@ MeshData NodeGraph::BuildMeshFromHeightPipelineCached(const SdfPipeline& pipelin
             operationCache.parameterHash != parameterHash)
         {
             HeightfieldGrid operationGrid = grid;
-            ApplyFluvialErosion(operationGrid, operation.fluvialErosion);
+            if (operation.kind == SdfPipeline::HeightfieldOperation::Kind::FluvialErosion)
+            {
+                ApplyFluvialErosion(operationGrid, operation.fluvialErosion);
+            }
+            else if (operation.kind == SdfPipeline::HeightfieldOperation::Kind::HeightmapBlur)
+            {
+                ApplyHeightmapBlur(operationGrid, operation.heightmapBlur);
+            }
             operationCache.grid = std::move(operationGrid);
             operationCache.message.clear();
             operationCache.valid = true;
@@ -1583,6 +1686,10 @@ GraphId NodeGraph::CreateNode(NodeKind kind)
         AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
         AddPin(nodeId, PinKind::Output, ValueType::Mask, "Fluvial Mask");
         break;
+    case NodeKind::HeightmapBlur:
+        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "HeightField");
+        AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
+        break;
     default:
         break;
     }
@@ -1707,6 +1814,8 @@ SdfPipeline NodeGraph::PipelineFor(PreviewStage stage) const
         return PipelineTo(NodeKind::CrackField);
     case PreviewStage::Fluvial:
         return PipelineTo(NodeKind::FluvialErosion);
+    case PreviewStage::HeightmapBlur:
+        return PipelineTo(NodeKind::HeightmapBlur);
     case PreviewStage::Output:
     default:
         return PipelineTo(NodeKind::OutputMesh);
@@ -1847,6 +1956,16 @@ SdfPipeline NodeGraph::PipelineToNode(const Node& targetNode) const
                 SdfPipeline::HeightfieldOperation::Kind::FluvialErosion,
                 node->id,
                 node->fluvialErosion,
+                {},
+            });
+        }
+        else if (node->kind == NodeKind::HeightmapBlur)
+        {
+            pipeline.heightfieldOperations.push_back({
+                SdfPipeline::HeightfieldOperation::Kind::HeightmapBlur,
+                node->id,
+                {},
+                node->heightmapBlur,
             });
         }
         else if (node->kind == NodeKind::PrimitiveSdf)
@@ -2061,6 +2180,8 @@ std::string_view ToString(NodeKind kind)
         return "Import Heightmap";
     case NodeKind::FluvialErosion:
         return "Fluvial Erosion";
+    case NodeKind::HeightmapBlur:
+        return "Heightmap Blur";
     default:
         return "Unknown";
     }
@@ -2080,6 +2201,8 @@ std::string_view ToString(PreviewStage stage)
         return "Fluvial Erosion";
     case PreviewStage::Output:
         return "Output Mesh";
+    case PreviewStage::HeightmapBlur:
+        return "Heightmap Blur";
     default:
         return "Unknown";
     }
@@ -2114,6 +2237,8 @@ PreviewStage PreviewStageFor(NodeKind kind)
         return PreviewStage::Crack;
     case NodeKind::FluvialErosion:
         return PreviewStage::Fluvial;
+    case NodeKind::HeightmapBlur:
+        return PreviewStage::HeightmapBlur;
     case NodeKind::HeightmapLoad:
         return PreviewStage::Primitive;
     case NodeKind::OutputMesh:

@@ -1415,6 +1415,11 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
                     {"levelStrengths", node.fluvialErosion.levelStrengths},
                     {"seed", node.fluvialErosion.seed},
                 }},
+                {"heightmapBlur", {
+                    {"radius", node.heightmapBlur.radius},
+                    {"strength", node.heightmapBlur.strength},
+                    {"iterations", node.heightmapBlur.iterations},
+                }},
             };
             for (const rock::Pin& pin : node.inputs)
             {
@@ -1553,7 +1558,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
             {
                 rock::Node node;
                 node.id = nodeJson.value("id", 0);
-                node.kind = static_cast<rock::NodeKind>(std::clamp(nodeJson.value("kind", 0), 0, 5));
+                node.kind = static_cast<rock::NodeKind>(std::clamp(nodeJson.value("kind", 0), 0, 6));
                 if (!IsTerrainNodeKind(node.kind))
                 {
                     continue;
@@ -1569,6 +1574,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 const nlohmann::json nodeOutputMeshJson = nodeJson.value("outputMesh", nlohmann::json::object());
                 const nlohmann::json nodeHeightmapJson = nodeJson.value("heightmap", nlohmann::json::object());
                 const nlohmann::json nodeFluvialJson = nodeJson.value("fluvialErosion", nlohmann::json::object());
+                const nlohmann::json nodeBlurJson = nodeJson.value("heightmapBlur", nlohmann::json::object());
                 node.primitive.kind = static_cast<rock::PrimitiveKind>(std::clamp(nodePrimitiveJson.value("kind", static_cast<int>(node.primitive.kind)), 0, 4));
                 node.noise.amplitude = nodeNoiseJson.value("amplitude", node.noise.amplitude);
                 node.noise.frequency = nodeNoiseJson.value("frequency", node.noise.frequency);
@@ -1609,6 +1615,9 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                     }
                 }
                 node.fluvialErosion.seed = std::clamp(nodeFluvialJson.value("seed", node.fluvialErosion.seed), 0, 999999);
+                node.heightmapBlur.radius = std::clamp(nodeBlurJson.value("radius", node.heightmapBlur.radius), 0.0f, 128.0f);
+                node.heightmapBlur.strength = std::clamp(nodeBlurJson.value("strength", node.heightmapBlur.strength), 0.0f, 1.0f);
+                node.heightmapBlur.iterations = std::clamp(nodeBlurJson.value("iterations", node.heightmapBlur.iterations), 0, 64);
 
                 const auto readPins = [&](const nlohmann::json& pinsJson, rock::PinKind pinKind, std::vector<rock::Pin>& pins) {
                     if (!pinsJson.is_array())
@@ -1739,7 +1748,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
         {
             g_pendingSelectedNodeIds.push_back(g_selectedNodeId);
         }
-        g_graph.SetPreviewStage(static_cast<rock::PreviewStage>(std::clamp(root.value("previewStage", static_cast<int>(g_graph.Preview())), 0, 3)));
+        g_graph.SetPreviewStage(static_cast<rock::PreviewStage>(std::clamp(root.value("previewStage", static_cast<int>(g_graph.Preview())), 0, 5)));
         const rock::GraphId previewPinId = root.value("previewPinId", 0);
         if (previewPinId != 0 && g_graph.FindPin(previewPinId) != nullptr)
         {
@@ -2536,7 +2545,7 @@ int EffectiveMeshResolution(int resolution, int lod)
 
 bool IsTerrainNodeKind(rock::NodeKind kind)
 {
-    return kind == rock::NodeKind::HeightmapLoad || kind == rock::NodeKind::FluvialErosion;
+    return kind == rock::NodeKind::HeightmapLoad || kind == rock::NodeKind::FluvialErosion || kind == rock::NodeKind::HeightmapBlur;
 }
 
 int CurrentPreviewMeshResolution()
@@ -3575,10 +3584,11 @@ void DrawHeightfieldMapPreview(const ImVec2& min, const ImVec2& max)
 
     const rock::EvaluationSummary& evaluation = g_graph.Evaluation();
     const rock::MeshData& mesh = evaluation.previewMesh;
-    const int gridResolution = static_cast<int>(std::lround(std::sqrt(static_cast<double>(mesh.vertices.size()))));
+    const int gridResolution = CurrentPreviewMeshResolution();
+    const size_t surfaceVertexCount = static_cast<size_t>(gridResolution) * static_cast<size_t>(gridResolution);
     const bool canDrawMap = evaluation.previewIsHeightmap &&
         gridResolution >= 2 &&
-        static_cast<size_t>(gridResolution * gridResolution) == mesh.vertices.size();
+        surfaceVertexCount <= mesh.vertices.size();
     const bool maskPreview = evaluation.previewShowsMask;
     const std::string title = maskPreview ? "2D View: Fluvial Mask" : "2D View: Heightmap";
     drawList->AddText(ImVec2(min.x + 16.0f, min.y + 14.0f), ThemeColor("accentText", ImVec4(0.86f, 0.88f, 0.85f, 1.0f)), title.c_str());
@@ -3648,6 +3658,8 @@ ImVec4 NodeAccentColor(rock::NodeKind kind)
         return ImVec4(0.38f, 0.62f, 0.53f, 1.0f);
     case rock::NodeKind::FluvialErosion:
         return ImVec4(0.36f, 0.58f, 0.78f, 1.0f);
+    case rock::NodeKind::HeightmapBlur:
+        return ImVec4(0.58f, 0.61f, 0.44f, 1.0f);
     case rock::NodeKind::NoiseWarp:
         return ImVec4(0.46f, 0.65f, 0.76f, 1.0f);
     case rock::NodeKind::CrackField:
@@ -3669,6 +3681,8 @@ ImVec2 InitialNodePosition(rock::NodeKind kind)
         return ImVec2(40.0f, 240.0f);
     case rock::NodeKind::FluvialErosion:
         return ImVec2(320.0f, 240.0f);
+    case rock::NodeKind::HeightmapBlur:
+        return ImVec2(600.0f, 240.0f);
     case rock::NodeKind::NoiseWarp:
         return ImVec2(320.0f, 64.0f);
     case rock::NodeKind::CrackField:
@@ -4077,6 +4091,7 @@ void PasteNodesFromClipboard(const ImVec2& pasteCenter)
             newMutableNode->outputMesh = clipboardNode.node.outputMesh;
             newMutableNode->heightmap = clipboardNode.node.heightmap;
             newMutableNode->fluvialErosion = clipboardNode.node.fluvialErosion;
+            newMutableNode->heightmapBlur = clipboardNode.node.heightmapBlur;
         }
         const rock::Node* newNode = g_graph.FindNode(newNodeId);
         if (newNode == nullptr)
@@ -4301,6 +4316,10 @@ void DrawNodeGraph()
     }
 
     ed::Suspend();
+    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, 8.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 10.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 7.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f, 6.0f));
     if (ImGui::BeginPopup("AddNodeContextMenu"))
     {
         ImGui::TextDisabled("ノードを追加");
@@ -4321,8 +4340,10 @@ void DrawNodeGraph()
         };
         addNodeMenuItem(rock::NodeKind::HeightmapLoad);
         addNodeMenuItem(rock::NodeKind::FluvialErosion);
+        addNodeMenuItem(rock::NodeKind::HeightmapBlur);
         ImGui::EndPopup();
     }
+    ImGui::PopStyleVar(4);
     ed::Resume();
 
     ed::NodeId selectedNodes[1];
@@ -4770,6 +4791,32 @@ void DrawPropertiesPanel()
             EvaluateGraph();
         }
         if (DrawPropertyIntRow("Simulation Resolution", "HeightmapSimulationResolution", &editableNode->heightmap.simulationResolution, 2, 2048, rock::HeightmapLoadSettings{}.simulationResolution, "Heightmap simulation resolution changed", true, "侵食や地形処理に使う内部ハイトフィールド解像度です。表示設定の Resolution はメッシュ表示の細かさだけを変更します。"))
+        {
+            EvaluateGraph();
+        }
+
+        ImGui::EndTable();
+        return;
+    }
+
+    if (selectedNode->kind == rock::NodeKind::HeightmapBlur && ImGui::BeginTable("HeightmapBlurRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 184.0f);
+        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+        rock::HeightmapBlurSettings& blur = editableNode->heightmapBlur;
+        blur.radius = std::clamp(blur.radius, 0.0f, 128.0f);
+        blur.strength = std::clamp(blur.strength, 0.0f, 1.0f);
+        blur.iterations = std::clamp(blur.iterations, 0, 64);
+
+        if (DrawPropertyFloatRow("Radius (cells)", "HeightmapBlurRadius", &blur.radius, 0.0f, 128.0f, rock::HeightmapBlurSettings{}.radius, "Heightmap blur radius changed", true, "ぼかしに使うセル半径です。大きいほど広い範囲の起伏をならします。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyPercentRow("Strength (%)", "HeightmapBlurStrength", &blur.strength, 0.0f, 1.0f, rock::HeightmapBlurSettings{}.strength, "Heightmap blur strength changed", "元の高さとぼかし後の高さを混ぜる量です。低いほど元の形を残します。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyIntRow("Iterations", "HeightmapBlurIterations", &blur.iterations, 0, 64, rock::HeightmapBlurSettings{}.iterations, "Heightmap blur iterations changed", true, "ぼかし処理を繰り返す回数です。増やすほど滑らかになりますが計算時間も増えます。"))
         {
             EvaluateGraph();
         }
