@@ -548,6 +548,7 @@ std::filesystem::path MeshPreviewShaderPath()
 void EvaluateGraph();
 void EnsureFinalMesh(rock::GraphId outputNodeId = 0);
 int CurrentPreviewMeshResolution();
+bool IsTerrainNodeKind(rock::NodeKind kind);
 void ResetViewport();
 ImVec2 InitialNodePosition(rock::NodeKind kind);
 
@@ -1379,6 +1380,10 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 rock::Node node;
                 node.id = nodeJson.value("id", 0);
                 node.kind = static_cast<rock::NodeKind>(std::clamp(nodeJson.value("kind", 0), 0, 5));
+                if (!IsTerrainNodeKind(node.kind))
+                {
+                    continue;
+                }
                 node.title = nodeJson.value("title", std::string(rock::ToString(node.kind)));
                 if (node.kind == rock::NodeKind::HeightmapLoad && node.title == "Load Heightmap")
                 {
@@ -1667,15 +1672,13 @@ int EffectiveMeshResolution(int resolution, int lod)
     return std::clamp(resolution / (1 << std::clamp(lod, 0, 4)), 16, 512);
 }
 
+bool IsTerrainNodeKind(rock::NodeKind kind)
+{
+    return kind == rock::NodeKind::HeightmapLoad || kind == rock::NodeKind::FluvialErosion;
+}
+
 int CurrentPreviewMeshResolution()
 {
-    if (const rock::Node* selectedNode = g_graph.FindNode(g_selectedNodeId);
-        selectedNode != nullptr && selectedNode->kind == rock::NodeKind::OutputMesh)
-    {
-        const rock::OutputMeshSettings& outputMesh = g_graph.OutputMeshSettingsFor(selectedNode->id);
-        return EffectiveMeshResolution(outputMesh.resolution, outputMesh.lod);
-    }
-
     const rock::PreviewSettings& preview = g_graph.Settings().preview;
     return EffectiveMeshResolution(preview.resolution, preview.lod);
 }
@@ -2948,12 +2951,8 @@ void DrawNodeGraph()
                 EvaluateGraph();
             }
         };
-        addNodeMenuItem(rock::NodeKind::PrimitiveSdf);
         addNodeMenuItem(rock::NodeKind::HeightmapLoad);
         addNodeMenuItem(rock::NodeKind::FluvialErosion);
-        addNodeMenuItem(rock::NodeKind::NoiseWarp);
-        addNodeMenuItem(rock::NodeKind::CrackField);
-        addNodeMenuItem(rock::NodeKind::OutputMesh);
         ImGui::EndPopup();
     }
     ed::Resume();
@@ -2969,11 +2968,7 @@ void DrawNodeGraph()
             {
                 EvaluateGraph();
             }
-            if (selectedNode->kind == rock::NodeKind::OutputMesh && g_lastFinalOutputNodeId != selectedNodeId)
-            {
-                g_lastFinalOutputNodeId = selectedNodeId;
-                EnsureFinalMesh(selectedNodeId);
-            }
+            g_lastFinalOutputNodeId = 0;
         }
     }
     else
@@ -3633,7 +3628,7 @@ void DrawStatsPanel()
     const rock::EvaluationSummary& evaluation = g_graph.Evaluation();
     ImGui::Text("Graph Version: %llu", static_cast<unsigned long long>(evaluation.version));
     ImGui::TextColored(evaluation.dirty ? ImVec4(0.90f, 0.64f, 0.30f, 1.0f) : ImVec4(0.54f, 0.78f, 0.58f, 1.0f), "%s", evaluation.dirty ? "Dirty" : "Evaluated");
-    ImGui::TextColored(evaluation.finalDirty ? ImVec4(0.90f, 0.64f, 0.30f, 1.0f) : ImVec4(0.54f, 0.78f, 0.58f, 1.0f), "%s", evaluation.finalDirty ? "Output Mesh: pending" : "Output Mesh: ready");
+    ImGui::TextColored(evaluation.finalDirty ? ImVec4(0.90f, 0.64f, 0.30f, 1.0f) : ImVec4(0.54f, 0.78f, 0.58f, 1.0f), "%s", evaluation.finalDirty ? "Terrain Mesh: pending" : "Terrain Mesh: ready");
     ImGui::TextWrapped("%s", evaluation.status.c_str());
 
     ImGui::SeparatorText("Preview");

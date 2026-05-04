@@ -4,6 +4,16 @@
 
 - なし
 
+## 0.7.0 - 2026-05-04 16:03
+
+- Terrain Editor の追加ノードを地形用の `Import Heightmap` と `Fluvial Erosion` に絞り、旧 Rock Generator 由来のノードを追加メニューとプロジェクト読み込み対象から外しました。
+- Stats の出力表示を `Output Mesh` から `Terrain Mesh` に変更しました。
+
+## 0.6.0 - 2026-05-04 15:49
+
+- Fluvial Erosion に flow accumulation / drainage area を追加し、流量が多い場所ほど侵食が強くなるようにしました。
+- Fluvial Erosion を粗い谷形成パスと細かいチャンネル形成パスのマルチスケール処理へ変更しました。
+
 ## 0.5.1 - 2026-05-04 15:49
 
 - Fluvial Erosion ノードの現状プロセスと今後追加すべきアルゴリズムを `docs/fluvial_erosion_node.md` として整理しました。
