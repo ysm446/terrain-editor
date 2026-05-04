@@ -3136,10 +3136,27 @@ void DrawNodeGraph()
     ed::SetCurrentEditor(nullptr);
 }
 
-void DrawPropertyLabel(const char* label, const char* tooltip = nullptr)
+bool FloatDiffersFromDefault(float value, float defaultValue)
+{
+    return std::fabs(value - defaultValue) > 0.0001f;
+}
+
+bool ColorDiffersFromDefault(const std::array<float, 3>& value, const std::array<float, 3>& defaultValue)
+{
+    return FloatDiffersFromDefault(value[0], defaultValue[0]) ||
+           FloatDiffersFromDefault(value[1], defaultValue[1]) ||
+           FloatDiffersFromDefault(value[2], defaultValue[2]);
+}
+
+void DrawPropertyLabel(const char* label, const char* tooltip = nullptr, bool modified = false)
 {
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted(label);
+    if (modified)
+    {
+        const ImVec2 textMin = ImGui::GetItemRectMin();
+        ImGui::GetWindowDrawList()->AddText(ImVec2(textMin.x + 0.7f, textMin.y), ImGui::GetColorU32(ImGuiCol_Text), label);
+    }
     if (tooltip != nullptr && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
     {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
@@ -3155,11 +3172,11 @@ void DrawPropertyLabel(const char* label, const char* tooltip = nullptr)
     }
 }
 
-bool DrawPropertyComboRow(const char* label, const char* id, int* value, const char* items, const char* tooltip = nullptr)
+bool DrawPropertyComboRow(const char* label, const char* id, int* value, const char* items, const char* tooltip = nullptr, int defaultValue = 0)
 {
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
-    DrawPropertyLabel(label, tooltip);
+    DrawPropertyLabel(label, tooltip, *value != defaultValue);
     ImGui::TableSetColumnIndex(1);
     ImGui::PushID(id);
     const float comboWidth = std::min(220.0f, ImGui::GetContentRegionAvail().x);
@@ -3199,7 +3216,7 @@ bool DrawPropertyFloatRow(const char* label, const char* id, float* value, float
     bool editEnded = false;
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
-    DrawPropertyLabel(label, tooltip);
+    DrawPropertyLabel(label, tooltip, FloatDiffersFromDefault(*value, defaultValue));
     ImGui::TableSetColumnIndex(1);
 
     ImGui::PushID(id);
@@ -3271,7 +3288,7 @@ bool DrawPropertyIntRow(const char* label, const char* id, int* value, int minVa
     bool editEnded = false;
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
-    DrawPropertyLabel(label, tooltip);
+    DrawPropertyLabel(label, tooltip, *value != defaultValue);
     ImGui::TableSetColumnIndex(1);
 
     ImGui::PushID(id);
@@ -3323,11 +3340,11 @@ bool DrawPropertyIntRow(const char* label, const char* id, int* value, int minVa
     return editEnded;
 }
 
-bool DrawPropertyBoolRow(const char* label, const char* id, bool* value, const char* dirtyReason, const char* tooltip = nullptr)
+bool DrawPropertyBoolRow(const char* label, const char* id, bool* value, const char* dirtyReason, const char* tooltip = nullptr, bool defaultValue = false)
 {
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
-    DrawPropertyLabel(label, tooltip);
+    DrawPropertyLabel(label, tooltip, *value != defaultValue);
     ImGui::TableSetColumnIndex(1);
 
     ImGui::PushID(id);
@@ -3345,7 +3362,7 @@ bool DrawPropertyPathRow(const char* label, const char* id, std::string* value, 
     bool editEnded = false;
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
-    DrawPropertyLabel(label, tooltip);
+    DrawPropertyLabel(label, tooltip, !value->empty());
     ImGui::TableSetColumnIndex(1);
 
     ImGui::PushID(id);
@@ -3391,8 +3408,7 @@ bool DrawColorRgbRow(const char* label, const char* id, std::array<float, 3>& va
 {
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(label);
+    DrawPropertyLabel(label, nullptr, ColorDiffersFromDefault(value, defaultValue));
     ImGui::TableSetColumnIndex(1);
 
     ImGui::PushID(id);
@@ -3590,7 +3606,7 @@ void DrawPropertiesPanel()
         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
 
         int primitive = static_cast<int>(editableNode->primitive.kind);
-        if (DrawPropertyComboRow("Primitive", "Primitive", &primitive, "Sphere\0Box\0Capsule\0Ellipsoid\0Rock Blob\0", "生成する基本形状です。現在は古い SDF 系ノードとの互換用です。"))
+        if (DrawPropertyComboRow("Primitive", "Primitive", &primitive, "Sphere\0Box\0Capsule\0Ellipsoid\0Rock Blob\0", "生成する基本形状です。現在は古い SDF 系ノードとの互換用です。", static_cast<int>(rock::PrimitiveSettings{}.kind)))
         {
             PushUndoSnapshot();
             editableNode->primitive.kind = static_cast<rock::PrimitiveKind>(primitive);
@@ -3693,7 +3709,7 @@ void DrawDisplaySettingsPanel()
         ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 112.0f);
         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
 
-        if (DrawPropertyBoolRow("Mesh Preview", "DisplayMeshPreview", &g_ui.meshPreview, "Mesh preview visibility changed"))
+        if (DrawPropertyBoolRow("Mesh Preview", "DisplayMeshPreview", &g_ui.meshPreview, "Mesh preview visibility changed", nullptr, UiState{}.meshPreview))
         {
             SaveAppSettingsSilently();
         }
@@ -3708,19 +3724,19 @@ void DrawDisplaySettingsPanel()
             SaveAppSettingsSilently();
         }
 
-        if (DrawPropertyBoolRow("Surface", "DisplaySurface", &settings.preview.showSurface, "Surface visibility changed"))
+        if (DrawPropertyBoolRow("Surface", "DisplaySurface", &settings.preview.showSurface, "Surface visibility changed", nullptr, rock::PreviewSettings{}.showSurface))
         {
             SaveAppSettingsSilently();
         }
-        if (DrawPropertyBoolRow("Wireframe", "DisplayWireframe", &settings.preview.showWireframe, "Wireframe visibility changed"))
+        if (DrawPropertyBoolRow("Wireframe", "DisplayWireframe", &settings.preview.showWireframe, "Wireframe visibility changed", nullptr, rock::PreviewSettings{}.showWireframe))
         {
             SaveAppSettingsSilently();
         }
-        if (DrawPropertyBoolRow("Points", "DisplayPoints", &settings.preview.showPoints, "Surface points visibility changed"))
+        if (DrawPropertyBoolRow("Points", "DisplayPoints", &settings.preview.showPoints, "Surface points visibility changed", nullptr, rock::PreviewSettings{}.showPoints))
         {
             SaveAppSettingsSilently();
         }
-        if (DrawPropertyBoolRow("Grid", "DisplayGrid", &settings.preview.showGrid, "Grid visibility changed"))
+        if (DrawPropertyBoolRow("Grid", "DisplayGrid", &settings.preview.showGrid, "Grid visibility changed", nullptr, rock::PreviewSettings{}.showGrid))
         {
             SaveAppSettingsSilently();
         }
@@ -4179,12 +4195,28 @@ void DrawUi()
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 8.0f));
     ImGui::BeginChild("Node Network", ImVec2(0.0f, g_ui.nodePaneHeight), false, fixedPaneFlags);
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 6.0f));
-    ImGui::Dummy(ImVec2(0.0f, 3.0f));
-    ImGui::TextUnformatted("ノードネットワーク");
-    ImGui::Separator();
-    DrawNodeGraph();
-    ImGui::PopStyleVar();
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12.0f, 5.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(5.0f, 5.0f));
+    ImGui::Dummy(ImVec2(0.0f, 2.0f));
+    ImGui::SetWindowFontScale(1.08f);
+    if (ImGui::BeginTabBar("NodeNetworkTabs"))
+    {
+        if (ImGui::BeginTabItem("ノードネットワーク"))
+        {
+            ImGui::SetWindowFontScale(1.0f);
+            ImGui::PopStyleVar(2);
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 6.0f));
+            DrawNodeGraph();
+            ImGui::PopStyleVar();
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12.0f, 5.0f));
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(5.0f, 5.0f));
+            ImGui::SetWindowFontScale(1.08f);
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
+    ImGui::SetWindowFontScale(1.0f);
+    ImGui::PopStyleVar(2);
     ImGui::EndChild();
     ImGui::PopStyleVar();
 
