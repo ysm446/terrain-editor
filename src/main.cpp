@@ -11,6 +11,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -2457,6 +2458,88 @@ void DrawViewportCube(const ImVec2& min, const ImVec2& max, float timeSeconds)
     DrawViewportAxisGizmo(drawList, min, max);
 }
 
+ImU32 MapPreviewColor(float value, bool mask)
+{
+    value = std::clamp(value, 0.0f, 1.0f);
+    if (mask)
+    {
+        const int r = static_cast<int>(35.0f + value * 220.0f);
+        const int g = static_cast<int>(42.0f + value * 122.0f);
+        const int b = static_cast<int>(44.0f + value * 24.0f);
+        return IM_COL32(r, g, b, 255);
+    }
+
+    const int c = static_cast<int>(28.0f + value * 214.0f);
+    return IM_COL32(c, c, c, 255);
+}
+
+void DrawHeightfieldMapPreview(const ImVec2& min, const ImVec2& max)
+{
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    const std::array<float, 3>& viewportBackground = g_graph.Settings().preview.viewportBackground;
+    drawList->AddRectFilled(min, max, ColorToU32(ImVec4(viewportBackground[0], viewportBackground[1], viewportBackground[2], 1.0f)));
+
+    const rock::EvaluationSummary& evaluation = g_graph.Evaluation();
+    const rock::MeshData& mesh = evaluation.previewMesh;
+    const int gridResolution = static_cast<int>(std::lround(std::sqrt(static_cast<double>(mesh.vertices.size()))));
+    const bool canDrawMap = evaluation.previewIsHeightmap &&
+        gridResolution >= 2 &&
+        static_cast<size_t>(gridResolution * gridResolution) == mesh.vertices.size();
+    const bool maskPreview = evaluation.previewShowsMask;
+    const std::string title = maskPreview ? "2D View: Fluvial Mask" : "2D View: Heightmap";
+    drawList->AddText(ImVec2(min.x + 16.0f, min.y + 14.0f), ThemeColor("accentText", ImVec4(0.86f, 0.88f, 0.85f, 1.0f)), title.c_str());
+
+    if (!canDrawMap)
+    {
+        drawList->AddText(ImVec2(min.x + 16.0f, min.y + 42.0f), ThemeColor("mutedText", ImVec4(0.54f, 0.59f, 0.56f, 1.0f)), "Select a heightmap or mask output to inspect it as a 2D map.");
+        return;
+    }
+
+    float minHeight = std::numeric_limits<float>::max();
+    float maxHeight = std::numeric_limits<float>::lowest();
+    for (const rock::MeshVertex& vertex : mesh.vertices)
+    {
+        minHeight = std::min(minHeight, vertex.y);
+        maxHeight = std::max(maxHeight, vertex.y);
+    }
+    const float heightRange = std::max(0.0001f, maxHeight - minHeight);
+
+    const float availableWidth = std::max(1.0f, max.x - min.x - 32.0f);
+    const float availableHeight = std::max(1.0f, max.y - min.y - 76.0f);
+    const float mapSize = std::max(1.0f, std::min(availableWidth, availableHeight));
+    const ImVec2 mapMin(min.x + 16.0f, min.y + 52.0f);
+    const ImVec2 mapMax(mapMin.x + mapSize, mapMin.y + mapSize);
+    drawList->AddRectFilled(mapMin, mapMax, IM_COL32(18, 20, 20, 255));
+
+    const int samples = std::clamp(gridResolution, 2, 256);
+    const float cellSize = mapSize / static_cast<float>(samples);
+    for (int z = 0; z < samples; ++z)
+    {
+        const int srcZ = samples > 1 ? static_cast<int>(std::lround(static_cast<float>(z) * static_cast<float>(gridResolution - 1) / static_cast<float>(samples - 1))) : 0;
+        for (int x = 0; x < samples; ++x)
+        {
+            const int srcX = samples > 1 ? static_cast<int>(std::lround(static_cast<float>(x) * static_cast<float>(gridResolution - 1) / static_cast<float>(samples - 1))) : 0;
+            const rock::MeshVertex& vertex = mesh.vertices[static_cast<size_t>(srcZ * gridResolution + srcX)];
+            const float value = maskPreview ? vertex.mask : (vertex.y - minHeight) / heightRange;
+            const ImVec2 cellMin(mapMin.x + static_cast<float>(x) * cellSize, mapMin.y + static_cast<float>(z) * cellSize);
+            const ImVec2 cellMax(mapMin.x + static_cast<float>(x + 1) * cellSize + 0.5f, mapMin.y + static_cast<float>(z + 1) * cellSize + 0.5f);
+            drawList->AddRectFilled(cellMin, cellMax, MapPreviewColor(value, maskPreview));
+        }
+    }
+    drawList->AddRect(mapMin, mapMax, ThemeColor("border", ImVec4(0.20f, 0.23f, 0.22f, 0.85f)));
+
+    char info[128]{};
+    if (maskPreview)
+    {
+        std::snprintf(info, sizeof(info), "%d x %d preview samples from selected mask output", samples, samples);
+    }
+    else
+    {
+        std::snprintf(info, sizeof(info), "%d x %d preview samples / height %.2f m to %.2f m", samples, samples, minHeight, maxHeight);
+    }
+    drawList->AddText(ImVec2(mapMin.x, mapMax.y + 10.0f), ThemeColor("mutedText", ImVec4(0.54f, 0.59f, 0.56f, 1.0f)), info);
+}
+
 ImVec4 NodeAccentColor(rock::NodeKind kind)
 {
     switch (kind)
@@ -4168,10 +4251,42 @@ void DrawUi()
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     ImGui::BeginChild("Preview Viewport", ImVec2(previewWidth, workHeight), false, fixedPaneFlags);
-    const ImVec2 min = ImGui::GetCursorScreenPos();
-    const ImVec2 max(min.x + ImGui::GetContentRegionAvail().x, min.y + ImGui::GetContentRegionAvail().y);
-    DrawViewportCube(min, max, timeSeconds);
-    ImGui::Dummy(ImGui::GetContentRegionAvail());
+    ImGui::Dummy(ImVec2(0.0f, 2.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12.0f, 5.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(5.0f, 5.0f));
+    ImGui::SetWindowFontScale(1.08f);
+    if (ImGui::BeginTabBar("ViewportTabs"))
+    {
+        if (ImGui::BeginTabItem("3Dビュー"))
+        {
+            ImGui::SetWindowFontScale(1.0f);
+            ImGui::PopStyleVar(2);
+            const ImVec2 min = ImGui::GetCursorScreenPos();
+            const ImVec2 max(min.x + ImGui::GetContentRegionAvail().x, min.y + ImGui::GetContentRegionAvail().y);
+            DrawViewportCube(min, max, timeSeconds);
+            ImGui::Dummy(ImGui::GetContentRegionAvail());
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12.0f, 5.0f));
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(5.0f, 5.0f));
+            ImGui::SetWindowFontScale(1.08f);
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("2Dビュー"))
+        {
+            ImGui::SetWindowFontScale(1.0f);
+            ImGui::PopStyleVar(2);
+            const ImVec2 min = ImGui::GetCursorScreenPos();
+            const ImVec2 max(min.x + ImGui::GetContentRegionAvail().x, min.y + ImGui::GetContentRegionAvail().y);
+            DrawHeightfieldMapPreview(min, max);
+            ImGui::Dummy(ImGui::GetContentRegionAvail());
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12.0f, 5.0f));
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(5.0f, 5.0f));
+            ImGui::SetWindowFontScale(1.08f);
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
+    ImGui::SetWindowFontScale(1.0f);
+    ImGui::PopStyleVar(2);
     ImGui::EndChild();
     ImGui::PopStyleVar();
 
