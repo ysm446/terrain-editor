@@ -196,7 +196,24 @@ struct MeshPreviewConstants
     float nearPlane;
     float farPlane;
     float maskPreview;
+    float lightingMode;
+    float sunDirection[4];
+    float albedoColor[4];
+    float sunIntensity;
+    float ambientStrength;
+    float shadowStrength;
+    float shadowMapResolution;
+    float shadowBias;
+    float shadowEnabled;
     float padding;
+    float lightRight[4];
+    float lightUp[4];
+    float lightForward[4];
+    float lightCenter[4];
+    float lightWorldRadius;
+    float lightNearPlane;
+    float lightFarPlane;
+    float padding2;
 };
 
 struct GpuMeshPreview
@@ -213,25 +230,41 @@ struct GpuMeshPreview
     bool showSurface = false;
     bool showWireframe = false;
     bool maskPreview = false;
+    int lightingMode = 0;
+    float sunAzimuthDegrees = 0.0f;
+    float sunElevationDegrees = 0.0f;
+    float sunIntensity = 0.0f;
+    float ambientStrength = 0.0f;
+    float shadowStrength = 0.0f;
+    int shadowMapResolution = 0;
+    float shadowBias = 0.0f;
+    std::array<float, 3> pbrAlbedo = {};
     ComPtr<ID3D12Resource> colorTarget;
     ComPtr<ID3D12Resource> depthTarget;
+    ComPtr<ID3D12Resource> shadowTarget;
     ComPtr<ID3D12Resource> vertexBuffer;
     ComPtr<ID3D12Resource> indexBuffer;
     ComPtr<ID3D12Resource> edgeIndexBuffer;
     D3D12_CPU_DESCRIPTOR_HANDLE rtvCpu{};
     D3D12_CPU_DESCRIPTOR_HANDLE dsvCpu{};
+    D3D12_CPU_DESCRIPTOR_HANDLE shadowDsvCpu{};
     D3D12_CPU_DESCRIPTOR_HANDLE srvCpu{};
     D3D12_GPU_DESCRIPTOR_HANDLE srvGpu{};
+    D3D12_CPU_DESCRIPTOR_HANDLE shadowSrvCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE shadowSrvGpu{};
     bool srvAllocated = false;
+    bool shadowSrvAllocated = false;
     UINT vertexCount = 0;
     UINT triIndexCount = 0;
     UINT edgeIndexCount = 0;
     D3D12_RESOURCE_STATES colorState = D3D12_RESOURCE_STATE_COMMON;
+    D3D12_RESOURCE_STATES shadowState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 };
 
 ComPtr<ID3D12RootSignature> g_meshPreviewRootSignature;
 ComPtr<ID3D12PipelineState> g_meshPreviewSurfacePso;
 ComPtr<ID3D12PipelineState> g_meshPreviewWirePso;
+ComPtr<ID3D12PipelineState> g_meshPreviewShadowPso;
 ComPtr<ID3D12DescriptorHeap> g_meshPreviewRtvHeap;
 ComPtr<ID3D12DescriptorHeap> g_meshPreviewDsvHeap;
 GpuMeshPreview g_gpuMeshPreview;
@@ -768,6 +801,19 @@ bool SaveAppSettings(std::string* error = nullptr)
             {"grid", settings.preview.showGrid},
             {"previewResolution", settings.preview.resolution},
             {"previewLod", settings.preview.lod},
+            {"lightingMode", settings.preview.lightingMode},
+            {"sunAzimuthDegrees", settings.preview.sunAzimuthDegrees},
+            {"sunElevationDegrees", settings.preview.sunElevationDegrees},
+            {"sunIntensity", settings.preview.sunIntensity},
+            {"ambientStrength", settings.preview.ambientStrength},
+            {"shadowStrength", settings.preview.shadowStrength},
+            {"shadowMapResolution", settings.preview.shadowMapResolution},
+            {"shadowBias", settings.preview.shadowBias},
+            {"pbrAlbedo", {
+                settings.preview.pbrAlbedo[0],
+                settings.preview.pbrAlbedo[1],
+                settings.preview.pbrAlbedo[2],
+            }},
             {"viewportBackground", {
                 settings.preview.viewportBackground[0],
                 settings.preview.viewportBackground[1],
@@ -893,6 +939,20 @@ bool LoadAppSettings(std::string* error = nullptr)
         settings.preview.showGrid = visibilityJson.value("grid", settings.preview.showGrid);
         settings.preview.resolution = std::clamp(visibilityJson.value("previewResolution", settings.preview.resolution), 16, 512);
         settings.preview.lod = std::clamp(visibilityJson.value("previewLod", settings.preview.lod), 0, 4);
+        settings.preview.lightingMode = std::clamp(visibilityJson.value("lightingMode", settings.preview.lightingMode), 0, 2);
+        settings.preview.sunAzimuthDegrees = std::clamp(visibilityJson.value("sunAzimuthDegrees", settings.preview.sunAzimuthDegrees), 0.0f, 360.0f);
+        settings.preview.sunElevationDegrees = std::clamp(visibilityJson.value("sunElevationDegrees", settings.preview.sunElevationDegrees), 1.0f, 89.0f);
+        settings.preview.sunIntensity = std::clamp(visibilityJson.value("sunIntensity", settings.preview.sunIntensity), 0.0f, 5.0f);
+        settings.preview.ambientStrength = std::clamp(visibilityJson.value("ambientStrength", settings.preview.ambientStrength), 0.0f, 2.0f);
+        settings.preview.shadowStrength = std::clamp(visibilityJson.value("shadowStrength", settings.preview.shadowStrength), 0.0f, 1.0f);
+        settings.preview.shadowMapResolution = std::clamp(visibilityJson.value("shadowMapResolution", settings.preview.shadowMapResolution), 512, 4096);
+        settings.preview.shadowBias = std::clamp(visibilityJson.value("shadowBias", settings.preview.shadowBias), 0.0f, 0.05f);
+        if (visibilityJson.contains("pbrAlbedo") && visibilityJson["pbrAlbedo"].is_array() && visibilityJson["pbrAlbedo"].size() == 3)
+        {
+            settings.preview.pbrAlbedo[0] = std::clamp(visibilityJson["pbrAlbedo"][0].get<float>(), 0.0f, 1.0f);
+            settings.preview.pbrAlbedo[1] = std::clamp(visibilityJson["pbrAlbedo"][1].get<float>(), 0.0f, 1.0f);
+            settings.preview.pbrAlbedo[2] = std::clamp(visibilityJson["pbrAlbedo"][2].get<float>(), 0.0f, 1.0f);
+        }
         if (visibilityJson.contains("viewportBackground") && visibilityJson["viewportBackground"].is_array() && visibilityJson["viewportBackground"].size() == 3)
         {
             settings.preview.viewportBackground[0] = std::clamp(visibilityJson["viewportBackground"][0].get<float>(), 0.0f, 1.0f);
@@ -1657,16 +1717,39 @@ bool EnsureMeshPreviewPipeline(std::string* error)
     if (g_meshPreviewSurfacePso) return true;
     if (!g_device) { if (error) *error = "D3D12 device not initialized"; return false; }
 
-    D3D12_ROOT_PARAMETER rootParam{};
-    rootParam.ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    rootParam.Constants.ShaderRegister = 0;
-    rootParam.Constants.RegisterSpace = 0;
-    rootParam.Constants.Num32BitValues = sizeof(MeshPreviewConstants) / sizeof(UINT);
-    rootParam.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    D3D12_DESCRIPTOR_RANGE shadowRange{};
+    shadowRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    shadowRange.NumDescriptors = 1;
+    shadowRange.BaseShaderRegister = 0;
+    shadowRange.RegisterSpace = 0;
+    shadowRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_ROOT_PARAMETER rootParams[2]{};
+    rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    rootParams[0].Constants.ShaderRegister = 0;
+    rootParams[0].Constants.RegisterSpace = 0;
+    rootParams[0].Constants.Num32BitValues = sizeof(MeshPreviewConstants) / sizeof(UINT);
+    rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[1].DescriptorTable.pDescriptorRanges = &shadowRange;
+    rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    D3D12_STATIC_SAMPLER_DESC shadowSampler{};
+    shadowSampler.Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
+    shadowSampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    shadowSampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    shadowSampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    shadowSampler.ShaderRegister = 0;
+    shadowSampler.RegisterSpace = 0;
+    shadowSampler.MaxLOD = D3D12_FLOAT32_MAX;
+    shadowSampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
     D3D12_ROOT_SIGNATURE_DESC rsDesc{};
-    rsDesc.NumParameters = 1;
-    rsDesc.pParameters = &rootParam;
+    rsDesc.NumParameters = 2;
+    rsDesc.pParameters = rootParams;
+    rsDesc.NumStaticSamplers = 1;
+    rsDesc.pStaticSamplers = &shadowSampler;
     rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
     ComPtr<ID3DBlob> sigBlob, errBlob;
@@ -1684,7 +1767,7 @@ bool EnsureMeshPreviewPipeline(std::string* error)
 #if defined(_DEBUG)
     compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
 #endif
-    ComPtr<ID3DBlob> vsBlob, psBlob, psEdgeBlob;
+    ComPtr<ID3DBlob> vsBlob, psBlob, psEdgeBlob, vsShadowBlob;
     hr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "VSMain", "vs_5_0", compileFlags, 0, &vsBlob, &errBlob);
     if (FAILED(hr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile mesh VS failed"; return false; }
     errBlob.Reset();
@@ -1693,6 +1776,9 @@ bool EnsureMeshPreviewPipeline(std::string* error)
     errBlob.Reset();
     hr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "PSEdge", "ps_5_0", compileFlags, 0, &psEdgeBlob, &errBlob);
     if (FAILED(hr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile mesh edge PS failed"; return false; }
+    errBlob.Reset();
+    hr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "VSShadow", "vs_5_0", compileFlags, 0, &vsShadowBlob, &errBlob);
+    if (FAILED(hr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile mesh shadow VS failed"; return false; }
 
     D3D12_INPUT_ELEMENT_DESC inputLayout[] =
     {
@@ -1731,6 +1817,19 @@ bool EnsureMeshPreviewPipeline(std::string* error)
     psoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
     hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewWirePso));
     if (FAILED(hr)) { if (error) *error = "Create mesh wire PSO failed"; return false; }
+
+    psoDesc.VS = {vsShadowBlob->GetBufferPointer(), vsShadowBlob->GetBufferSize()};
+    psoDesc.PS = {};
+    psoDesc.NumRenderTargets = 0;
+    psoDesc.RTVFormats[0] = DXGI_FORMAT_UNKNOWN;
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    psoDesc.RasterizerState.DepthBias = 1200;
+    psoDesc.RasterizerState.SlopeScaledDepthBias = 1.5f;
+    psoDesc.DepthStencilState.DepthEnable = TRUE;
+    psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    psoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
+    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewShadowPso));
+    if (FAILED(hr)) { if (error) *error = "Create mesh shadow PSO failed"; return false; }
 
     return true;
 }
@@ -1829,8 +1928,8 @@ void UpdateViewportInteraction(const ImVec2& min, const ImVec2& max)
 
     if (hovered && io.MouseWheel != 0.0f)
     {
-        g_viewport.zoom *= std::pow(1.12f, io.MouseWheel);
-        g_viewport.zoom = std::clamp(g_viewport.zoom, 0.05f, 20.0f);
+        g_viewport.orbitDistance *= std::pow(1.12f, -io.MouseWheel);
+        g_viewport.orbitDistance = std::clamp(g_viewport.orbitDistance, 1.0f, 10000.0f);
     }
 
     if (ImGui::IsMouseDragging(ImGuiMouseButton_Left) && hovered)
@@ -1945,17 +2044,25 @@ ImU32 ThemeColor(const std::string& name, const ImVec4& fallback);
 
 bool EnsureMeshPreviewRenderTarget(int width, int height, std::string* error)
 {
-    if (g_gpuMeshPreview.colorTarget && g_gpuMeshPreview.width == width && g_gpuMeshPreview.height == height)
+    const int shadowResolution = std::clamp(g_graph.Settings().preview.shadowMapResolution, 512, 4096);
+    if (g_gpuMeshPreview.colorTarget && g_gpuMeshPreview.shadowTarget &&
+        g_gpuMeshPreview.width == width && g_gpuMeshPreview.height == height &&
+        g_gpuMeshPreview.shadowMapResolution == shadowResolution)
+    {
         return true;
+    }
 
     try
     {
         WaitForLastSubmittedFrame();
         g_gpuMeshPreview.colorTarget.Reset();
         g_gpuMeshPreview.depthTarget.Reset();
+        g_gpuMeshPreview.shadowTarget.Reset();
         g_gpuMeshPreview.width = width;
         g_gpuMeshPreview.height = height;
+        g_gpuMeshPreview.shadowMapResolution = shadowResolution;
         g_gpuMeshPreview.colorState = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        g_gpuMeshPreview.shadowState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 
         if (!g_meshPreviewRtvHeap)
         {
@@ -1969,14 +2076,21 @@ bool EnsureMeshPreviewRenderTarget(int width, int height, std::string* error)
         {
             D3D12_DESCRIPTOR_HEAP_DESC desc{};
             desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
-            desc.NumDescriptors = 1;
+            desc.NumDescriptors = 2;
             ThrowIfFailed(g_device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&g_meshPreviewDsvHeap)), "Create mesh DSV heap failed");
             g_gpuMeshPreview.dsvCpu = g_meshPreviewDsvHeap->GetCPUDescriptorHandleForHeapStart();
+            g_gpuMeshPreview.shadowDsvCpu = g_gpuMeshPreview.dsvCpu;
+            g_gpuMeshPreview.shadowDsvCpu.ptr += g_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
         }
         if (!g_gpuMeshPreview.srvAllocated)
         {
             AllocateSrvDescriptor(nullptr, &g_gpuMeshPreview.srvCpu, &g_gpuMeshPreview.srvGpu);
             g_gpuMeshPreview.srvAllocated = true;
+        }
+        if (!g_gpuMeshPreview.shadowSrvAllocated)
+        {
+            AllocateSrvDescriptor(nullptr, &g_gpuMeshPreview.shadowSrvCpu, &g_gpuMeshPreview.shadowSrvGpu);
+            g_gpuMeshPreview.shadowSrvAllocated = true;
         }
 
         const D3D12_HEAP_PROPERTIES defaultHeap = HeapProperties(D3D12_HEAP_TYPE_DEFAULT);
@@ -2012,6 +2126,27 @@ bool EnsureMeshPreviewRenderTarget(int width, int height, std::string* error)
             dsvDesc.Format = DXGI_FORMAT_D32_FLOAT;
             dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
             g_device->CreateDepthStencilView(g_gpuMeshPreview.depthTarget.Get(), &dsvDesc, g_gpuMeshPreview.dsvCpu);
+        }
+        {
+            D3D12_CLEAR_VALUE clearVal{};
+            clearVal.Format = DXGI_FORMAT_D32_FLOAT;
+            clearVal.DepthStencil.Depth = 1.0f;
+            const D3D12_RESOURCE_DESC desc = Texture2DResourceDesc(
+                static_cast<UINT>(shadowResolution), static_cast<UINT>(shadowResolution),
+                DXGI_FORMAT_R32_TYPELESS, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
+            ThrowIfFailed(g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &desc,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &clearVal, IID_PPV_ARGS(&g_gpuMeshPreview.shadowTarget)),
+                "Create mesh shadow map failed");
+            D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
+            dsvDesc.Format = DXGI_FORMAT_D32_FLOAT;
+            dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+            g_device->CreateDepthStencilView(g_gpuMeshPreview.shadowTarget.Get(), &dsvDesc, g_gpuMeshPreview.shadowDsvCpu);
+            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+            srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
+            srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            srvDesc.Texture2D.MipLevels = 1;
+            g_device->CreateShaderResourceView(g_gpuMeshPreview.shadowTarget.Get(), &srvDesc, g_gpuMeshPreview.shadowSrvCpu);
         }
         return true;
     }
@@ -2309,6 +2444,14 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.showSurface != showSurface ||
         g_gpuMeshPreview.showWireframe != showWireframe ||
         g_gpuMeshPreview.maskPreview != g_graph.Evaluation().previewShowsMask ||
+        g_gpuMeshPreview.lightingMode != g_graph.Settings().preview.lightingMode ||
+        g_gpuMeshPreview.sunAzimuthDegrees != g_graph.Settings().preview.sunAzimuthDegrees ||
+        g_gpuMeshPreview.sunElevationDegrees != g_graph.Settings().preview.sunElevationDegrees ||
+        g_gpuMeshPreview.sunIntensity != g_graph.Settings().preview.sunIntensity ||
+        g_gpuMeshPreview.ambientStrength != g_graph.Settings().preview.ambientStrength ||
+        g_gpuMeshPreview.shadowStrength != g_graph.Settings().preview.shadowStrength ||
+        g_gpuMeshPreview.shadowBias != g_graph.Settings().preview.shadowBias ||
+        g_gpuMeshPreview.pbrAlbedo != g_graph.Settings().preview.pbrAlbedo ||
         g_gpuMeshPreview.colorState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     if (!meshDirty && !viewportDirty) return true;
 
@@ -2368,6 +2511,85 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         constants.nearPlane  = 0.05f;
         constants.farPlane   = 20000.0f;
         constants.maskPreview = g_graph.Evaluation().previewShowsMask ? 1.0f : 0.0f;
+        constants.lightingMode = static_cast<float>(g_graph.Settings().preview.lightingMode);
+        const float azimuth = g_graph.Settings().preview.sunAzimuthDegrees * 3.1415926535f / 180.0f;
+        const float elevation = g_graph.Settings().preview.sunElevationDegrees * 3.1415926535f / 180.0f;
+        const float cosElevation = std::cos(elevation);
+        constants.sunDirection[0] = std::sin(azimuth) * cosElevation;
+        constants.sunDirection[1] = std::sin(elevation);
+        constants.sunDirection[2] = std::cos(azimuth) * cosElevation;
+        constants.sunDirection[3] = 0.0f;
+        constants.albedoColor[0] = g_graph.Settings().preview.pbrAlbedo[0];
+        constants.albedoColor[1] = g_graph.Settings().preview.pbrAlbedo[1];
+        constants.albedoColor[2] = g_graph.Settings().preview.pbrAlbedo[2];
+        constants.albedoColor[3] = 1.0f;
+        constants.sunIntensity = g_graph.Settings().preview.sunIntensity;
+        constants.ambientStrength = g_graph.Settings().preview.ambientStrength;
+        constants.shadowStrength = g_graph.Settings().preview.shadowStrength;
+        constants.shadowMapResolution = static_cast<float>(g_gpuMeshPreview.shadowMapResolution);
+        constants.shadowBias = g_graph.Settings().preview.shadowBias;
+        constants.shadowEnabled = (g_graph.Settings().preview.lightingMode >= 1 && !g_graph.Evaluation().previewShowsMask) ? 1.0f : 0.0f;
+
+        Vec3 sunDirection(constants.sunDirection[0], constants.sunDirection[1], constants.sunDirection[2]);
+        sunDirection = Normalize(sunDirection, Vec3(0.35f, 0.65f, 0.68f));
+        const Vec3 lightForward = Scale(sunDirection, -1.0f);
+        const Vec3 guideUp = (std::abs(Dot(lightForward, Vec3(0.0f, 1.0f, 0.0f))) > 0.92f) ? Vec3(1.0f, 0.0f, 0.0f) : Vec3(0.0f, 1.0f, 0.0f);
+        const Vec3 lightRight = Normalize(Cross(guideUp, lightForward), Vec3(1.0f, 0.0f, 0.0f));
+        const Vec3 lightUp = Normalize(Cross(lightForward, lightRight), Vec3(0.0f, 1.0f, 0.0f));
+
+        Vec3 boundsMin(FLT_MAX, FLT_MAX, FLT_MAX);
+        Vec3 boundsMax(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+        for (const rock::MeshVertex& vertex : mesh.vertices)
+        {
+            boundsMin.x = std::min(boundsMin.x, vertex.x);
+            boundsMin.y = std::min(boundsMin.y, vertex.y);
+            boundsMin.z = std::min(boundsMin.z, vertex.z);
+            boundsMax.x = std::max(boundsMax.x, vertex.x);
+            boundsMax.y = std::max(boundsMax.y, vertex.y);
+            boundsMax.z = std::max(boundsMax.z, vertex.z);
+        }
+        const Vec3 corners[] =
+        {
+            Vec3(boundsMin.x, boundsMin.y, boundsMin.z),
+            Vec3(boundsMax.x, boundsMin.y, boundsMin.z),
+            Vec3(boundsMin.x, boundsMax.y, boundsMin.z),
+            Vec3(boundsMax.x, boundsMax.y, boundsMin.z),
+            Vec3(boundsMin.x, boundsMin.y, boundsMax.z),
+            Vec3(boundsMax.x, boundsMin.y, boundsMax.z),
+            Vec3(boundsMin.x, boundsMax.y, boundsMax.z),
+            Vec3(boundsMax.x, boundsMax.y, boundsMax.z),
+        };
+        float lightMinX = FLT_MAX, lightMinY = FLT_MAX, lightMinZ = FLT_MAX;
+        float lightMaxX = -FLT_MAX, lightMaxY = -FLT_MAX, lightMaxZ = -FLT_MAX;
+        for (const Vec3& corner : corners)
+        {
+            const float x = Dot(corner, lightRight);
+            const float y = Dot(corner, lightUp);
+            const float z = Dot(corner, lightForward);
+            lightMinX = std::min(lightMinX, x);
+            lightMinY = std::min(lightMinY, y);
+            lightMinZ = std::min(lightMinZ, z);
+            lightMaxX = std::max(lightMaxX, x);
+            lightMaxY = std::max(lightMaxY, y);
+            lightMaxZ = std::max(lightMaxZ, z);
+        }
+        const float boundsDiagonal = Length(Subtract(boundsMax, boundsMin));
+        const float kLightPadding = std::max(64.0f, boundsDiagonal * 0.08f);
+        const float kLightDepthPadding = std::max(512.0f, boundsDiagonal * 1.25f);
+        const float lightCenterX = (lightMinX + lightMaxX) * 0.5f;
+        const float lightCenterY = (lightMinY + lightMaxY) * 0.5f;
+        const float lightCenterZ = (lightMinZ + lightMaxZ) * 0.5f;
+        const Vec3 lightCenterWorld = Add(Add(Scale(lightRight, lightCenterX), Scale(lightUp, lightCenterY)), Scale(lightForward, lightCenterZ));
+        const float lightHalfX = std::max(1.0f, (lightMaxX - lightMinX) * 0.5f + kLightPadding);
+        const float lightHalfY = std::max(1.0f, (lightMaxY - lightMinY) * 0.5f + kLightPadding);
+        const float lightHalfZ = std::max(1.0f, (lightMaxZ - lightMinZ) * 0.5f + kLightDepthPadding);
+        constants.lightRight[0] = lightRight.x; constants.lightRight[1] = lightRight.y; constants.lightRight[2] = lightRight.z;
+        constants.lightUp[0] = lightUp.x; constants.lightUp[1] = lightUp.y; constants.lightUp[2] = lightUp.z;
+        constants.lightForward[0] = lightForward.x; constants.lightForward[1] = lightForward.y; constants.lightForward[2] = lightForward.z;
+        constants.lightCenter[0] = lightCenterWorld.x; constants.lightCenter[1] = lightCenterWorld.y; constants.lightCenter[2] = lightCenterWorld.z;
+        constants.lightWorldRadius = lightHalfX;
+        constants.lightNearPlane = lightHalfY;
+        constants.lightFarPlane = lightHalfZ;
 
         D3D12_VERTEX_BUFFER_VIEW vbv{};
         vbv.BufferLocation = g_gpuMeshPreview.vertexBuffer->GetGPUVirtualAddress();
@@ -2376,6 +2598,50 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         commandList->IASetVertexBuffers(0, 1, &vbv);
         commandList->SetGraphicsRootSignature(g_meshPreviewRootSignature.Get());
         commandList->SetGraphicsRoot32BitConstants(0, sizeof(constants) / 4, &constants, 0);
+
+        if (constants.shadowEnabled > 0.5f && showSurface && g_gpuMeshPreview.triIndexCount > 0)
+        {
+            if (g_gpuMeshPreview.shadowState != D3D12_RESOURCE_STATE_DEPTH_WRITE)
+            {
+                D3D12_RESOURCE_BARRIER shadowToDepth{};
+                shadowToDepth.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                shadowToDepth.Transition.pResource = g_gpuMeshPreview.shadowTarget.Get();
+                shadowToDepth.Transition.StateBefore = g_gpuMeshPreview.shadowState;
+                shadowToDepth.Transition.StateAfter = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+                shadowToDepth.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                commandList->ResourceBarrier(1, &shadowToDepth);
+                g_gpuMeshPreview.shadowState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+            }
+
+            const int shadowResolution = std::max(1, g_gpuMeshPreview.shadowMapResolution);
+            D3D12_VIEWPORT shadowVp{0.0f, 0.0f, static_cast<float>(shadowResolution), static_cast<float>(shadowResolution), 0.0f, 1.0f};
+            D3D12_RECT shadowScissor{0, 0, shadowResolution, shadowResolution};
+            commandList->RSSetViewports(1, &shadowVp);
+            commandList->RSSetScissorRects(1, &shadowScissor);
+            commandList->ClearDepthStencilView(g_gpuMeshPreview.shadowDsvCpu, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+            commandList->OMSetRenderTargets(0, nullptr, FALSE, &g_gpuMeshPreview.shadowDsvCpu);
+            D3D12_INDEX_BUFFER_VIEW shadowIbv{g_gpuMeshPreview.indexBuffer->GetGPUVirtualAddress(), g_gpuMeshPreview.triIndexCount * sizeof(UINT), DXGI_FORMAT_R32_UINT};
+            commandList->IASetIndexBuffer(&shadowIbv);
+            commandList->SetPipelineState(g_meshPreviewShadowPso.Get());
+            commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            commandList->DrawIndexedInstanced(g_gpuMeshPreview.triIndexCount, 1, 0, 0, 0);
+
+            D3D12_RESOURCE_BARRIER shadowToSrv{};
+            shadowToSrv.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            shadowToSrv.Transition.pResource = g_gpuMeshPreview.shadowTarget.Get();
+            shadowToSrv.Transition.StateBefore = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+            shadowToSrv.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            shadowToSrv.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            commandList->ResourceBarrier(1, &shadowToSrv);
+            g_gpuMeshPreview.shadowState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        }
+
+        commandList->OMSetRenderTargets(1, &g_gpuMeshPreview.rtvCpu, FALSE, &g_gpuMeshPreview.dsvCpu);
+        commandList->RSSetViewports(1, &vp);
+        commandList->RSSetScissorRects(1, &scissor);
+        ID3D12DescriptorHeap* descriptorHeaps[] = {g_srvHeap.Get()};
+        commandList->SetDescriptorHeaps(1, descriptorHeaps);
+        commandList->SetGraphicsRootDescriptorTable(1, g_gpuMeshPreview.shadowSrvGpu);
 
         if (showSurface && g_gpuMeshPreview.triIndexCount > 0)
         {
@@ -2418,6 +2684,14 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.showSurface   = showSurface;
         g_gpuMeshPreview.showWireframe = showWireframe;
         g_gpuMeshPreview.maskPreview   = g_graph.Evaluation().previewShowsMask;
+        g_gpuMeshPreview.lightingMode  = g_graph.Settings().preview.lightingMode;
+        g_gpuMeshPreview.sunAzimuthDegrees = g_graph.Settings().preview.sunAzimuthDegrees;
+        g_gpuMeshPreview.sunElevationDegrees = g_graph.Settings().preview.sunElevationDegrees;
+        g_gpuMeshPreview.sunIntensity = g_graph.Settings().preview.sunIntensity;
+        g_gpuMeshPreview.ambientStrength = g_graph.Settings().preview.ambientStrength;
+        g_gpuMeshPreview.shadowStrength = g_graph.Settings().preview.shadowStrength;
+        g_gpuMeshPreview.shadowBias = g_graph.Settings().preview.shadowBias;
+        g_gpuMeshPreview.pbrAlbedo = g_graph.Settings().preview.pbrAlbedo;
         g_gpuMeshPreview.colorState    = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         return true;
     }
@@ -3917,6 +4191,48 @@ void DrawDisplaySettingsPanel()
         {
             SaveAppSettingsSilently();
         }
+        if (DrawPropertyComboRow("Lighting Mode", "DisplayLightingMode", &settings.preview.lightingMode, "Simple\0PBR Preview\0Shadow Debug\0", "3Dビューのライティングモードです。Simple はマスク確認向け、PBR Preview は地形の陰影確認向け、Shadow Debug はシャドウ判定の確認用です。", rock::PreviewSettings{}.lightingMode))
+        {
+            settings.preview.lightingMode = std::clamp(settings.preview.lightingMode, 0, 2);
+            SaveAppSettingsSilently();
+        }
+        if (settings.preview.lightingMode >= 1)
+        {
+            ImGui::SeparatorText("PBR Preview");
+            if (DrawPropertyFloatRow("Sun Azimuth (deg)", "DisplaySunAzimuth", &settings.preview.sunAzimuthDegrees, 0.0f, 360.0f, rock::PreviewSettings{}.sunAzimuthDegrees, "Sun azimuth changed", false, "太陽の水平角度です。地形の溝が読みやすい方向へ回せます。"))
+            {
+                SaveAppSettingsSilently();
+            }
+            if (DrawPropertyFloatRow("Sun Elevation (deg)", "DisplaySunElevation", &settings.preview.sunElevationDegrees, 1.0f, 89.0f, rock::PreviewSettings{}.sunElevationDegrees, "Sun elevation changed", false, "太陽の高さです。低いほど影が長く、凹凸が強調されます。"))
+            {
+                SaveAppSettingsSilently();
+            }
+            if (DrawPropertyFloatRow("Sun Intensity", "DisplaySunIntensity", &settings.preview.sunIntensity, 0.0f, 5.0f, rock::PreviewSettings{}.sunIntensity, "Sun intensity changed", false, "直射光の強さです。"))
+            {
+                SaveAppSettingsSilently();
+            }
+            if (DrawPropertyFloatRow("Ambient", "DisplayAmbientStrength", &settings.preview.ambientStrength, 0.0f, 2.0f, rock::PreviewSettings{}.ambientStrength, "Ambient strength changed", false, "影側を持ち上げる環境光の強さです。"))
+            {
+                SaveAppSettingsSilently();
+            }
+            if (DrawPropertyFloatRow("Shadow Strength", "DisplayShadowStrength", &settings.preview.shadowStrength, 0.0f, 1.0f, rock::PreviewSettings{}.shadowStrength, "Shadow strength changed", false, "シャドウマップで落ちる影の濃さです。"))
+            {
+                SaveAppSettingsSilently();
+            }
+            if (DrawPropertyIntRow("Shadow Map Resolution", "DisplayShadowMapResolution", &settings.preview.shadowMapResolution, 512, 4096, rock::PreviewSettings{}.shadowMapResolution, "Shadow map resolution changed", false, "太陽方向から見た深度マップの解像度です。高いほど影の輪郭が細かくなりますが描画負荷が増えます。"))
+            {
+                settings.preview.shadowMapResolution = std::clamp(settings.preview.shadowMapResolution, 512, 4096);
+                SaveAppSettingsSilently();
+            }
+            if (DrawPropertyFloatRow("Shadow Bias", "DisplayShadowBias", &settings.preview.shadowBias, 0.0f, 0.05f, rock::PreviewSettings{}.shadowBias, "Shadow bias changed", false, "影のにじみや縞を抑えるための深度オフセットです。大きすぎると影が浮いて見えます。"))
+            {
+                SaveAppSettingsSilently();
+            }
+            if (DrawColorRgbRow("Albedo", "DisplayPbrAlbedo", settings.preview.pbrAlbedo, rock::PreviewSettings{}.pbrAlbedo))
+            {
+                SaveAppSettingsSilently();
+            }
+        }
         if (DrawColorRgbRow("ビューポート背景色", "ViewportBackgroundColor", settings.preview.viewportBackground, rock::PreviewSettings{}.viewportBackground))
         {
             SaveAppSettingsSilently();
@@ -4487,17 +4803,17 @@ void DrawUi()
             EndInspectorTabContent();
             EndStyledTabItem(defaultTabStyle);
         }
-        if (BeginStyledTabItem("統計"))
-        {
-            BeginInspectorTabContent();
-            DrawStatsPanel();
-            EndInspectorTabContent();
-            EndStyledTabItem(defaultTabStyle);
-        }
         if (BeginStyledTabItem("表示設定"))
         {
             BeginInspectorTabContent();
             DrawDisplaySettingsPanel();
+            EndInspectorTabContent();
+            EndStyledTabItem(defaultTabStyle);
+        }
+        if (BeginStyledTabItem("統計"))
+        {
+            BeginInspectorTabContent();
+            DrawStatsPanel();
             EndInspectorTabContent();
             EndStyledTabItem(defaultTabStyle);
         }

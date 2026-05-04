@@ -146,6 +146,15 @@ struct PreviewSettings
     bool showWireframe = true;
     bool showPoints = false;
     bool showGrid = true;
+    int lightingMode = 0;
+    float sunAzimuthDegrees = 315.0f;
+    float sunElevationDegrees = 38.0f;
+    float sunIntensity = 1.35f;
+    float ambientStrength = 0.22f;
+    float shadowStrength = 0.55f;
+    int shadowMapResolution = 2048;
+    float shadowBias = 0.0035f;
+    std::array<float, 3> pbrAlbedo = {0.78f, 0.80f, 0.76f};
     std::array<float, 3> viewportBackground = {0.268f, 0.268f, 0.268f};
 };
 
