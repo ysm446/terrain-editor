@@ -188,13 +188,16 @@ float4 PSSurface(VSOut i) : SV_TARGET
         float ndl = saturate(dot(n, L));
         float visibility = ComputeShadowVisibility(i.worldPos);
         float viewFacing = pow(saturate(dot(n, V) * 0.5 + 0.5), 0.35);
-        float shadowMix = lerp(1.0 - shadowStrength, 1.0, visibility);
-        float3 skyTint = float3(0.48, 0.58, 0.72) * ambientStrength * saturate(n.y * 0.65 + 0.35);
-        float3 sunTint = float3(1.00, 0.94, 0.84) * ndl * sunIntensity * shadowMix;
-        float3 shadowTint = float3(0.16, 0.28, 0.44) * (1.0 - visibility) * shadowStrength * 0.56;
-        float3 slopeMicroShade = lerp(float3(0.72, 0.76, 0.82), float3(1.08, 1.06, 1.02), viewFacing);
-        col = albedoColor.rgb * (skyTint + sunTint) * slopeMicroShade + shadowTint;
-        col += pow(saturate(ndl), 24.0) * sunIntensity * visibility * 0.08;
+        float shadowAmount = (1.0 - visibility) * shadowStrength;
+        float shadowMix = lerp(1.0 - shadowStrength * 0.75, 1.0, visibility);
+        float upFacing = saturate(n.y * 0.55 + 0.45);
+        float3 skyTint = lerp(float3(0.42, 0.45, 0.45), float3(0.58, 0.61, 0.62), upFacing) * ambientStrength;
+        float3 sunTint = float3(1.00, 0.96, 0.88) * ndl * sunIntensity * shadowMix;
+        float3 bounceTint = float3(0.28, 0.30, 0.28) * ambientStrength * shadowAmount;
+        float3 slopeMicroShade = lerp(float3(0.78, 0.80, 0.82), float3(1.06, 1.05, 1.02), viewFacing);
+        col = albedoColor.rgb * (skyTint + sunTint + bounceTint) * slopeMicroShade;
+        col = lerp(col, dot(col, float3(0.299, 0.587, 0.114)).xxx, shadowAmount * 0.18);
+        col += pow(saturate(ndl), 24.0) * sunIntensity * visibility * 0.045;
     }
     if (maskPreview > 0.5)
     {
