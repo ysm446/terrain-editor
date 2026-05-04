@@ -2,6 +2,36 @@
 
 このメモは Terrain Editor の `Fluvial Erosion` ノードについて、現在の実装と、KTT 風の自然な水侵食へ近づけるために今後追加したい処理を分けて整理したものです。
 
+## 更新履歴
+
+| バージョン | 内容 |
+| --- | --- |
+| 0.4.0 | KTT を参考にした CPU 版 `Fluvial Erosion` ノードを追加しました。Heightfield を入力し、簡易的な粒子移動と channeling で侵食筋を作る MVP です。 |
+| 0.5.0 | ノードプロパティへツールチップと単位表示を追加しました。 |
+| 0.5.1 | 本設計メモを追加し、現状プロセスと今後必要なアルゴリズムを整理しました。 |
+| 0.6.0 | flow accumulation / drainage area を追加し、流量が多い場所ほど侵食が強くなるようにしました。粗い谷形成パスと細かいチャンネル形成パスのマルチスケール処理も追加しました。 |
+| 0.7.0 | Terrain Editor のノード構成を地形用ノードへ整理し、旧 Rock Generator 由来のノードを追加メニューと読み込み対象から外しました。 |
+| 0.7.1 | 本メモへ更新履歴と現状アップデートを追記しました。 |
+| 0.8.0 | sediment capacity と deposit field を追加し、粒子が削った土砂を保持して谷底や緩斜面へ堆積できるようにしました。 |
+| 0.9.0 | `Fluvial Erosion` に `Heightmap` と `Fluvial Mask` の 2 出力を追加し、出力ピンをクリックして地形プレビューとマスクプレビューを切り替えられるようにしました。 |
+
+## 現在のアップデート
+
+現在の `Fluvial Erosion` は、初期の単純な斜面方向の粒子侵食から一段進み、内部に flow accumulation を持つようになりました。
+
+大きな変更点は次の通りです。
+
+- D8 風の receiver を使い、各セルがどの下流セルへ流れるかを決めます。
+- 標高順に flow を下流へ足し込み、drainage area を作ります。
+- `log(flow)` で正規化した流量を、粒子発生率、侵食強度、channeling の重みに使います。
+- 粗い谷形成パスと細かいチャンネル形成パスに分け、単一スケールよりも谷筋と支流が出やすい構成にしています。
+- 粒子ごとに `sediment` を持ち、流速、斜面、流量から求めた capacity と比較して、削剥と堆積を切り替えます。
+- `depositField` を内部に持ち、土砂がどこに堆積したかを蓄積します。
+- `Fluvial Mask` 出力ピンを選ぶと、侵食・堆積の内部マスクを地形メッシュ上へ色付きで表示します。
+- ただし hardness mask、flow line input、マスクの外部テクスチャ書き出しはまだ未実装です。
+
+そのため、現状は「水が集まる場所ほど削れる」だけでなく、「削った土砂を運び、谷底や緩斜面へ堆積させる」初期段階まで入りました。さらに `Fluvial Mask` プレビューで、どこに侵食・堆積が出ているか確認できます。次の大きな改善点は、flow / wear / deposit の個別可視化、D-infinity flow、hardness / erodibility です。
+
 ## 目的
 
 `Fluvial Erosion` は、ハイトフィールド地形に水流による侵食跡を加えるノードです。
@@ -46,6 +76,8 @@ KTT の考え方を参考にしつつ、Terrain Editor 上でまず動くこと�
 | Max Erosion Angle (deg) | 侵食を許可する最大斜面角度 |
 | Granularity (%) | 粒子密度や細かさの制御 |
 | Sediment Velocity (x) | 粒子の移動速度 |
+| Sediment Capacity (%) | 粒子が保持できる土砂量 |
+| Deposition Rate (%) | 土砂を堆積させる速さ |
 | Seed | 粒子分布の乱数シード |
 
 ## 現状で出やすい見た目
@@ -72,11 +104,13 @@ KTT の考え方を参考にしつつ、Terrain Editor 上でまず動くこと�
 
 ### Sediment Transport
 
-現在の土砂運搬はかなり簡略化されています。
+`0.8.0` で最初の sediment transport を追加しました。
 
-KTT 風にするには、粒子が土砂を保持し、速度、斜面、流量、容量に応じて削る量と堆積する量を決める必要があります。
+現在は、粒子が `sediment` を持ち、速度、斜面、流量から計算した capacity と比較します。capacity より sediment が少ない場合は削り、capacity を超えた場合は堆積します。
 
-必要になる状態:
+今後は、より物理寄りの capacity 式、粒子の水量、地質硬度、堆積物の粒径などを足すと制御しやすくなります。
+
+現在使っている主な状態:
 
 - water / flow
 - sediment
@@ -86,9 +120,9 @@ KTT 風にするには、粒子が土砂を保持し、速度、斜面、流量�
 
 ### Deposit Field
 
-削った土砂をどこへ積むかが弱いため、谷底や緩斜面の自然な埋まり方が出にくいです。
+`0.8.0` で内部的な deposit field を追加しました。
 
-堆積量を別フィールドとして持ち、最終的に高さへ合成する処理があると制御しやすくなります。
+現状は堆積量を内部で蓄積するだけで、まだノード出力やビュー表示はありません。今後は deposit field をマスクや可視化レイヤーとして扱えるようにすると、調整しやすくなります。
 
 ### Particle Distribution
 
@@ -126,8 +160,8 @@ Terrain Editor でも将来的に `Flow Lines` ノードや `River Guide` ノー
 
 1. D-infinity などの複数方向 flow accumulation へ改善する。
 2. 粒子発生をさらにランダム / ブルーノイズ / 流量依存へ変更する。
-3. sediment capacity を導入し、削剥と堆積を分ける。
-4. deposit / flow / wear などの補助フィールドを内部に持つ。
+3. deposit / flow / wear などの補助フィールドを可視化・出力できるようにする。
+4. capacity 式を水量、速度、斜面、粒子量に分けて調整しやすくする。
 5. coarse grid / detail grid を分けたマルチスケール処理へ発展させる。
 6. Hardness / Erosion Mask 入力を追加する。
 7. Flow Lines 入力ノードを追加する。
@@ -135,9 +169,9 @@ Terrain Editor でも将来的に `Flow Lines` ノードや `River Guide` ノー
 
 ## 近い目標
 
-次の改善としては、sediment capacity と deposit field を入れるのが効果的です。
+次の改善としては、deposit / flow / wear フィールドを可視化するのが効果的です。
 
-流量によって削る場所は見え始めるため、次は削った土砂を保持し、谷底や緩斜面へ堆積させる処理を足すと、より KTT に近い侵食になります。
+削る場所と堆積する場所を見ながら調整できるようになると、capacity や deposition rate の係数を安定して詰められます。その次に D-infinity flow や hardness / erodibility を足すと、より汎用的な侵食ノードへ近づきます。
 
 ## GPU 化について
 

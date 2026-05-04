@@ -46,15 +46,50 @@ struct HeightmapImage
     std::vector<float> values;
 };
 
-struct HeightfieldGrid
-{
-    int resolution = 0;
-    float terrainSizeMeters = 1.0f;
-    std::vector<float> heights;
-};
-
 void AddEdge(MeshData& mesh, std::unordered_set<uint64_t>& edgeKeys, uint32_t a, uint32_t b);
 void AccumulateNormal(MeshVertex& vertex, float nx, float ny, float nz);
+
+void HashCombine(uint64_t& seed, uint64_t value)
+{
+    seed ^= value + 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2);
+}
+
+uint64_t HashFloat(float value)
+{
+    return static_cast<uint64_t>(std::hash<float>{}(value));
+}
+
+uint64_t HashHeightmapSettings(const HeightmapLoadSettings& settings, int resolution)
+{
+    uint64_t hash = 1469598103934665603ull;
+    HashCombine(hash, static_cast<uint64_t>(std::hash<std::string>{}(settings.path)));
+    HashCombine(hash, HashFloat(settings.scaleMeters));
+    HashCombine(hash, HashFloat(settings.relativeVerticalScalePercent));
+    HashCombine(hash, HashFloat(settings.verticalOffsetMeters));
+    HashCombine(hash, static_cast<uint64_t>(resolution));
+    return hash;
+}
+
+uint64_t HashFluvialSettings(const FluvialErosionSettings& settings, int resolution)
+{
+    uint64_t hash = 1099511628211ull;
+    HashCombine(hash, HashFloat(settings.featureSize));
+    HashCombine(hash, static_cast<uint64_t>(settings.iterations));
+    HashCombine(hash, HashFloat(settings.channelLength));
+    HashCombine(hash, HashFloat(settings.erosionStrength));
+    HashCombine(hash, HashFloat(settings.channeling));
+    HashCombine(hash, HashFloat(settings.friction));
+    HashCombine(hash, HashFloat(settings.wearAngleDegrees));
+    HashCombine(hash, HashFloat(settings.depositAngleDegrees));
+    HashCombine(hash, HashFloat(settings.maxErosionAngleDegrees));
+    HashCombine(hash, HashFloat(settings.erosionGranularity));
+    HashCombine(hash, HashFloat(settings.sedimentVelocity));
+    HashCombine(hash, HashFloat(settings.sedimentCapacity));
+    HashCombine(hash, HashFloat(settings.depositionRate));
+    HashCombine(hash, static_cast<uint64_t>(settings.seed));
+    HashCombine(hash, static_cast<uint64_t>(resolution));
+    return hash;
+}
 
 std::wstring Utf8ToWidePath(const std::string& value)
 {
@@ -243,6 +278,7 @@ HeightfieldGrid BuildHeightfieldFromHeightmap(const HeightmapLoadSettings& setti
     grid.terrainSizeMeters = std::max(1.0f, settings.scaleMeters);
     const float verticalRange = grid.terrainSizeMeters * std::max(0.0f, settings.relativeVerticalScalePercent) / 100.0f;
     grid.heights.reserve(static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution));
+    grid.mask.assign(static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution), 0.0f);
     for (int z = 0; z < grid.resolution; ++z)
     {
         const float v = grid.resolution > 1 ? static_cast<float>(z) / static_cast<float>(grid.resolution - 1) : 0.0f;
@@ -299,6 +335,7 @@ void ApplyFluvialErosion(HeightfieldGrid& grid, const FluvialErosionSettings& se
     std::vector<float> forceX(cellCount, 0.0f);
     std::vector<float> forceZ(cellCount, 0.0f);
     std::vector<float> flow(cellCount, 1.0f);
+    std::vector<float> maskField(cellCount, 0.0f);
     std::vector<int> receiver(cellCount, -1);
     std::vector<size_t> sortedCells(cellCount, 0);
     std::iota(sortedCells.begin(), sortedCells.end(), 0);
@@ -380,6 +417,8 @@ void ApplyFluvialErosion(HeightfieldGrid& grid, const FluvialErosionSettings& se
     const float channeling = std::clamp(settings.channeling, 0.0f, 1.0f);
     const float friction = std::clamp(settings.friction, 0.0f, 1.0f);
     const float velocityScale = std::clamp(settings.sedimentVelocity, 0.0f, 2.0f);
+    const float capacityScale = std::clamp(settings.sedimentCapacity, 0.0f, 2.0f);
+    const float depositionRate = std::clamp(settings.depositionRate, 0.0f, 1.0f);
     const float featureCells = std::max(settings.featureSize, cellSize) / std::max(cellSize, 0.0001f);
     const float granularity = std::clamp(settings.erosionGranularity, 1.0f, 100.0f) / 100.0f;
 
@@ -412,7 +451,7 @@ void ApplyFluvialErosion(HeightfieldGrid& grid, const FluvialErosionSettings& se
                     float pz = static_cast<float>(z) + Hash01(x, z, settings.seed + seedOffset + 23) - 0.5f;
                     float vx = 0.0f;
                     float vz = 0.0f;
-                    float carry = 0.0f;
+                    float sediment = 0.0f;
                     for (int step = 0; step < maxSteps; ++step)
                     {
                         const int ix = clampCoord(static_cast<int>(px));
@@ -421,7 +460,7 @@ void ApplyFluvialErosion(HeightfieldGrid& grid, const FluvialErosionSettings& se
                         float fx = forceX[currentIndex];
                         float fz = forceZ[currentIndex];
                         const float slope = std::sqrt(fx * fx + fz * fz);
-                        if (slope < wearSlope || slope < depositSlope || slope > maxSlope)
+                        if (slope > maxSlope)
                         {
                             break;
                         }
@@ -442,17 +481,27 @@ void ApplyFluvialErosion(HeightfieldGrid& grid, const FluvialErosionSettings& se
                         const float ahead = sampleHeight(px + dirX, pz + dirZ);
                         const float behind = sampleHeight(px - dirX, pz - dirZ);
                         const float flowStrength = std::lerp(0.45f, 1.8f, flowWeight);
-                        float delta = (((ahead + behind) * 0.5f) - before) * strength * 0.20f * featureStrength * flowStrength;
-                        delta -= std::max(before - ahead, 0.0f) * channeling * 0.16f * featureStrength * flowStrength;
+                        const float downhill = std::max(before - ahead, 0.0f);
+                        const float slopeCapacity = slope * passFeatureMeters * 0.12f + downhill * 0.85f;
+                        const float capacity = std::max(0.0f, slopeCapacity * flowStrength * capacityScale * strengthScale);
+                        const float lowSlopeDeposit = slope <= depositSlope ? 1.0f : 0.35f;
+                        const float depositAmount = std::max(sediment - capacity, 0.0f) * depositionRate * lowSlopeDeposit;
+
+                        float erodeAmount = 0.0f;
+                        if (slope >= wearSlope)
+                        {
+                            const float capacityDeficit = std::max(capacity - sediment, 0.0f);
+                            const float valleyCut = std::max(before - ahead, 0.0f) * channeling * 0.14f * featureStrength * flowStrength;
+                            const float smoothCut = std::max(before - ((ahead + behind) * 0.5f), 0.0f) * 0.10f * featureStrength;
+                            erodeAmount = (capacityDeficit * 0.18f + valleyCut + smoothCut) * strength;
+                        }
+                        erodeAmount = std::min(erodeAmount, std::max(before - std::min(ahead, behind), 0.0f));
 
                         const float oldHeight = grid.heights[currentIndex];
-                        grid.heights[currentIndex] = std::clamp(oldHeight + delta, std::min(ahead, behind), std::max(ahead, behind));
-                        carry += oldHeight - grid.heights[currentIndex];
-                        if (carry < 0.0f)
-                        {
-                            grid.heights[currentIndex] = oldHeight - carry;
-                            carry = 0.0f;
-                        }
+                        const float nextHeight = std::clamp(oldHeight - erodeAmount + depositAmount, std::min(ahead, behind), std::max(ahead, behind) + passFeatureMeters * 0.1f);
+                        grid.heights[currentIndex] = nextHeight;
+                        sediment = std::max(0.0f, sediment + (oldHeight - nextHeight));
+                        maskField[currentIndex] += erodeAmount + std::max(nextHeight - (oldHeight - erodeAmount), 0.0f);
 
                         px += dirX * velocityScale;
                         pz += dirZ * velocityScale;
@@ -472,6 +521,20 @@ void ApplyFluvialErosion(HeightfieldGrid& grid, const FluvialErosionSettings& se
     if (detailIterations > 0)
     {
         runErosionPass(0.75f, 0.85f, 0.9f, detailIterations, 29017);
+    }
+
+    float maxMask = 0.0f;
+    for (float value : maskField)
+    {
+        maxMask = std::max(maxMask, value);
+    }
+    grid.mask.resize(cellCount, 0.0f);
+    if (maxMask > 0.000001f)
+    {
+        for (size_t i = 0; i < cellCount; ++i)
+        {
+            grid.mask[i] = std::clamp(maskField[i] / maxMask, 0.0f, 1.0f);
+        }
     }
 }
 
@@ -557,7 +620,7 @@ MeshData BuildMeshFromHeightfield(const HeightfieldGrid& grid)
         const float length = std::sqrt(vertex.nx * vertex.nx + vertex.ny * vertex.ny + vertex.nz * vertex.nz);
         if (length > 0.000001f)
         {
-            vertex.nx /= length;
+                vertex.nx /= length;
             vertex.ny /= length;
             vertex.nz /= length;
         }
@@ -566,6 +629,11 @@ MeshData BuildMeshFromHeightfield(const HeightfieldGrid& grid)
             vertex.nx = 0.0f;
             vertex.ny = 1.0f;
             vertex.nz = 0.0f;
+        }
+        const size_t vertexIndex = static_cast<size_t>(&vertex - mesh.vertices.data());
+        if (vertexIndex < grid.mask.size())
+        {
+            vertex.mask = grid.mask[vertexIndex];
         }
     }
     return mesh;
@@ -755,6 +823,84 @@ MeshData BuildMeshFromHeightPipeline(const SdfPipeline& pipeline, int resolution
 }
 } // namespace
 
+MeshData NodeGraph::BuildMeshFromHeightPipelineCached(const SdfPipeline& pipeline, int resolution, std::string* message)
+{
+    if (pipeline.heightmapNodeId == 0)
+    {
+        return BuildMeshFromHeightPipeline(pipeline, resolution, message);
+    }
+
+    uint64_t inputHash = 0;
+    const uint64_t heightmapHash = HashHeightmapSettings(pipeline.heightmap, resolution);
+    HeightfieldNodeCache& heightmapCache = heightfieldCache_[pipeline.heightmapNodeId];
+    if (!heightmapCache.valid ||
+        heightmapCache.resolution != resolution ||
+        heightmapCache.inputHash != inputHash ||
+        heightmapCache.parameterHash != heightmapHash)
+    {
+        std::string heightmapMessage;
+        heightmapCache.grid = BuildHeightfieldFromHeightmap(pipeline.heightmap, resolution, &heightmapMessage);
+        heightmapCache.message = heightmapMessage;
+        heightmapCache.valid = true;
+        heightmapCache.resolution = resolution;
+        heightmapCache.inputHash = inputHash;
+        heightmapCache.parameterHash = heightmapHash;
+        heightmapCache.outputHash = heightmapHash;
+    }
+
+    HeightfieldGrid grid = heightmapCache.grid;
+    inputHash = heightmapCache.outputHash;
+    if (message != nullptr)
+    {
+        *message = heightmapCache.message;
+    }
+    if (grid.resolution <= 0)
+    {
+        return {};
+    }
+
+    for (const SdfPipeline::HeightfieldOperation& operation : pipeline.heightfieldOperations)
+    {
+        if (operation.kind != SdfPipeline::HeightfieldOperation::Kind::FluvialErosion || operation.nodeId == 0)
+        {
+            if (operation.kind == SdfPipeline::HeightfieldOperation::Kind::FluvialErosion)
+            {
+                ApplyFluvialErosion(grid, operation.fluvialErosion);
+            }
+            continue;
+        }
+
+        const uint64_t parameterHash = HashFluvialSettings(operation.fluvialErosion, resolution);
+        HeightfieldNodeCache& operationCache = heightfieldCache_[operation.nodeId];
+        if (!operationCache.valid ||
+            operationCache.resolution != resolution ||
+            operationCache.inputHash != inputHash ||
+            operationCache.parameterHash != parameterHash)
+        {
+            HeightfieldGrid operationGrid = grid;
+            ApplyFluvialErosion(operationGrid, operation.fluvialErosion);
+            operationCache.grid = std::move(operationGrid);
+            operationCache.message.clear();
+            operationCache.valid = true;
+            operationCache.resolution = resolution;
+            operationCache.inputHash = inputHash;
+            operationCache.parameterHash = parameterHash;
+            operationCache.outputHash = inputHash;
+            HashCombine(operationCache.outputHash, parameterHash);
+            HashCombine(operationCache.outputHash, static_cast<uint64_t>(operation.nodeId));
+        }
+
+        grid = operationCache.grid;
+        inputHash = operationCache.outputHash;
+    }
+
+    if (message != nullptr && !pipeline.heightfieldOperations.empty())
+    {
+        *message += std::format(" + {} heightfield op{}", pipeline.heightfieldOperations.size(), pipeline.heightfieldOperations.size() == 1 ? "" : "s");
+    }
+    return BuildMeshFromHeightfield(grid);
+}
+
 NodeGraph NodeGraph::CreateDefaultTerrainGraph()
 {
     NodeGraph graph;
@@ -939,6 +1085,8 @@ bool NodeGraph::DeleteNode(GraphId nodeId)
     if (evaluation_.previewNodeId == nodeId)
     {
         evaluation_.previewNodeId = 0;
+        evaluation_.previewPinId = 0;
+        evaluation_.previewShowsMask = false;
     }
     MarkDirty("Node deleted");
     return true;
@@ -961,11 +1109,12 @@ GraphId NodeGraph::CreateNode(NodeKind kind)
         AddPin(nodeId, PinKind::Input, ValueType::HeightField, "HeightField");
         break;
     case NodeKind::HeightmapLoad:
-        AddPin(nodeId, PinKind::Output, ValueType::HeightField, "HeightField");
+        AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
         break;
     case NodeKind::FluvialErosion:
         AddPin(nodeId, PinKind::Input, ValueType::HeightField, "HeightField");
-        AddPin(nodeId, PinKind::Output, ValueType::HeightField, "HeightField");
+        AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
+        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Fluvial Mask");
         break;
     default:
         break;
@@ -1033,9 +1182,44 @@ bool NodeGraph::SetPreviewNode(GraphId nodeId)
     }
 
     evaluation_.previewNodeId = nodeId;
+    evaluation_.previewPinId = 0;
+    evaluation_.previewShowsMask = false;
     evaluation_.previewStage = stage;
     evaluation_.dirty = true;
     evaluation_.status = std::format("Preview node changed to {}", node->title);
+    return true;
+}
+
+bool NodeGraph::SetPreviewPin(GraphId pinId)
+{
+    const Pin* pin = FindPin(pinId);
+    if (pin == nullptr || pin->kind != PinKind::Output)
+    {
+        return false;
+    }
+    const Node* node = FindNode(pin->nodeId);
+    if (node == nullptr)
+    {
+        return false;
+    }
+
+    const bool showsMask = pin->valueType == ValueType::Mask;
+    const PreviewStage stage = PreviewStageFor(node->kind);
+    if (evaluation_.previewNodeId == node->id &&
+        evaluation_.previewPinId == pinId &&
+        evaluation_.previewStage == stage &&
+        evaluation_.previewShowsMask == showsMask)
+    {
+        return false;
+    }
+
+    const bool pipelineChanged = evaluation_.previewNodeId != node->id || evaluation_.previewStage != stage;
+    evaluation_.previewNodeId = node->id;
+    evaluation_.previewPinId = pinId;
+    evaluation_.previewShowsMask = showsMask;
+    evaluation_.previewStage = stage;
+    evaluation_.dirty = evaluation_.dirty || pipelineChanged;
+    evaluation_.status = std::format("Preview output changed to {}", pin->label);
     return true;
 }
 
@@ -1196,6 +1380,7 @@ SdfPipeline NodeGraph::PipelineToNode(const Node& targetNode) const
         {
             pipeline.hasSource = true;
             pipeline.useHeightmap = true;
+            pipeline.heightmapNodeId = node->id;
             pipeline.heightmap = node->heightmap;
             break;
         }
@@ -1222,6 +1407,7 @@ void NodeGraph::Evaluate(int previewMeshResolution)
     const SdfPipeline previewPipeline = PreviewPipeline();
     const SdfPipeline finalPipeline = FinalPipeline();
     evaluation_.previewIsHeightmap = previewPipeline.useHeightmap;
+    evaluation_.previewShowsMask = evaluation_.previewShowsMask && previewPipeline.useHeightmap;
     evaluation_.previewMessage.clear();
     if (!previewPipeline.hasSource)
     {
@@ -1232,7 +1418,7 @@ void NodeGraph::Evaluate(int previewMeshResolution)
     else if (previewPipeline.useHeightmap)
     {
         evaluation_.previewSdf = {};
-        evaluation_.previewMesh = BuildMeshFromHeightPipeline(previewPipeline, previewMeshResolution, &evaluation_.previewMessage);
+        evaluation_.previewMesh = BuildMeshFromHeightPipelineCached(previewPipeline, previewMeshResolution, &evaluation_.previewMessage);
     }
     else
     {
@@ -1300,7 +1486,7 @@ void NodeGraph::EvaluateFinal(GraphId outputNodeId)
     else if (finalPipeline.useHeightmap)
     {
         evaluation_.finalSdf = {};
-        evaluation_.finalMesh = BuildMeshFromHeightPipeline(finalPipeline, outputMeshResolution, nullptr);
+        evaluation_.finalMesh = BuildMeshFromHeightPipelineCached(finalPipeline, outputMeshResolution, nullptr);
     }
     else
     {
@@ -1430,6 +1616,8 @@ std::string_view ToString(ValueType type)
         return "Mesh";
     case ValueType::HeightField:
         return "HeightField";
+    case ValueType::Mask:
+        return "Mask";
     default:
         return "Unknown";
     }

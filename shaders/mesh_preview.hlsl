@@ -10,13 +10,15 @@ cbuffer Constants : register(b0)
     float panNdcY;
     float nearPlane;
     float farPlane;
-    float2 pad;
+    float maskPreview;
+    float pad;
 };
 
 struct VSIn
 {
     float3 pos : POSITION;
     float3 nor : NORMAL;
+    float mask : TEXCOORD0;
 };
 
 struct VSOut
@@ -24,6 +26,7 @@ struct VSOut
     float4 pos : SV_POSITION;
     float3 worldNor : NORMAL;
     float3 worldPos : TEXCOORD0;
+    float mask : TEXCOORD1;
 };
 
 VSOut VSMain(VSIn i)
@@ -41,6 +44,7 @@ VSOut VSMain(VSIn i)
         d);
     o.worldNor = i.nor;
     o.worldPos = i.pos;
+    o.mask = i.mask;
     return o;
 }
 
@@ -69,6 +73,15 @@ float4 PSSurface(VSOut i) : SV_TARGET
     baseColor = lerp(baseColor, slopeTint, slope * 0.42);
 
     float3 col = baseColor * light;
+    if (maskPreview > 0.5)
+    {
+        float mask = saturate(i.mask);
+        float3 lowMask = float3(0.18, 0.20, 0.21);
+        float3 highMask = float3(0.95, 0.56, 0.18);
+        baseColor = lerp(lowMask, highMask, mask);
+        col = baseColor * (ambient + key * 0.65 + fill * 0.18 + sky * 0.5);
+        col += pow(mask, 2.2) * float3(0.42, 0.20, 0.05);
+    }
     col += rim * float3(0.16, 0.18, 0.20);
     col = pow(saturate(col), 1.0 / 1.18);
     return float4(col, 1.0);

@@ -81,6 +81,7 @@ bool g_layoutSplitterActive = false;
 rock::NodeGraph g_graph = rock::NodeGraph::CreateDefaultTerrainGraph();
 std::string g_exportStatus = "No export yet";
 std::string g_projectStatus = "No project file";
+std::string g_lastEvaluationDuration = "Eval --";
 std::filesystem::path g_projectPath;
 std::wstring g_windowTitle;
 std::vector<std::filesystem::path> g_recentProjectPaths;
@@ -90,6 +91,7 @@ std::vector<rock::GraphId> g_pendingSelectedNodeIds;
 rock::UiThemeManager g_themeManager;
 rock::GraphId g_selectedNodeId = 0;
 rock::GraphId g_lastFinalOutputNodeId = 0;
+rock::GraphId g_pendingPreviewPinId = 0;
 
 struct ClipboardNode
 {
@@ -113,6 +115,7 @@ struct GraphEditSnapshot
     std::vector<rock::GraphId> selectedNodeIds;
     rock::GraphId selectedNodeId = 0;
     rock::GraphId previewNodeId = 0;
+    rock::GraphId previewPinId = 0;
     rock::PreviewStage previewStage = rock::PreviewStage::Output;
 };
 
@@ -182,7 +185,8 @@ struct MeshPreviewConstants
     float panNdcY;
     float nearPlane;
     float farPlane;
-    float padding[2];
+    float maskPreview;
+    float padding;
 };
 
 struct GpuMeshPreview
@@ -198,6 +202,7 @@ struct GpuMeshPreview
     uint64_t graphVersion = UINT64_MAX;
     bool showSurface = false;
     bool showWireframe = false;
+    bool maskPreview = false;
     ComPtr<ID3D12Resource> colorTarget;
     ComPtr<ID3D12Resource> depthTarget;
     ComPtr<ID3D12Resource> vertexBuffer;
@@ -1014,6 +1019,7 @@ GraphEditSnapshot CaptureGraphEditSnapshot()
     snapshot.selectedNodeIds = CurrentSelectedNodeIds();
     snapshot.selectedNodeId = snapshot.selectedNodeIds.empty() ? g_selectedNodeId : snapshot.selectedNodeIds.front();
     snapshot.previewNodeId = g_graph.Evaluation().previewNodeId;
+    snapshot.previewPinId = g_graph.Evaluation().previewPinId;
     snapshot.previewStage = g_graph.Preview();
     return snapshot;
 }
@@ -1099,7 +1105,11 @@ void ApplyGraphEditSnapshot(const GraphEditSnapshot& snapshot)
     g_graph.ReplaceNodes(snapshot.nodes);
     g_graph.ReplaceLinks(snapshot.links);
     g_graph.SetPreviewStage(snapshot.previewStage);
-    if (g_graph.FindNode(snapshot.previewNodeId) != nullptr)
+    if (snapshot.previewPinId != 0 && g_graph.FindPin(snapshot.previewPinId) != nullptr)
+    {
+        g_graph.SetPreviewPin(snapshot.previewPinId);
+    }
+    else if (g_graph.FindNode(snapshot.previewNodeId) != nullptr)
     {
         g_graph.SetPreviewNode(snapshot.previewNodeId);
     }
@@ -1169,6 +1179,7 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
         root["selectedNodeId"] = g_selectedNodeId;
         root["selectedNodeIds"] = nlohmann::json::array();
         root["previewStage"] = static_cast<int>(g_graph.Preview());
+        root["previewPinId"] = g_graph.Evaluation().previewPinId;
 
         root["settings"] = nlohmann::json::object();
 
@@ -1240,6 +1251,8 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
                     {"maxErosionAngleDegrees", node.fluvialErosion.maxErosionAngleDegrees},
                     {"erosionGranularity", node.fluvialErosion.erosionGranularity},
                     {"sedimentVelocity", node.fluvialErosion.sedimentVelocity},
+                    {"sedimentCapacity", node.fluvialErosion.sedimentCapacity},
+                    {"depositionRate", node.fluvialErosion.depositionRate},
                     {"seed", node.fluvialErosion.seed},
                 }},
             };
@@ -1375,6 +1388,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
         if (nodesJson.is_array() && !nodesJson.empty())
         {
             std::vector<rock::Node> nodes;
+            rock::GraphId syntheticPinId = 100000;
             for (const nlohmann::json& nodeJson : nodesJson)
             {
                 rock::Node node;
@@ -1421,6 +1435,8 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 node.fluvialErosion.maxErosionAngleDegrees = std::clamp(nodeFluvialJson.value("maxErosionAngleDegrees", node.fluvialErosion.maxErosionAngleDegrees), 0.0f, 90.0f);
                 node.fluvialErosion.erosionGranularity = std::clamp(nodeFluvialJson.value("erosionGranularity", node.fluvialErosion.erosionGranularity), 1.0f, 100.0f);
                 node.fluvialErosion.sedimentVelocity = std::clamp(nodeFluvialJson.value("sedimentVelocity", node.fluvialErosion.sedimentVelocity), 0.0f, 2.0f);
+                node.fluvialErosion.sedimentCapacity = std::clamp(nodeFluvialJson.value("sedimentCapacity", node.fluvialErosion.sedimentCapacity), 0.0f, 2.0f);
+                node.fluvialErosion.depositionRate = std::clamp(nodeFluvialJson.value("depositionRate", node.fluvialErosion.depositionRate), 0.0f, 1.0f);
                 node.fluvialErosion.seed = std::clamp(nodeFluvialJson.value("seed", node.fluvialErosion.seed), 0, 999999);
 
                 const auto readPins = [&](const nlohmann::json& pinsJson, rock::PinKind pinKind, std::vector<rock::Pin>& pins) {
@@ -1434,13 +1450,22 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                         pin.id = pinJson.value("id", 0);
                         pin.nodeId = node.id;
                         pin.kind = pinKind;
-                        pin.valueType = static_cast<rock::ValueType>(std::clamp(pinJson.value("valueType", 0), 0, 2));
+                        pin.valueType = static_cast<rock::ValueType>(std::clamp(pinJson.value("valueType", 0), 0, 3));
                         pin.label = pinJson.value("label", std::string(rock::ToString(pin.valueType)));
+                        if (pin.valueType == rock::ValueType::HeightField && pin.kind == rock::PinKind::Output)
+                        {
+                            pin.label = "Heightmap";
+                        }
                         pins.push_back(std::move(pin));
                     }
                 };
                 readPins(nodeJson.value("inputs", nlohmann::json::array()), rock::PinKind::Input, node.inputs);
                 readPins(nodeJson.value("outputs", nlohmann::json::array()), rock::PinKind::Output, node.outputs);
+                if (node.kind == rock::NodeKind::FluvialErosion &&
+                    std::ranges::none_of(node.outputs, [](const rock::Pin& pin) { return pin.valueType == rock::ValueType::Mask; }))
+                {
+                    node.outputs.push_back({syntheticPinId++, node.id, rock::PinKind::Output, rock::ValueType::Mask, "Fluvial Mask"});
+                }
                 if (node.id != 0)
                 {
                     nodes.push_back(std::move(node));
@@ -1544,6 +1569,11 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
             g_pendingSelectedNodeIds.push_back(g_selectedNodeId);
         }
         g_graph.SetPreviewStage(static_cast<rock::PreviewStage>(std::clamp(root.value("previewStage", static_cast<int>(g_graph.Preview())), 0, 3)));
+        const rock::GraphId previewPinId = root.value("previewPinId", 0);
+        if (previewPinId != 0 && g_graph.FindPin(previewPinId) != nullptr)
+        {
+            g_graph.SetPreviewPin(previewPinId);
+        }
 
         g_pendingNodePositions.clear();
         g_nodePositionCache.clear();
@@ -1631,12 +1661,13 @@ bool EnsureMeshPreviewPipeline(std::string* error)
     {
         {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0,  0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
         {"NORMAL",   0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 0, DXGI_FORMAT_R32_FLOAT,       0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
     };
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
     psoDesc.pRootSignature = g_meshPreviewRootSignature.Get();
     psoDesc.VS = {vsBlob->GetBufferPointer(), vsBlob->GetBufferSize()};
-    psoDesc.InputLayout = {inputLayout, 2};
+    psoDesc.InputLayout = {inputLayout, 3};
     psoDesc.SampleMask = UINT_MAX;
     psoDesc.SampleDesc.Count = 1;
     psoDesc.NumRenderTargets = 1;
@@ -1685,8 +1716,21 @@ int CurrentPreviewMeshResolution()
 
 void EvaluateGraph()
 {
+    const auto startedAt = std::chrono::steady_clock::now();
     const int meshResolution = CurrentPreviewMeshResolution();
     g_graph.Evaluate(meshResolution);
+    const auto finishedAt = std::chrono::steady_clock::now();
+    const double elapsedMs = std::chrono::duration<double, std::milli>(finishedAt - startedAt).count();
+    char buffer[64]{};
+    if (elapsedMs >= 1000.0)
+    {
+        std::snprintf(buffer, sizeof(buffer), "Eval %.2f s", elapsedMs / 1000.0);
+    }
+    else
+    {
+        std::snprintf(buffer, sizeof(buffer), "Eval %.1f ms", elapsedMs);
+    }
+    g_lastEvaluationDuration = buffer;
 }
 
 void EnsureFinalMesh(rock::GraphId outputNodeId)
@@ -2227,6 +2271,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.pan.y != g_viewport.pan.y ||
         g_gpuMeshPreview.showSurface != showSurface ||
         g_gpuMeshPreview.showWireframe != showWireframe ||
+        g_gpuMeshPreview.maskPreview != g_graph.Evaluation().previewShowsMask ||
         g_gpuMeshPreview.colorState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     if (!meshDirty && !viewportDirty) return true;
 
@@ -2285,6 +2330,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         constants.panNdcY    = -g_viewport.pan.y * 2.0f / viewportHeight;
         constants.nearPlane  = 0.05f;
         constants.farPlane   = 20000.0f;
+        constants.maskPreview = g_graph.Evaluation().previewShowsMask ? 1.0f : 0.0f;
 
         D3D12_VERTEX_BUFFER_VIEW vbv{};
         vbv.BufferLocation = g_gpuMeshPreview.vertexBuffer->GetGPUVirtualAddress();
@@ -2334,6 +2380,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.pan           = g_viewport.pan;
         g_gpuMeshPreview.showSurface   = showSurface;
         g_gpuMeshPreview.showWireframe = showWireframe;
+        g_gpuMeshPreview.maskPreview   = g_graph.Evaluation().previewShowsMask;
         g_gpuMeshPreview.colorState    = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         return true;
     }
@@ -2389,9 +2436,11 @@ void DrawViewportCube(const ImVec2& min, const ImVec2& max, float timeSeconds)
         }
     }
 
-    const std::string title = g_graph.Evaluation().previewIsHeightmap
-        ? "Heightmap Preview"
-        : "SDF Preview: " + std::string(rock::ToString(g_graph.Preview()));
+    const std::string title = g_graph.Evaluation().previewShowsMask
+        ? "Fluvial Mask Preview"
+        : (g_graph.Evaluation().previewIsHeightmap
+            ? "Heightmap Preview"
+            : "SDF Preview: " + std::string(rock::ToString(g_graph.Preview())));
     drawList->AddText(ImVec2(min.x + 16.0f, min.y + 14.0f), ThemeColor("accentText", ImVec4(0.86f, 0.88f, 0.85f, 1.0f)), title.c_str());
     drawList->AddText(ImVec2(min.x + 16.0f, min.y + 36.0f), ThemeColor("mutedText", ImVec4(0.54f, 0.59f, 0.56f, 1.0f)), "Right-handed, Y-up, 100 m cells");
     char fpsText[32]{};
@@ -2496,10 +2545,51 @@ ImU32 ThemeColor(const std::string& name, const ImVec4& fallback)
     return ColorToU32(g_themeManager.AppColor(name, fallback));
 }
 
+ImVec4 PinTypeColor(rock::ValueType valueType)
+{
+    switch (valueType)
+    {
+    case rock::ValueType::HeightField:
+        return ImVec4(0.70f, 0.93f, 0.78f, 1.0f);
+    case rock::ValueType::Mask:
+        return ImVec4(0.82f, 0.64f, 0.36f, 1.0f);
+    case rock::ValueType::SdfGrid:
+        return ImVec4(0.58f, 0.72f, 0.86f, 1.0f);
+    case rock::ValueType::Mesh:
+    default:
+        return ImVec4(0.52f, 0.58f, 0.56f, 1.0f);
+    }
+}
+
 ImVec4 PinColor(const rock::Pin& pin)
 {
-    const bool connected = g_graph.PinHasLink(pin.id);
-    return connected ? ImVec4(0.70f, 0.93f, 0.78f, 1.0f) : ImVec4(0.52f, 0.58f, 0.56f, 1.0f);
+    return PinTypeColor(pin.valueType);
+}
+
+ImVec4 LinkColor(const rock::Link& link)
+{
+    if (const rock::Pin* startPin = g_graph.FindPin(link.startPin))
+    {
+        return PinTypeColor(startPin->valueType);
+    }
+    if (const rock::Pin* endPin = g_graph.FindPin(link.endPin))
+    {
+        return PinTypeColor(endPin->valueType);
+    }
+    return ImVec4(0.52f, 0.70f, 0.59f, 1.0f);
+}
+
+ImVec4 LinkPreviewColor(rock::GraphId startPinId, rock::GraphId endPinId)
+{
+    if (const rock::Pin* startPin = g_graph.FindPin(startPinId))
+    {
+        return PinTypeColor(startPin->valueType);
+    }
+    if (const rock::Pin* endPin = g_graph.FindPin(endPinId))
+    {
+        return PinTypeColor(endPin->valueType);
+    }
+    return ImVec4(0.52f, 0.70f, 0.59f, 1.0f);
 }
 
 void DrawNodeIcon(const ImVec2& origin, const ImVec4& color)
@@ -2579,19 +2669,36 @@ void DrawRockNode(const rock::Node& node)
         ImGui::Dummy(ImVec2(14.0f, 20.0f));
     }
 
-    if (!node.outputs.empty())
+    for (size_t outputIndex = 0; outputIndex < node.outputs.size(); ++outputIndex)
     {
-        const rock::Pin& output = node.outputs.front();
-        const float labelWidth = ImGui::CalcTextSize(output.label.c_str()).x;
-        ImGui::SetCursorPos(ImVec2(rowStartX + nodeWidth - labelWidth - 22.0f, rowY + 2.0f));
-        ImGui::TextColored(PinColor(output), "%s", output.label.c_str());
+        const rock::Pin& output = node.outputs[outputIndex];
+        const bool outputSelected = g_graph.Evaluation().previewPinId == output.id;
+        const float outputY = rowY + static_cast<float>(outputIndex) * 24.0f;
+        const float labelWidth = ImGui::CalcTextSize(output.label.c_str()).x + (outputSelected ? 2.0f : 0.0f);
+        ImGui::SetCursorPos(ImVec2(rowStartX + nodeWidth - labelWidth - 22.0f, outputY + 2.0f));
+        const ImVec4 outputColor = PinColor(output);
+        ImGui::TextColored(outputColor, "%s", output.label.c_str());
+        if (outputSelected)
+        {
+            ImDrawList* drawList = ImGui::GetWindowDrawList();
+            const ImVec2 textMin = ImGui::GetItemRectMin();
+            drawList->AddText(ImVec2(textMin.x + 0.7f, textMin.y), ColorToU32(outputColor), output.label.c_str());
+        }
+        if (ImGui::IsItemClicked(ImGuiMouseButton_Left))
+        {
+            g_pendingPreviewPinId = output.id;
+        }
         ImGui::SameLine();
-        ImGui::SetCursorPosY(rowY);
-        ed::BeginPin(ed::PinId(node.outputs.front().id), ed::PinKind::Output);
+        ImGui::SetCursorPosY(outputY);
+        ed::BeginPin(ed::PinId(output.id), ed::PinKind::Output);
         DrawRoundPin(output);
+        if (ImGui::IsItemClicked(ImGuiMouseButton_Left))
+        {
+            g_pendingPreviewPinId = output.id;
+        }
         ed::EndPin();
     }
-    ImGui::Dummy(ImVec2(nodeWidth, 4.0f));
+    ImGui::Dummy(ImVec2(nodeWidth, std::max(4.0f, static_cast<float>(node.outputs.size()) * 24.0f - 20.0f)));
 
     ed::EndNode();
     ed::PopStyleColor(3);
@@ -2835,7 +2942,7 @@ void DrawNodeGraph()
 
     for (const rock::Link& link : g_graph.Links())
     {
-        ed::Link(ed::LinkId(link.id), ed::PinId(link.startPin), ed::PinId(link.endPin), ImVec4(0.52f, 0.70f, 0.59f, 1.0f), 2.5f);
+        ed::Link(ed::LinkId(link.id), ed::PinId(link.startPin), ed::PinId(link.endPin), LinkColor(link), 2.5f);
     }
 
     if (ed::BeginCreate(ImVec4(0.52f, 0.70f, 0.59f, 1.0f), 2.5f))
@@ -2848,7 +2955,7 @@ void DrawNodeGraph()
             int endPin = ToGraphId(endPinId.Get());
             if (g_graph.CanCreateLink(startPin, endPin))
             {
-                if (ed::AcceptNewItem(ImVec4(0.52f, 0.70f, 0.59f, 1.0f), 3.0f))
+                if (ed::AcceptNewItem(LinkPreviewColor(startPin, endPin), 3.0f))
                 {
                     PushUndoSnapshot();
                     if (g_graph.CreateLink(startPin, endPin))
@@ -2958,7 +3065,26 @@ void DrawNodeGraph()
     ed::Resume();
 
     ed::NodeId selectedNodes[1];
-    if (ed::GetSelectedNodes(selectedNodes, 1) > 0)
+    bool handledPreviewPinClick = false;
+    if (g_pendingPreviewPinId != 0)
+    {
+        const rock::GraphId pinId = g_pendingPreviewPinId;
+        g_pendingPreviewPinId = 0;
+        handledPreviewPinClick = true;
+        if (g_graph.SetPreviewPin(pinId))
+        {
+            if (const rock::Pin* pin = g_graph.FindPin(pinId))
+            {
+                g_selectedNodeId = pin->nodeId;
+                g_pendingSelectedNodeIds = {pin->nodeId};
+            }
+            if (g_graph.Evaluation().dirty)
+            {
+                EvaluateGraph();
+            }
+        }
+    }
+    if (!handledPreviewPinClick && ed::GetSelectedNodes(selectedNodes, 1) > 0)
     {
         const rock::GraphId selectedNodeId = ToGraphId(selectedNodes[0].Get());
         g_selectedNodeId = selectedNodeId;
@@ -3372,7 +3498,7 @@ void DrawPropertiesPanel()
 
     if (selectedNode->kind == rock::NodeKind::FluvialErosion && ImGui::BeginTable("FluvialErosionRows", 2, ImGuiTableFlags_SizingStretchProp))
     {
-        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 190.0f);
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 210.0f);
         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
         rock::FluvialErosionSettings& erosion = editableNode->fluvialErosion;
         erosion.featureSize = std::clamp(erosion.featureSize, 1.0f, 64.0f);
@@ -3386,6 +3512,8 @@ void DrawPropertiesPanel()
         erosion.maxErosionAngleDegrees = std::clamp(erosion.maxErosionAngleDegrees, 0.0f, 90.0f);
         erosion.erosionGranularity = std::clamp(erosion.erosionGranularity, 1.0f, 100.0f);
         erosion.sedimentVelocity = std::clamp(erosion.sedimentVelocity, 0.0f, 2.0f);
+        erosion.sedimentCapacity = std::clamp(erosion.sedimentCapacity, 0.0f, 2.0f);
+        erosion.depositionRate = std::clamp(erosion.depositionRate, 0.0f, 1.0f);
         erosion.seed = std::clamp(erosion.seed, 0, 999999);
 
         if (DrawPropertyFloatRow("Feature Size (m)", "FluvialFeatureSize", &erosion.featureSize, 1.0f, 64.0f, rock::FluvialErosionSettings{}.featureSize, "Fluvial feature size changed", true, "侵食で扱う地形特徴の大きさです。大きいほど広い起伏をなだらかに処理します。"))
@@ -3429,6 +3557,14 @@ void DrawPropertiesPanel()
             EvaluateGraph();
         }
         if (DrawPropertyFloatRow("Sediment Velocity (x)", "FluvialSedimentVelocity", &erosion.sedimentVelocity, 0.0f, 2.0f, rock::FluvialErosionSettings{}.sedimentVelocity, "Fluvial sediment velocity changed", true, "削られた土砂が下流へ運ばれる強さです。高いほど堆積位置が流れ方向へ伸びます。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyPercentRow("Sediment Capacity (%)", "FluvialSedimentCapacity", &erosion.sedimentCapacity, 0.0f, 2.0f, rock::FluvialErosionSettings{}.sedimentCapacity, "Fluvial sediment capacity changed", "粒子が保持できる土砂量です。高いほど下流まで削った土砂を運びやすくなります。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyPercentRow("Deposition Rate (%)", "FluvialDepositionRate", &erosion.depositionRate, 0.0f, 1.0f, rock::FluvialErosionSettings{}.depositionRate, "Fluvial deposition rate changed", "土砂を堆積させる速さです。高いほど谷底や緩斜面に土砂が残りやすくなります。"))
         {
             EvaluateGraph();
         }
@@ -3627,6 +3763,7 @@ void DrawStatsPanel()
 {
     const rock::EvaluationSummary& evaluation = g_graph.Evaluation();
     ImGui::Text("Graph Version: %llu", static_cast<unsigned long long>(evaluation.version));
+    ImGui::Text("%s", g_lastEvaluationDuration.c_str());
     ImGui::TextColored(evaluation.dirty ? ImVec4(0.90f, 0.64f, 0.30f, 1.0f) : ImVec4(0.54f, 0.78f, 0.58f, 1.0f), "%s", evaluation.dirty ? "Dirty" : "Evaluated");
     ImGui::TextColored(evaluation.finalDirty ? ImVec4(0.90f, 0.64f, 0.30f, 1.0f) : ImVec4(0.54f, 0.78f, 0.58f, 1.0f), "%s", evaluation.finalDirty ? "Terrain Mesh: pending" : "Terrain Mesh: ready");
     ImGui::TextWrapped("%s", evaluation.status.c_str());
@@ -4122,7 +4259,7 @@ void DrawUi()
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 4.0f));
     ImGui::BeginChild("Status Bar", ImVec2(0.0f, statusBarHeight), true, fixedPaneFlags);
     const rock::EvaluationSummary& evaluation = g_graph.Evaluation();
-    ImGui::Text("%s | %s | %s | %s", evaluation.dirty ? "Dirty" : "Evaluated", rock::ToString(evaluation.previewStage).data(), g_projectStatus.c_str(), g_exportStatus.c_str());
+    ImGui::Text("%s | %s | %s | %s | %s", evaluation.dirty ? "Dirty" : "Evaluated", rock::ToString(evaluation.previewStage).data(), g_lastEvaluationDuration.c_str(), g_projectStatus.c_str(), g_exportStatus.c_str());
     ImGui::EndChild();
     ImGui::PopStyleVar();
 

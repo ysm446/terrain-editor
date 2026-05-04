@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace rock
@@ -31,6 +32,7 @@ enum class ValueType
     SdfGrid,
     Mesh,
     HeightField,
+    Mask,
 };
 
 enum class PrimitiveKind
@@ -108,6 +110,8 @@ struct FluvialErosionSettings
     float maxErosionAngleDegrees = 30.0f;
     float erosionGranularity = 10.0f;
     float sedimentVelocity = 1.0f;
+    float sedimentCapacity = 0.6f;
+    float depositionRate = 0.35f;
     int seed = 1;
 };
 
@@ -188,6 +192,7 @@ struct MeshVertex
     float nx = 0.0f;
     float ny = 1.0f;
     float nz = 0.0f;
+    float mask = 0.0f;
 };
 
 struct MeshTriangle
@@ -208,6 +213,14 @@ struct MeshData
     std::vector<MeshVertex> vertices;
     std::vector<MeshTriangle> triangles;
     std::vector<MeshEdge> edges;
+};
+
+struct HeightfieldGrid
+{
+    int resolution = 0;
+    float terrainSizeMeters = 1.0f;
+    std::vector<float> heights;
+    std::vector<float> mask;
 };
 
 struct SdfPreviewStats
@@ -268,6 +281,7 @@ struct SdfPipeline
     float outputIsoValue = 0.0f;
     bool hasSource = false;
     bool useHeightmap = false;
+    GraphId heightmapNodeId = 0;
     HeightmapLoadSettings heightmap;
     std::vector<HeightfieldOperation> heightfieldOperations;
 };
@@ -281,7 +295,9 @@ struct EvaluationSummary
     std::string status = "Graph has not been evaluated";
     PreviewStage previewStage = PreviewStage::Output;
     GraphId previewNodeId = 0;
+    GraphId previewPinId = 0;
     bool previewIsHeightmap = false;
+    bool previewShowsMask = false;
     std::string previewMessage;
     SdfPreviewStats previewSdf;
     SdfPreviewStats finalSdf;
@@ -319,6 +335,7 @@ public:
     void ReplaceLinks(std::vector<Link> links);
     bool SetPreviewStage(PreviewStage stage);
     bool SetPreviewNode(GraphId nodeId);
+    bool SetPreviewPin(GraphId pinId);
     PreviewStage Preview() const;
     SdfPipeline PipelineFor(PreviewStage stage) const;
     SdfPipeline PreviewPipeline() const;
@@ -336,10 +353,23 @@ private:
     const Node* FindUpstreamNode(const Node& node) const;
     SdfPipeline PipelineTo(NodeKind targetKind) const;
     SdfPipeline PipelineToNode(const Node& targetNode) const;
+    MeshData BuildMeshFromHeightPipelineCached(const SdfPipeline& pipeline, int resolution, std::string* message);
+
+    struct HeightfieldNodeCache
+    {
+        bool valid = false;
+        int resolution = 0;
+        uint64_t inputHash = 0;
+        uint64_t parameterHash = 0;
+        uint64_t outputHash = 0;
+        HeightfieldGrid grid;
+        std::string message;
+    };
 
     std::vector<Node> nodes_;
     std::vector<Link> links_;
     GraphSettings settings_;
+    std::unordered_map<GraphId, HeightfieldNodeCache> heightfieldCache_;
     EvaluationSummary evaluation_;
     GraphId nextNodeId_ = 1;
     GraphId nextPinId_ = 11;
