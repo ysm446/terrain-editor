@@ -66,6 +66,7 @@ uint64_t HashHeightmapSettings(const HeightmapLoadSettings& settings, int resolu
     HashCombine(hash, HashFloat(settings.scaleMeters));
     HashCombine(hash, HashFloat(settings.relativeVerticalScalePercent));
     HashCombine(hash, HashFloat(settings.verticalOffsetMeters));
+    HashCombine(hash, static_cast<uint64_t>(settings.simulationResolution));
     HashCombine(hash, static_cast<uint64_t>(resolution));
     return hash;
 }
@@ -250,6 +251,28 @@ float SampleHeightmap(const HeightmapImage& image, float u, float v)
     return std::lerp(a, b, ty);
 }
 
+float SampleHeightfieldValue(const std::vector<float>& values, int resolution, float u, float v)
+{
+    if (resolution < 2 || values.size() < static_cast<size_t>(resolution * resolution))
+    {
+        return 0.0f;
+    }
+    const float x = std::clamp(u, 0.0f, 1.0f) * static_cast<float>(resolution - 1);
+    const float z = std::clamp(v, 0.0f, 1.0f) * static_cast<float>(resolution - 1);
+    const int x0 = static_cast<int>(std::floor(x));
+    const int z0 = static_cast<int>(std::floor(z));
+    const int x1 = std::min(x0 + 1, resolution - 1);
+    const int z1 = std::min(z0 + 1, resolution - 1);
+    const float tx = x - static_cast<float>(x0);
+    const float tz = z - static_cast<float>(z0);
+    const auto at = [&](int px, int pz) {
+        return values[static_cast<size_t>(pz * resolution + px)];
+    };
+    const float a = std::lerp(at(x0, z0), at(x1, z0), tx);
+    const float b = std::lerp(at(x0, z1), at(x1, z1), tx);
+    return std::lerp(a, b, tz);
+}
+
 float Hash01(int x, int y, int seed)
 {
     uint32_t h = static_cast<uint32_t>(x) * 374761393u;
@@ -274,7 +297,7 @@ HeightfieldGrid BuildHeightfieldFromHeightmap(const HeightmapLoadSettings& setti
         return grid;
     }
 
-    grid.resolution = std::clamp(resolution, 2, 512);
+    grid.resolution = std::clamp(resolution, 2, 2048);
     grid.terrainSizeMeters = std::max(1.0f, settings.scaleMeters);
     const float verticalRange = grid.terrainSizeMeters * std::max(0.0f, settings.relativeVerticalScalePercent) / 100.0f;
     grid.heights.reserve(static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution));
@@ -538,7 +561,7 @@ void ApplyFluvialErosion(HeightfieldGrid& grid, const FluvialErosionSettings& se
     }
 }
 
-MeshData BuildMeshFromHeightfield(const HeightfieldGrid& grid)
+MeshData BuildMeshFromHeightfield(const HeightfieldGrid& grid, int meshResolution)
 {
     MeshData mesh;
     const int gridResolution = grid.resolution;
@@ -546,32 +569,34 @@ MeshData BuildMeshFromHeightfield(const HeightfieldGrid& grid)
     {
         return mesh;
     }
+    meshResolution = std::clamp(meshResolution, 2, 512);
 
     const float halfSize = grid.terrainSizeMeters * 0.5f;
-    mesh.vertices.reserve(static_cast<size_t>(gridResolution) * static_cast<size_t>(gridResolution));
-    mesh.triangles.reserve(static_cast<size_t>(gridResolution - 1) * static_cast<size_t>(gridResolution - 1) * 2u);
+    mesh.vertices.reserve(static_cast<size_t>(meshResolution) * static_cast<size_t>(meshResolution));
+    mesh.triangles.reserve(static_cast<size_t>(meshResolution - 1) * static_cast<size_t>(meshResolution - 1) * 2u);
     mesh.edges.reserve(mesh.triangles.capacity() * 3u);
 
-    for (int z = 0; z < gridResolution; ++z)
+    for (int z = 0; z < meshResolution; ++z)
     {
-        const float v = gridResolution > 1 ? static_cast<float>(z) / static_cast<float>(gridResolution - 1) : 0.0f;
-        for (int x = 0; x < gridResolution; ++x)
+        const float v = meshResolution > 1 ? static_cast<float>(z) / static_cast<float>(meshResolution - 1) : 0.0f;
+        for (int x = 0; x < meshResolution; ++x)
         {
-            const float u = gridResolution > 1 ? static_cast<float>(x) / static_cast<float>(gridResolution - 1) : 0.0f;
+            const float u = meshResolution > 1 ? static_cast<float>(x) / static_cast<float>(meshResolution - 1) : 0.0f;
             mesh.vertices.push_back({
                 std::lerp(-halfSize, halfSize, u),
-                grid.heights[static_cast<size_t>(z * gridResolution + x)],
+                SampleHeightfieldValue(grid.heights, gridResolution, u, v),
                 std::lerp(halfSize, -halfSize, v),
                 0.0f,
                 0.0f,
                 0.0f,
+                SampleHeightfieldValue(grid.mask, gridResolution, u, v),
             });
         }
     }
 
     std::unordered_set<uint64_t> edgeKeys;
-    const auto indexAt = [gridResolution](int x, int z) {
-        return static_cast<uint32_t>(z * gridResolution + x);
+    const auto indexAt = [meshResolution](int x, int z) {
+        return static_cast<uint32_t>(z * meshResolution + x);
     };
     const auto addTriangle = [&](uint32_t a, uint32_t b, uint32_t c) {
         const MeshVertex& va = mesh.vertices[a];
@@ -602,9 +627,9 @@ MeshData BuildMeshFromHeightfield(const HeightfieldGrid& grid)
         AddEdge(mesh, edgeKeys, c, a);
     };
 
-    for (int z = 0; z < gridResolution - 1; ++z)
+    for (int z = 0; z < meshResolution - 1; ++z)
     {
-        for (int x = 0; x < gridResolution - 1; ++x)
+        for (int x = 0; x < meshResolution - 1; ++x)
         {
             const uint32_t a = indexAt(x, z);
             const uint32_t b = indexAt(x + 1, z);
@@ -629,11 +654,6 @@ MeshData BuildMeshFromHeightfield(const HeightfieldGrid& grid)
             vertex.nx = 0.0f;
             vertex.ny = 1.0f;
             vertex.nz = 0.0f;
-        }
-        const size_t vertexIndex = static_cast<size_t>(&vertex - mesh.vertices.data());
-        if (vertexIndex < grid.mask.size())
-        {
-            vertex.mask = grid.mask[vertexIndex];
         }
     }
     return mesh;
@@ -819,7 +839,7 @@ MeshData BuildMeshFromHeightPipeline(const SdfPipeline& pipeline, int resolution
     {
         *message += std::format(" + {} heightfield op{}", pipeline.heightfieldOperations.size(), pipeline.heightfieldOperations.size() == 1 ? "" : "s");
     }
-    return BuildMeshFromHeightfield(grid);
+    return BuildMeshFromHeightfield(grid, resolution);
 }
 } // namespace
 
@@ -830,19 +850,20 @@ MeshData NodeGraph::BuildMeshFromHeightPipelineCached(const SdfPipeline& pipelin
         return BuildMeshFromHeightPipeline(pipeline, resolution, message);
     }
 
+    const int simulationResolution = std::clamp(pipeline.heightmap.simulationResolution, 2, 2048);
     uint64_t inputHash = 0;
-    const uint64_t heightmapHash = HashHeightmapSettings(pipeline.heightmap, resolution);
+    const uint64_t heightmapHash = HashHeightmapSettings(pipeline.heightmap, simulationResolution);
     HeightfieldNodeCache& heightmapCache = heightfieldCache_[pipeline.heightmapNodeId];
     if (!heightmapCache.valid ||
-        heightmapCache.resolution != resolution ||
+        heightmapCache.resolution != simulationResolution ||
         heightmapCache.inputHash != inputHash ||
         heightmapCache.parameterHash != heightmapHash)
     {
         std::string heightmapMessage;
-        heightmapCache.grid = BuildHeightfieldFromHeightmap(pipeline.heightmap, resolution, &heightmapMessage);
+        heightmapCache.grid = BuildHeightfieldFromHeightmap(pipeline.heightmap, simulationResolution, &heightmapMessage);
         heightmapCache.message = heightmapMessage;
         heightmapCache.valid = true;
-        heightmapCache.resolution = resolution;
+        heightmapCache.resolution = simulationResolution;
         heightmapCache.inputHash = inputHash;
         heightmapCache.parameterHash = heightmapHash;
         heightmapCache.outputHash = heightmapHash;
@@ -870,10 +891,10 @@ MeshData NodeGraph::BuildMeshFromHeightPipelineCached(const SdfPipeline& pipelin
             continue;
         }
 
-        const uint64_t parameterHash = HashFluvialSettings(operation.fluvialErosion, resolution);
+        const uint64_t parameterHash = HashFluvialSettings(operation.fluvialErosion, simulationResolution);
         HeightfieldNodeCache& operationCache = heightfieldCache_[operation.nodeId];
         if (!operationCache.valid ||
-            operationCache.resolution != resolution ||
+            operationCache.resolution != simulationResolution ||
             operationCache.inputHash != inputHash ||
             operationCache.parameterHash != parameterHash)
         {
@@ -882,7 +903,7 @@ MeshData NodeGraph::BuildMeshFromHeightPipelineCached(const SdfPipeline& pipelin
             operationCache.grid = std::move(operationGrid);
             operationCache.message.clear();
             operationCache.valid = true;
-            operationCache.resolution = resolution;
+            operationCache.resolution = simulationResolution;
             operationCache.inputHash = inputHash;
             operationCache.parameterHash = parameterHash;
             operationCache.outputHash = inputHash;
@@ -898,7 +919,7 @@ MeshData NodeGraph::BuildMeshFromHeightPipelineCached(const SdfPipeline& pipelin
     {
         *message += std::format(" + {} heightfield op{}", pipeline.heightfieldOperations.size(), pipeline.heightfieldOperations.size() == 1 ? "" : "s");
     }
-    return BuildMeshFromHeightfield(grid);
+    return BuildMeshFromHeightfield(grid, resolution);
 }
 
 NodeGraph NodeGraph::CreateDefaultTerrainGraph()

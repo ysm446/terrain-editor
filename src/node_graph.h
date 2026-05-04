@@ -95,6 +95,7 @@ struct HeightmapLoadSettings
     float scaleMeters = 1024.0f;
     float relativeVerticalScalePercent = 100.0f;
     float verticalOffsetMeters = 0.0f;
+    int simulationResolution = 512;
 };
 
 struct FluvialErosionSettings

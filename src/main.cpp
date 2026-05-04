@@ -1238,6 +1238,7 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
                     {"scaleMeters", node.heightmap.scaleMeters},
                     {"relativeVerticalScalePercent", node.heightmap.relativeVerticalScalePercent},
                     {"verticalOffsetMeters", node.heightmap.verticalOffsetMeters},
+                    {"simulationResolution", node.heightmap.simulationResolution},
                 }},
                 {"fluvialErosion", {
                     {"featureSize", node.fluvialErosion.featureSize},
@@ -1424,6 +1425,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 node.heightmap.scaleMeters = std::clamp(nodeHeightmapJson.value("scaleMeters", node.heightmap.scaleMeters), 1.0f, 1000000.0f);
                 node.heightmap.relativeVerticalScalePercent = std::clamp(nodeHeightmapJson.value("relativeVerticalScalePercent", node.heightmap.relativeVerticalScalePercent), 0.0f, 10000.0f);
                 node.heightmap.verticalOffsetMeters = std::clamp(nodeHeightmapJson.value("verticalOffsetMeters", node.heightmap.verticalOffsetMeters), -1000000.0f, 1000000.0f);
+                node.heightmap.simulationResolution = std::clamp(nodeHeightmapJson.value("simulationResolution", node.heightmap.simulationResolution), 2, 2048);
                 node.fluvialErosion.featureSize = std::clamp(nodeFluvialJson.value("featureSize", node.fluvialErosion.featureSize), 1.0f, 64.0f);
                 node.fluvialErosion.iterations = std::clamp(nodeFluvialJson.value("iterations", node.fluvialErosion.iterations), 0, 200);
                 node.fluvialErosion.channelLength = std::clamp(nodeFluvialJson.value("channelLength", node.fluvialErosion.channelLength), 1.0f, 1024.0f);
@@ -3469,11 +3471,12 @@ void DrawPropertiesPanel()
     }
     if (selectedNode->kind == rock::NodeKind::HeightmapLoad && ImGui::BeginTable("HeightmapPropertyRows", 2, ImGuiTableFlags_SizingStretchProp))
     {
-        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 148.0f);
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 184.0f);
         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
         editableNode->heightmap.scaleMeters = std::clamp(editableNode->heightmap.scaleMeters, 1.0f, 8096.0f);
         editableNode->heightmap.relativeVerticalScalePercent = std::clamp(editableNode->heightmap.relativeVerticalScalePercent, 0.0f, 100.0f);
         editableNode->heightmap.verticalOffsetMeters = std::clamp(editableNode->heightmap.verticalOffsetMeters, -4096.0f, 4096.0f);
+        editableNode->heightmap.simulationResolution = std::clamp(editableNode->heightmap.simulationResolution, 2, 2048);
 
         if (DrawPropertyPathRow("File", "HeightmapFile", &editableNode->heightmap.path, "Heightmap file changed", "読み込むハイトマップ画像です。明るいピクセルほど高い地形として扱います。"))
         {
@@ -3488,6 +3491,10 @@ void DrawPropertiesPanel()
             EvaluateGraph();
         }
         if (DrawPropertyFloatRow("Offset (m)", "HeightmapVerticalOffset", &editableNode->heightmap.verticalOffsetMeters, -4096.0f, 4096.0f, rock::HeightmapLoadSettings{}.verticalOffsetMeters, "Heightmap vertical offset changed", true, "地形全体を上下に移動する高さオフセットです。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyIntRow("Simulation Resolution", "HeightmapSimulationResolution", &editableNode->heightmap.simulationResolution, 2, 2048, rock::HeightmapLoadSettings{}.simulationResolution, "Heightmap simulation resolution changed", true, "侵食や地形処理に使う内部ハイトフィールド解像度です。表示設定の Resolution はメッシュ表示の細かさだけを変更します。"))
         {
             EvaluateGraph();
         }
