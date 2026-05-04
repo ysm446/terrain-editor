@@ -4,6 +4,13 @@
 
 - なし
 
+## 0.4.0 - 2026-05-04 14:04
+
+- KTT を参考にしたノード候補一覧を `docs/node_candidates.md` として追加しました。
+- KTT Fluvial Erosion の内容と Terrain Editor 向け実装メモを `docs/fluvial_erosion_hda_notes.md` として追加しました。
+- CPU 版の Fluvial Erosion ノードを追加し、Heightmap Load から HeightField として接続して地形メッシュへ反映できるようにしました。
+- Fluvial Erosion の主要パラメータを Inspector で編集し、プロジェクト保存/読み込みに対応しました。
+
 ## 0.3.3 - 2026-05-04 07:14
 
 - Voxels 表示モードと関連する表示設定を削除し、メッシュ表示のみに整理しました。

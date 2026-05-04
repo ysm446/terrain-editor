@@ -1227,6 +1227,20 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
                     {"relativeVerticalScalePercent", node.heightmap.relativeVerticalScalePercent},
                     {"verticalOffsetMeters", node.heightmap.verticalOffsetMeters},
                 }},
+                {"fluvialErosion", {
+                    {"featureSize", node.fluvialErosion.featureSize},
+                    {"iterations", node.fluvialErosion.iterations},
+                    {"channelLength", node.fluvialErosion.channelLength},
+                    {"erosionStrength", node.fluvialErosion.erosionStrength},
+                    {"channeling", node.fluvialErosion.channeling},
+                    {"friction", node.fluvialErosion.friction},
+                    {"wearAngleDegrees", node.fluvialErosion.wearAngleDegrees},
+                    {"depositAngleDegrees", node.fluvialErosion.depositAngleDegrees},
+                    {"maxErosionAngleDegrees", node.fluvialErosion.maxErosionAngleDegrees},
+                    {"erosionGranularity", node.fluvialErosion.erosionGranularity},
+                    {"sedimentVelocity", node.fluvialErosion.sedimentVelocity},
+                    {"seed", node.fluvialErosion.seed},
+                }},
             };
             for (const rock::Pin& pin : node.inputs)
             {
@@ -1364,13 +1378,14 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
             {
                 rock::Node node;
                 node.id = nodeJson.value("id", 0);
-                node.kind = static_cast<rock::NodeKind>(std::clamp(nodeJson.value("kind", 0), 0, 4));
+                node.kind = static_cast<rock::NodeKind>(std::clamp(nodeJson.value("kind", 0), 0, 5));
                 node.title = nodeJson.value("title", std::string(rock::ToString(node.kind)));
                 const nlohmann::json nodePrimitiveJson = nodeJson.value("primitive", primitiveJson);
                 const nlohmann::json nodeNoiseJson = nodeJson.value("noise", noiseJson);
                 const nlohmann::json nodeCrackJson = nodeJson.value("crack", crackJson);
                 const nlohmann::json nodeOutputMeshJson = nodeJson.value("outputMesh", nlohmann::json::object());
                 const nlohmann::json nodeHeightmapJson = nodeJson.value("heightmap", nlohmann::json::object());
+                const nlohmann::json nodeFluvialJson = nodeJson.value("fluvialErosion", nlohmann::json::object());
                 node.primitive.kind = static_cast<rock::PrimitiveKind>(std::clamp(nodePrimitiveJson.value("kind", static_cast<int>(node.primitive.kind)), 0, 4));
                 node.noise.amplitude = nodeNoiseJson.value("amplitude", node.noise.amplitude);
                 node.noise.frequency = nodeNoiseJson.value("frequency", node.noise.frequency);
@@ -1386,6 +1401,18 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 node.heightmap.scaleMeters = std::clamp(nodeHeightmapJson.value("scaleMeters", node.heightmap.scaleMeters), 1.0f, 1000000.0f);
                 node.heightmap.relativeVerticalScalePercent = std::clamp(nodeHeightmapJson.value("relativeVerticalScalePercent", node.heightmap.relativeVerticalScalePercent), 0.0f, 10000.0f);
                 node.heightmap.verticalOffsetMeters = std::clamp(nodeHeightmapJson.value("verticalOffsetMeters", node.heightmap.verticalOffsetMeters), -1000000.0f, 1000000.0f);
+                node.fluvialErosion.featureSize = std::clamp(nodeFluvialJson.value("featureSize", node.fluvialErosion.featureSize), 1.0f, 64.0f);
+                node.fluvialErosion.iterations = std::clamp(nodeFluvialJson.value("iterations", node.fluvialErosion.iterations), 0, 200);
+                node.fluvialErosion.channelLength = std::clamp(nodeFluvialJson.value("channelLength", node.fluvialErosion.channelLength), 1.0f, 1024.0f);
+                node.fluvialErosion.erosionStrength = std::clamp(nodeFluvialJson.value("erosionStrength", node.fluvialErosion.erosionStrength), 0.0f, 1.0f);
+                node.fluvialErosion.channeling = std::clamp(nodeFluvialJson.value("channeling", node.fluvialErosion.channeling), 0.0f, 1.0f);
+                node.fluvialErosion.friction = std::clamp(nodeFluvialJson.value("friction", node.fluvialErosion.friction), 0.0f, 1.0f);
+                node.fluvialErosion.wearAngleDegrees = std::clamp(nodeFluvialJson.value("wearAngleDegrees", node.fluvialErosion.wearAngleDegrees), 0.0f, 90.0f);
+                node.fluvialErosion.depositAngleDegrees = std::clamp(nodeFluvialJson.value("depositAngleDegrees", node.fluvialErosion.depositAngleDegrees), 0.0f, 90.0f);
+                node.fluvialErosion.maxErosionAngleDegrees = std::clamp(nodeFluvialJson.value("maxErosionAngleDegrees", node.fluvialErosion.maxErosionAngleDegrees), 0.0f, 90.0f);
+                node.fluvialErosion.erosionGranularity = std::clamp(nodeFluvialJson.value("erosionGranularity", node.fluvialErosion.erosionGranularity), 1.0f, 100.0f);
+                node.fluvialErosion.sedimentVelocity = std::clamp(nodeFluvialJson.value("sedimentVelocity", node.fluvialErosion.sedimentVelocity), 0.0f, 2.0f);
+                node.fluvialErosion.seed = std::clamp(nodeFluvialJson.value("seed", node.fluvialErosion.seed), 0, 999999);
 
                 const auto readPins = [&](const nlohmann::json& pinsJson, rock::PinKind pinKind, std::vector<rock::Pin>& pins) {
                     if (!pinsJson.is_array())
@@ -2380,6 +2407,8 @@ ImVec4 NodeAccentColor(rock::NodeKind kind)
         return ImVec4(0.53f, 0.71f, 0.61f, 1.0f);
     case rock::NodeKind::HeightmapLoad:
         return ImVec4(0.38f, 0.62f, 0.53f, 1.0f);
+    case rock::NodeKind::FluvialErosion:
+        return ImVec4(0.36f, 0.58f, 0.78f, 1.0f);
     case rock::NodeKind::NoiseWarp:
         return ImVec4(0.46f, 0.65f, 0.76f, 1.0f);
     case rock::NodeKind::CrackField:
@@ -2399,6 +2428,8 @@ ImVec2 InitialNodePosition(rock::NodeKind kind)
         return ImVec2(40.0f, 64.0f);
     case rock::NodeKind::HeightmapLoad:
         return ImVec2(40.0f, 240.0f);
+    case rock::NodeKind::FluvialErosion:
+        return ImVec2(320.0f, 240.0f);
     case rock::NodeKind::NoiseWarp:
         return ImVec2(320.0f, 64.0f);
     case rock::NodeKind::CrackField:
@@ -2670,6 +2701,7 @@ void PasteNodesFromClipboard(const ImVec2& pasteCenter)
             newMutableNode->crack = clipboardNode.node.crack;
             newMutableNode->outputMesh = clipboardNode.node.outputMesh;
             newMutableNode->heightmap = clipboardNode.node.heightmap;
+            newMutableNode->fluvialErosion = clipboardNode.node.fluvialErosion;
         }
         const rock::Node* newNode = g_graph.FindNode(newNodeId);
         if (newNode == nullptr)
@@ -2914,6 +2946,7 @@ void DrawNodeGraph()
         };
         addNodeMenuItem(rock::NodeKind::PrimitiveSdf);
         addNodeMenuItem(rock::NodeKind::HeightmapLoad);
+        addNodeMenuItem(rock::NodeKind::FluvialErosion);
         addNodeMenuItem(rock::NodeKind::NoiseWarp);
         addNodeMenuItem(rock::NodeKind::CrackField);
         addNodeMenuItem(rock::NodeKind::OutputMesh);
@@ -3298,6 +3331,77 @@ void DrawPropertiesPanel()
             EvaluateGraph();
         }
         if (DrawPropertyFloatRow("Offset (m)", "HeightmapVerticalOffset", &editableNode->heightmap.verticalOffsetMeters, -4096.0f, 4096.0f, rock::HeightmapLoadSettings{}.verticalOffsetMeters, "Heightmap vertical offset changed"))
+        {
+            EvaluateGraph();
+        }
+
+        ImGui::EndTable();
+        return;
+    }
+
+    if (selectedNode->kind == rock::NodeKind::FluvialErosion && ImGui::BeginTable("FluvialErosionRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 154.0f);
+        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+        rock::FluvialErosionSettings& erosion = editableNode->fluvialErosion;
+        erosion.featureSize = std::clamp(erosion.featureSize, 1.0f, 64.0f);
+        erosion.iterations = std::clamp(erosion.iterations, 0, 200);
+        erosion.channelLength = std::clamp(erosion.channelLength, 1.0f, 1024.0f);
+        erosion.erosionStrength = std::clamp(erosion.erosionStrength, 0.0f, 1.0f);
+        erosion.channeling = std::clamp(erosion.channeling, 0.0f, 1.0f);
+        erosion.friction = std::clamp(erosion.friction, 0.0f, 1.0f);
+        erosion.wearAngleDegrees = std::clamp(erosion.wearAngleDegrees, 0.0f, 90.0f);
+        erosion.depositAngleDegrees = std::clamp(erosion.depositAngleDegrees, 0.0f, 90.0f);
+        erosion.maxErosionAngleDegrees = std::clamp(erosion.maxErosionAngleDegrees, 0.0f, 90.0f);
+        erosion.erosionGranularity = std::clamp(erosion.erosionGranularity, 1.0f, 100.0f);
+        erosion.sedimentVelocity = std::clamp(erosion.sedimentVelocity, 0.0f, 2.0f);
+        erosion.seed = std::clamp(erosion.seed, 0, 999999);
+
+        if (DrawPropertyFloatRow("Feature Size", "FluvialFeatureSize", &erosion.featureSize, 1.0f, 64.0f, rock::FluvialErosionSettings{}.featureSize, "Fluvial feature size changed"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyIntRow("Iterations", "FluvialIterations", &erosion.iterations, 0, 200, rock::FluvialErosionSettings{}.iterations, "Fluvial iterations changed"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Channel Length", "FluvialChannelLength", &erosion.channelLength, 1.0f, 1024.0f, rock::FluvialErosionSettings{}.channelLength, "Fluvial channel length changed"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Erosion Strength", "FluvialErosionStrength", &erosion.erosionStrength, 0.0f, 1.0f, rock::FluvialErosionSettings{}.erosionStrength, "Fluvial erosion strength changed"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Channeling", "FluvialChanneling", &erosion.channeling, 0.0f, 1.0f, rock::FluvialErosionSettings{}.channeling, "Fluvial channeling changed"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Friction", "FluvialFriction", &erosion.friction, 0.0f, 1.0f, rock::FluvialErosionSettings{}.friction, "Fluvial friction changed"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Wear Angle", "FluvialWearAngle", &erosion.wearAngleDegrees, 0.0f, 90.0f, rock::FluvialErosionSettings{}.wearAngleDegrees, "Fluvial wear angle changed"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Deposit Angle", "FluvialDepositAngle", &erosion.depositAngleDegrees, 0.0f, 90.0f, rock::FluvialErosionSettings{}.depositAngleDegrees, "Fluvial deposit angle changed"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Max Erosion Angle", "FluvialMaxErosionAngle", &erosion.maxErosionAngleDegrees, 0.0f, 90.0f, rock::FluvialErosionSettings{}.maxErosionAngleDegrees, "Fluvial max erosion angle changed"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Granularity", "FluvialGranularity", &erosion.erosionGranularity, 1.0f, 100.0f, rock::FluvialErosionSettings{}.erosionGranularity, "Fluvial granularity changed"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Sediment Velocity", "FluvialSedimentVelocity", &erosion.sedimentVelocity, 0.0f, 2.0f, rock::FluvialErosionSettings{}.sedimentVelocity, "Fluvial sediment velocity changed"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyIntRow("Seed", "FluvialSeed", &erosion.seed, 0, 999999, rock::FluvialErosionSettings{}.seed, "Fluvial seed changed"))
         {
             EvaluateGraph();
         }

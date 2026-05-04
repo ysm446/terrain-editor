@@ -17,6 +17,7 @@ enum class NodeKind
     CrackField,
     OutputMesh,
     HeightmapLoad,
+    FluvialErosion,
 };
 
 enum class PinKind
@@ -46,6 +47,7 @@ enum class PreviewStage
     Primitive,
     Noise,
     Crack,
+    Fluvial,
     Output,
 };
 
@@ -93,6 +95,22 @@ struct HeightmapLoadSettings
     float verticalOffsetMeters = 0.0f;
 };
 
+struct FluvialErosionSettings
+{
+    float featureSize = 8.0f;
+    int iterations = 25;
+    float channelLength = 128.0f;
+    float erosionStrength = 1.0f;
+    float channeling = 0.25f;
+    float friction = 0.1f;
+    float wearAngleDegrees = 15.0f;
+    float depositAngleDegrees = 0.0f;
+    float maxErosionAngleDegrees = 30.0f;
+    float erosionGranularity = 10.0f;
+    float sedimentVelocity = 1.0f;
+    int seed = 1;
+};
+
 struct Node
 {
     GraphId id = 0;
@@ -105,6 +123,7 @@ struct Node
     CrackSettings crack;
     OutputMeshSettings outputMesh;
     HeightmapLoadSettings heightmap;
+    FluvialErosionSettings fluvialErosion;
 };
 
 struct Link
@@ -226,6 +245,18 @@ struct SdfPipeline
         float isoValue = 0.0f;
     };
 
+    struct HeightfieldOperation
+    {
+        enum class Kind
+        {
+            FluvialErosion,
+        };
+
+        Kind kind = Kind::FluvialErosion;
+        GraphId nodeId = 0;
+        FluvialErosionSettings fluvialErosion;
+    };
+
     PrimitiveKind primitiveKind = PrimitiveKind::RockBlob;
     std::vector<Operation> operations;
     bool useNoise = false;
@@ -238,6 +269,7 @@ struct SdfPipeline
     bool hasSource = false;
     bool useHeightmap = false;
     HeightmapLoadSettings heightmap;
+    std::vector<HeightfieldOperation> heightfieldOperations;
 };
 
 struct EvaluationSummary

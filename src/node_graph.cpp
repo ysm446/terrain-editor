@@ -45,6 +45,16 @@ struct HeightmapImage
     std::vector<float> values;
 };
 
+struct HeightfieldGrid
+{
+    int resolution = 0;
+    float terrainSizeMeters = 1.0f;
+    std::vector<float> heights;
+};
+
+void AddEdge(MeshData& mesh, std::unordered_set<uint64_t>& edgeKeys, uint32_t a, uint32_t b);
+void AccumulateNormal(MeshVertex& vertex, float nx, float ny, float nz);
+
 std::wstring Utf8ToWidePath(const std::string& value)
 {
     if (value.empty())
@@ -202,6 +212,283 @@ float SampleHeightmap(const HeightmapImage& image, float u, float v)
     const float a = std::lerp(at(x0, y0), at(x1, y0), tx);
     const float b = std::lerp(at(x0, y1), at(x1, y1), tx);
     return std::lerp(a, b, ty);
+}
+
+float Hash01(int x, int y, int seed)
+{
+    uint32_t h = static_cast<uint32_t>(x) * 374761393u;
+    h += static_cast<uint32_t>(y) * 668265263u;
+    h ^= static_cast<uint32_t>(seed) * 2246822519u;
+    h = (h ^ (h >> 13)) * 1274126177u;
+    h ^= h >> 16;
+    return static_cast<float>(h & 0x00FFFFFFu) / static_cast<float>(0x01000000u);
+}
+
+HeightfieldGrid BuildHeightfieldFromHeightmap(const HeightmapLoadSettings& settings, int resolution, std::string* message)
+{
+    HeightfieldGrid grid;
+    HeightmapImage image;
+    std::string error;
+    if (!LoadHeightmapImage(settings.path, image, &error))
+    {
+        if (message != nullptr)
+        {
+            *message = error;
+        }
+        return grid;
+    }
+
+    grid.resolution = std::clamp(resolution, 2, 256);
+    grid.terrainSizeMeters = std::max(1.0f, settings.scaleMeters);
+    const float verticalRange = grid.terrainSizeMeters * std::max(0.0f, settings.relativeVerticalScalePercent) / 100.0f;
+    grid.heights.reserve(static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution));
+    for (int z = 0; z < grid.resolution; ++z)
+    {
+        const float v = grid.resolution > 1 ? static_cast<float>(z) / static_cast<float>(grid.resolution - 1) : 0.0f;
+        for (int x = 0; x < grid.resolution; ++x)
+        {
+            const float u = grid.resolution > 1 ? static_cast<float>(x) / static_cast<float>(grid.resolution - 1) : 0.0f;
+            grid.heights.push_back(settings.verticalOffsetMeters + SampleHeightmap(image, u, v) * verticalRange);
+        }
+    }
+
+    if (message != nullptr)
+    {
+        *message = std::format(
+            "heightmap {}x{} -> terrain {}x{} ({:.1f} m)",
+            image.width,
+            image.height,
+            grid.resolution,
+            grid.resolution,
+            settings.scaleMeters);
+    }
+    return grid;
+}
+
+void ApplyFluvialErosion(HeightfieldGrid& grid, const FluvialErosionSettings& settings)
+{
+    const int n = grid.resolution;
+    if (n < 3 || grid.heights.size() < static_cast<size_t>(n * n) || settings.iterations <= 0 || settings.erosionStrength <= 0.0f)
+    {
+        return;
+    }
+
+    const float cellSize = grid.terrainSizeMeters / static_cast<float>(std::max(1, n - 1));
+    const auto indexAt = [n](int x, int z) {
+        return static_cast<size_t>(z * n + x);
+    };
+    const auto clampCoord = [n](int value) {
+        return std::clamp(value, 0, n - 1);
+    };
+    const auto sampleHeight = [&](float x, float z) {
+        const float fx = std::clamp(x, 0.0f, static_cast<float>(n - 1));
+        const float fz = std::clamp(z, 0.0f, static_cast<float>(n - 1));
+        const int x0 = static_cast<int>(std::floor(fx));
+        const int z0 = static_cast<int>(std::floor(fz));
+        const int x1 = std::min(x0 + 1, n - 1);
+        const int z1 = std::min(z0 + 1, n - 1);
+        const float tx = fx - static_cast<float>(x0);
+        const float tz = fz - static_cast<float>(z0);
+        const float a = std::lerp(grid.heights[indexAt(x0, z0)], grid.heights[indexAt(x1, z0)], tx);
+        const float b = std::lerp(grid.heights[indexAt(x0, z1)], grid.heights[indexAt(x1, z1)], tx);
+        return std::lerp(a, b, tz);
+    };
+
+    std::vector<float> forceX(static_cast<size_t>(n * n), 0.0f);
+    std::vector<float> forceZ(static_cast<size_t>(n * n), 0.0f);
+    const auto updateForces = [&]() {
+        for (int z = 0; z < n; ++z)
+        {
+            for (int x = 0; x < n; ++x)
+            {
+                const float left = grid.heights[indexAt(clampCoord(x - 1), z)];
+                const float right = grid.heights[indexAt(clampCoord(x + 1), z)];
+                const float up = grid.heights[indexAt(x, clampCoord(z - 1))];
+                const float down = grid.heights[indexAt(x, clampCoord(z + 1))];
+                const size_t index = indexAt(x, z);
+                forceX[index] = -(right - left) / std::max(cellSize * 2.0f, 0.0001f);
+                forceZ[index] = -(down - up) / std::max(cellSize * 2.0f, 0.0001f);
+            }
+        }
+    };
+
+    updateForces();
+    const float wearSlope = std::tan(std::clamp(settings.wearAngleDegrees, 0.0f, 89.0f) * 3.14159265f / 180.0f);
+    const float depositSlope = std::tan(std::clamp(settings.depositAngleDegrees, 0.0f, 89.0f) * 3.14159265f / 180.0f);
+    const float maxSlope = std::tan(std::clamp(settings.maxErosionAngleDegrees, 0.0f, 89.0f) * 3.14159265f / 180.0f);
+    const float strength = std::clamp(settings.erosionStrength, 0.0f, 1.0f);
+    const float channeling = std::clamp(settings.channeling, 0.0f, 1.0f);
+    const float friction = std::clamp(settings.friction, 0.0f, 1.0f);
+    const float velocityScale = std::clamp(settings.sedimentVelocity, 0.0f, 2.0f);
+    const float featureCells = std::max(settings.featureSize, cellSize) / std::max(cellSize, 0.0001f);
+    const int maxSteps = std::clamp(static_cast<int>(settings.channelLength / std::max(cellSize, settings.featureSize * 0.25f)), 1, 512);
+    const int particleStride = std::max(1, static_cast<int>(std::round(std::sqrt(std::max(settings.erosionGranularity, 1.0f)) * std::max(1.0f, featureCells * 0.12f))));
+
+    for (int iteration = 0; iteration < settings.iterations; ++iteration)
+    {
+        if ((iteration % 4) == 0)
+        {
+            updateForces();
+        }
+        for (int z = 1; z < n - 1; z += particleStride)
+        {
+            for (int x = 1; x < n - 1; x += particleStride)
+            {
+                if (Hash01(x, z, settings.seed + iteration * 977) < 0.35f)
+                {
+                    continue;
+                }
+
+                float px = static_cast<float>(x) + Hash01(x, z, settings.seed + 11) - 0.5f;
+                float pz = static_cast<float>(z) + Hash01(x, z, settings.seed + 23) - 0.5f;
+                float vx = 0.0f;
+                float vz = 0.0f;
+                float carry = 0.0f;
+                for (int step = 0; step < maxSteps; ++step)
+                {
+                    const int ix = clampCoord(static_cast<int>(px));
+                    const int iz = clampCoord(static_cast<int>(pz));
+                    const size_t currentIndex = indexAt(ix, iz);
+                    float fx = forceX[currentIndex];
+                    float fz = forceZ[currentIndex];
+                    const float slope = std::sqrt(fx * fx + fz * fz);
+                    if (slope < wearSlope || slope < depositSlope || slope > maxSlope)
+                    {
+                        break;
+                    }
+
+                    vx = vx * (1.0f - friction) + fx;
+                    vz = vz * (1.0f - friction) + fz;
+                    const float vLength = std::sqrt(vx * vx + vz * vz);
+                    if (vLength < 0.00001f)
+                    {
+                        break;
+                    }
+
+                    const float dirX = vx / vLength;
+                    const float dirZ = vz / vLength;
+                    const float before = grid.heights[currentIndex];
+                    const float ahead = sampleHeight(px + dirX, pz + dirZ);
+                    const float behind = sampleHeight(px - dirX, pz - dirZ);
+                    const float featureStrength = std::clamp(featureCells * 0.2f, 0.35f, 2.0f);
+                    float delta = (((ahead + behind) * 0.5f) - before) * strength * 0.22f * featureStrength;
+                    delta -= std::max(before - ahead, 0.0f) * channeling * 0.12f * featureStrength;
+
+                    const float oldHeight = grid.heights[currentIndex];
+                    grid.heights[currentIndex] = std::clamp(oldHeight + delta, std::min(ahead, behind), std::max(ahead, behind));
+                    carry += oldHeight - grid.heights[currentIndex];
+                    if (carry < 0.0f)
+                    {
+                        grid.heights[currentIndex] = oldHeight - carry;
+                        carry = 0.0f;
+                    }
+
+                    px += dirX * velocityScale;
+                    pz += dirZ * velocityScale;
+                    if (px < 1.0f || pz < 1.0f || px > static_cast<float>(n - 2) || pz > static_cast<float>(n - 2))
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+MeshData BuildMeshFromHeightfield(const HeightfieldGrid& grid)
+{
+    MeshData mesh;
+    const int gridResolution = grid.resolution;
+    if (gridResolution < 2 || grid.heights.size() < static_cast<size_t>(gridResolution * gridResolution))
+    {
+        return mesh;
+    }
+
+    const float halfSize = grid.terrainSizeMeters * 0.5f;
+    mesh.vertices.reserve(static_cast<size_t>(gridResolution) * static_cast<size_t>(gridResolution));
+    mesh.triangles.reserve(static_cast<size_t>(gridResolution - 1) * static_cast<size_t>(gridResolution - 1) * 2u);
+    mesh.edges.reserve(mesh.triangles.capacity() * 3u);
+
+    for (int z = 0; z < gridResolution; ++z)
+    {
+        const float v = gridResolution > 1 ? static_cast<float>(z) / static_cast<float>(gridResolution - 1) : 0.0f;
+        for (int x = 0; x < gridResolution; ++x)
+        {
+            const float u = gridResolution > 1 ? static_cast<float>(x) / static_cast<float>(gridResolution - 1) : 0.0f;
+            mesh.vertices.push_back({
+                std::lerp(-halfSize, halfSize, u),
+                grid.heights[static_cast<size_t>(z * gridResolution + x)],
+                std::lerp(halfSize, -halfSize, v),
+                0.0f,
+                0.0f,
+                0.0f,
+            });
+        }
+    }
+
+    std::unordered_set<uint64_t> edgeKeys;
+    const auto indexAt = [gridResolution](int x, int z) {
+        return static_cast<uint32_t>(z * gridResolution + x);
+    };
+    const auto addTriangle = [&](uint32_t a, uint32_t b, uint32_t c) {
+        const MeshVertex& va = mesh.vertices[a];
+        const MeshVertex& vb = mesh.vertices[b];
+        const MeshVertex& vc = mesh.vertices[c];
+        const float ux = vb.x - va.x;
+        const float uy = vb.y - va.y;
+        const float uz = vb.z - va.z;
+        const float vx = vc.x - va.x;
+        const float vy = vc.y - va.y;
+        const float vz = vc.z - va.z;
+        float nx = uy * vz - uz * vy;
+        float ny = uz * vx - ux * vz;
+        float nz = ux * vy - uy * vx;
+        if (ny < 0.0f)
+        {
+            std::swap(b, c);
+            nx = -nx;
+            ny = -ny;
+            nz = -nz;
+        }
+        AccumulateNormal(mesh.vertices[a], nx, ny, nz);
+        AccumulateNormal(mesh.vertices[b], nx, ny, nz);
+        AccumulateNormal(mesh.vertices[c], nx, ny, nz);
+        mesh.triangles.push_back({a, b, c});
+        AddEdge(mesh, edgeKeys, a, b);
+        AddEdge(mesh, edgeKeys, b, c);
+        AddEdge(mesh, edgeKeys, c, a);
+    };
+
+    for (int z = 0; z < gridResolution - 1; ++z)
+    {
+        for (int x = 0; x < gridResolution - 1; ++x)
+        {
+            const uint32_t a = indexAt(x, z);
+            const uint32_t b = indexAt(x + 1, z);
+            const uint32_t c = indexAt(x + 1, z + 1);
+            const uint32_t d = indexAt(x, z + 1);
+            addTriangle(a, b, c);
+            addTriangle(a, c, d);
+        }
+    }
+
+    for (MeshVertex& vertex : mesh.vertices)
+    {
+        const float length = std::sqrt(vertex.nx * vertex.nx + vertex.ny * vertex.ny + vertex.nz * vertex.nz);
+        if (length > 0.000001f)
+        {
+            vertex.nx /= length;
+            vertex.ny /= length;
+            vertex.nz /= length;
+        }
+        else
+        {
+            vertex.nx = 0.0f;
+            vertex.ny = 1.0f;
+            vertex.nz = 0.0f;
+        }
+    }
+    return mesh;
 }
 
 std::string OperationPipelineSummary(const SdfPipeline& pipeline)
@@ -366,122 +653,25 @@ MeshData BuildMeshFromSdf(const GraphSettings& settings, const SdfPipeline& pipe
     return mesh;
 }
 
-MeshData BuildMeshFromHeightmap(const HeightmapLoadSettings& settings, int resolution, std::string* message)
+MeshData BuildMeshFromHeightPipeline(const SdfPipeline& pipeline, int resolution, std::string* message)
 {
-    MeshData mesh;
-    HeightmapImage image;
-    std::string error;
-    if (!LoadHeightmapImage(settings.path, image, &error))
+    HeightfieldGrid grid = BuildHeightfieldFromHeightmap(pipeline.heightmap, resolution, message);
+    if (grid.resolution <= 0)
     {
-        if (message != nullptr)
-        {
-            *message = error;
-        }
-        return mesh;
+        return {};
     }
-
-    const int gridResolution = std::clamp(resolution, 2, 256);
-    const float terrainSize = std::max(1.0f, settings.scaleMeters);
-    const float verticalRange = terrainSize * std::max(0.0f, settings.relativeVerticalScalePercent) / 100.0f;
-    const float verticalOffset = settings.verticalOffsetMeters;
-    const float halfSize = terrainSize * 0.5f;
-
-    mesh.vertices.reserve(static_cast<size_t>(gridResolution) * static_cast<size_t>(gridResolution));
-    mesh.triangles.reserve(static_cast<size_t>(gridResolution - 1) * static_cast<size_t>(gridResolution - 1) * 2u);
-    mesh.edges.reserve(mesh.triangles.capacity() * 3u);
-
-    for (int z = 0; z < gridResolution; ++z)
+    for (const SdfPipeline::HeightfieldOperation& operation : pipeline.heightfieldOperations)
     {
-        const float v = gridResolution > 1 ? static_cast<float>(z) / static_cast<float>(gridResolution - 1) : 0.0f;
-        for (int x = 0; x < gridResolution; ++x)
+        if (operation.kind == SdfPipeline::HeightfieldOperation::Kind::FluvialErosion)
         {
-            const float u = gridResolution > 1 ? static_cast<float>(x) / static_cast<float>(gridResolution - 1) : 0.0f;
-            const float height = SampleHeightmap(image, u, v);
-            mesh.vertices.push_back({
-                std::lerp(-halfSize, halfSize, u),
-                verticalOffset + height * verticalRange,
-                std::lerp(halfSize, -halfSize, v),
-                0.0f,
-                0.0f,
-                0.0f,
-            });
+            ApplyFluvialErosion(grid, operation.fluvialErosion);
         }
     }
-
-    std::unordered_set<uint64_t> edgeKeys;
-    const auto indexAt = [gridResolution](int x, int z) {
-        return static_cast<uint32_t>(z * gridResolution + x);
-    };
-    const auto addTriangle = [&](uint32_t a, uint32_t b, uint32_t c) {
-        const MeshVertex& va = mesh.vertices[a];
-        const MeshVertex& vb = mesh.vertices[b];
-        const MeshVertex& vc = mesh.vertices[c];
-        const float ux = vb.x - va.x;
-        const float uy = vb.y - va.y;
-        const float uz = vb.z - va.z;
-        const float vx = vc.x - va.x;
-        const float vy = vc.y - va.y;
-        const float vz = vc.z - va.z;
-        float nx = uy * vz - uz * vy;
-        float ny = uz * vx - ux * vz;
-        float nz = ux * vy - uy * vx;
-        if (ny < 0.0f)
-        {
-            std::swap(b, c);
-            nx = -nx;
-            ny = -ny;
-            nz = -nz;
-        }
-        AccumulateNormal(mesh.vertices[a], nx, ny, nz);
-        AccumulateNormal(mesh.vertices[b], nx, ny, nz);
-        AccumulateNormal(mesh.vertices[c], nx, ny, nz);
-        mesh.triangles.push_back({a, b, c});
-        AddEdge(mesh, edgeKeys, a, b);
-        AddEdge(mesh, edgeKeys, b, c);
-        AddEdge(mesh, edgeKeys, c, a);
-    };
-
-    for (int z = 0; z < gridResolution - 1; ++z)
+    if (message != nullptr && !pipeline.heightfieldOperations.empty())
     {
-        for (int x = 0; x < gridResolution - 1; ++x)
-        {
-            const uint32_t a = indexAt(x, z);
-            const uint32_t b = indexAt(x + 1, z);
-            const uint32_t c = indexAt(x + 1, z + 1);
-            const uint32_t d = indexAt(x, z + 1);
-            addTriangle(a, b, c);
-            addTriangle(a, c, d);
-        }
+        *message += std::format(" + {} heightfield op{}", pipeline.heightfieldOperations.size(), pipeline.heightfieldOperations.size() == 1 ? "" : "s");
     }
-
-    for (MeshVertex& vertex : mesh.vertices)
-    {
-        const float length = std::sqrt(vertex.nx * vertex.nx + vertex.ny * vertex.ny + vertex.nz * vertex.nz);
-        if (length > 0.000001f)
-        {
-            vertex.nx /= length;
-            vertex.ny /= length;
-            vertex.nz /= length;
-        }
-        else
-        {
-            vertex.nx = 0.0f;
-            vertex.ny = 1.0f;
-            vertex.nz = 0.0f;
-        }
-    }
-
-    if (message != nullptr)
-    {
-        *message = std::format(
-            "heightmap {}x{} -> terrain {}x{} ({:.1f} m)",
-            image.width,
-            image.height,
-            gridResolution,
-            gridResolution,
-            settings.scaleMeters);
-    }
-    return mesh;
+    return BuildMeshFromHeightfield(grid);
 }
 } // namespace
 
@@ -688,9 +878,13 @@ GraphId NodeGraph::CreateNode(NodeKind kind)
         AddPin(nodeId, PinKind::Output, ValueType::SdfGrid, "SDFGrid");
         break;
     case NodeKind::OutputMesh:
-        AddPin(nodeId, PinKind::Input, ValueType::SdfGrid, "SDFGrid");
+        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "HeightField");
         break;
     case NodeKind::HeightmapLoad:
+        AddPin(nodeId, PinKind::Output, ValueType::HeightField, "HeightField");
+        break;
+    case NodeKind::FluvialErosion:
+        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "HeightField");
         AddPin(nodeId, PinKind::Output, ValueType::HeightField, "HeightField");
         break;
     default:
@@ -780,6 +974,8 @@ SdfPipeline NodeGraph::PipelineFor(PreviewStage stage) const
         return PipelineTo(NodeKind::NoiseWarp);
     case PreviewStage::Crack:
         return PipelineTo(NodeKind::CrackField);
+    case PreviewStage::Fluvial:
+        return PipelineTo(NodeKind::FluvialErosion);
     case PreviewStage::Output:
     default:
         return PipelineTo(NodeKind::OutputMesh);
@@ -902,6 +1098,14 @@ SdfPipeline NodeGraph::PipelineToNode(const Node& targetNode) const
                 node->outputMesh.isoValue,
             });
         }
+        else if (node->kind == NodeKind::FluvialErosion)
+        {
+            pipeline.heightfieldOperations.push_back({
+                SdfPipeline::HeightfieldOperation::Kind::FluvialErosion,
+                node->id,
+                node->fluvialErosion,
+            });
+        }
         else if (node->kind == NodeKind::PrimitiveSdf)
         {
             pipeline.hasSource = true;
@@ -920,6 +1124,7 @@ SdfPipeline NodeGraph::PipelineToNode(const Node& targetNode) const
     }
     std::ranges::reverse(pipeline.noiseLayers);
     std::ranges::reverse(pipeline.operations);
+    std::ranges::reverse(pipeline.heightfieldOperations);
     pipeline.useNoise = !pipeline.noiseLayers.empty();
     if (pipeline.useNoise)
     {
@@ -947,7 +1152,7 @@ void NodeGraph::Evaluate(int previewMeshResolution)
     else if (previewPipeline.useHeightmap)
     {
         evaluation_.previewSdf = {};
-        evaluation_.previewMesh = BuildMeshFromHeightmap(previewPipeline.heightmap, previewMeshResolution, &evaluation_.previewMessage);
+        evaluation_.previewMesh = BuildMeshFromHeightPipeline(previewPipeline, previewMeshResolution, &evaluation_.previewMessage);
     }
     else
     {
@@ -1015,7 +1220,7 @@ void NodeGraph::EvaluateFinal(GraphId outputNodeId)
     else if (finalPipeline.useHeightmap)
     {
         evaluation_.finalSdf = {};
-        evaluation_.finalMesh = BuildMeshFromHeightmap(finalPipeline.heightmap, outputMeshResolution, nullptr);
+        evaluation_.finalMesh = BuildMeshFromHeightPipeline(finalPipeline, outputMeshResolution, nullptr);
     }
     else
     {
@@ -1109,6 +1314,8 @@ std::string_view ToString(NodeKind kind)
         return "Output Mesh";
     case NodeKind::HeightmapLoad:
         return "Load Heightmap";
+    case NodeKind::FluvialErosion:
+        return "Fluvial Erosion";
     default:
         return "Unknown";
     }
@@ -1124,6 +1331,8 @@ std::string_view ToString(PreviewStage stage)
         return "Noise Warp";
     case PreviewStage::Crack:
         return "Crack Field";
+    case PreviewStage::Fluvial:
+        return "Fluvial Erosion";
     case PreviewStage::Output:
         return "Output Mesh";
     default:
@@ -1156,6 +1365,8 @@ PreviewStage PreviewStageFor(NodeKind kind)
         return PreviewStage::Noise;
     case NodeKind::CrackField:
         return PreviewStage::Crack;
+    case NodeKind::FluvialErosion:
+        return PreviewStage::Fluvial;
     case NodeKind::HeightmapLoad:
         return PreviewStage::Primitive;
     case NodeKind::OutputMesh:
