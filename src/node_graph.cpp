@@ -572,19 +572,25 @@ MeshData BuildMeshFromHeightfield(const HeightfieldGrid& grid, int meshResolutio
     meshResolution = std::clamp(meshResolution, 2, 512);
 
     const float halfSize = grid.terrainSizeMeters * 0.5f;
-    mesh.vertices.reserve(static_cast<size_t>(meshResolution) * static_cast<size_t>(meshResolution));
-    mesh.triangles.reserve(static_cast<size_t>(meshResolution - 1) * static_cast<size_t>(meshResolution - 1) * 2u);
+    const size_t surfaceVertexCount = static_cast<size_t>(meshResolution) * static_cast<size_t>(meshResolution);
+    mesh.vertices.reserve(surfaceVertexCount * 2u + static_cast<size_t>(meshResolution) * 8u);
+    mesh.triangles.reserve(static_cast<size_t>(meshResolution - 1) * static_cast<size_t>(meshResolution - 1) * 4u + static_cast<size_t>(meshResolution - 1) * 8u);
     mesh.edges.reserve(mesh.triangles.capacity() * 3u);
 
+    float minHeight = FLT_MAX;
+    float maxHeight = -FLT_MAX;
     for (int z = 0; z < meshResolution; ++z)
     {
         const float v = meshResolution > 1 ? static_cast<float>(z) / static_cast<float>(meshResolution - 1) : 0.0f;
         for (int x = 0; x < meshResolution; ++x)
         {
             const float u = meshResolution > 1 ? static_cast<float>(x) / static_cast<float>(meshResolution - 1) : 0.0f;
+            const float height = SampleHeightfieldValue(grid.heights, gridResolution, u, v);
+            minHeight = std::min(minHeight, height);
+            maxHeight = std::max(maxHeight, height);
             mesh.vertices.push_back({
                 std::lerp(-halfSize, halfSize, u),
-                SampleHeightfieldValue(grid.heights, gridResolution, u, v),
+                height,
                 std::lerp(halfSize, -halfSize, v),
                 0.0f,
                 0.0f,
@@ -598,7 +604,7 @@ MeshData BuildMeshFromHeightfield(const HeightfieldGrid& grid, int meshResolutio
     const auto indexAt = [meshResolution](int x, int z) {
         return static_cast<uint32_t>(z * meshResolution + x);
     };
-    const auto addTriangle = [&](uint32_t a, uint32_t b, uint32_t c) {
+    const auto addTriangle = [&](uint32_t a, uint32_t b, uint32_t c, bool keepWinding = false) {
         const MeshVertex& va = mesh.vertices[a];
         const MeshVertex& vb = mesh.vertices[b];
         const MeshVertex& vc = mesh.vertices[c];
@@ -611,7 +617,7 @@ MeshData BuildMeshFromHeightfield(const HeightfieldGrid& grid, int meshResolutio
         float nx = uy * vz - uz * vy;
         float ny = uz * vx - ux * vz;
         float nz = ux * vy - uy * vx;
-        if (ny < 0.0f)
+        if (!keepWinding && ny < 0.0f)
         {
             std::swap(b, c);
             nx = -nx;
@@ -640,12 +646,68 @@ MeshData BuildMeshFromHeightfield(const HeightfieldGrid& grid, int meshResolutio
         }
     }
 
+    const float heightRange = std::max(0.0f, maxHeight - minHeight);
+    const float baseDepth = std::max({grid.terrainSizeMeters * 0.08f, heightRange * 0.15f, 32.0f});
+    const float baseY = minHeight - baseDepth;
+    const auto addVertex = [&](float x, float y, float z, float mask = 0.0f) {
+        const uint32_t index = static_cast<uint32_t>(mesh.vertices.size());
+        mesh.vertices.push_back({x, y, z, 0.0f, 0.0f, 0.0f, mask});
+        return index;
+    };
+    const auto addWallSegment = [&](uint32_t topA, uint32_t topB) {
+        const MeshVertex& a = mesh.vertices[topA];
+        const MeshVertex& b = mesh.vertices[topB];
+        const uint32_t sideTopA = addVertex(a.x, a.y, a.z, a.mask);
+        const uint32_t sideTopB = addVertex(b.x, b.y, b.z, b.mask);
+        const uint32_t sideBottomA = addVertex(a.x, baseY, a.z, a.mask);
+        const uint32_t sideBottomB = addVertex(b.x, baseY, b.z, b.mask);
+        addTriangle(sideTopA, sideBottomA, sideBottomB, true);
+        addTriangle(sideTopA, sideBottomB, sideTopB, true);
+    };
+
+    for (int x = 0; x < meshResolution - 1; ++x)
+    {
+        addWallSegment(indexAt(x, 0), indexAt(x + 1, 0));
+        addWallSegment(indexAt(x + 1, meshResolution - 1), indexAt(x, meshResolution - 1));
+    }
+    for (int z = 0; z < meshResolution - 1; ++z)
+    {
+        addWallSegment(indexAt(0, z + 1), indexAt(0, z));
+        addWallSegment(indexAt(meshResolution - 1, z), indexAt(meshResolution - 1, z + 1));
+    }
+
+    const uint32_t bottomStart = static_cast<uint32_t>(mesh.vertices.size());
+    for (int z = 0; z < meshResolution; ++z)
+    {
+        const float v = meshResolution > 1 ? static_cast<float>(z) / static_cast<float>(meshResolution - 1) : 0.0f;
+        for (int x = 0; x < meshResolution; ++x)
+        {
+            const float u = meshResolution > 1 ? static_cast<float>(x) / static_cast<float>(meshResolution - 1) : 0.0f;
+            addVertex(std::lerp(-halfSize, halfSize, u), baseY, std::lerp(halfSize, -halfSize, v));
+        }
+    }
+    const auto bottomIndexAt = [bottomStart, meshResolution](int x, int z) {
+        return bottomStart + static_cast<uint32_t>(z * meshResolution + x);
+    };
+    for (int z = 0; z < meshResolution - 1; ++z)
+    {
+        for (int x = 0; x < meshResolution - 1; ++x)
+        {
+            const uint32_t a = bottomIndexAt(x, z);
+            const uint32_t b = bottomIndexAt(x + 1, z);
+            const uint32_t c = bottomIndexAt(x + 1, z + 1);
+            const uint32_t d = bottomIndexAt(x, z + 1);
+            addTriangle(a, c, b, true);
+            addTriangle(a, d, c, true);
+        }
+    }
+
     for (MeshVertex& vertex : mesh.vertices)
     {
         const float length = std::sqrt(vertex.nx * vertex.nx + vertex.ny * vertex.ny + vertex.nz * vertex.nz);
         if (length > 0.000001f)
         {
-                vertex.nx /= length;
+            vertex.nx /= length;
             vertex.ny /= length;
             vertex.nz /= length;
         }

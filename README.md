@@ -1,40 +1,79 @@
 # Terrain Editor
 
-Windows desktop prototype for a heightfield-oriented terrain editor.
+ハイトフィールドを中心にした、ノードベースの地形エディタの Windows デスクトッププロトタイプです。
 
-## Current Prototype
+このプロジェクトはもともと岩生成ツールとして始まりましたが、現在はハイトマップの読み込み、地形向けのプロシージャル処理、地形確認用の表示機能を中心に作り替えています。
 
-- C++20 / CMake application
-- Win32 + DirectX 12 renderer
-- Dear ImGui shell UI
-- imgui-node-editor backed node graph
-- Internal `NodeGraph` model with nodes, pins, links, parameters, and evaluation status
-- Heightmap image loading node with scale, relative vertical scale, and offset controls
-- Split production layout:
-  - left preview viewport
-  - right-top node network
-  - right-bottom inspector tabs for properties, stats, camera, and export
-- Heightfield terrain mesh preview with 1 unit = 1 meter
-- Interactive viewport orbit, pan, zoom, and reset controls
-- Node-stage preview: selecting graph nodes shows that generation stage in the viewport
-- View menu toggles Mesh and wireframe previews
-- Final mesh evaluation now builds indexed topology with shared vertices, triangle indices, unique edges, and vertex normals
-- JSON-driven UI themes in `data/ui_themes`, selectable from `設定 > UIテーマ`
-- JSON project save/load via `ファイル > 保存` / `ファイル > 開く` using `.terrainproj` files, with legacy `.rockproj` loading retained.
-- App settings persistence in `data/app_settings.json` for UI theme, viewport camera state, preview visibility, and up to 8 recent project files.
+## 現在のプロトタイプ
 
-Terrain editing tools, layer operations, and export nodes are intentionally left for later phases.
+- C++20 / CMake アプリケーション
+- Win32 + DirectX 12 レンダラ
+- Dear ImGui ベースの UI
+- imgui-node-editor を使ったノードグラフ
+- ノード、ピン、リンク、パラメータ、評価キャッシュ、プレビュー状態を持つ内部 `NodeGraph` モデル
+- `ファイル > 保存` / `ファイル > 開く` による `.terrainproj` の JSON プロジェクト保存・読み込み
+- 古いサンプルデータ用に `.rockproj` の読み込みも維持
+- `data/ui_themes` の JSON UI テーマを `設定 > UIテーマ` から切り替え可能
+- `data/app_settings.json` に UI テーマ、3D カメラ、2D マップ表示、プレビュー表示、ライティング設定、最近使ったプロジェクトを保存
 
-## Build
+## 地形ノード
 
-Install dependencies with vcpkg, then configure with the vcpkg toolchain:
+- `Import Heightmap`
+  - ハイトマップ画像を読み込みます。
+  - 地形スケールをメートル単位で指定できます。
+  - Relative Vertical Scale と縦方向オフセットを指定できます。
+  - 表示解像度とは別にシミュレーション解像度を持ち、ビューポートのメッシュ解像度は見た目だけの設定として扱います。
+- `Fluvial Erosion`
+  - CPU ベースのハイトフィールド浸食を適用します。
+  - Flow accumulation / drainage area 的な影響、Sediment Capacity、堆積、マルチスケール処理を含みます。
+  - `Heightmap` と `Fluvial Mask` を出力します。
+  - 上流入力やノードパラメータが変わるまで、中間ハイトフィールド結果をキャッシュします。
+
+まずは汎用的な浸食ワークフローを作ることを優先しています。アルプスの山と日本の山の違いのような地質・地域性のプリセットは、コアの浸食モデルの上に重ねる後工程として扱う想定です。
+
+## ビューとプレビュー
+
+- 1 unit = 1 m の 3D 地形ビューポート
+- 選択中のハイトマップまたはマスク出力を確認する 2D マップビュー
+- 2D ビューはズーム、パン、リセットに対応
+- ノードや出力ピンを選択すると、その段階の結果をプレビュー表示
+- 出力ピンは型ごとに色分け
+  - ハイトフィールド出力は緑
+  - マスクテクスチャ出力はオレンジ
+- アクティブな出力ラベルをノード上で強調表示
+- プレビュー評価は非同期で実行し、ノード選択やパラメータ変更時に UI が固まりにくいようにしています。
+- ステータスバーに評価状態と計算時間を表示
+- 評価中のノードには `計算中` / `計算待ち` バッジを表示
+
+## 3D 表示モード
+
+- `Simple`
+  - 軽量な地形・マスク確認用の表示モードです。
+- `PBR Preview`
+  - 太陽方向、光量、環境光、影の強さ、シャドウマップ解像度、バイアス、Albedo、ビューポート背景色を調整できる地形確認向けのライティング表示です。
+  - 完全なプロダクション用 PBR マテリアルではなく、地形の凹凸や影を読みやすくするプレビューとして扱っています。
+- `Shadow Debug`
+  - シャドウマップの範囲や比較結果を可視化し、影設定を調整するためのデバッグ表示です。
+
+## エクスポートと補助機能
+
+- 評価済み地形メッシュの OBJ エクスポート
+- 最終メッシュ評価では、共有頂点、三角形インデックス、ユニークエッジ、頂点法線を持つインデックス付きトポロジを生成
+- F12 キーでアプリケーションウィンドウ全体を PNG スクリーンショットとして保存
+- 変更履歴は `docs/changelog.md` に記録
+- Fluvial Erosion の実装メモは `docs/fluvial_erosion_node.md` と `docs/fluvial_erosion_hda_notes.md` に記録
+- 今後追加したいノード候補は `docs/node_candidates.md` に記録
+
+## ビルド
+
+vcpkg で依存ライブラリを用意し、vcpkg toolchain を指定して CMake を構成します。
 
 ```powershell
 cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=C:/path/to/vcpkg/scripts/buildsystems/vcpkg.cmake
 cmake --build build --config Debug
 ```
 
-Run:
+実行:
 
 ```powershell
 ./build/Debug/terrain_editor.exe
