@@ -2421,7 +2421,7 @@ bool RunFluvialComputeGridImmediate(rock::HeightfieldGrid& grid, const rock::Flu
     }
 
     commandList->SetPipelineState(g_fluvialGridErosionPso.Get());
-    const int iterationCount = std::clamp(settings.iterations, 1, 200);
+    const int iterationCount = std::clamp(std::max(1, settings.iterations / 2), 1, 200);
     for (int iteration = 0; iteration < iterationCount; ++iteration)
     {
         constants.iteration = static_cast<UINT>(iteration);
@@ -4147,7 +4147,7 @@ void DrawNodeGraph()
             {
                 ed::SetNodePosition(ed::NodeId(node.id), pending->second);
             }
-            else
+            else if (!g_nodePositionsInitialized)
             {
                 ed::SetNodePosition(ed::NodeId(node.id), InitialNodePosition(node.kind));
             }
@@ -5599,14 +5599,6 @@ void DrawUi()
             ImGui::Separator();
             ImGui::MenuItem("環境設定", nullptr, false, false);
             ImGui::MenuItem("ショートカット設定", nullptr, false, false);
-            ImGui::EndMenu();
-        }
-        if (ImGui::BeginMenu("ビルド"))
-        {
-            if (ImGui::MenuItem("グラフを評価"))
-            {
-                EvaluateGraph();
-            }
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("エクスポート"))

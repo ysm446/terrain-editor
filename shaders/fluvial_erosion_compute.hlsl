@@ -62,6 +62,65 @@ uint BestReceiverIndex(int x, int z)
     return bestIndex;
 }
 
+float NormalizedFlowWeight(uint index)
+{
+    const float normalizedFlow = saturate(log(1.0f + max(FlowIn[index], 1.0f)) / log(1.0f + max((float)cellCount, 2.0f)));
+    return pow(normalizedFlow, 1.35f);
+}
+
+void ComputeGridErosionAt(int x, int z, out uint receiverIndex, out float erodeAmount, out float depositAmount)
+{
+    const uint index = IndexAt(x, z);
+    receiverIndex = index;
+    erodeAmount = 0.0f;
+    depositAmount = 0.0f;
+    if (x <= 0 || z <= 0 || x + 1 >= (int)resolution || z + 1 >= (int)resolution)
+    {
+        return;
+    }
+
+    const float center = HeightIn[index];
+    float bestDrop = 0.0f;
+    float bestDistance = 1.0f;
+
+    [unroll]
+    for (int dz = -1; dz <= 1; ++dz)
+    {
+        [unroll]
+        for (int dx = -1; dx <= 1; ++dx)
+        {
+            if (dx == 0 && dz == 0)
+            {
+                continue;
+            }
+            const int nx = x + dx;
+            const int nz = z + dz;
+            const uint neighborIndex = IndexAt(nx, nz);
+            const float distance = (dx != 0 && dz != 0) ? 1.41421356f : 1.0f;
+            const float drop = (center - HeightIn[neighborIndex]) / distance;
+            if (drop > bestDrop)
+            {
+                bestDrop = drop;
+                bestDistance = distance;
+                receiverIndex = neighborIndex;
+            }
+        }
+    }
+
+    const float distanceMeters = max(cellSizeMeters * bestDistance, 0.0001f);
+    const float slope = max(bestDrop, 0.0f) / distanceMeters;
+    if (slope > maxSlope)
+    {
+        return;
+    }
+
+    const float flowWeight = NormalizedFlowWeight(index);
+    const float wearGate = saturate((slope + flowWeight * 0.10f) / max(wearSlope + 0.10f, 0.0001f));
+    const float capacity = (bestDrop * 0.16f + slope * cellSizeMeters * 0.08f) * (0.25f + flowWeight * 2.4f) * sedimentCapacity;
+    erodeAmount = min(bestDrop * 0.72f, capacity * erosionStrength * strengthScale * wearGate * (0.65f + channeling));
+    depositAmount = erodeAmount * depositionRate * lerp(0.18f, 0.42f, flowWeight);
+}
+
 [numthreads(8, 8, 1)]
 void CSFlowAccumulation(uint3 dispatchThreadId : SV_DispatchThreadID)
 {
@@ -116,10 +175,12 @@ void CSGridErosion(uint3 dispatchThreadId : SV_DispatchThreadID)
         return;
     }
 
-    const float center = HeightIn[index];
-    float bestDrop = 0.0f;
-    float bestDistance = 1.0f;
+    uint ownReceiver = index;
+    float ownErode = 0.0f;
+    float ownDeposit = 0.0f;
+    ComputeGridErosionAt((int)x, (int)z, ownReceiver, ownErode, ownDeposit);
 
+    float incomingDeposit = 0.0f;
     [unroll]
     for (int dz = -1; dz <= 1; ++dz)
     {
@@ -130,26 +191,19 @@ void CSGridErosion(uint3 dispatchThreadId : SV_DispatchThreadID)
             {
                 continue;
             }
-            const uint nx = x + dx;
-            const uint nz = z + dz;
-            const uint neighborIndex = nz * resolution + nx;
-            const float distance = (dx != 0 && dz != 0) ? 1.41421356f : 1.0f;
-            const float drop = (center - HeightIn[neighborIndex]) / distance;
-            if (drop > bestDrop)
+            const int nx = (int)x + dx;
+            const int nz = (int)z + dz;
+            uint neighborReceiver = IndexAt(nx, nz);
+            float neighborErode = 0.0f;
+            float neighborDeposit = 0.0f;
+            ComputeGridErosionAt(nx, nz, neighborReceiver, neighborErode, neighborDeposit);
+            if (neighborReceiver == index)
             {
-                bestDrop = drop;
-                bestDistance = distance;
+                incomingDeposit += neighborDeposit;
             }
         }
     }
 
-    const float distanceMeters = max(cellSizeMeters * bestDistance, 0.0001f);
-    const float slope = max(bestDrop, 0.0f) / distanceMeters;
-    const float slopeAllowed = slope <= maxSlope ? 1.0f : 0.0f;
-    const float flowWeight = saturate(log(1.0f + max(FlowIn[index], 1.0f)) / log(1.0f + max((float)cellCount * 0.15f, 2.0f)));
-    const float wearGate = saturate((slope + 0.10f) / max(wearSlope + 0.10f, 0.0001f));
-    const float capacity = (bestDrop * 0.16f + slope * cellSizeMeters * 0.08f) * (0.25f + flowWeight * 2.4f) * sedimentCapacity;
-    const float amount = min(bestDrop * 0.72f, capacity * erosionStrength * strengthScale * wearGate * (0.65f + channeling)) * slopeAllowed;
-    HeightOut[index] = center - amount;
-    MaskOut[index] = max(MaskOut[index], amount + MaskOut[index] * 0.995f);
+    HeightOut[index] = HeightIn[index] - ownErode + incomingDeposit;
+    MaskOut[index] = max(MaskOut[index], ownErode + incomingDeposit * 0.5f + MaskOut[index] * 0.995f);
 }
