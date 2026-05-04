@@ -238,7 +238,7 @@ HeightfieldGrid BuildHeightfieldFromHeightmap(const HeightmapLoadSettings& setti
         return grid;
     }
 
-    grid.resolution = std::clamp(resolution, 2, 256);
+    grid.resolution = std::clamp(resolution, 2, 512);
     grid.terrainSizeMeters = std::max(1.0f, settings.scaleMeters);
     const float verticalRange = grid.terrainSizeMeters * std::max(0.0f, settings.relativeVerticalScalePercent) / 100.0f;
     grid.heights.reserve(static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution));
@@ -504,7 +504,7 @@ template <typename Settings>
 int EffectiveMeshResolution(const Settings& settings)
 {
     const int divisor = 1 << std::clamp(settings.lod, 0, 4);
-    return std::clamp(settings.resolution / divisor, 16, 96);
+    return std::clamp(settings.resolution / divisor, 16, 512);
 }
 
 struct QuantizedVertex

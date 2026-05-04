@@ -857,7 +857,7 @@ bool LoadAppSettings(std::string* error = nullptr)
         settings.preview.showWireframe = visibilityJson.value("meshWireframe", settings.preview.showWireframe);
         settings.preview.showPoints = visibilityJson.value("surfacePoints", settings.preview.showPoints);
         settings.preview.showGrid = visibilityJson.value("grid", settings.preview.showGrid);
-        settings.preview.resolution = std::clamp(visibilityJson.value("previewResolution", settings.preview.resolution), 16, 96);
+        settings.preview.resolution = std::clamp(visibilityJson.value("previewResolution", settings.preview.resolution), 16, 512);
         settings.preview.lod = std::clamp(visibilityJson.value("previewLod", settings.preview.lod), 0, 4);
         if (visibilityJson.contains("viewportBackground") && visibilityJson["viewportBackground"].is_array() && visibilityJson["viewportBackground"].size() == 3)
         {
@@ -1394,7 +1394,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 node.crack.width = nodeCrackJson.value("width", node.crack.width);
                 node.crack.depth = nodeCrackJson.value("depth", node.crack.depth);
                 node.crack.roughness = nodeCrackJson.value("roughness", node.crack.roughness);
-                node.outputMesh.resolution = std::clamp(nodeOutputMeshJson.value("resolution", node.outputMesh.resolution), 16, 96);
+                node.outputMesh.resolution = std::clamp(nodeOutputMeshJson.value("resolution", node.outputMesh.resolution), 16, 512);
                 node.outputMesh.lod = std::clamp(nodeOutputMeshJson.value("lod", node.outputMesh.lod), 0, 4);
                 node.outputMesh.isoValue = std::clamp(nodeOutputMeshJson.value("isoValue", node.outputMesh.isoValue), -0.2f, 0.2f);
                 node.heightmap.path = nodeHeightmapJson.value("path", node.heightmap.path);
@@ -1453,7 +1453,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
         legacyCrack.width = crackJson.value("width", legacyCrack.width);
         legacyCrack.depth = crackJson.value("depth", legacyCrack.depth);
         legacyCrack.roughness = crackJson.value("roughness", legacyCrack.roughness);
-        legacyOutputMesh.resolution = std::clamp(outputMeshJson.value("resolution", legacyOutputMesh.resolution), 16, 96);
+        legacyOutputMesh.resolution = std::clamp(outputMeshJson.value("resolution", legacyOutputMesh.resolution), 16, 512);
         legacyOutputMesh.lod = std::clamp(outputMeshJson.value("lod", legacyOutputMesh.lod), 0, 4);
         legacyOutputMesh.isoValue = std::clamp(outputMeshJson.value("isoValue", legacyOutputMesh.isoValue), -0.2f, 0.2f);
         for (const rock::Node& node : g_graph.Nodes())
@@ -1481,7 +1481,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
             if (rock::OutputMeshSettings* nodeOutputMesh = g_graph.FindOutputMeshSettings(nodeId))
             {
                 const nlohmann::json nodeOutputMeshJson = nodeSettingsJsonValue.value("outputMesh", nlohmann::json::object());
-                nodeOutputMesh->resolution = std::clamp(nodeOutputMeshJson.value("resolution", nodeOutputMesh->resolution), 16, 96);
+                nodeOutputMesh->resolution = std::clamp(nodeOutputMeshJson.value("resolution", nodeOutputMesh->resolution), 16, 512);
                 nodeOutputMesh->lod = std::clamp(nodeOutputMeshJson.value("lod", nodeOutputMesh->lod), 0, 4);
                 nodeOutputMesh->isoValue = std::clamp(nodeOutputMeshJson.value("isoValue", nodeOutputMesh->isoValue), -0.2f, 0.2f);
             }
@@ -1660,7 +1660,7 @@ bool EnsureMeshPreviewPipeline(std::string* error)
 
 int EffectiveMeshResolution(int resolution, int lod)
 {
-    return std::clamp(resolution / (1 << std::clamp(lod, 0, 4)), 16, 96);
+    return std::clamp(resolution / (1 << std::clamp(lod, 0, 4)), 16, 512);
 }
 
 int CurrentPreviewMeshResolution()
@@ -3484,7 +3484,7 @@ void DrawPropertiesPanel()
             ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 112.0f);
             ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
 
-            if (DrawPropertyIntRow("Resolution", "OutputMeshResolution", &outputMesh->resolution, 16, 96, rock::OutputMeshSettings{}.resolution, "Output mesh resolution changed"))
+            if (DrawPropertyIntRow("Resolution", "OutputMeshResolution", &outputMesh->resolution, 16, 512, rock::OutputMeshSettings{}.resolution, "Output mesh resolution changed"))
             {
                 EvaluateGraph();
             }
@@ -3523,7 +3523,7 @@ void DrawDisplaySettingsPanel()
         {
             SaveAppSettingsSilently();
         }
-        if (DrawPropertyIntRow("Resolution", "DisplayPreviewResolution", &settings.preview.resolution, 16, 96, rock::PreviewSettings{}.resolution, "Preview resolution changed", false))
+        if (DrawPropertyIntRow("Resolution", "DisplayPreviewResolution", &settings.preview.resolution, 16, 512, rock::PreviewSettings{}.resolution, "Preview resolution changed", false))
         {
             EvaluateGraph();
             SaveAppSettingsSilently();
@@ -3622,7 +3622,7 @@ void DrawStatsPanel()
 void DrawAssetExportPanel()
 {
     const rock::OutputMeshSettings& outputMesh = g_graph.OutputMeshSettingsFor(g_selectedNodeId);
-    const int effectiveResolution = std::clamp(outputMesh.resolution / (1 << std::clamp(outputMesh.lod, 0, 4)), 16, 96);
+    const int effectiveResolution = std::clamp(outputMesh.resolution / (1 << std::clamp(outputMesh.lod, 0, 4)), 16, 512);
     ImGui::Columns(4, nullptr, false);
     ImGui::TextUnformatted("High mesh");
     ImGui::Text("%s", g_graph.Evaluation().finalDirty ? "needs build" : "ready");

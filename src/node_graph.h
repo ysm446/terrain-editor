@@ -82,7 +82,7 @@ struct CrackSettings
 
 struct OutputMeshSettings
 {
-    int resolution = 96;
+    int resolution = 512;
     int lod = 0;
     float isoValue = 0.0f;
 };
