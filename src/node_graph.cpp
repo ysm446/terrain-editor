@@ -851,10 +851,12 @@ void ApplyFluvialErosionSingleLevel(HeightfieldGrid& grid, const FluvialErosionS
                     const float dirX = dirXn * l1;
                     const float dirZ = dirZn * l1;
 
-                    const int ix = clampCoord(static_cast<int>(px));
-                    const int iz = clampCoord(static_cast<int>(pz));
-                    const size_t cellIdx = indexAt(ix, iz);
-                    const float h1 = grid.heights[cellIdx];
+                    // Bilinear read of h1 at the particle's fractional position so that
+                    // mirror particles read mirror values regardless of sub-cell offset.
+                    // Writing back via splatField (4-tap bilinear) preserves the mirror
+                    // symmetry that floor(px) / floor(pz) breaks when the dome center
+                    // sits at a half-integer cell boundary.
+                    const float h1 = sampleHeight(px, pz);
                     const float h2 = sampleHeight(px + dirX + shearXVal, pz + dirZ + shearZVal);
                     const float h3 = sampleHeight(px - dirX + shearXVal, pz - dirZ + shearZVal);
 
@@ -875,7 +877,7 @@ void ApplyFluvialErosionSingleLevel(HeightfieldGrid& grid, const FluvialErosionS
                     splatField(depositField, px, pz, deposited);
                     splatField(flowField, px, pz, 1.0f);
                     splatField(maskField, px, pz, eroded + deposited * 0.5f);
-                    grid.heights[cellIdx] = newH;
+                    splatField(grid.heights, px, pz, newH - h1);
                 }
             }
         }
