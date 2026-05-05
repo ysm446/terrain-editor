@@ -1713,6 +1713,11 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 {
                     node.outputs.push_back({syntheticPinId++, node.id, rock::PinKind::Output, rock::ValueType::Mask, "Flows"});
                 }
+                if (node.kind == rock::NodeKind::FluvialErosion &&
+                    std::ranges::none_of(node.outputs, [](const rock::Pin& pin) { return pin.label == "Age"; }))
+                {
+                    node.outputs.push_back({syntheticPinId++, node.id, rock::PinKind::Output, rock::ValueType::Mask, "Age"});
+                }
                 if (node.id != 0)
                 {
                     nodes.push_back(std::move(node));
