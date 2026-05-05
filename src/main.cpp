@@ -52,6 +52,8 @@ namespace
 constexpr int kFrameCount = 2;
 constexpr int kSrvDescriptorCount = 64;
 constexpr float kFullFrameSensorHeightMm = 24.0f;
+constexpr int kMaxSerializedNodeKind = static_cast<int>(rock::NodeKind::ErosionNoise);
+constexpr int kMaxSerializedPreviewStage = static_cast<int>(rock::PreviewStage::ErosionNoise);
 
 struct FrameContext
 {
@@ -1621,7 +1623,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
             {
                 rock::Node node;
                 node.id = nodeJson.value("id", 0);
-                node.kind = static_cast<rock::NodeKind>(std::clamp(nodeJson.value("kind", 0), 0, 7));
+                node.kind = static_cast<rock::NodeKind>(std::clamp(nodeJson.value("kind", 0), 0, kMaxSerializedNodeKind));
                 if (!IsTerrainNodeKind(node.kind))
                 {
                     continue;
@@ -1837,7 +1839,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
         {
             g_pendingSelectedNodeIds.push_back(g_selectedNodeId);
         }
-        g_graph.SetPreviewStage(static_cast<rock::PreviewStage>(std::clamp(root.value("previewStage", static_cast<int>(g_graph.Preview())), 0, 6)));
+        g_graph.SetPreviewStage(static_cast<rock::PreviewStage>(std::clamp(root.value("previewStage", static_cast<int>(g_graph.Preview())), 0, kMaxSerializedPreviewStage)));
         const rock::GraphId previewPinId = root.value("previewPinId", 0);
         if (previewPinId != 0 && g_graph.FindPin(previewPinId) != nullptr)
         {

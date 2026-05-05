@@ -169,12 +169,12 @@ struct HeightmapBlurSettings
 
 struct ErosionNoiseSettings
 {
-    float frequency = 16.0f;
-    int octaves = 5;
-    float erosionStrength = 0.05f;
-    float directionInfluence = 1.0f;
-    float valleyLow = 0.3f;
-    float valleyHigh = 0.5f;
+    float frequency = 20.0f;
+    int octaves = 2;
+    float erosionStrength = 0.02f;
+    float directionInfluence = 0.5f;
+    float valleyLow = 0.1f;
+    float valleyHigh = 0.4f;
     int seed = 0;
 };
 
