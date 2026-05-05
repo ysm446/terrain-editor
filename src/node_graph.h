@@ -116,12 +116,12 @@ struct HeightmapLoadSettings
 
 struct FluvialErosionSettings
 {
-    float featureSize = 4.0f;
+    float featureSize = 8.0f;
     float geologicalAge = 20.0f;
     int iterations = 25;
     float channelLength = 128.0f;
-    float erosionStrength = 0.65f;
-    float channeling = 0.2f;
+    float erosionStrength = 1.0f;
+    float channeling = 0.25f;
     float friction = 0.1f;
     float wearAngleDegrees = 15.0f;
     float depositAngleDegrees = 0.0f;
@@ -130,6 +130,13 @@ struct FluvialErosionSettings
     float flowVolume = 0.0f;
     float smallChannelInfluence = 0.0f;
     float sedimentVelocity = 1.0f;
+    float forceVectorX = 0.0f;
+    float forceVectorY = 0.0f;
+    float forceVectorZ = 0.0f;
+    float forceStrength = 1.0f;
+    float shearX = 0.0f;
+    float shearY = 0.0f;
+    float referenceDetailSize = 1.0f;
 };
 
 struct HeightmapBlurSettings

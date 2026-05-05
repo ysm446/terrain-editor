@@ -1436,6 +1436,13 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
                     {"flowVolume", node.fluvialErosion.flowVolume},
                     {"smallChannelInfluence", node.fluvialErosion.smallChannelInfluence},
                     {"sedimentVelocity", node.fluvialErosion.sedimentVelocity},
+                    {"forceVectorX", node.fluvialErosion.forceVectorX},
+                    {"forceVectorY", node.fluvialErosion.forceVectorY},
+                    {"forceVectorZ", node.fluvialErosion.forceVectorZ},
+                    {"forceStrength", node.fluvialErosion.forceStrength},
+                    {"shearX", node.fluvialErosion.shearX},
+                    {"shearY", node.fluvialErosion.shearY},
+                    {"referenceDetailSize", node.fluvialErosion.referenceDetailSize},
                 }},
                 {"heightmapBlur", {
                     {"radius", node.heightmapBlur.radius},
@@ -1613,20 +1620,27 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 node.heightmap.relativeVerticalScalePercent = std::clamp(nodeHeightmapJson.value("relativeVerticalScalePercent", node.heightmap.relativeVerticalScalePercent), 0.0f, 10000.0f);
                 node.heightmap.verticalOffsetMeters = std::clamp(nodeHeightmapJson.value("verticalOffsetMeters", node.heightmap.verticalOffsetMeters), -1000000.0f, 1000000.0f);
                 node.heightmap.simulationResolution = std::clamp(nodeHeightmapJson.value("simulationResolution", node.heightmap.simulationResolution), 2, 2048);
-                node.fluvialErosion.featureSize = std::clamp(nodeFluvialJson.value("featureSize", node.fluvialErosion.featureSize), 1.0f, 64.0f);
-                node.fluvialErosion.geologicalAge = std::clamp(nodeFluvialJson.value("geologicalAge", node.fluvialErosion.geologicalAge), 0.0f, 100.0f);
-                node.fluvialErosion.iterations = std::clamp(nodeFluvialJson.value("iterations", node.fluvialErosion.iterations), 0, 200);
-                node.fluvialErosion.channelLength = std::clamp(nodeFluvialJson.value("channelLength", node.fluvialErosion.channelLength), 1.0f, 1024.0f);
+                node.fluvialErosion.featureSize = std::clamp(nodeFluvialJson.value("featureSize", node.fluvialErosion.featureSize), 0.0f, 32.0f);
+                node.fluvialErosion.geologicalAge = std::clamp(nodeFluvialJson.value("geologicalAge", node.fluvialErosion.geologicalAge), 0.0f, 20.0f);
+                node.fluvialErosion.iterations = std::clamp(nodeFluvialJson.value("iterations", node.fluvialErosion.iterations), 0, 100);
+                node.fluvialErosion.channelLength = std::clamp(nodeFluvialJson.value("channelLength", node.fluvialErosion.channelLength), 0.0f, 512.0f);
                 node.fluvialErosion.erosionStrength = std::clamp(nodeFluvialJson.value("erosionStrength", node.fluvialErosion.erosionStrength), 0.0f, 1.0f);
                 node.fluvialErosion.channeling = std::clamp(nodeFluvialJson.value("channeling", node.fluvialErosion.channeling), 0.0f, 1.0f);
                 node.fluvialErosion.friction = std::clamp(nodeFluvialJson.value("friction", node.fluvialErosion.friction), 0.0f, 1.0f);
                 node.fluvialErosion.wearAngleDegrees = std::clamp(nodeFluvialJson.value("wearAngleDegrees", node.fluvialErosion.wearAngleDegrees), 0.0f, 90.0f);
                 node.fluvialErosion.depositAngleDegrees = std::clamp(nodeFluvialJson.value("depositAngleDegrees", node.fluvialErosion.depositAngleDegrees), 0.0f, 90.0f);
                 node.fluvialErosion.maxErosionAngleDegrees = std::clamp(nodeFluvialJson.value("maxErosionAngleDegrees", node.fluvialErosion.maxErosionAngleDegrees), 0.0f, 90.0f);
-                node.fluvialErosion.erosionGranularity = std::clamp(nodeFluvialJson.value("erosionGranularity", node.fluvialErosion.erosionGranularity), 1.0f, 100.0f);
-                node.fluvialErosion.flowVolume = std::clamp(nodeFluvialJson.value("flowVolume", node.fluvialErosion.flowVolume), 0.0f, 2.0f);
+                node.fluvialErosion.erosionGranularity = std::clamp(nodeFluvialJson.value("erosionGranularity", node.fluvialErosion.erosionGranularity), 0.0f, 100.0f);
+                node.fluvialErosion.flowVolume = std::clamp(nodeFluvialJson.value("flowVolume", node.fluvialErosion.flowVolume), 0.0f, 1.0f);
                 node.fluvialErosion.smallChannelInfluence = std::clamp(nodeFluvialJson.value("smallChannelInfluence", node.fluvialErosion.smallChannelInfluence), 0.0f, 1.0f);
                 node.fluvialErosion.sedimentVelocity = std::clamp(nodeFluvialJson.value("sedimentVelocity", node.fluvialErosion.sedimentVelocity), 0.0f, 2.0f);
+                node.fluvialErosion.forceVectorX = std::clamp(nodeFluvialJson.value("forceVectorX", node.fluvialErosion.forceVectorX), -1.0f, 1.0f);
+                node.fluvialErosion.forceVectorY = std::clamp(nodeFluvialJson.value("forceVectorY", node.fluvialErosion.forceVectorY), -1.0f, 1.0f);
+                node.fluvialErosion.forceVectorZ = std::clamp(nodeFluvialJson.value("forceVectorZ", node.fluvialErosion.forceVectorZ), -1.0f, 1.0f);
+                node.fluvialErosion.forceStrength = std::clamp(nodeFluvialJson.value("forceStrength", node.fluvialErosion.forceStrength), 0.0f, 1.0f);
+                node.fluvialErosion.shearX = std::clamp(nodeFluvialJson.value("shearX", node.fluvialErosion.shearX), -0.1f, 0.1f);
+                node.fluvialErosion.shearY = std::clamp(nodeFluvialJson.value("shearY", node.fluvialErosion.shearY), -0.1f, 0.1f);
+                node.fluvialErosion.referenceDetailSize = std::clamp(nodeFluvialJson.value("referenceDetailSize", node.fluvialErosion.referenceDetailSize), 0.01f, 2.0f);
                 node.heightmapBlur.radius = std::clamp(nodeBlurJson.value("radius", node.heightmapBlur.radius), 0.0f, 128.0f);
                 node.heightmapBlur.strength = std::clamp(nodeBlurJson.value("strength", node.heightmapBlur.strength), 0.0f, 1.0f);
                 node.heightmapBlur.iterations = std::clamp(nodeBlurJson.value("iterations", node.heightmapBlur.iterations), 0, 64);
@@ -4964,34 +4978,41 @@ void DrawPropertiesPanel()
         ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 210.0f);
         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
         rock::FluvialErosionSettings& erosion = editableNode->fluvialErosion;
-        erosion.featureSize = std::clamp(erosion.featureSize, 1.0f, 64.0f);
-        erosion.geologicalAge = std::clamp(erosion.geologicalAge, 0.0f, 100.0f);
-        erosion.iterations = std::clamp(erosion.iterations, 0, 200);
-        erosion.channelLength = std::clamp(erosion.channelLength, 1.0f, 1024.0f);
+        erosion.featureSize = std::clamp(erosion.featureSize, 0.0f, 32.0f);
+        erosion.geologicalAge = std::clamp(erosion.geologicalAge, 0.0f, 20.0f);
+        erosion.iterations = std::clamp(erosion.iterations, 0, 100);
+        erosion.channelLength = std::clamp(erosion.channelLength, 0.0f, 512.0f);
         erosion.erosionStrength = std::clamp(erosion.erosionStrength, 0.0f, 1.0f);
         erosion.channeling = std::clamp(erosion.channeling, 0.0f, 1.0f);
         erosion.friction = std::clamp(erosion.friction, 0.0f, 1.0f);
         erosion.wearAngleDegrees = std::clamp(erosion.wearAngleDegrees, 0.0f, 90.0f);
         erosion.depositAngleDegrees = std::clamp(erosion.depositAngleDegrees, 0.0f, 90.0f);
         erosion.maxErosionAngleDegrees = std::clamp(erosion.maxErosionAngleDegrees, 0.0f, 90.0f);
-        erosion.erosionGranularity = std::clamp(erosion.erosionGranularity, 1.0f, 100.0f);
-        erosion.flowVolume = std::clamp(erosion.flowVolume, 0.0f, 2.0f);
+        erosion.erosionGranularity = std::clamp(erosion.erosionGranularity, 0.0f, 100.0f);
+        erosion.flowVolume = std::clamp(erosion.flowVolume, 0.0f, 1.0f);
         erosion.smallChannelInfluence = std::clamp(erosion.smallChannelInfluence, 0.0f, 1.0f);
         erosion.sedimentVelocity = std::clamp(erosion.sedimentVelocity, 0.0f, 2.0f);
+        erosion.forceVectorX = std::clamp(erosion.forceVectorX, -1.0f, 1.0f);
+        erosion.forceVectorY = std::clamp(erosion.forceVectorY, -1.0f, 1.0f);
+        erosion.forceVectorZ = std::clamp(erosion.forceVectorZ, -1.0f, 1.0f);
+        erosion.forceStrength = std::clamp(erosion.forceStrength, 0.0f, 1.0f);
+        erosion.shearX = std::clamp(erosion.shearX, -0.1f, 0.1f);
+        erosion.shearY = std::clamp(erosion.shearY, -0.1f, 0.1f);
+        erosion.referenceDetailSize = std::clamp(erosion.referenceDetailSize, 0.01f, 2.0f);
 
-        if (DrawPropertyFloatRow("Feature Size", "FluvialFeatureSize", &erosion.featureSize, 1.0f, 64.0f, rock::FluvialErosionSettings{}.featureSize, "Fluvial feature size changed", true, "侵食で扱う地形特徴の大きさです。小さいほど細かい地形特徴に反応します。"))
+        if (DrawPropertyFloatRow("Feature Size", "FluvialFeatureSize", &erosion.featureSize, 0.0f, 32.0f, rock::FluvialErosionSettings{}.featureSize, "Fluvial feature size changed", true, "侵食で扱う地形特徴の大きさです。小さいほど細かい地形特徴に反応します。"))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyFloatRow("Geological Age", "FluvialGeologicalAge", &erosion.geologicalAge, 0.0f, 100.0f, rock::FluvialErosionSettings{}.geologicalAge, "Fluvial geological age changed", true, "地形が水で削られてきた時間の目安です。高いほど侵食が成熟します。"))
+        if (DrawPropertyFloatRow("Geological Age", "FluvialGeologicalAge", &erosion.geologicalAge, 0.0f, 20.0f, rock::FluvialErosionSettings{}.geologicalAge, "Fluvial geological age changed", true, "地形が水で削られてきた時間の目安です。高いほど侵食が成熟します。"))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyIntRow("Simulation Iterations", "FluvialIterations", &erosion.iterations, 0, 200, rock::FluvialErosionSettings{}.iterations, "Fluvial iterations changed", true, "侵食シミュレーションの反復回数です。増やすほど効果が強くなりますが計算時間も増えます。"))
+        if (DrawPropertyIntRow("Simulation Iterations", "FluvialIterations", &erosion.iterations, 0, 100, rock::FluvialErosionSettings{}.iterations, "Fluvial iterations changed", true, "侵食シミュレーションの反復回数です。増やすほど効果が強くなりますが計算時間も増えます。"))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyFloatRow("Channel Length", "FluvialChannelLength", &erosion.channelLength, 1.0f, 1024.0f, rock::FluvialErosionSettings{}.channelLength, "Fluvial channel length changed", true, "水の流れが影響する距離です。大きいほど長い流路が形成されやすくなります。"))
+        if (DrawPropertyFloatRow("Channel Length", "FluvialChannelLength", &erosion.channelLength, 0.0f, 512.0f, rock::FluvialErosionSettings{}.channelLength, "Fluvial channel length changed", true, "水の流れが影響する距離です。大きいほど長い流路が形成されやすくなります。"))
         {
             EvaluateGraph();
         }
@@ -5025,11 +5046,11 @@ void DrawPropertiesPanel()
         ImGui::TextDisabled("Sediment Shaping");
         ImGui::TableSetColumnIndex(1);
         ImGui::SeparatorText("Sediment Shaping");
-        if (DrawPropertyFloatRow("Erosion Granularity", "FluvialGranularity", &erosion.erosionGranularity, 1.0f, 100.0f, rock::FluvialErosionSettings{}.erosionGranularity, "Fluvial granularity changed", true, "侵食パターンの細かさです。高いほど細かい溝やノイズ感が出やすくなります。"))
+        if (DrawPropertyFloatRow("Erosion Granularity", "FluvialGranularity", &erosion.erosionGranularity, 0.0f, 100.0f, rock::FluvialErosionSettings{}.erosionGranularity, "Fluvial granularity changed", true, "侵食パターンの細かさです。高いほど細かい溝やノイズ感が出やすくなります。"))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyFloatRow("Flow Volume", "FluvialFlowVolume", &erosion.flowVolume, 0.0f, 2.0f, rock::FluvialErosionSettings{}.flowVolume, "Fluvial flow volume changed", true, "水量の追加係数です。高いほど流量と土砂輸送力が増えます。"))
+        if (DrawPropertyFloatRow("Flow Volume", "FluvialFlowVolume", &erosion.flowVolume, 0.0f, 1.0f, rock::FluvialErosionSettings{}.flowVolume, "Fluvial flow volume changed", true, "水量の追加係数です。高いほど流量と土砂輸送力が増えます。"))
         {
             EvaluateGraph();
         }
@@ -5038,6 +5059,40 @@ void DrawPropertiesPanel()
             EvaluateGraph();
         }
         if (DrawPropertyFloatRow("Sediment Velocity", "FluvialSedimentVelocity", &erosion.sedimentVelocity, 0.0f, 2.0f, rock::FluvialErosionSettings{}.sedimentVelocity, "Fluvial sediment velocity changed", true, "削られた土砂が下流へ運ばれる強さです。高いほど堆積位置が流れ方向へ伸びます。"))
+        {
+            EvaluateGraph();
+        }
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextDisabled("Directionality");
+        ImGui::TableSetColumnIndex(1);
+        ImGui::SeparatorText("Directionality");
+        if (DrawPropertyFloatRow("Force Vector X", "FluvialForceX", &erosion.forceVectorX, -1.0f, 1.0f, rock::FluvialErosionSettings{}.forceVectorX, "Fluvial force vector X changed", true, "力場に加算する外力ベクトルの X 成分。流れの方向にバイアスをかけます。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Force Vector Z", "FluvialForceZ", &erosion.forceVectorZ, -1.0f, 1.0f, rock::FluvialErosionSettings{}.forceVectorZ, "Fluvial force vector Z changed", true, "力場に加算する外力ベクトルの Z 成分。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyPercentRow("Force Strength", "FluvialForceStrength", &erosion.forceStrength, 0.0f, 1.0f, rock::FluvialErosionSettings{}.forceStrength, "Fluvial force strength changed", "外力の倍率です。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Shear X", "FluvialShearX", &erosion.shearX, -0.1f, 0.1f, rock::FluvialErosionSettings{}.shearX, "Fluvial shear X changed", true, "粒子の前後サンプル位置に加える X 方向ずらしです。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Shear Y", "FluvialShearY", &erosion.shearY, -0.1f, 0.1f, rock::FluvialErosionSettings{}.shearY, "Fluvial shear Y changed", true, "粒子の前後サンプル位置に加える Z 方向ずらしです。"))
+        {
+            EvaluateGraph();
+        }
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextDisabled("Advanced");
+        ImGui::TableSetColumnIndex(1);
+        ImGui::SeparatorText("Advanced");
+        if (DrawPropertyFloatRow("Reference Detail Size", "FluvialReferenceDetailSize", &erosion.referenceDetailSize, 0.01f, 2.0f, rock::FluvialErosionSettings{}.referenceDetailSize, "Fluvial reference detail size changed", true, "カーネルの Detail_Scale。粒子ステップ数や粒子密度の解像度依存スケール基準。"))
         {
             EvaluateGraph();
         }
