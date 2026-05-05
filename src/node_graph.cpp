@@ -26,6 +26,10 @@ namespace
 using Microsoft::WRL::ComPtr;
 
 FluvialGpuEvaluator g_fluvialGpuEvaluator = nullptr;
+constexpr int kFluvialSeed = 1;
+constexpr float kFluvialSedimentCapacity = 0.4f;
+constexpr float kFluvialDepositionRate = 0.42f;
+constexpr std::array<float, 6> kFluvialLevelStrengths = {0.18f, 0.28f, 0.52f, 0.68f, 0.78f, 0.58f};
 
 std::string NoisePipelineSummary(const SdfPipeline& pipeline)
 {
@@ -77,9 +81,8 @@ uint64_t HashHeightmapSettings(const HeightmapLoadSettings& settings, int resolu
 uint64_t HashFluvialSettings(const FluvialErosionSettings& settings, int resolution)
 {
     uint64_t hash = 1099511628211ull;
-    HashCombine(hash, static_cast<uint64_t>(settings.backend));
-    HashCombine(hash, static_cast<uint64_t>(settings.useAdvancedParameters));
     HashCombine(hash, HashFloat(settings.featureSize));
+    HashCombine(hash, HashFloat(settings.geologicalAge));
     HashCombine(hash, static_cast<uint64_t>(settings.iterations));
     HashCombine(hash, HashFloat(settings.channelLength));
     HashCombine(hash, HashFloat(settings.erosionStrength));
@@ -89,14 +92,9 @@ uint64_t HashFluvialSettings(const FluvialErosionSettings& settings, int resolut
     HashCombine(hash, HashFloat(settings.depositAngleDegrees));
     HashCombine(hash, HashFloat(settings.maxErosionAngleDegrees));
     HashCombine(hash, HashFloat(settings.erosionGranularity));
+    HashCombine(hash, HashFloat(settings.flowVolume));
+    HashCombine(hash, HashFloat(settings.smallChannelInfluence));
     HashCombine(hash, HashFloat(settings.sedimentVelocity));
-    HashCombine(hash, HashFloat(settings.sedimentCapacity));
-    HashCombine(hash, HashFloat(settings.depositionRate));
-    for (float levelStrength : settings.levelStrengths)
-    {
-        HashCombine(hash, HashFloat(levelStrength));
-    }
-    HashCombine(hash, static_cast<uint64_t>(settings.seed));
     HashCombine(hash, static_cast<uint64_t>(resolution));
     return hash;
 }
@@ -393,6 +391,12 @@ float Hash01(int x, int y, int seed)
     return static_cast<float>(h & 0x00FFFFFFu) / static_cast<float>(0x01000000u);
 }
 
+float KttRandom2(float seedX, float seedY)
+{
+    const float value = std::abs(std::sin(seedX * 1.29898f + seedY * 7.8233f)) * 1228.543f;
+    return value - std::floor(value);
+}
+
 HeightfieldGrid BuildHeightfieldFromHeightmap(const HeightmapLoadSettings& settings, int resolution, std::string* message)
 {
     HeightfieldGrid grid;
@@ -412,6 +416,8 @@ HeightfieldGrid BuildHeightfieldFromHeightmap(const HeightmapLoadSettings& setti
     const float verticalRange = grid.terrainSizeMeters * std::max(0.0f, settings.relativeVerticalScalePercent) / 100.0f;
     grid.heights.reserve(static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution));
     grid.mask.assign(static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution), 0.0f);
+    grid.deposits.assign(static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution), 0.0f);
+    grid.flows.assign(static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution), 0.0f);
     for (int z = 0; z < grid.resolution; ++z)
     {
         const float v = grid.resolution > 1 ? static_cast<float>(z) / static_cast<float>(grid.resolution - 1) : 0.0f;
@@ -444,6 +450,8 @@ HeightfieldGrid ResampleHeightfieldGrid(const HeightfieldGrid& source, int resol
     const size_t cellCount = static_cast<size_t>(result.resolution) * static_cast<size_t>(result.resolution);
     result.heights.reserve(cellCount);
     result.mask.assign(cellCount, 0.0f);
+    result.deposits.assign(cellCount, 0.0f);
+    result.flows.assign(cellCount, 0.0f);
     for (int z = 0; z < result.resolution; ++z)
     {
         const float v = result.resolution > 1 ? static_cast<float>(z) / static_cast<float>(result.resolution - 1) : 0.0f;
@@ -454,6 +462,53 @@ HeightfieldGrid ResampleHeightfieldGrid(const HeightfieldGrid& source, int resol
         }
     }
     return result;
+}
+
+std::vector<float> SmoothHeightfieldHeights(const std::vector<float>& source, int resolution, int radius, int iterations)
+{
+    if (resolution < 2 || source.size() < static_cast<size_t>(resolution * resolution) || radius <= 0 || iterations <= 0)
+    {
+        return source;
+    }
+
+    const int n = resolution;
+    const auto indexAt = [n](int x, int z) {
+        return static_cast<size_t>(z * n + x);
+    };
+    std::vector<float> current = source;
+    std::vector<float> next = source;
+    const int clampedRadius = std::clamp(radius, 1, std::max(1, n / 8));
+    const int clampedIterations = std::clamp(iterations, 1, 8);
+    for (int iteration = 0; iteration < clampedIterations; ++iteration)
+    {
+        for (int z = 0; z < n; ++z)
+        {
+            for (int x = 0; x < n; ++x)
+            {
+                float weightedSum = 0.0f;
+                float weightSum = 0.0f;
+                for (int dz = -clampedRadius; dz <= clampedRadius; ++dz)
+                {
+                    for (int dx = -clampedRadius; dx <= clampedRadius; ++dx)
+                    {
+                        const int sx = std::clamp(x + dx, 0, n - 1);
+                        const int sz = std::clamp(z + dz, 0, n - 1);
+                        const float distance = std::sqrt(static_cast<float>(dx * dx + dz * dz));
+                        if (distance > static_cast<float>(clampedRadius) + 0.001f)
+                        {
+                            continue;
+                        }
+                        const float weight = 1.0f / (1.0f + distance);
+                        weightedSum += current[indexAt(sx, sz)] * weight;
+                        weightSum += weight;
+                    }
+                }
+                next[indexAt(x, z)] = weightSum > 0.0f ? weightedSum / weightSum : current[indexAt(x, z)];
+            }
+        }
+        current.swap(next);
+    }
+    return current;
 }
 
 void AddResampledHeightDelta(HeightfieldGrid& target, const HeightfieldGrid& base, const HeightfieldGrid& eroded, float strength)
@@ -475,6 +530,14 @@ void AddResampledHeightDelta(HeightfieldGrid& target, const HeightfieldGrid& bas
     {
         target.mask.assign(cellCount, 0.0f);
     }
+    if (target.deposits.size() != cellCount)
+    {
+        target.deposits.assign(cellCount, 0.0f);
+    }
+    if (target.flows.size() != cellCount)
+    {
+        target.flows.assign(cellCount, 0.0f);
+    }
 
     for (int z = 0; z < n; ++z)
     {
@@ -490,23 +553,50 @@ void AddResampledHeightDelta(HeightfieldGrid& target, const HeightfieldGrid& bas
             {
                 target.mask[index] += SampleHeightfieldValue(eroded.mask, eroded.resolution, u, v) * strength;
             }
+            if (!eroded.deposits.empty())
+            {
+                target.deposits[index] += SampleHeightfieldValue(eroded.deposits, eroded.resolution, u, v) * strength;
+            }
+            if (!eroded.flows.empty())
+            {
+                target.flows[index] += SampleHeightfieldValue(eroded.flows, eroded.resolution, u, v) * strength;
+            }
         }
     }
 }
 
-void NormalizeHeightfieldMask(HeightfieldGrid& grid)
+void NormalizeField(std::vector<float>& field)
 {
-    float maxMask = 0.0f;
-    for (float value : grid.mask)
+    float maxValue = 0.0f;
+    for (float value : field)
     {
-        maxMask = std::max(maxMask, value);
+        maxValue = std::max(maxValue, value);
     }
-    if (maxMask > 0.000001f)
+    if (maxValue > 0.000001f)
     {
-        for (float& value : grid.mask)
+        for (float& value : field)
         {
-            value = std::clamp(value / maxMask, 0.0f, 1.0f);
+            value = std::clamp(value / maxValue, 0.0f, 1.0f);
         }
+    }
+}
+
+void NormalizeHeightfieldFields(HeightfieldGrid& grid)
+{
+    NormalizeField(grid.mask);
+    NormalizeField(grid.deposits);
+    NormalizeField(grid.flows);
+}
+
+void SelectHeightfieldPreviewField(HeightfieldGrid& grid, HeightfieldPreviewField previewField)
+{
+    if (previewField == HeightfieldPreviewField::Deposits && !grid.deposits.empty())
+    {
+        grid.mask = grid.deposits;
+    }
+    else if (previewField == HeightfieldPreviewField::Flows && !grid.flows.empty())
+    {
+        grid.mask = grid.flows;
     }
 }
 
@@ -527,8 +617,9 @@ void ApplyGridErosionPass(HeightfieldGrid& grid, const FluvialErosionSettings& s
         return std::clamp(value, 0, n - 1);
     };
 
-    std::vector<int> receiver(cellCount, -1);
-    std::vector<float> receiverDistance(cellCount, 1.0f);
+    std::vector<std::array<int, 8>> receivers(cellCount);
+    std::vector<std::array<float, 8>> receiverWeights(cellCount);
+    std::vector<std::array<float, 8>> receiverDistances(cellCount);
     std::vector<float> flow(cellCount, 1.0f);
     std::vector<float> delta(cellCount, 0.0f);
     std::vector<size_t> sortedCells(cellCount, 0);
@@ -537,8 +628,8 @@ void ApplyGridErosionPass(HeightfieldGrid& grid, const FluvialErosionSettings& s
     const float wearSlope = std::tan(std::clamp(settings.wearAngleDegrees, 0.0f, 89.0f) * 3.14159265f / 180.0f);
     const float maxSlope = std::tan(std::clamp(settings.maxErosionAngleDegrees, 0.0f, 89.0f) * 3.14159265f / 180.0f);
     const float strength = std::clamp(settings.erosionStrength, 0.0f, 1.0f) * strengthScale;
-    const float capacityScale = std::clamp(settings.sedimentCapacity, 0.0f, 2.0f);
-    const float depositionRate = std::clamp(settings.depositionRate, 0.0f, 1.0f);
+    const float capacityScale = kFluvialSedimentCapacity;
+    const float depositionRate = kFluvialDepositionRate;
     const float channeling = std::clamp(settings.channeling, 0.0f, 1.0f);
 
     for (int iteration = 0; iteration < iterationCount; ++iteration)
@@ -548,10 +639,12 @@ void ApplyGridErosionPass(HeightfieldGrid& grid, const FluvialErosionSettings& s
             for (int x = 0; x < n; ++x)
             {
                 const size_t index = indexAt(x, z);
-                float steepestDrop = 0.0f;
-                int bestReceiver = -1;
-                float bestDistance = 1.0f;
+                receivers[index].fill(-1);
+                receiverWeights[index].fill(0.0f);
+                receiverDistances[index].fill(1.0f);
                 const float currentHeight = grid.heights[index];
+                float weightSum = 0.0f;
+                size_t receiverCount = 0;
                 for (int dz = -1; dz <= 1; ++dz)
                 {
                     for (int dx = -1; dx <= 1; ++dx)
@@ -569,16 +662,24 @@ void ApplyGridErosionPass(HeightfieldGrid& grid, const FluvialErosionSettings& s
                         const float distance = (dx != 0 && dz != 0) ? 1.41421356f : 1.0f;
                         const size_t neighborIndex = indexAt(nx, nz);
                         const float drop = (currentHeight - grid.heights[neighborIndex]) / distance;
-                        if (drop > steepestDrop)
+                        if (drop > 0.0f && receiverCount < receivers[index].size())
                         {
-                            steepestDrop = drop;
-                            bestReceiver = static_cast<int>(neighborIndex);
-                            bestDistance = distance;
+                            const float weight = std::pow(drop, 1.15f);
+                            receivers[index][receiverCount] = static_cast<int>(neighborIndex);
+                            receiverWeights[index][receiverCount] = weight;
+                            receiverDistances[index][receiverCount] = distance;
+                            weightSum += weight;
+                            ++receiverCount;
                         }
                     }
                 }
-                receiver[index] = bestReceiver;
-                receiverDistance[index] = bestDistance;
+                if (weightSum > 0.000001f)
+                {
+                    for (float& weight : receiverWeights[index])
+                    {
+                        weight /= weightSum;
+                    }
+                }
             }
         }
 
@@ -588,10 +689,14 @@ void ApplyGridErosionPass(HeightfieldGrid& grid, const FluvialErosionSettings& s
         });
         for (const size_t index : sortedCells)
         {
-            const int next = receiver[index];
-            if (next >= 0)
+            for (size_t slot = 0; slot < receivers[index].size(); ++slot)
             {
-                flow[static_cast<size_t>(next)] += flow[index];
+                const int next = receivers[index][slot];
+                const float weight = receiverWeights[index][slot];
+                if (next >= 0 && weight > 0.0f)
+                {
+                    flow[static_cast<size_t>(next)] += flow[index] * weight;
+                }
             }
         }
 
@@ -612,29 +717,33 @@ void ApplyGridErosionPass(HeightfieldGrid& grid, const FluvialErosionSettings& s
             for (int x = 1; x < n - 1; ++x)
             {
                 const size_t index = indexAt(x, z);
-                const int next = receiver[index];
-                if (next < 0)
-                {
-                    continue;
-                }
-                const size_t receiverIndex = static_cast<size_t>(next);
-                const float distanceMeters = std::max(cellSize * receiverDistance[index], 0.0001f);
-                const float drop = std::max(grid.heights[index] - grid.heights[receiverIndex], 0.0f);
-                const float slope = drop / distanceMeters;
-                if (slope > maxSlope)
-                {
-                    continue;
-                }
-
                 const float flowWeight = std::pow(std::clamp(flow[index], 0.0f, 1.0f), 1.35f);
-                const float wearGate = std::clamp((slope + flowWeight * 0.10f) / std::max(wearSlope + 0.10f, 0.0001f), 0.0f, 1.0f);
-                const float capacity = (drop * 0.16f + slope * cellSize * 0.08f) * (0.25f + flowWeight * 2.4f) * capacityScale;
-                const float erodeAmount = std::min(drop * 0.72f, capacity * strength * wearGate * (0.65f + channeling));
-                const float depositAmount = erodeAmount * depositionRate * std::lerp(0.18f, 0.42f, flowWeight);
-                delta[index] -= erodeAmount;
-                delta[receiverIndex] += depositAmount;
-                maskField[index] += erodeAmount;
-                maskField[receiverIndex] += depositAmount * 0.5f;
+                for (size_t slot = 0; slot < receivers[index].size(); ++slot)
+                {
+                    const int next = receivers[index][slot];
+                    const float receiverWeight = receiverWeights[index][slot];
+                    if (next < 0 || receiverWeight <= 0.0f)
+                    {
+                        continue;
+                    }
+                    const size_t receiverIndex = static_cast<size_t>(next);
+                    const float distanceMeters = std::max(cellSize * receiverDistances[index][slot], 0.0001f);
+                    const float drop = std::max(grid.heights[index] - grid.heights[receiverIndex], 0.0f);
+                    const float slope = drop / distanceMeters;
+                    if (slope > maxSlope)
+                    {
+                        continue;
+                    }
+
+                    const float wearGate = std::clamp((slope + flowWeight * 0.10f) / std::max(wearSlope + 0.10f, 0.0001f), 0.0f, 1.0f);
+                    const float capacity = (drop * 0.16f + slope * cellSize * 0.08f) * (0.25f + flowWeight * 2.4f) * capacityScale;
+                    const float erodeAmount = std::min(drop * 0.72f, capacity * strength * wearGate * (0.65f + channeling) * receiverWeight);
+                    const float depositAmount = erodeAmount * depositionRate * std::lerp(0.18f, 0.42f, flowWeight);
+                    delta[index] -= erodeAmount;
+                    delta[receiverIndex] += depositAmount;
+                    maskField[index] += erodeAmount;
+                    maskField[receiverIndex] += depositAmount * 0.5f;
+                }
             }
         }
 
@@ -675,30 +784,70 @@ void ApplyFluvialErosionSingleLevel(HeightfieldGrid& grid, const FluvialErosionS
     };
 
     const size_t cellCount = static_cast<size_t>(n * n);
+    const float bedrockFloor = *std::ranges::min_element(grid.heights);
     std::vector<float> forceX(cellCount, 0.0f);
     std::vector<float> forceZ(cellCount, 0.0f);
     std::vector<float> flow(cellCount, 1.0f);
+    std::vector<float> rawFlow(cellCount, 1.0f);
+    std::vector<float> smoothedFlow(cellCount, 0.0f);
+    std::vector<float> transportFlowField(cellCount, 0.0f);
+    std::vector<float> looseSediment(cellCount, 0.0f);
+    std::vector<float> depositField(cellCount, 0.0f);
+    std::vector<float> erosionField(cellCount, 0.0f);
     std::vector<float> maskField(cellCount, 0.0f);
-    std::vector<int> receiver(cellCount, -1);
+    std::vector<std::array<int, 8>> receivers(cellCount);
+    std::vector<std::array<float, 8>> receiverWeights(cellCount);
     std::vector<size_t> sortedCells(cellCount, 0);
     std::iota(sortedCells.begin(), sortedCells.end(), 0);
+
+    const float wearSlope = std::tan(std::clamp(settings.wearAngleDegrees, 0.0f, 89.0f) * 3.14159265f / 180.0f);
+    const float depositSlope = std::tan(std::clamp(settings.depositAngleDegrees, 0.0f, 89.0f) * 3.14159265f / 180.0f);
+    const float maxSlope = std::tan(std::clamp(settings.maxErosionAngleDegrees, 0.0f, 89.0f) * 3.14159265f / 180.0f);
+    const float strength = std::clamp(settings.erosionStrength, 0.0f, 1.0f);
+    const float channeling = std::clamp(settings.channeling, 0.0f, 1.0f);
+    const float friction = std::clamp(settings.friction, 0.0f, 1.0f);
+    const float velocityScale = std::clamp(settings.sedimentVelocity, 0.0f, 2.0f);
+    const float depositionRate = kFluvialDepositionRate;
+    const float featureCells = std::max(settings.featureSize, cellSize) / std::max(cellSize, 0.0001f);
+    const float erosionGranularity = std::clamp(settings.erosionGranularity + 1.0f, 1.0f, 101.0f);
+    const float ageScale = std::clamp(settings.geologicalAge / 20.0f, 0.1f, 4.0f);
+    const float waterScale = 1.0f + std::clamp(settings.flowVolume, 0.0f, 2.0f);
+    const float smallChannelScale = std::clamp(settings.smallChannelInfluence, 0.0f, 1.0f);
+    const float detailScaleMeters = std::max(settings.featureSize, cellSize);
+    const float flowCutting = cellSize <= detailScaleMeters ? std::lerp(0.35f, 6.0f, std::clamp(settings.flowVolume / 2.0f, 0.0f, 1.0f)) : 0.0f;
 
     const auto updateFlowFields = [&]() {
         for (int z = 0; z < n; ++z)
         {
             for (int x = 0; x < n; ++x)
             {
-                const float left = grid.heights[indexAt(clampCoord(x - 1), z)];
-                const float right = grid.heights[indexAt(clampCoord(x + 1), z)];
-                const float up = grid.heights[indexAt(x, clampCoord(z - 1))];
-                const float down = grid.heights[indexAt(x, clampCoord(z + 1))];
                 const size_t index = indexAt(x, z);
-                forceX[index] = -(right - left) / std::max(cellSize * 2.0f, 0.0001f);
-                forceZ[index] = -(down - up) / std::max(cellSize * 2.0f, 0.0001f);
+                float gradX = 0.0f;
+                float gradZ = 0.0f;
+                const float baseHeight = grid.heights[index] + erosionField[index] * flowCutting;
+                for (int dz = -1; dz <= 1; ++dz)
+                {
+                    for (int dx = -1; dx <= 1; ++dx)
+                    {
+                        const int sx = clampCoord(x + dx);
+                        const int sz = clampCoord(z + dz);
+                        const float distance = std::sqrt(static_cast<float>(dx * dx + dz * dz)) + 0.0001f;
+                        const size_t sampleIndex = indexAt(sx, sz);
+                        const float sampleHeight = grid.heights[sampleIndex] + erosionField[sampleIndex] * flowCutting;
+                        gradX += static_cast<float>(dx) * (sampleHeight - baseHeight) / distance;
+                        gradZ += static_cast<float>(dz) * (sampleHeight - baseHeight) / distance;
+                    }
+                }
+                gradX /= std::max(cellSize * 6.0f, 0.0001f);
+                gradZ /= std::max(cellSize * 6.0f, 0.0001f);
+                forceX[index] = -gradX;
+                forceZ[index] = -gradZ;
 
-                float steepestDrop = 0.0f;
-                int bestReceiver = -1;
-                const float currentHeight = grid.heights[index];
+                receivers[index].fill(-1);
+                receiverWeights[index].fill(0.0f);
+                const float currentHeight = baseHeight;
+                float weightSum = 0.0f;
+                size_t receiverCount = 0;
                 for (int dz = -1; dz <= 1; ++dz)
                 {
                     for (int dx = -1; dx <= 1; ++dx)
@@ -715,171 +864,332 @@ void ApplyFluvialErosionSingleLevel(HeightfieldGrid& grid, const FluvialErosionS
                         }
                         const float distance = (dx != 0 && dz != 0) ? 1.41421356f : 1.0f;
                         const size_t neighborIndex = indexAt(nx, nz);
-                        const float drop = (currentHeight - grid.heights[neighborIndex]) / distance;
-                        if (drop > steepestDrop)
+                        const float neighborHeight = grid.heights[neighborIndex] + erosionField[neighborIndex] * flowCutting;
+                        const float drop = (currentHeight - neighborHeight) / distance;
+                        if (drop > 0.0f && receiverCount < receivers[index].size())
                         {
-                            steepestDrop = drop;
-                            bestReceiver = static_cast<int>(neighborIndex);
+                            const float weight = std::pow(drop, 1.15f);
+                            receivers[index][receiverCount] = static_cast<int>(neighborIndex);
+                            receiverWeights[index][receiverCount] = weight;
+                            weightSum += weight;
+                            ++receiverCount;
                         }
                     }
                 }
-                receiver[index] = bestReceiver;
+                if (weightSum > 0.000001f)
+                {
+                    for (float& weight : receiverWeights[index])
+                    {
+                        weight /= weightSum;
+                    }
+                }
             }
         }
 
-        std::fill(flow.begin(), flow.end(), 1.0f);
+        std::fill(rawFlow.begin(), rawFlow.end(), 1.0f);
         std::ranges::sort(sortedCells, [&](size_t a, size_t b) {
             return grid.heights[a] > grid.heights[b];
         });
         for (const size_t index : sortedCells)
         {
-            const int next = receiver[index];
-            if (next >= 0)
+            for (size_t slot = 0; slot < receivers[index].size(); ++slot)
             {
-                flow[static_cast<size_t>(next)] += flow[index];
+                const int next = receivers[index][slot];
+                const float weight = receiverWeights[index][slot];
+                if (next >= 0 && weight > 0.0f)
+                {
+                    rawFlow[static_cast<size_t>(next)] += rawFlow[index] * weight;
+                }
             }
         }
 
         float maxFlow = 1.0f;
-        for (float value : flow)
+        for (float value : rawFlow)
         {
             maxFlow = std::max(maxFlow, value);
         }
         const float logMaxFlow = std::log1p(maxFlow);
-        for (float& value : flow)
+        for (size_t i = 0; i < cellCount; ++i)
         {
-            value = logMaxFlow > 0.0001f ? std::log1p(value) / logMaxFlow : 0.0f;
+            flow[i] = logMaxFlow > 0.0001f ? std::log1p(rawFlow[i]) / logMaxFlow : 0.0f;
+        }
+        for (int z = 1; z < n - 1; ++z)
+        {
+            for (int x = 1; x < n - 1; ++x)
+            {
+                const size_t index = indexAt(x, z);
+                float sum = flow[index] * 2.0f;
+                float weight = 2.0f;
+                for (int dz = -1; dz <= 1; ++dz)
+                {
+                    for (int dx = -1; dx <= 1; ++dx)
+                    {
+                        if (dx == 0 && dz == 0)
+                        {
+                            continue;
+                        }
+                        sum += flow[indexAt(x + dx, z + dz)];
+                        weight += 1.0f;
+                    }
+                }
+                smoothedFlow[index] = sum / weight;
+            }
+        }
+        for (int z = 1; z < n - 1; ++z)
+        {
+            for (int x = 1; x < n - 1; ++x)
+            {
+                const size_t index = indexAt(x, z);
+                flow[index] = std::lerp(flow[index], smoothedFlow[index], 0.35f);
+            }
         }
     };
 
     updateFlowFields();
-    const float wearSlope = std::tan(std::clamp(settings.wearAngleDegrees, 0.0f, 89.0f) * 3.14159265f / 180.0f);
-    const float depositSlope = std::tan(std::clamp(settings.depositAngleDegrees, 0.0f, 89.0f) * 3.14159265f / 180.0f);
-    const float maxSlope = std::tan(std::clamp(settings.maxErosionAngleDegrees, 0.0f, 89.0f) * 3.14159265f / 180.0f);
-    const float strength = std::clamp(settings.erosionStrength, 0.0f, 1.0f);
-    const float channeling = std::clamp(settings.channeling, 0.0f, 1.0f);
-    const float friction = std::clamp(settings.friction, 0.0f, 1.0f);
-    const float velocityScale = std::clamp(settings.sedimentVelocity, 0.0f, 2.0f);
-    const float capacityScale = std::clamp(settings.sedimentCapacity, 0.0f, 2.0f);
-    const float depositionRate = std::clamp(settings.depositionRate, 0.0f, 1.0f);
-    const float featureCells = std::max(settings.featureSize, cellSize) / std::max(cellSize, 0.0001f);
-    const float granularity = std::clamp(settings.erosionGranularity, 1.0f, 100.0f) / 100.0f;
+    const auto bilinearWeights = [&](float x, float z) {
+        struct Weights
+        {
+            std::array<size_t, 4> indices{};
+            std::array<float, 4> weights{};
+        };
+        const float fx = std::clamp(x, 0.0f, static_cast<float>(n - 1));
+        const float fz = std::clamp(z, 0.0f, static_cast<float>(n - 1));
+        const int x0 = std::clamp(static_cast<int>(std::floor(fx)), 0, n - 1);
+        const int z0 = std::clamp(static_cast<int>(std::floor(fz)), 0, n - 1);
+        const int x1 = std::min(x0 + 1, n - 1);
+        const int z1 = std::min(z0 + 1, n - 1);
+        const float tx = fx - static_cast<float>(x0);
+        const float tz = fz - static_cast<float>(z0);
+        return Weights{
+            {indexAt(x0, z0), indexAt(x1, z0), indexAt(x0, z1), indexAt(x1, z1)},
+            {(1.0f - tx) * (1.0f - tz), tx * (1.0f - tz), (1.0f - tx) * tz, tx * tz},
+        };
+    };
+    const auto sampleField = [&](const std::vector<float>& field, float x, float z) {
+        const auto weights = bilinearWeights(x, z);
+        float value = 0.0f;
+        for (size_t i = 0; i < weights.indices.size(); ++i)
+        {
+            value += field[weights.indices[i]] * weights.weights[i];
+        }
+        return value;
+    };
+    const auto splatField = [&](std::vector<float>& field, float x, float z, float amount) {
+        if (std::abs(amount) <= 0.0000001f)
+        {
+            return;
+        }
+        const auto weights = bilinearWeights(x, z);
+        for (size_t i = 0; i < weights.indices.size(); ++i)
+        {
+            field[weights.indices[i]] += amount * weights.weights[i];
+        }
+    };
+    const auto consumeField = [&](std::vector<float>& field, float x, float z, float amount) {
+        if (amount <= 0.0f)
+        {
+            return 0.0f;
+        }
+        const auto weights = bilinearWeights(x, z);
+        float available = 0.0f;
+        for (size_t i = 0; i < weights.indices.size(); ++i)
+        {
+            available += field[weights.indices[i]] * weights.weights[i];
+        }
+        const float consumed = std::min(amount, available);
+        for (size_t i = 0; i < weights.indices.size(); ++i)
+        {
+            const size_t index = weights.indices[i];
+            const float take = std::min(field[index], consumed * weights.weights[i]);
+            field[index] -= take;
+        }
+        return consumed;
+    };
+    const auto enforceBedrockFloor = [&]() {
+        for (float& height : grid.heights)
+        {
+            height = std::max(height, bedrockFloor);
+        }
+    };
 
     const auto runErosionPass = [&](float featureScale, float lengthScale, float strengthScale, int iterationCount, int seedOffset) {
         const float passFeatureCells = std::max(1.0f, featureCells * featureScale);
-        const float passFeatureMeters = std::max(cellSize, settings.featureSize * featureScale);
-        const int maxSteps = std::clamp(static_cast<int>((settings.channelLength * lengthScale) / std::max(cellSize, passFeatureMeters * 0.25f)), 1, 512);
-        const int particleStride = std::max(1, static_cast<int>(std::round(std::lerp(passFeatureCells * 0.22f, 1.0f, granularity))));
-        const float spawnBase = std::lerp(0.42f, 0.82f, granularity);
-        const float featureStrength = std::clamp(passFeatureCells * 0.2f, 0.35f, 2.4f) * strengthScale;
+        const int maxSteps = std::clamp(static_cast<int>(std::round(settings.channelLength * lengthScale * detailScaleMeters / std::max(cellSize, 0.0001f))), 1, 2048);
+        const int particleStride = std::max(1, static_cast<int>(std::round(std::clamp(passFeatureCells * 0.18f, 1.0f, 8.0f))));
+        std::vector<float> visitMask(cellCount, 0.0f);
 
         for (int iteration = 0; iteration < iterationCount; ++iteration)
         {
-            if ((iteration % 4) == 0)
-            {
-                updateFlowFields();
-            }
+            std::fill(visitMask.begin(), visitMask.end(), 0.0f);
+            updateFlowFields();
             for (int z = 1; z < n - 1; z += particleStride)
             {
                 for (int x = 1; x < n - 1; x += particleStride)
                 {
-                    const float sourceFlow = flow[indexAt(x, z)];
-                    const float spawnChance = std::clamp(spawnBase + sourceFlow * 0.45f, 0.0f, 0.98f);
-                    if (Hash01(x, z, settings.seed + seedOffset + iteration * 977) > spawnChance)
+                    const float iterValue = static_cast<float>(iteration + seedOffset) * 0.013f;
+                    float px = iterValue + KttRandom2(static_cast<float>(x) * 1.8f * cellSize, static_cast<float>(z) / 49.2f * cellSize) * static_cast<float>(n - 1);
+                    px = (px / static_cast<float>(n - 1) - std::floor(px / static_cast<float>(n - 1))) * static_cast<float>(n - 1);
+                    float pz = iterValue * 3.241f + KttRandom2(static_cast<float>(x) / 1.345f * cellSize + 203.12f, static_cast<float>(z) * cellSize + 502.23f) * static_cast<float>(n - 1);
+                    pz = (pz / static_cast<float>(n - 1) - std::floor(pz / static_cast<float>(n - 1))) * static_cast<float>(n - 1);
+                    if (px < 1.0f || pz < 1.0f || px > static_cast<float>(n - 2) || pz > static_cast<float>(n - 2))
                     {
                         continue;
                     }
+                    const int startX = clampCoord(static_cast<int>(px));
+                    const int startZ = clampCoord(static_cast<int>(pz));
+                    const size_t startIndex = indexAt(startX, startZ);
+                    float slopeMax = 0.0f;
+                    float curvature = 0.0f;
+                    const float centerHeight = grid.heights[startIndex];
+                    for (int dz = -1; dz <= 1; ++dz)
+                    {
+                        for (int dx = -1; dx <= 1; ++dx)
+                        {
+                            const float dh = grid.heights[indexAt(clampCoord(startX + dx), clampCoord(startZ + dz))] - centerHeight;
+                            slopeMax = std::max(slopeMax, std::abs(dh) / std::max(cellSize, 0.0001f));
+                            curvature += dh / std::max(cellSize * 8.0f, 0.0001f);
+                        }
+                    }
+                    float fx = forceX[startIndex];
+                    float fz = forceZ[startIndex];
+                    if (std::max(std::sqrt(fx * fx + fz * fz), -curvature) <= wearSlope)
+                    {
+                        continue;
+                    }
+                    const float scaleRatio = std::max(cellSize / detailScaleMeters, 0.0001f);
+                    const float granularityExponent = cellSize > detailScaleMeters ? 2.0f : 2.0f - 2.0f * smallChannelScale;
+                    const float granularityDenominator = std::max(erosionGranularity / std::pow(scaleRatio, granularityExponent), 0.0001f);
+                    const float granularityThreshold = std::clamp(1.0f - 1.0f / granularityDenominator, 0.0f, 0.999f);
+                    if (KttRandom2(static_cast<float>(x) + 1042.1f, static_cast<float>(z) + static_cast<float>(iteration)) <= granularityThreshold)
+                    {
+                        continue;
+                    }
+                    if (visitMask[startIndex] > 0.1f)
+                    {
+                        continue;
+                    }
+                    visitMask[startIndex] = 1.0f;
 
-                    float px = static_cast<float>(x) + Hash01(x, z, settings.seed + seedOffset + 11) - 0.5f;
-                    float pz = static_cast<float>(z) + Hash01(x, z, settings.seed + seedOffset + 23) - 0.5f;
                     float vx = 0.0f;
                     float vz = 0.0f;
                     float sediment = 0.0f;
+                    float carry = 0.0f;
+                    float lastPx = px;
+                    float lastPz = pz;
                     for (int step = 0; step < maxSteps; ++step)
                     {
-                        const int ix = clampCoord(static_cast<int>(px));
-                        const int iz = clampCoord(static_cast<int>(pz));
-                        const size_t currentIndex = indexAt(ix, iz);
-                        float fx = forceX[currentIndex];
-                        float fz = forceZ[currentIndex];
+                        fx = sampleField(forceX, px, pz);
+                        fz = sampleField(forceZ, px, pz);
                         const float slope = std::sqrt(fx * fx + fz * fz);
                         if (slope > maxSlope)
                         {
                             break;
                         }
 
-                        const float flowWeight = std::clamp(flow[currentIndex], 0.0f, 1.0f);
-                        const float flowBoost = 0.45f + flowWeight * 1.35f;
-                        vx = vx * (1.0f - friction) + fx * flowBoost;
-                        vz = vz * (1.0f - friction) + fz * flowBoost;
-                        const float vLength = std::sqrt(vx * vx + vz * vz);
-                        if (vLength < 0.00001f)
-                        {
-                            break;
-                        }
-
-                        const float dirX = vx / vLength;
-                        const float dirZ = vz / vLength;
-                        const float before = grid.heights[currentIndex];
-                        const float ahead = sampleHeight(px + dirX, pz + dirZ);
-                        const float behind = sampleHeight(px - dirX, pz - dirZ);
-                        const float flowStrength = std::lerp(0.45f, 1.8f, flowWeight);
-                        const float downhill = std::max(before - ahead, 0.0f);
-                        const float slopeCapacity = slope * passFeatureMeters * 0.12f + downhill * 0.85f;
-                        const float capacity = std::max(0.0f, slopeCapacity * flowStrength * capacityScale * strengthScale);
-                        const float lowSlopeDeposit = slope <= depositSlope ? 1.0f : 0.35f;
-                        const float depositAmount = std::max(sediment - capacity, 0.0f) * depositionRate * lowSlopeDeposit;
-
-                        float erodeAmount = 0.0f;
-                        if (slope >= wearSlope)
-                        {
-                            const float capacityDeficit = std::max(capacity - sediment, 0.0f);
-                            const float valleyCut = std::max(before - ahead, 0.0f) * channeling * 0.14f * featureStrength * flowStrength;
-                            const float smoothCut = std::max(before - ((ahead + behind) * 0.5f), 0.0f) * 0.10f * featureStrength;
-                            erodeAmount = (capacityDeficit * 0.18f + valleyCut + smoothCut) * strength;
-                        }
-                        erodeAmount = std::min(erodeAmount, std::max(before - std::min(ahead, behind), 0.0f));
-
-                        const float oldHeight = grid.heights[currentIndex];
-                        const float nextHeight = std::clamp(oldHeight - erodeAmount + depositAmount, std::min(ahead, behind), std::max(ahead, behind) + passFeatureMeters * 0.1f);
-                        grid.heights[currentIndex] = nextHeight;
-                        sediment = std::max(0.0f, sediment + (oldHeight - nextHeight));
-                        maskField[currentIndex] += erodeAmount + std::max(nextHeight - (oldHeight - erodeAmount), 0.0f);
-
-                        px += dirX * velocityScale;
-                        pz += dirZ * velocityScale;
+                        const float flowWeight = std::clamp(sampleField(flow, px, pz), 0.0f, 1.0f);
+                        px += velocityScale * vx / (1.0f + std::sqrt(fx * fx + fz * fz));
+                        pz += velocityScale * vz / (1.0f + std::sqrt(fx * fx + fz * fz));
                         if (px < 1.0f || pz < 1.0f || px > static_cast<float>(n - 2) || pz > static_cast<float>(n - 2))
                         {
                             break;
                         }
+                        const int movedX = clampCoord(static_cast<int>(px));
+                        const int movedZ = clampCoord(static_cast<int>(pz));
+                        const size_t movedIndex = indexAt(movedX, movedZ);
+                        fx = sampleField(forceX, px, pz);
+                        fz = sampleField(forceZ, px, pz);
+                        vx *= std::pow(1.0f - friction, cellSize / std::max(detailScaleMeters, 0.0001f));
+                        vz *= std::pow(1.0f - friction, cellSize / std::max(detailScaleMeters, 0.0001f));
+                        vx += fx * cellSize / std::max(detailScaleMeters, 0.0001f);
+                        vz += fz * cellSize / std::max(detailScaleMeters, 0.0001f);
+                        const float nextVLength = std::sqrt(vx * vx + vz * vz);
+                        if (nextVLength < 0.00001f)
+                        {
+                            break;
+                        }
+                        splatField(transportFlowField, px, pz, (0.25f + flowWeight * 0.75f) * strengthScale);
+
+                        float dirX = vx / nextVLength;
+                        float dirZ = vz / nextVLength;
+                        const float manhattanLength = (std::abs(dirX) + std::abs(dirZ)) / (std::sqrt(dirX * dirX + dirZ * dirZ) + 0.0001f);
+                        dirX *= manhattanLength;
+                        dirZ *= manhattanLength;
+                        const float before = grid.heights[movedIndex];
+                        const float ahead = sampleHeight(px + dirX, pz + dirZ);
+                        const float behind = sampleHeight(px - dirX, pz - dirZ);
+                        const float flowStrength = std::clamp(strength * std::sqrt(ageScale) * waterScale * strengthScale, 0.0f, 1.0f);
+                        if (std::sqrt(fx * fx + fz * fz) < depositSlope || std::sqrt(fx * fx + fz * fz) >= maxSlope)
+                        {
+                            break;
+                        }
+                        float nextHeight = std::lerp(before, (ahead + behind) * 0.5f, flowStrength);
+                        nextHeight -= channeling * std::max(nextHeight - before, 0.0f);
+                        carry += before - nextHeight;
+                        if (carry < 0.0f)
+                        {
+                            nextHeight = before - carry;
+                            carry = 0.0f;
+                        }
+                        nextHeight = std::max(nextHeight, std::min(ahead, behind));
+                        nextHeight = std::min(nextHeight, std::max(ahead, behind));
+                        const float heightDelta = nextHeight - before;
+                        grid.heights[movedIndex] = nextHeight;
+                        const float erodeAmount = std::max(-heightDelta, 0.0f);
+                        const float depositAmount = std::max(heightDelta, 0.0f);
+                        sediment = std::max(0.0f, sediment + erodeAmount - depositAmount);
+                        splatField(looseSediment, px, pz, depositAmount);
+                        splatField(depositField, px, pz, depositAmount);
+                        splatField(erosionField, px, pz, erodeAmount);
+                        splatField(maskField, px, pz, erodeAmount + depositAmount * 0.65f + flowWeight * strengthScale * 0.015f);
+
+                        lastPx = px;
+                        lastPz = pz;
+                    }
+                    if (sediment > 0.0f)
+                    {
+                        const float terminalDeposit = sediment * depositionRate * 0.45f;
+                        splatField(looseSediment, lastPx, lastPz, terminalDeposit);
+                        splatField(depositField, lastPx, lastPz, terminalDeposit);
+                        splatField(maskField, lastPx, lastPz, terminalDeposit * 0.35f);
                     }
                 }
             }
+            enforceBedrockFloor();
         }
     };
 
-    const int gridIterations = std::max(1, settings.iterations / 2);
-    const int particleIterations = std::max(0, settings.iterations - gridIterations);
-    ApplyGridErosionPass(grid, settings, gridIterations, 0.68f, maskField);
+    const int ageIterations = std::max(1, static_cast<int>(std::round(static_cast<float>(settings.iterations) * std::clamp(ageScale, 0.35f, 2.5f))));
+    const int particleIterations = ageIterations;
     updateFlowFields();
 
     const int coarseIterations = particleIterations / 2;
     const int detailIterations = std::max(0, particleIterations - coarseIterations);
     if (coarseIterations > 0)
     {
-        runErosionPass(2.75f, 1.6f, 0.45f, coarseIterations, 13007);
+        runErosionPass(2.75f, 1.6f, 0.38f, coarseIterations, 13007);
     }
     if (detailIterations > 0)
     {
-        runErosionPass(0.75f, 0.85f, 0.65f, detailIterations, 29017);
+        runErosionPass(0.75f, 0.85f, 0.42f, detailIterations, 29017);
+    }
+    if ((settings.erosionGranularity >= 8.0f || smallChannelScale > 0.0f) && detailIterations > 0)
+    {
+        const int microIterations = std::max(1, detailIterations / 2);
+        runErosionPass(0.35f, 0.42f, 0.12f + smallChannelScale * 0.16f, microIterations, 41027);
     }
 
     float maxMask = 0.0f;
+    for (size_t i = 0; i < cellCount; ++i)
+    {
+        maskField[i] += depositField[i] * 0.35f + erosionField[i] * 0.25f + flow[i] * 0.10f;
+    }
     for (float value : maskField)
     {
         maxMask = std::max(maxMask, value);
     }
     grid.mask.resize(cellCount, 0.0f);
+    grid.deposits = depositField;
+    grid.flows = transportFlowField;
     if (maxMask > 0.000001f)
     {
         for (size_t i = 0; i < cellCount; ++i)
@@ -897,34 +1207,24 @@ void ApplyFluvialErosion(HeightfieldGrid& grid, const FluvialErosionSettings& se
         return;
     }
 
-    const std::array<int, FluvialErosionSettings::LevelStrengthCount> levelResolutions = {16, 32, 64, 128, 256, 512};
+    const std::vector<float> sourceHeights = grid.heights;
+    const std::array<int, kFluvialLevelStrengths.size()> levelResolutions = {16, 32, 64, 128, 256, 512};
     FluvialErosionSettings effectiveSettings = settings;
-    if (!settings.useAdvancedParameters)
-    {
-        const FluvialErosionSettings defaults;
-        effectiveSettings.featureSize = defaults.featureSize;
-        effectiveSettings.channelLength = defaults.channelLength;
-        effectiveSettings.channeling = defaults.channeling;
-        effectiveSettings.friction = defaults.friction;
-        effectiveSettings.wearAngleDegrees = 4.0f;
-        effectiveSettings.depositAngleDegrees = defaults.depositAngleDegrees;
-        effectiveSettings.maxErosionAngleDegrees = 80.0f;
-        effectiveSettings.erosionGranularity = defaults.erosionGranularity;
-        effectiveSettings.sedimentVelocity = defaults.sedimentVelocity;
-    }
 
     grid.mask.assign(static_cast<size_t>(n) * static_cast<size_t>(n), 0.0f);
+    grid.deposits.assign(static_cast<size_t>(n) * static_cast<size_t>(n), 0.0f);
+    grid.flows.assign(static_cast<size_t>(n) * static_cast<size_t>(n), 0.0f);
     int previousResolution = 0;
-    for (size_t level = 0; level < effectiveSettings.levelStrengths.size(); ++level)
+    for (size_t level = 0; level < kFluvialLevelStrengths.size(); ++level)
     {
-        const float levelStrength = std::clamp(effectiveSettings.levelStrengths[level], 0.0f, 2.0f);
+        const float levelStrength = std::clamp(kFluvialLevelStrengths[level], 0.0f, 2.0f);
         if (levelStrength <= 0.0001f)
         {
             continue;
         }
 
         const int levelResolution = std::clamp(levelResolutions[level], 16, n);
-        if (levelResolution == previousResolution && levelResolution != n)
+        if (levelResolution == previousResolution)
         {
             continue;
         }
@@ -933,27 +1233,63 @@ void ApplyFluvialErosion(HeightfieldGrid& grid, const FluvialErosionSettings& se
         HeightfieldGrid base = ResampleHeightfieldGrid(grid, levelResolution);
         HeightfieldGrid eroded = base;
         FluvialErosionSettings levelSettings = effectiveSettings;
-        const float detailT = static_cast<float>(level) / static_cast<float>(std::max<size_t>(1, effectiveSettings.levelStrengths.size() - 1));
+        const float detailT = static_cast<float>(level) / static_cast<float>(std::max<size_t>(1, kFluvialLevelStrengths.size() - 1));
+        const float levelCellSize = eroded.terrainSizeMeters / static_cast<float>(std::max(1, eroded.resolution - 1));
+        const float referenceDetailSize = std::max(grid.terrainSizeMeters / 255.0f, 0.0001f);
+        const float voxelScale = std::max(levelCellSize / referenceDetailSize, 0.0001f);
+        const float durationScale = std::clamp(std::pow(voxelScale, -std::clamp(effectiveSettings.geologicalAge, 0.0f, 100.0f) * 0.1f), 1.0f, 100.0f);
+        const float levelFade = detailT < 0.2f ? std::lerp(0.35f, 1.0f, detailT / 0.2f) : 1.0f;
         levelSettings.erosionStrength = std::clamp(effectiveSettings.erosionStrength * levelStrength, 0.0f, 2.0f);
-        levelSettings.iterations = std::max(1, static_cast<int>(std::round(static_cast<float>(effectiveSettings.iterations) * std::lerp(0.55f, 0.9f, detailT))));
+        levelSettings.iterations = std::clamp(static_cast<int>(std::round(static_cast<float>(effectiveSettings.iterations) * durationScale * levelFade)), 1, 180);
         levelSettings.channelLength = effectiveSettings.channelLength * std::lerp(2.8f, 0.75f, detailT);
         levelSettings.featureSize = effectiveSettings.featureSize * std::lerp(4.0f, 0.75f, detailT);
         levelSettings.channeling = std::clamp(effectiveSettings.channeling * std::lerp(1.65f, 0.85f, detailT), 0.0f, 1.0f);
         levelSettings.erosionGranularity = std::clamp(effectiveSettings.erosionGranularity * std::lerp(0.45f, 1.2f, detailT), 1.0f, 100.0f);
-        levelSettings.seed = effectiveSettings.seed + static_cast<int>(level) * 1009;
-        bool usedGpu = false;
-        if (effectiveSettings.backend == FluvialBackend::GpuCompute && g_fluvialGpuEvaluator != nullptr)
-        {
-            std::string gpuError;
-            usedGpu = g_fluvialGpuEvaluator(eroded, levelSettings, &gpuError);
-        }
-        if (!usedGpu)
-        {
-            ApplyFluvialErosionSingleLevel(eroded, levelSettings);
-        }
+        ApplyFluvialErosionSingleLevel(eroded, levelSettings);
         AddResampledHeightDelta(grid, base, eroded, 1.0f);
     }
-    NormalizeHeightfieldMask(grid);
+
+    const size_t cellCount = static_cast<size_t>(n) * static_cast<size_t>(n);
+    if (sourceHeights.size() == cellCount && grid.heights.size() == cellCount)
+    {
+        const float cellSize = grid.terrainSizeMeters / static_cast<float>(std::max(1, n - 1));
+        const int detailSmoothRadius = std::clamp(static_cast<int>(std::round(std::max(effectiveSettings.featureSize, cellSize) / std::max(cellSize, 0.0001f) * 1.25f)), 1, std::max(1, n / 8));
+        const std::vector<float> smoothedSourceHeights = SmoothHeightfieldHeights(sourceHeights, n, detailSmoothRadius, 2);
+        const auto [minIt, maxIt] = std::ranges::minmax_element(sourceHeights);
+        const float heightRange = (minIt != sourceHeights.end() && maxIt != sourceHeights.end()) ? std::max(*maxIt - *minIt, 0.0001f) : 1.0f;
+        const float maxDetailDelta = heightRange * 0.018f;
+        float maxWear = 0.0f;
+        for (float value : grid.mask)
+        {
+            maxWear = std::max(maxWear, value);
+        }
+        for (size_t i = 0; i < cellCount; ++i)
+        {
+            const float wear = maxWear > 0.000001f ? std::clamp(grid.mask[i] / maxWear, 0.0f, 1.0f) : 0.0f;
+            const float detailDelta = std::clamp(sourceHeights[i] - smoothedSourceHeights[i], -maxDetailDelta, maxDetailDelta);
+            const float restoreWeight = std::lerp(0.08f, 0.42f, std::sqrt(wear));
+            grid.heights[i] += detailDelta * restoreWeight;
+        }
+
+        const int macroSmoothRadius = std::clamp(static_cast<int>(std::round(std::max(effectiveSettings.featureSize * 4.0f, cellSize) / std::max(cellSize, 0.0001f))), 2, std::max(2, n / 5));
+        const std::vector<float> sourceMacroHeights = SmoothHeightfieldHeights(sourceHeights, n, macroSmoothRadius, 2);
+        const std::vector<float> resultMacroHeights = SmoothHeightfieldHeights(grid.heights, n, macroSmoothRadius, 2);
+        const float ageScale = std::clamp(effectiveSettings.geologicalAge / 20.0f, 0.35f, 1.8f);
+        const float strengthScale = std::clamp(effectiveSettings.erosionStrength, 0.0f, 1.0f);
+        const float baseAllowedDrop = heightRange * std::lerp(0.045f, 0.11f, strengthScale) * ageScale;
+        for (size_t i = 0; i < cellCount; ++i)
+        {
+            const float wear = maxWear > 0.000001f ? std::clamp(grid.mask[i] / maxWear, 0.0f, 1.0f) : 0.0f;
+            const float allowedDrop = baseAllowedDrop * std::lerp(0.75f, 1.85f, wear);
+            const float macroDeficit = sourceMacroHeights[i] - resultMacroHeights[i] - allowedDrop;
+            if (macroDeficit > 0.0f)
+            {
+                const float restoreWeight = std::lerp(0.55f, 0.24f, wear);
+                grid.heights[i] += macroDeficit * restoreWeight;
+            }
+        }
+    }
+    NormalizeHeightfieldFields(grid);
 }
 
 void ApplyHeightmapBlur(HeightfieldGrid& grid, const HeightmapBlurSettings& settings)
@@ -1354,7 +1690,7 @@ MeshData BuildMeshFromSdf(const GraphSettings& settings, const SdfPipeline& pipe
     return mesh;
 }
 
-MeshData BuildMeshFromHeightPipeline(const SdfPipeline& pipeline, int resolution, std::string* message)
+MeshData BuildMeshFromHeightPipeline(const SdfPipeline& pipeline, int resolution, std::string* message, HeightfieldPreviewField previewField = HeightfieldPreviewField::Heightmap)
 {
     HeightfieldGrid grid = BuildHeightfieldFromHeightmap(pipeline.heightmap, resolution, message);
     if (grid.resolution <= 0)
@@ -1376,15 +1712,16 @@ MeshData BuildMeshFromHeightPipeline(const SdfPipeline& pipeline, int resolution
     {
         *message += std::format(" + {} heightfield op{}", pipeline.heightfieldOperations.size(), pipeline.heightfieldOperations.size() == 1 ? "" : "s");
     }
+    SelectHeightfieldPreviewField(grid, previewField);
     return BuildMeshFromHeightfield(grid, resolution);
 }
 } // namespace
 
-MeshData NodeGraph::BuildMeshFromHeightPipelineCached(const SdfPipeline& pipeline, int resolution, std::string* message)
+MeshData NodeGraph::BuildMeshFromHeightPipelineCached(const SdfPipeline& pipeline, int resolution, std::string* message, HeightfieldPreviewField previewField)
 {
     if (pipeline.heightmapNodeId == 0)
     {
-        return BuildMeshFromHeightPipeline(pipeline, resolution, message);
+        return BuildMeshFromHeightPipeline(pipeline, resolution, message, previewField);
     }
 
     const int simulationResolution = std::clamp(pipeline.heightmap.simulationResolution, 2, 2048);
@@ -1469,6 +1806,7 @@ MeshData NodeGraph::BuildMeshFromHeightPipelineCached(const SdfPipeline& pipelin
     {
         *message += std::format(" + {} heightfield op{}", pipeline.heightfieldOperations.size(), pipeline.heightfieldOperations.size() == 1 ? "" : "s");
     }
+    SelectHeightfieldPreviewField(grid, previewField);
     return BuildMeshFromHeightfield(grid, resolution);
 }
 
@@ -1685,7 +2023,8 @@ GraphId NodeGraph::CreateNode(NodeKind kind)
     case NodeKind::FluvialErosion:
         AddPin(nodeId, PinKind::Input, ValueType::HeightField, "HeightField");
         AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
-        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Fluvial Mask");
+        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Deposits");
+        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Flows");
         break;
     case NodeKind::HeightmapBlur:
         AddPin(nodeId, PinKind::Input, ValueType::HeightField, "HeightField");
@@ -1759,6 +2098,7 @@ bool NodeGraph::SetPreviewNode(GraphId nodeId)
     evaluation_.previewNodeId = nodeId;
     evaluation_.previewPinId = 0;
     evaluation_.previewShowsMask = false;
+    evaluation_.previewField = HeightfieldPreviewField::Heightmap;
     evaluation_.previewStage = stage;
     evaluation_.dirty = true;
     evaluation_.status = std::format("Preview node changed to {}", node->title);
@@ -1779,11 +2119,24 @@ bool NodeGraph::SetPreviewPin(GraphId pinId)
     }
 
     const bool showsMask = pin->valueType == ValueType::Mask;
+    HeightfieldPreviewField previewField = HeightfieldPreviewField::Heightmap;
+    if (showsMask)
+    {
+        if (pin->label == "Deposits")
+        {
+            previewField = HeightfieldPreviewField::Deposits;
+        }
+        else if (pin->label == "Flows")
+        {
+            previewField = HeightfieldPreviewField::Flows;
+        }
+    }
     const PreviewStage stage = PreviewStageFor(node->kind);
     if (evaluation_.previewNodeId == node->id &&
         evaluation_.previewPinId == pinId &&
         evaluation_.previewStage == stage &&
-        evaluation_.previewShowsMask == showsMask)
+        evaluation_.previewShowsMask == showsMask &&
+        evaluation_.previewField == previewField)
     {
         return false;
     }
@@ -1792,6 +2145,7 @@ bool NodeGraph::SetPreviewPin(GraphId pinId)
     evaluation_.previewNodeId = node->id;
     evaluation_.previewPinId = pinId;
     evaluation_.previewShowsMask = showsMask;
+    evaluation_.previewField = previewField;
     evaluation_.previewStage = stage;
     evaluation_.dirty = evaluation_.dirty || pipelineChanged;
     evaluation_.status = std::format("Preview output changed to {}", pin->label);
@@ -2007,6 +2361,10 @@ void NodeGraph::Evaluate(int previewMeshResolution)
     const SdfPipeline finalPipeline = FinalPipeline();
     evaluation_.previewIsHeightmap = previewPipeline.useHeightmap;
     evaluation_.previewShowsMask = evaluation_.previewShowsMask && previewPipeline.useHeightmap;
+    if (!evaluation_.previewShowsMask)
+    {
+        evaluation_.previewField = HeightfieldPreviewField::Heightmap;
+    }
     evaluation_.previewMessage.clear();
     if (!previewPipeline.hasSource)
     {
@@ -2017,7 +2375,7 @@ void NodeGraph::Evaluate(int previewMeshResolution)
     else if (previewPipeline.useHeightmap)
     {
         evaluation_.previewSdf = {};
-        evaluation_.previewMesh = BuildMeshFromHeightPipelineCached(previewPipeline, previewMeshResolution, &evaluation_.previewMessage);
+        evaluation_.previewMesh = BuildMeshFromHeightPipelineCached(previewPipeline, previewMeshResolution, &evaluation_.previewMessage, evaluation_.previewField);
     }
     else
     {

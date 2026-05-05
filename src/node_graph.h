@@ -62,6 +62,13 @@ enum class PreviewStage
     HeightmapBlur,
 };
 
+enum class HeightfieldPreviewField
+{
+    Heightmap,
+    Deposits,
+    Flows,
+};
+
 struct Pin
 {
     GraphId id = 0;
@@ -109,25 +116,20 @@ struct HeightmapLoadSettings
 
 struct FluvialErosionSettings
 {
-    static constexpr size_t LevelStrengthCount = 6;
-
-    FluvialBackend backend = FluvialBackend::CpuReference;
-    bool useAdvancedParameters = false;
-    float featureSize = 8.0f;
+    float featureSize = 4.0f;
+    float geologicalAge = 20.0f;
     int iterations = 25;
     float channelLength = 128.0f;
-    float erosionStrength = 1.0f;
-    float channeling = 0.25f;
+    float erosionStrength = 0.65f;
+    float channeling = 0.2f;
     float friction = 0.1f;
     float wearAngleDegrees = 15.0f;
     float depositAngleDegrees = 0.0f;
     float maxErosionAngleDegrees = 30.0f;
     float erosionGranularity = 10.0f;
+    float flowVolume = 0.0f;
+    float smallChannelInfluence = 0.0f;
     float sedimentVelocity = 1.0f;
-    float sedimentCapacity = 0.6f;
-    float depositionRate = 0.35f;
-    std::array<float, LevelStrengthCount> levelStrengths = {0.85f, 1.0f, 0.75f, 0.45f, 0.25f, 0.12f};
-    int seed = 1;
 };
 
 struct HeightmapBlurSettings
@@ -253,6 +255,8 @@ struct HeightfieldGrid
     float terrainSizeMeters = 1.0f;
     std::vector<float> heights;
     std::vector<float> mask;
+    std::vector<float> deposits;
+    std::vector<float> flows;
 };
 
 using FluvialGpuEvaluator = bool (*)(HeightfieldGrid& grid, const FluvialErosionSettings& settings, std::string* error);
@@ -334,6 +338,7 @@ struct EvaluationSummary
     GraphId previewPinId = 0;
     bool previewIsHeightmap = false;
     bool previewShowsMask = false;
+    HeightfieldPreviewField previewField = HeightfieldPreviewField::Heightmap;
     std::string previewMessage;
     SdfPreviewStats previewSdf;
     SdfPreviewStats finalSdf;
@@ -391,7 +396,7 @@ private:
     const Node* FindUpstreamNode(const Node& node) const;
     SdfPipeline PipelineTo(NodeKind targetKind) const;
     SdfPipeline PipelineToNode(const Node& targetNode) const;
-    MeshData BuildMeshFromHeightPipelineCached(const SdfPipeline& pipeline, int resolution, std::string* message);
+    MeshData BuildMeshFromHeightPipelineCached(const SdfPipeline& pipeline, int resolution, std::string* message, HeightfieldPreviewField previewField = HeightfieldPreviewField::Heightmap);
 
     struct HeightfieldNodeCache
     {

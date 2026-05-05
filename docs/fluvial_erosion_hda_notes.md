@@ -26,8 +26,9 @@ HDA の内部ネットワークは gzip 圧縮された `Contents.gz` として�
 | Input 2 | Flow Lines Input |
 | Output 1 | Heightfield Output |
 
-Terrain Editor の初期実装では、まず Input 1 の `Heightfield` のみを受け取り、Heightfield を返す形で十分です。
-Flow Lines 入力は、後で `Flowlines` ノードや River 系ノードを作るタイミングで追加するのがよさそうです。
+Terrain Editor では、まず Input 1 の `Heightfield` を主入力として扱います。
+ただし実装方針は「簡易的な見た目再現」ではなく、KTT の粒子輸送、補助フィールド、マルチスケール処理にできるだけ近づけることを目標にします。
+Flow Lines 入力は初期段階では未接続でも、将来の River / Flowline 系ノードと接続できる前提で設計します。
 
 ## HDA の主なパラメータ
 
@@ -104,7 +105,9 @@ KTT は高さだけでなく、侵食結果の補助フィールドを出力で�
 | age | 侵食による年齢/摩耗表現 |
 | flows | 流れの強さや流線情報 |
 
-Terrain Editor の最初の実装では Heightfield のみを更新し、後で `Mask` や `Field` のデータモデルができてから補助フィールドを追加するのが安全です。
+Terrain Editor でも、KTT に近い調整を行うには補助フィールドが必要です。
+そのため Heightfield の更新だけでなく、少なくとも `deposits` と `flows` はノード出力として扱います。
+`age` や `wear/erosion` は、見た目の調整とデバッグに必要になった段階で追加します。
 
 ## 内部ネットワークの構成
 
@@ -167,11 +170,21 @@ Terrain Editor の最初の実装では Heightfield のみを更新し、後で 
 - `wear` と `deposit` に削り量/堆積量を蓄積する
 - 高さは前後サンプルの範囲内にクランプして破綻を抑える
 
-KTT の核はこの粒子輸送処理です。Terrain Editor では、最初は CPU で同じ考え方を簡略実装するとよさそうです。
+KTT の核はこの粒子輸送処理です。
+Terrain Editor でも、単なる斜面方向の削り込みではなく、力場、粒子輸送、堆積、flow/deposit 補助フィールド、マルチスケール処理を組み合わせて、かなり KTT に似せた構成を目指します。
 
-## Terrain Editor 向け MVP
+## Terrain Editor 向け実装方針
 
-最初に作る `Fluvial Erosion` ノードは、完全な KTT 再現ではなく、以下の範囲がよさそうです。
+`Fluvial Erosion` ノードは、KTT の完全なバイナリ互換や Houdini 内部ノードの完全移植ではなくても、挙動と調整感はできるだけ KTT に近づけます。
+特に、KTT らしさに効く次の要素は初期から中核として扱います。
+
+- `Feature Size`、`Geological Age`、`Simulation Iterations`、`Channel Length` を基本パラメータとして持つ
+- `Erosion Strength` と `Channeling` で水路状の削り込みを制御する
+- `Friction`、`Wear Angle`、`Deposit Angle`、`Max Erosion Angle`、`Sediment Velocity` で粒子輸送を制御する
+- `Erosion Granularity`、`Flow Volume`、`Small Channel Influence` で細いチャンネルの密度と影響を制御する
+- `deposits` と `flows` を補助出力として確認できるようにする
+- D8 の単一下流だけでなく、複数下流セルへ分配する multi-flow 風の flow accumulation を使う
+- 大きな谷筋と細かいリルを分けて扱うマルチスケール処理を持つ
 
 ### 入出力
 
@@ -179,48 +192,65 @@ KTT の核はこの粒子輸送処理です。Terrain Editor では、最初は 
 | --- | --- |
 | Input | Heightfield |
 | Output | Heightfield |
+| Output | Deposits |
+| Output | Flows |
 
-### 初期パラメータ
+将来的には、KTT の Input 2 に相当する Flow Lines 入力、Erosion Mask、Hardness Mask、`age` / `erosion` 出力も追加候補にします。
+
+### KTT 寄せのパラメータ
 
 | パラメータ | 初期値 | 範囲 |
 | --- | ---: | ---: |
-| Feature Size | 8 | 1-64 |
+| Feature Size | 4 | 1-64 |
+| Geological Age | 20 | 0-100 |
 | Iterations | 25 | 0-200 |
 | Channel Length | 128 | 1-1024 |
-| Erosion Strength | 1 | 0-1 |
-| Channeling | 0.25 | 0-1 |
+| Erosion Strength | 0.65 | 0-1 |
+| Channeling | 0.2 | 0-1 |
 | Friction | 0.1 | 0-1 |
 | Wear Angle | 15 | 0-90 |
 | Deposit Angle | 0 | 0-90 |
 | Max Erosion Angle | 30 | 0-90 |
 | Erosion Granularity | 10 | 1-100 |
+| Flow Volume | 0 | 0-2 |
+| Small Channel Influence | 0 | 0-1 |
 | Sediment Velocity | 1 | 0-2 |
-| Seed | 1 | 0-999999 |
 
-### CPU 実装案
+Terrain Editor 側の内部係数やマルチスケール強度は、KTT の表示パラメータから自動的に決めます。
+KTT の UI に存在しない `Sediment Capacity`、`Deposition Rate`、`Large/Medium/Detail Scale`、`Level Strength`、`Seed` は設定項目として保存せず、内部係数として扱います。
+
+### CPU 実装方針
 
 1. 入力 heightfield を作業バッファへコピーする
-2. 高さ勾配 `fx/fy` を計算する
-3. iteration ごとに粒子開始点を乱数で散布する
-4. 粒子ごとに最大 `Channel Length` ステップ移動する
-5. 現在地点の斜面角、曲率、マスク条件から侵食可能か判定する
-6. 進行方向前後の高さを見て、現在セルを削る/盛る
-7. `Channeling` で下方向の削り込みを追加する
-8. 高さを近傍の最小/最大にクランプする
-9. 一定間隔で `fx/fy` を再計算する
+2. 高さと `wear` フィードバックから `fx/fy` の力場を計算する
+3. 下がっている複数近傍へ flow を分配し、multi-flow 風の drainage area を作る
+4. Feature Size と内部スケール係数から、粗い谷筋、中規模支流、細かいリルの複数スケールに分ける。ただし粗いスケールは地形を均しすぎないよう弱めに扱う
+5. `VoxelScale` と `Geological Age` に応じて、KTT の反復数スケーリングに近い形でスケール別反復数を決める
+6. iteration ごとにKTTの `Transport_Particles` に近い式で粒子開始点を乱数散布する
+7. 粒子ごとに `Channel_Length / (dx / Detail_Scale)` に近い距離だけ移動する
+8. flow、斜面角、Wear Angle、Deposit Angle、Max Erosion Angle から侵食/堆積を判定する
+9. `Channeling` と `Flow Volume` で流路状の削り込みと輸送力を調整する
+10. `Small Channel Influence` と micro/detail pass で浅い細リルを追加する
+11. 粒子が削った土砂を `sediment` として運び、谷底や緩斜面へ `deposits` として残す
+12. 粒子通過量を `flows` として蓄積する
+13. 同一反復内の重複侵食をマスクで抑え、削れた流路へ次の力場が集まるようにする
+14. 高さを bedrock floor や近傍関係でクランプして破綻を抑える
+15. KTT の `Smooth_Flows` / `Add_Detail_Pass` に近い形で、最終段に平滑化した元地形との差分を侵食後へ戻す
+16. 一定間隔で `fx/fy` と flow を再計算する
 
-### 後回しにする機能
+### 追加で近づけたい機能
 
+- `age` / `erosion` / `wear` 出力
 - Flow Lines 入力
 - Erosion Mask / Hardness Mask
-- deposits / age / flows の補助フィールド出力
-- タイル処理
-- マルチグリッド処理
-- GPU/OpenCL/D3D12 compute 実装
+- Directionality の Force Vector / Shear
+- タイル処理とタイル境界の padding
+- KTT の Add Detail Pass をより正確にするための `Source_Terrain_Detail_Smoothing` 相当パラメータ
+- CPU 実装で見た目を固めた後の GPU/D3D12 compute 追従
 
 ## 注意点
 
-- HDA の実装は非決定的な挙動を含むため、Terrain Editor では `Seed` を持たせて再現性を優先する。
+- HDA の実装は非決定的な挙動を含むが、Terrain Editor の通常UIではKTTにない乱数シードを表示せず、内部値で再現性を保つ。
 - 1 unit = 1 m の前提では、`Feature Size` と `Channel Length` はメートル単位として扱うと分かりやすい。
 - 侵食は重い処理になるため、プレビュー解像度と最終解像度を分ける必要がある。
-- 最初は見た目重視の近似でよい。KTT 完全互換より、ノードとして使いやすいことを優先する。
+- KTT の完全なHoudini互換ではなくても、見た目、パラメータの効き方、補助フィールドの扱いはKTTにかなり近づけることを優先する。

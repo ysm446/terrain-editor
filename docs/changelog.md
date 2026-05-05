@@ -4,6 +4,133 @@
 
 - なし
 
+## 0.15.45 - 2026-05-05 07:20
+
+- `Fluvial Erosion` のCPU処理で、元ハイトマップへの局所的な押し戻しが強すぎて太い塊状の地形になる問題を修正しました。
+- 山体保護は低周波のマクロ形状だけを弱く戻す処理に絞り、KTT らしい流路の削れ方を潰しにくくしました。
+
+## 0.15.44 - 2026-05-05 07:15
+
+- `Fluvial Erosion` のCPUマルチスケール反復数で、KTT HDA の `VoxelScale` に近づけるため `Feature Size` ではなく参照ディテールサイズ基準でスケールするようにしました。
+- 解像度や `Feature Size` によって細部レベルの反復数が過剰になり、大きな山体が消えやすくなる問題を抑えました。
+- 元ハイトマップから局所的に沈み込みすぎたセルを戻す保護を追加し、流路は残しながら地形全体のシルエットを維持しやすくしました。
+
+## 0.15.43 - 2026-05-05 07:07
+
+- `Fluvial Erosion` のCPUマルチスケール処理で、入力解像度より大きい内部レベルが同じ解像度へクランプされたときに重複実行される問題を修正しました。
+- 特に256解像度で256レベルの侵食が二重にかかり、大きな山体が消えやすくなる問題を抑えました。
+
+## 0.15.42 - 2026-05-05 07:02
+
+- `Fluvial Erosion` のCPUマルチスケール合成で、大きな山体の低周波形状が削れすぎて消える問題を抑えるマクロ形状保護を追加しました。
+- KTT HDA の `Smooth_Flows` / `Add_Detail_Pass` が元地形を参照して戻す性質に近づけるため、侵食量に応じて元地形の大きなシルエットを復元する処理を追加しました。
+
+## 0.15.41 - 2026-05-05 06:56
+
+- `Fluvial Erosion` の粒子輸送で、KTT HDA と異なる移動先セルの重複停止を外し、開始セルだけを同一反復内の重複判定に使うようにしました。
+- KTT の `Transport_Particles` に近い流路継続になりやすいよう、未使用になっていた内部変数を整理しました。
+
+## 0.15.40 - 2026-05-05 06:52
+
+- `Fluvial Erosion` のCPUマルチスケール反復数を、KTT HDA の `VoxelScale` と `Erosion_Duration_Coefficient` を使う式に近づけました。
+- 粒子輸送の最大ステップ数を KTT の `Channel_Length / (dx / Detail_Scale)` に近い計算へ変更し、細かい解像度で流路が伸びやすくしました。
+
+## 0.15.39 - 2026-05-05 06:33
+
+- `Fluvial Erosion` のCPU処理に、KTT HDA の `Update_Forces` に近い `wear` フィードバック付きの力場更新を追加しました。
+- 粒子の開始位置をKTTの `Transport_Particles` に近い散布式へ変更し、同一反復内の重複侵食を抑えるマスクを追加しました。
+- 削れた流路が次の粒子を誘導しやすくし、フラクタルな支流状の侵食が出やすい構成へ近づけました。
+
+## 0.15.38 - 2026-05-05 06:21
+
+- `Fluvial Erosion` の初期状態で地形の起伏が大きく均されすぎる問題を修正しました。
+- KTT の粒子輸送から遠い独自のグリッド侵食パスを初期計算から外し、低解像度スケールの内部強度を下げました。
+
+## 0.15.37 - 2026-05-05 06:07
+
+- 互換性よりKTT寄せを優先し、`Fluvial Erosion` の保存データと設定構造からKTTのUIに存在しない `Backend`、`Use Advanced`、`Sediment Capacity`、`Deposition Rate`、`Level Strength`、`Seed` を削除しました。
+- `Fluvial Erosion` の内部マルチスケール強度、土砂容量、堆積率、乱数シードは、ユーザー向けパラメータではなく固定の内部係数として扱うようにしました。
+
+## 0.15.36 - 2026-05-05 06:07
+
+- `Fluvial Erosion` のプロパティ表示から、KTT のUIパラメータではない `Backend`、`Use Advanced`、`Sediment Capacity`、`Deposition Rate`、`Seed`、`Large/Medium/Detail Scale`、`Level Strength` を外しました。
+- `Channeling`、`Friction`、角度系、`Erosion Granularity`、`Flow Volume`、`Small Channel Influence`、`Sediment Velocity` は常に計算へ反映されるようにしました。
+- `Erosion Granularity` の初期値をKTTの表示例に合わせて `10` に戻しました。
+- `Fluvial Erosion` は、GPU実装がKTT寄せのCPU処理へ追従するまで内部的にCPU処理を使うようにしました。
+
+## 0.15.35 - 2026-05-05 05:57
+
+- `Fluvial Erosion` のCPUディテール復元を各スケールごとの加算から最終段の一回だけに変更し、元地形ノイズが重なってKTTらしさから外れる問題を抑えました。
+- ディテール復元を侵食の出た領域へ寄せ、平坦部へ細かいザラつきが乗りすぎないようにしました。
+
+## 0.15.34 - 2026-05-05 05:46
+
+- `Fluvial Erosion` のCPU処理に、KTT HDA の `Smooth_Flows` / `Add_Detail_Pass` に近い元地形ディテール差分の復元パスを追加しました。
+- 各スケールで平滑化した元地形との差分を侵食後へ薄く戻し、KTT から遠ざかる過剰な丸まりを抑えました。
+
+## 0.15.33 - 2026-05-05 05:36
+
+- `Fluvial Erosion` のCPU粒子輸送で、KTTの重複防止マスク相当の処理を粒子ステップごとに適用してしまい、初速0の粒子がほぼ動かなくなる問題を修正しました。
+
+## 0.15.32 - 2026-05-05 05:26
+
+- KTT HDA 内の `Transport_Particles` OpenCL カーネルを読み直し、CPU粒子輸送を KTT の前後サンプル平均、`carry`、`Channeling`、前後高さクランプの式へ近づけました。
+- `Erosion Granularity` と `Small Channel Influence` の粒子発生判定を、KTT の `Granularity_Threshold` 式に近い形へ変更しました。
+
+## 0.15.31 - 2026-05-05 05:12
+
+- `docs/fluvial_erosion_hda_notes.md` の Terrain Editor 向け方針を、簡易MVPではなく、KTT の挙動と調整感へかなり近づける実装方針として書き直しました。
+
+## 0.15.30 - 2026-05-05 05:02
+
+- `Fluvial Erosion` のCPU flow accumulationをD8風の単一下流セルから、下がっている複数近傍へ勾配重みで分配する multi-flow 風の処理へ変更しました。
+- CPUグリッド侵食パスも複数下流セルへ侵食・堆積を分配するようにし、格子方向へ寄った単線流路ではなく、面状の流れと枝分かれが出やすいようにしました。
+
+## 0.15.29 - 2026-05-05 04:48
+
+- `Fluvial Erosion` に KTT の UI に合わせた `Geological Age`、`Flow Volume`、`Small Channel Influence` を追加しました。
+- `Feature Size` を通常表示へ移し、`Large Scale` / `Medium Scale` / `Detail Scale` は Advanced 側の補助パラメータとして整理しました。
+- CPU侵食で `Geological Age` を成熟度、`Flow Volume` を水量、`Small Channel Influence` を浅い細リルの出やすさとして反映するようにしました。
+- Advanced OFF でも通常表示の `Feature Size` と `Channel Length` が計算へ反映されるようにしました。
+
+## 0.15.28 - 2026-05-05 04:35
+
+- `Fluvial Erosion` のデフォルトを、丸くなりすぎないよう detail レベルと粒子密度を少し戻し、浅い micro pass を追加して斜面の細いリルを出しやすくしました。
+
+## 0.15.27 - 2026-05-05 04:22
+
+- `Fluvial Erosion` の新規ノード出力を `Heightmap` / `Deposits` / `Flows` に整理し、役割が曖昧になっていた `Fluvial Mask` 出力を外しました。
+- 古いプロジェクト読み込み時に、`Fluvial Mask` 出力を補完せず、`Deposits` と `Flows` のみを補完するようにしました。
+
+## 0.15.26 - 2026-05-05 04:10
+
+- `Fluvial Erosion` の初期値とCPU侵食係数を穏やかにし、低流量の斜面で粒子が出すぎないようにして、細い縦筋と過剰な削り込みを抑えました。
+
+## 0.15.25 - 2026-05-05 03:58
+
+- `Fluvial Erosion` の `Large Scale` / `Medium Scale` / `Detail Scale` がドラッグ中に元の値へ戻り、変更できないように見える問題を修正しました。
+
+## 0.15.24 - 2026-05-05 03:45
+
+- `Fluvial Erosion` の `Flows` 出力を粒子が実際に通過した累積フィールドに変更し、`Deposits` 出力には粒子の減速・停止・出口で残った土砂も反映して、両方の見え方が同じ流路模様に寄りすぎないようにしました。
+
+## 0.15.23 - 2026-05-05 03:34
+
+- `Fluvial Erosion` に `Deposits` と `Flows` の出力ピンを追加し、2Dビューとプレビューで堆積フィールドと流量フィールドを確認できるようにしました。
+
+## 0.15.22 - 2026-05-05 03:23
+
+- `Fluvial Erosion` のCPU処理で、粒子輸送の削り込みが各レベル開始時の最低高さを下回らないようにしました。
+
+## 0.15.21 - 2026-05-05 03:16
+
+- `Fluvial Erosion` のCPU粒子輸送で、粒子位置の周囲4セルへ侵食、堆積、移動可能な土砂、マスクをbilinearに散布するようにしました。
+
+## 0.15.20 - 2026-05-05 03:08
+
+- `Fluvial Erosion` のCPU処理をKTT寄せの内部フィールド構成へ近づけ、流量、堆積、侵食、移動可能な土砂を粒子輸送中に保持するようにしました。
+- `Fluvial Erosion` のCPU粒子輸送で、堆積した土砂を後続の粒子が再輸送できるようにしました。
+
 ## 0.15.19 - 2026-05-05 02:54
 
 - 3DプレビューのグリッドをGPUメッシュプレビューの深度バッファで描画し、ハイトフィールドとの前後関係が自然になるようにしました。
