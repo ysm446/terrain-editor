@@ -22,6 +22,7 @@ enum class NodeKind
     FluvialErosion,
     HeightmapBlur,
     Shape,
+    ErosionNoise,
 };
 
 enum class PinKind
@@ -68,6 +69,7 @@ enum class PreviewStage
     Output,
     HeightmapBlur,
     Shape,
+    ErosionNoise,
 };
 
 enum class HeightfieldPreviewField
@@ -165,6 +167,17 @@ struct HeightmapBlurSettings
     int iterations = 1;
 };
 
+struct ErosionNoiseSettings
+{
+    float frequency = 16.0f;
+    int octaves = 5;
+    float erosionStrength = 0.05f;
+    float directionInfluence = 1.0f;
+    float valleyLow = 0.3f;
+    float valleyHigh = 0.5f;
+    int seed = 0;
+};
+
 struct Node
 {
     GraphId id = 0;
@@ -180,6 +193,7 @@ struct Node
     ShapeSettings shape;
     FluvialErosionSettings fluvialErosion;
     HeightmapBlurSettings heightmapBlur;
+    ErosionNoiseSettings erosionNoise;
 };
 
 struct Link
@@ -333,12 +347,14 @@ struct SdfPipeline
         {
             FluvialErosion,
             HeightmapBlur,
+            ErosionNoise,
         };
 
         Kind kind = Kind::FluvialErosion;
         GraphId nodeId = 0;
         FluvialErosionSettings fluvialErosion;
         HeightmapBlurSettings heightmapBlur;
+        ErosionNoiseSettings erosionNoise;
     };
 
     PrimitiveKind primitiveKind = PrimitiveKind::RockBlob;

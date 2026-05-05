@@ -1474,6 +1474,15 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
                     {"strength", node.heightmapBlur.strength},
                     {"iterations", node.heightmapBlur.iterations},
                 }},
+                {"erosionNoise", {
+                    {"frequency", node.erosionNoise.frequency},
+                    {"octaves", node.erosionNoise.octaves},
+                    {"erosionStrength", node.erosionNoise.erosionStrength},
+                    {"directionInfluence", node.erosionNoise.directionInfluence},
+                    {"valleyLow", node.erosionNoise.valleyLow},
+                    {"valleyHigh", node.erosionNoise.valleyHigh},
+                    {"seed", node.erosionNoise.seed},
+                }},
             };
             for (const rock::Pin& pin : node.inputs)
             {
@@ -1630,6 +1639,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 const nlohmann::json nodeShapeJson = nodeJson.value("shape", nlohmann::json::object());
                 const nlohmann::json nodeFluvialJson = nodeJson.value("fluvialErosion", nlohmann::json::object());
                 const nlohmann::json nodeBlurJson = nodeJson.value("heightmapBlur", nlohmann::json::object());
+                const nlohmann::json nodeErosionNoiseJson = nodeJson.value("erosionNoise", nlohmann::json::object());
                 node.primitive.kind = static_cast<rock::PrimitiveKind>(std::clamp(nodePrimitiveJson.value("kind", static_cast<int>(node.primitive.kind)), 0, 4));
                 node.noise.amplitude = nodeNoiseJson.value("amplitude", node.noise.amplitude);
                 node.noise.frequency = nodeNoiseJson.value("frequency", node.noise.frequency);
@@ -1676,6 +1686,13 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 node.heightmapBlur.radius = std::clamp(nodeBlurJson.value("radius", node.heightmapBlur.radius), 0.0f, 128.0f);
                 node.heightmapBlur.strength = std::clamp(nodeBlurJson.value("strength", node.heightmapBlur.strength), 0.0f, 1.0f);
                 node.heightmapBlur.iterations = std::clamp(nodeBlurJson.value("iterations", node.heightmapBlur.iterations), 0, 64);
+                node.erosionNoise.frequency = std::clamp(nodeErosionNoiseJson.value("frequency", node.erosionNoise.frequency), 0.0f, 256.0f);
+                node.erosionNoise.octaves = std::clamp(nodeErosionNoiseJson.value("octaves", node.erosionNoise.octaves), 0, 8);
+                node.erosionNoise.erosionStrength = std::clamp(nodeErosionNoiseJson.value("erosionStrength", node.erosionNoise.erosionStrength), 0.0f, 1.0f);
+                node.erosionNoise.directionInfluence = std::clamp(nodeErosionNoiseJson.value("directionInfluence", node.erosionNoise.directionInfluence), 0.0f, 8.0f);
+                node.erosionNoise.valleyLow = std::clamp(nodeErosionNoiseJson.value("valleyLow", node.erosionNoise.valleyLow), 0.0f, 1.0f);
+                node.erosionNoise.valleyHigh = std::clamp(nodeErosionNoiseJson.value("valleyHigh", node.erosionNoise.valleyHigh), 0.0f, 1.0f);
+                node.erosionNoise.seed = std::clamp(nodeErosionNoiseJson.value("seed", node.erosionNoise.seed), 0, 999999);
 
                 const auto readPins = [&](const nlohmann::json& pinsJson, rock::PinKind pinKind, std::vector<rock::Pin>& pins) {
                     if (!pinsJson.is_array())
@@ -2617,7 +2634,8 @@ bool IsTerrainNodeKind(rock::NodeKind kind)
     return kind == rock::NodeKind::HeightmapLoad ||
         kind == rock::NodeKind::Shape ||
         kind == rock::NodeKind::FluvialErosion ||
-        kind == rock::NodeKind::HeightmapBlur;
+        kind == rock::NodeKind::HeightmapBlur ||
+        kind == rock::NodeKind::ErosionNoise;
 }
 
 int CurrentPreviewMeshResolution()
@@ -3849,6 +3867,8 @@ ImVec4 NodeAccentColor(rock::NodeKind kind)
         return ImVec4(0.36f, 0.58f, 0.78f, 1.0f);
     case rock::NodeKind::HeightmapBlur:
         return ImVec4(0.58f, 0.61f, 0.44f, 1.0f);
+    case rock::NodeKind::ErosionNoise:
+        return ImVec4(0.66f, 0.55f, 0.42f, 1.0f);
     case rock::NodeKind::NoiseWarp:
         return ImVec4(0.46f, 0.65f, 0.76f, 1.0f);
     case rock::NodeKind::CrackField:
@@ -3874,6 +3894,8 @@ ImVec2 InitialNodePosition(rock::NodeKind kind)
         return ImVec2(320.0f, 240.0f);
     case rock::NodeKind::HeightmapBlur:
         return ImVec2(600.0f, 240.0f);
+    case rock::NodeKind::ErosionNoise:
+        return ImVec2(600.0f, 380.0f);
     case rock::NodeKind::NoiseWarp:
         return ImVec2(320.0f, 64.0f);
     case rock::NodeKind::CrackField:
@@ -4324,6 +4346,7 @@ void PasteNodesFromClipboard(const ImVec2& pasteCenter)
             newMutableNode->shape = clipboardNode.node.shape;
             newMutableNode->fluvialErosion = clipboardNode.node.fluvialErosion;
             newMutableNode->heightmapBlur = clipboardNode.node.heightmapBlur;
+            newMutableNode->erosionNoise = clipboardNode.node.erosionNoise;
         }
         const rock::Node* newNode = g_graph.FindNode(newNodeId);
         if (newNode == nullptr)
@@ -4561,6 +4584,7 @@ void DrawNodeGraph()
         addNodeMenuItem(rock::NodeKind::Shape);
         addNodeMenuItem(rock::NodeKind::FluvialErosion);
         addNodeMenuItem(rock::NodeKind::HeightmapBlur);
+        addNodeMenuItem(rock::NodeKind::ErosionNoise);
         ImGui::EndPopup();
     }
     ImGui::PopStyleVar(4);
@@ -5065,6 +5089,52 @@ void DrawPropertiesPanel()
             EvaluateGraph();
         }
         if (DrawPropertyIntRow("Iterations", "HeightmapBlurIterations", &blur.iterations, 0, 64, rock::HeightmapBlurSettings{}.iterations, "Heightmap blur iterations changed", true, "ぼかし処理を繰り返す回数です。増やすほど滑らかになりますが計算時間も増えます。"))
+        {
+            EvaluateGraph();
+        }
+
+        ImGui::EndTable();
+        return;
+    }
+
+    if (selectedNode->kind == rock::NodeKind::ErosionNoise && ImGui::BeginTable("ErosionNoiseRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 200.0f);
+        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+        rock::ErosionNoiseSettings& en = editableNode->erosionNoise;
+        en.frequency = std::clamp(en.frequency, 0.0f, 256.0f);
+        en.octaves = std::clamp(en.octaves, 0, 8);
+        en.erosionStrength = std::clamp(en.erosionStrength, 0.0f, 1.0f);
+        en.directionInfluence = std::clamp(en.directionInfluence, 0.0f, 8.0f);
+        en.valleyLow = std::clamp(en.valleyLow, 0.0f, 1.0f);
+        en.valleyHigh = std::clamp(en.valleyHigh, 0.0f, 1.0f);
+        en.seed = std::clamp(en.seed, 0, 999999);
+
+        if (DrawPropertyFloatRow("Frequency", "ErosionNoiseFrequency", &en.frequency, 0.0f, 256.0f, rock::ErosionNoiseSettings{}.frequency, "Erosion noise frequency changed", true, "地形範囲に対するノイズの周波数です。大きいほど細かい谷筋になります。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyIntRow("Octaves", "ErosionNoiseOctaves", &en.octaves, 0, 8, rock::ErosionNoiseSettings{}.octaves, "Erosion noise octaves changed", true, "重ねる方向性ノイズのオクターブ数です。多いほど階層的なディテールが増えますが計算時間も増えます。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyPercentRow("Strength (%)", "ErosionNoiseStrength", &en.erosionStrength, 0.0f, 1.0f, rock::ErosionNoiseSettings{}.erosionStrength, "Erosion noise strength changed", "ノイズで足し合わせる高さ寄与です。元地形の高さレンジに対する割合として扱います。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Direction Influence", "ErosionNoiseDirectionInfluence", &en.directionInfluence, 0.0f, 8.0f, rock::ErosionNoiseSettings{}.directionInfluence, "Erosion noise direction influence changed", true, "入力ハイトフィールドの勾配が谷筋方向に効く強さです。0 でランダム方向、大きいほど等高線に沿います。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Valley Low", "ErosionNoiseValleyLow", &en.valleyLow, 0.0f, 1.0f, rock::ErosionNoiseSettings{}.valleyLow, "Erosion noise valley low changed", true, "谷を滑らかに保つ smoothstep の下端しきい値です(正規化高度)。これより低い場所はノイズの寄与が抑えられます。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Valley High", "ErosionNoiseValleyHigh", &en.valleyHigh, 0.0f, 1.0f, rock::ErosionNoiseSettings{}.valleyHigh, "Erosion noise valley high changed", true, "谷を滑らかに保つ smoothstep の上端しきい値です(正規化高度)。これより高い場所でノイズが完全に効きます。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyIntRow("Seed", "ErosionNoiseSeed", &en.seed, 0, 999999, rock::ErosionNoiseSettings{}.seed, "Erosion noise seed changed", true, "ハッシュのオフセットです。同じパラメータでも異なるパターンを得るために使います。"))
         {
             EvaluateGraph();
         }
