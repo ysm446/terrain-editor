@@ -84,6 +84,7 @@ uint64_t HashShapeSettings(const ShapeSettings& settings, int resolution)
     HashCombine(hash, static_cast<uint64_t>(settings.kind));
     HashCombine(hash, HashFloat(settings.scaleMeters));
     HashCombine(hash, HashFloat(settings.relativeHeightPercent));
+    HashCombine(hash, static_cast<uint64_t>(settings.simulationResolution));
     HashCombine(hash, static_cast<uint64_t>(resolution));
     return hash;
 }
@@ -789,14 +790,16 @@ void ApplyFluvialErosionSingleLevel(HeightfieldGrid& grid, const FluvialErosionS
         const float iterValRaw = static_cast<float>(iteration + kFluvialSeed);
         const float clampX = static_cast<float>(n - 1);
         const float clampZ = static_cast<float>(n - 1);
+        const float iterOffsetX = KttRandom2(iterValRaw * 11.137f + 7.31f, 17.93f) * clampX;
+        const float iterOffsetZ = KttRandom2(iterValRaw * 23.719f + 41.51f, 53.17f) * clampZ;
 
         for (int z = 1; z < n - 1; z += particleStride)
         {
             for (int x = 1; x < n - 1; x += particleStride)
             {
-                float px = iterValRaw + KttRandom2(static_cast<float>(x) * 1.8f * cellSize, static_cast<float>(z) / 49.2f * cellSize) * clampX;
+                float px = iterOffsetX + KttRandom2(static_cast<float>(x) * 1.8f * cellSize, static_cast<float>(z) / 49.2f * cellSize) * clampX;
                 px = (px / clampX - std::floor(px / clampX)) * clampX;
-                float pz = iterValRaw * 3.241f + KttRandom2(static_cast<float>(x) / 1.345f * cellSize + 203.12f, static_cast<float>(z) * cellSize + 502.23f) * clampZ;
+                float pz = iterOffsetZ + KttRandom2(static_cast<float>(x) / 1.345f * cellSize + 203.12f, static_cast<float>(z) * cellSize + 502.23f) * clampZ;
                 pz = (pz / clampZ - std::floor(pz / clampZ)) * clampZ;
 
                 const int sx = clampCoord(static_cast<int>(px));
@@ -1347,7 +1350,7 @@ MeshData BuildMeshFromSdf(const GraphSettings& settings, const SdfPipeline& pipe
 MeshData BuildMeshFromHeightPipeline(const SdfPipeline& pipeline, int resolution, std::string* message, HeightfieldPreviewField previewField = HeightfieldPreviewField::Heightmap)
 {
     HeightfieldGrid grid = pipeline.useShape
-        ? BuildHeightfieldFromShape(pipeline.shape, resolution, message)
+        ? BuildHeightfieldFromShape(pipeline.shape, std::clamp(pipeline.shape.simulationResolution, 2, 2048), message)
         : BuildHeightfieldFromHeightmap(pipeline.heightmap, resolution, message);
     if (grid.resolution <= 0)
     {
@@ -1382,7 +1385,7 @@ MeshData NodeGraph::BuildMeshFromHeightPipelineCached(const SdfPipeline& pipelin
     }
 
     const int simulationResolution = pipeline.useShape
-        ? std::clamp(resolution, 2, 2048)
+        ? std::clamp(pipeline.shape.simulationResolution, 2, 2048)
         : std::clamp(pipeline.heightmap.simulationResolution, 2, 2048);
     uint64_t inputHash = 0;
     const uint64_t sourceHash = pipeline.useShape

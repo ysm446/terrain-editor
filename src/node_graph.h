@@ -127,6 +127,7 @@ struct ShapeSettings
     ShapeKind kind = ShapeKind::Hemisphere;
     float scaleMeters = 1024.0f;
     float relativeHeightPercent = 50.0f;
+    int simulationResolution = 512;
 };
 
 struct FluvialErosionSettings

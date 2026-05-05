@@ -1425,6 +1425,7 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
                     {"kind", static_cast<int>(node.shape.kind)},
                     {"scaleMeters", node.shape.scaleMeters},
                     {"relativeHeightPercent", node.shape.relativeHeightPercent},
+                    {"simulationResolution", node.shape.simulationResolution},
                 }},
                 {"fluvialErosion", {
                     {"featureSize", node.fluvialErosion.featureSize},
@@ -1629,6 +1630,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 node.shape.kind = static_cast<rock::ShapeKind>(std::clamp(nodeShapeJson.value("kind", static_cast<int>(node.shape.kind)), 0, 1));
                 node.shape.scaleMeters = std::clamp(nodeShapeJson.value("scaleMeters", node.shape.scaleMeters), 1.0f, 1000000.0f);
                 node.shape.relativeHeightPercent = std::clamp(nodeShapeJson.value("relativeHeightPercent", node.shape.relativeHeightPercent), 0.0f, 10000.0f);
+                node.shape.simulationResolution = std::clamp(nodeShapeJson.value("simulationResolution", node.shape.simulationResolution), 2, 2048);
                 node.fluvialErosion.featureSize = std::clamp(nodeFluvialJson.value("featureSize", node.fluvialErosion.featureSize), 0.0f, 32.0f);
                 node.fluvialErosion.geologicalAge = std::clamp(nodeFluvialJson.value("geologicalAge", node.fluvialErosion.geologicalAge), 0.0f, 20.0f);
                 node.fluvialErosion.iterations = std::clamp(nodeFluvialJson.value("iterations", node.fluvialErosion.iterations), 0, 100);
@@ -4974,6 +4976,7 @@ void DrawPropertiesPanel()
         rock::ShapeSettings& shape = editableNode->shape;
         shape.scaleMeters = std::clamp(shape.scaleMeters, 1.0f, 8096.0f);
         shape.relativeHeightPercent = std::clamp(shape.relativeHeightPercent, 0.0f, 100.0f);
+        shape.simulationResolution = std::clamp(shape.simulationResolution, 2, 2048);
 
         int shapeKind = static_cast<int>(shape.kind);
         if (DrawPropertyComboRow("Shape Type", "ShapeType", &shapeKind, "Hemisphere\0Pyramid\0", "デバッグ用の基本ハイトフィールド形状です。", static_cast<int>(rock::ShapeSettings{}.kind)))
@@ -4987,6 +4990,10 @@ void DrawPropertiesPanel()
             EvaluateGraph();
         }
         if (DrawPropertyFloatRow("Relative Height (%)", "ShapeRelativeHeight", &shape.relativeHeightPercent, 0.0f, 100.0f, rock::ShapeSettings{}.relativeHeightPercent, "Shape height changed", true, "最大高さです。実際の高さは Scale (m) x この値 / 100 になります。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyIntRow("Simulation Resolution", "ShapeSimulationResolution", &shape.simulationResolution, 2, 2048, rock::ShapeSettings{}.simulationResolution, "Shape simulation resolution changed", true, "侵食や地形処理に使う内部ハイトフィールド解像度です。表示設定の Resolution はメッシュ表示の細かさだけを変更します。"))
         {
             EvaluateGraph();
         }
@@ -5860,13 +5867,20 @@ void DrawUi()
     const float workHeight = std::max(260.0f, content.y - statusBarHeight);
     constexpr float mainSplitterWidth = 7.0f;
     constexpr float paneMinWidth = 320.0f;
-    if (g_ui.rightPaneWidth <= 0.0f)
+    const float minMainLayoutWidth = paneMinWidth * 2.0f + mainSplitterWidth;
+    const bool mainLayoutCanFit = content.x >= minMainLayoutWidth;
+    float rightPaneWidth = g_ui.rightPaneWidth;
+    if (rightPaneWidth <= 0.0f)
     {
-        g_ui.rightPaneWidth = std::clamp(content.x * 0.42f, 480.0f, std::min(820.0f, std::max(paneMinWidth, content.x - paneMinWidth)));
+        rightPaneWidth = std::clamp(content.x * 0.42f, 480.0f, std::min(820.0f, std::max(paneMinWidth, content.x - paneMinWidth)));
     }
     const float maxRightWidth = std::max(paneMinWidth, content.x - paneMinWidth - mainSplitterWidth);
-    g_ui.rightPaneWidth = std::clamp(g_ui.rightPaneWidth, paneMinWidth, maxRightWidth);
-    float previewWidth = std::max(paneMinWidth, content.x - g_ui.rightPaneWidth - mainSplitterWidth);
+    rightPaneWidth = std::clamp(rightPaneWidth, paneMinWidth, maxRightWidth);
+    if (mainLayoutCanFit)
+    {
+        g_ui.rightPaneWidth = rightPaneWidth;
+    }
+    float previewWidth = std::max(paneMinWidth, content.x - rightPaneWidth - mainSplitterWidth);
 
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 0.0f);
@@ -5877,26 +5891,43 @@ void DrawUi()
 
     if (DrawVerticalSplitter("MainLayoutSplitter", &previewWidth, content.x, paneMinWidth, paneMinWidth, workHeight))
     {
-        SaveAppSettingsSilently();
+        if (mainLayoutCanFit)
+        {
+            SaveAppSettingsSilently();
+        }
     }
-    g_ui.rightPaneWidth = std::max(paneMinWidth, content.x - previewWidth - mainSplitterWidth);
+    rightPaneWidth = std::max(paneMinWidth, content.x - previewWidth - mainSplitterWidth);
+    if (mainLayoutCanFit)
+    {
+        g_ui.rightPaneWidth = rightPaneWidth;
+    }
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 8.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 6.0f));
-    ImGui::BeginChild("Right Work Column", ImVec2(g_ui.rightPaneWidth, workHeight), false, fixedPaneFlags);
+    ImGui::BeginChild("Right Work Column", ImVec2(rightPaneWidth, workHeight), false, fixedPaneFlags);
     const float rightColumnHeight = ImGui::GetContentRegionAvail().y;
     constexpr float inspectorSplitterHeight = 7.0f;
-    if (g_ui.nodePaneHeight <= 0.0f)
+    const bool inspectorLayoutCanFit = rightColumnHeight >= 160.0f * 2.0f + inspectorSplitterHeight;
+    float nodePaneHeight = g_ui.nodePaneHeight;
+    if (nodePaneHeight <= 0.0f)
     {
-        g_ui.nodePaneHeight = std::clamp(rightColumnHeight * 0.56f, 220.0f, std::max(220.0f, rightColumnHeight - 190.0f));
+        nodePaneHeight = std::clamp(rightColumnHeight * 0.56f, 220.0f, std::max(220.0f, rightColumnHeight - 190.0f));
     }
-    g_ui.nodePaneHeight = std::clamp(g_ui.nodePaneHeight, 160.0f, std::max(160.0f, rightColumnHeight - 160.0f - inspectorSplitterHeight));
-
-    DrawNodeNetworkTabs(g_ui.nodePaneHeight, fixedPaneFlags);
-
-    if (DrawHorizontalSplitter("InspectorLayoutSplitter", &g_ui.nodePaneHeight, rightColumnHeight, 160.0f, 160.0f))
+    nodePaneHeight = std::clamp(nodePaneHeight, 160.0f, std::max(160.0f, rightColumnHeight - 160.0f - inspectorSplitterHeight));
+    if (inspectorLayoutCanFit)
     {
-        SaveAppSettingsSilently();
+        g_ui.nodePaneHeight = nodePaneHeight;
+    }
+
+    DrawNodeNetworkTabs(nodePaneHeight, fixedPaneFlags);
+
+    if (DrawHorizontalSplitter("InspectorLayoutSplitter", &nodePaneHeight, rightColumnHeight, 160.0f, 160.0f))
+    {
+        if (inspectorLayoutCanFit)
+        {
+            g_ui.nodePaneHeight = nodePaneHeight;
+            SaveAppSettingsSilently();
+        }
     }
 
     ImGui::BeginChild("Inspector", ImVec2(0.0f, 0.0f), false);
