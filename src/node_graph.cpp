@@ -117,6 +117,8 @@ uint64_t HashFluvialSettings(const FluvialErosionSettings& settings, int resolut
     HashCombine(hash, HashFloat(settings.shearX));
     HashCombine(hash, HashFloat(settings.shearY));
     HashCombine(hash, HashFloat(settings.referenceDetailSize));
+    HashCombine(hash, HashFloat(settings.sourceTerrainDetailSmoothing));
+    HashCombine(hash, static_cast<uint64_t>(settings.useMultigrid ? 1 : 0));
     HashCombine(hash, static_cast<uint64_t>(resolution));
     return hash;
 }
@@ -440,6 +442,7 @@ HeightfieldGrid BuildHeightfieldFromHeightmap(const HeightmapLoadSettings& setti
     grid.mask.assign(static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution), 0.0f);
     grid.deposits.assign(static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution), 0.0f);
     grid.flows.assign(static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution), 0.0f);
+    grid.age.assign(static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution), 0.0f);
     for (int z = 0; z < grid.resolution; ++z)
     {
         const float v = grid.resolution > 1 ? static_cast<float>(z) / static_cast<float>(grid.resolution - 1) : 0.0f;
@@ -475,6 +478,7 @@ HeightfieldGrid BuildHeightfieldFromShape(const ShapeSettings& settings, int res
     grid.mask.assign(cellCount, 0.0f);
     grid.deposits.assign(cellCount, 0.0f);
     grid.flows.assign(cellCount, 0.0f);
+    grid.age.assign(cellCount, 0.0f);
 
     for (int z = 0; z < grid.resolution; ++z)
     {
@@ -521,6 +525,7 @@ HeightfieldGrid ResampleHeightfieldGrid(const HeightfieldGrid& source, int resol
     result.mask.assign(cellCount, 0.0f);
     result.deposits.assign(cellCount, 0.0f);
     result.flows.assign(cellCount, 0.0f);
+    result.age.assign(cellCount, 0.0f);
     for (int z = 0; z < result.resolution; ++z)
     {
         const float v = result.resolution > 1 ? static_cast<float>(z) / static_cast<float>(result.resolution - 1) : 0.0f;
@@ -607,6 +612,10 @@ void AddResampledHeightDelta(HeightfieldGrid& target, const HeightfieldGrid& bas
     {
         target.flows.assign(cellCount, 0.0f);
     }
+    if (target.age.size() != cellCount)
+    {
+        target.age.assign(cellCount, 0.0f);
+    }
 
     for (int z = 0; z < n; ++z)
     {
@@ -629,6 +638,10 @@ void AddResampledHeightDelta(HeightfieldGrid& target, const HeightfieldGrid& bas
             if (!eroded.flows.empty())
             {
                 target.flows[index] += SampleHeightfieldValue(eroded.flows, eroded.resolution, u, v) * strength;
+            }
+            if (!eroded.age.empty())
+            {
+                target.age[index] += SampleHeightfieldValue(eroded.age, eroded.resolution, u, v) * strength;
             }
         }
     }
@@ -655,6 +668,7 @@ void NormalizeHeightfieldFields(HeightfieldGrid& grid)
     NormalizeField(grid.mask);
     NormalizeField(grid.deposits);
     NormalizeField(grid.flows);
+    NormalizeField(grid.age);
 }
 
 void SelectHeightfieldPreviewField(HeightfieldGrid& grid, HeightfieldPreviewField previewField)
@@ -666,6 +680,10 @@ void SelectHeightfieldPreviewField(HeightfieldGrid& grid, HeightfieldPreviewFiel
     else if (previewField == HeightfieldPreviewField::Flows && !grid.flows.empty())
     {
         grid.mask = grid.flows;
+    }
+    else if (previewField == HeightfieldPreviewField::Age && !grid.age.empty())
+    {
+        grid.mask = grid.age;
     }
 }
 
@@ -756,6 +774,7 @@ void ApplyFluvialErosionSingleLevel(HeightfieldGrid& grid, const FluvialErosionS
     std::vector<float> flowField(cellCount, 0.0f);
     std::vector<float> maskField(cellCount, 0.0f);
     std::vector<float> visitMask(cellCount, 0.0f);
+    std::vector<float> ageField(cellCount, 0.0f);
 
     const auto updateForces = [&]() {
         for (int z = 0; z < n; ++z)
@@ -780,6 +799,7 @@ void ApplyFluvialErosionSingleLevel(HeightfieldGrid& grid, const FluvialErosionS
                 }
                 forceX[idx] = -gx / (cellSize * 6.0f) + forceX0;
                 forceZ[idx] = -gz / (cellSize * 6.0f) + forceZ0;
+                ageField[idx] += 0.1f * cellSize;
             }
         }
     };
@@ -882,6 +902,15 @@ void ApplyFluvialErosionSingleLevel(HeightfieldGrid& grid, const FluvialErosionS
                     splatField(flowField, px, pz, 1.0f);
                     splatField(maskField, px, pz, eroded + deposited * 0.5f);
                     splatField(grid.heights, px, pz, newH - h1);
+
+                    // Age decay: cells that get eroded/deposited become "younger".
+                    // Mirrors the kernel's Age[sampleidx] *= pow(0.5, |dh|*10/dx).
+                    const float ageDecay = std::pow(0.5f, std::abs(newH - h1) * 10.0f / std::max(cellSize, 0.0001f));
+                    const auto bw = bilinearAt(px, pz);
+                    for (int i = 0; i < 4; ++i)
+                    {
+                        ageField[bw.idx[i]] *= std::lerp(1.0f, ageDecay, bw.w[i]);
+                    }
                 }
             }
         }
@@ -891,6 +920,7 @@ void ApplyFluvialErosionSingleLevel(HeightfieldGrid& grid, const FluvialErosionS
 
     grid.deposits = depositField;
     grid.flows = flowField;
+    grid.age = ageField;
     grid.mask.resize(cellCount, 0.0f);
     float maxMask = 0.0f;
     for (float v : maskField) { maxMask = std::max(maxMask, v); }
@@ -903,6 +933,8 @@ void ApplyFluvialErosionSingleLevel(HeightfieldGrid& grid, const FluvialErosionS
     }
 }
 
+void ApplyHeightmapBlur(HeightfieldGrid& grid, const HeightmapBlurSettings& settings);
+
 void ApplyFluvialErosion(HeightfieldGrid& grid, const FluvialErosionSettings& settings)
 {
     const int n = grid.resolution;
@@ -911,12 +943,37 @@ void ApplyFluvialErosion(HeightfieldGrid& grid, const FluvialErosionSettings& se
         return;
     }
 
-    const std::array<int, kFluvialLevelStrengths.size()> levelResolutions = {16, 32, 64, 128, 256, 512};
     const size_t cellCount = static_cast<size_t>(n) * static_cast<size_t>(n);
+
+    // Source Terrain Detail Smoothing: optional Gaussian pre-smooth on the input
+    // so noisy heightmaps yield cleaner flow paths. Mirrors the HDA parameter.
+    const float smoothing = std::clamp(settings.sourceTerrainDetailSmoothing, 0.0f, 10.0f);
+    if (smoothing > 0.001f)
+    {
+        HeightmapBlurSettings blur;
+        blur.radius = 1.5f;
+        blur.strength = 1.0f;
+        blur.iterations = std::max(1, static_cast<int>(std::round(smoothing)));
+        ApplyHeightmapBlur(grid, blur);
+    }
+
+    if (!settings.useMultigrid)
+    {
+        grid.mask.assign(cellCount, 0.0f);
+        grid.deposits.assign(cellCount, 0.0f);
+        grid.flows.assign(cellCount, 0.0f);
+        grid.age.assign(cellCount, 0.0f);
+        ApplyFluvialErosionSingleLevel(grid, settings);
+        NormalizeHeightfieldFields(grid);
+        return;
+    }
+
+    const std::array<int, kFluvialLevelStrengths.size()> levelResolutions = {16, 32, 64, 128, 256, 512};
 
     grid.mask.assign(cellCount, 0.0f);
     grid.deposits.assign(cellCount, 0.0f);
     grid.flows.assign(cellCount, 0.0f);
+    grid.age.assign(cellCount, 0.0f);
 
     int previousResolution = 0;
     for (size_t level = 0; level < kFluvialLevelStrengths.size(); ++level)
@@ -954,6 +1011,7 @@ void ApplyFluvialErosion(HeightfieldGrid& grid, const FluvialErosionSettings& se
                 grid.mask[idx] += SampleHeightfieldValue(eroded.mask, eroded.resolution, u, v);
                 grid.deposits[idx] += SampleHeightfieldValue(eroded.deposits, eroded.resolution, u, v);
                 grid.flows[idx] += SampleHeightfieldValue(eroded.flows, eroded.resolution, u, v);
+                grid.age[idx] += SampleHeightfieldValue(eroded.age, eroded.resolution, u, v);
             }
         }
     }
@@ -1698,6 +1756,7 @@ GraphId NodeGraph::CreateNode(NodeKind kind)
         AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
         AddPin(nodeId, PinKind::Output, ValueType::Mask, "Deposits");
         AddPin(nodeId, PinKind::Output, ValueType::Mask, "Flows");
+        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Age");
         break;
     case NodeKind::HeightmapBlur:
         AddPin(nodeId, PinKind::Input, ValueType::HeightField, "HeightField");
@@ -1802,6 +1861,10 @@ bool NodeGraph::SetPreviewPin(GraphId pinId)
         else if (pin->label == "Flows")
         {
             previewField = HeightfieldPreviewField::Flows;
+        }
+        else if (pin->label == "Age")
+        {
+            previewField = HeightfieldPreviewField::Age;
         }
     }
     const PreviewStage stage = PreviewStageFor(node->kind);

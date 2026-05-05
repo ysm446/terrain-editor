@@ -1466,6 +1466,8 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
                     {"shearX", node.fluvialErosion.shearX},
                     {"shearY", node.fluvialErosion.shearY},
                     {"referenceDetailSize", node.fluvialErosion.referenceDetailSize},
+                    {"sourceTerrainDetailSmoothing", node.fluvialErosion.sourceTerrainDetailSmoothing},
+                    {"useMultigrid", node.fluvialErosion.useMultigrid},
                 }},
                 {"heightmapBlur", {
                     {"radius", node.heightmapBlur.radius},
@@ -1669,6 +1671,8 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 node.fluvialErosion.shearX = std::clamp(nodeFluvialJson.value("shearX", node.fluvialErosion.shearX), -0.1f, 0.1f);
                 node.fluvialErosion.shearY = std::clamp(nodeFluvialJson.value("shearY", node.fluvialErosion.shearY), -0.1f, 0.1f);
                 node.fluvialErosion.referenceDetailSize = std::clamp(nodeFluvialJson.value("referenceDetailSize", node.fluvialErosion.referenceDetailSize), 0.01f, 2.0f);
+                node.fluvialErosion.sourceTerrainDetailSmoothing = std::clamp(nodeFluvialJson.value("sourceTerrainDetailSmoothing", node.fluvialErosion.sourceTerrainDetailSmoothing), 0.0f, 10.0f);
+                node.fluvialErosion.useMultigrid = nodeFluvialJson.value("useMultigrid", node.fluvialErosion.useMultigrid);
                 node.heightmapBlur.radius = std::clamp(nodeBlurJson.value("radius", node.heightmapBlur.radius), 0.0f, 128.0f);
                 node.heightmapBlur.strength = std::clamp(nodeBlurJson.value("strength", node.heightmapBlur.strength), 0.0f, 1.0f);
                 node.heightmapBlur.iterations = std::clamp(nodeBlurJson.value("iterations", node.heightmapBlur.iterations), 0, 64);
@@ -3689,6 +3693,8 @@ void DrawViewportCube(const ImVec2& min, const ImVec2& max, float timeSeconds)
             return "Deposits";
         case rock::HeightfieldPreviewField::Flows:
             return "Flows";
+        case rock::HeightfieldPreviewField::Age:
+            return "Age";
         case rock::HeightfieldPreviewField::Heightmap:
         default:
             return "Heightmap";
@@ -3757,6 +3763,8 @@ void DrawHeightfieldMapPreview(const ImVec2& min, const ImVec2& max)
             return "Deposits";
         case rock::HeightfieldPreviewField::Flows:
             return "Flows";
+        case rock::HeightfieldPreviewField::Age:
+            return "Age";
         case rock::HeightfieldPreviewField::Heightmap:
         default:
             return "Heightmap";
@@ -5086,6 +5094,7 @@ void DrawPropertiesPanel()
         erosion.shearX = std::clamp(erosion.shearX, -0.1f, 0.1f);
         erosion.shearY = std::clamp(erosion.shearY, -0.1f, 0.1f);
         erosion.referenceDetailSize = std::clamp(erosion.referenceDetailSize, 0.01f, 2.0f);
+        erosion.sourceTerrainDetailSmoothing = std::clamp(erosion.sourceTerrainDetailSmoothing, 0.0f, 10.0f);
 
         if (DrawPropertyFloatRow("Feature Size", "FluvialFeatureSize", &erosion.featureSize, 0.0f, 32.0f, rock::FluvialErosionSettings{}.featureSize, "Fluvial feature size changed", true, "侵食で扱う地形特徴の大きさです。小さいほど細かい地形特徴に反応します。"))
         {
@@ -5180,6 +5189,14 @@ void DrawPropertiesPanel()
         ImGui::TableSetColumnIndex(1);
         ImGui::SeparatorText("Advanced");
         if (DrawPropertyFloatRow("Reference Detail Size", "FluvialReferenceDetailSize", &erosion.referenceDetailSize, 0.01f, 2.0f, rock::FluvialErosionSettings{}.referenceDetailSize, "Fluvial reference detail size changed", true, "カーネルの Detail_Scale。粒子ステップ数や粒子密度の解像度依存スケール基準。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Source Terrain Detail Smoothing", "FluvialSourceSmoothing", &erosion.sourceTerrainDetailSmoothing, 0.0f, 10.0f, rock::FluvialErosionSettings{}.sourceTerrainDetailSmoothing, "Fluvial source smoothing changed", true, "侵食前に入力地形をぼかす度合い。値が大きいほどクリーンな流路が形成されますが細部が失われます。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyBoolRow("Use Multigrid Acceleration", "FluvialUseMultigrid", &erosion.useMultigrid, "Fluvial multigrid toggle changed", "複数解像度で侵食を計算して大きな谷筋を作ります。オフにすると最終解像度のみで処理されます。", rock::FluvialErosionSettings{}.useMultigrid))
         {
             EvaluateGraph();
         }

@@ -75,6 +75,7 @@ enum class HeightfieldPreviewField
     Heightmap,
     Deposits,
     Flows,
+    Age,
 };
 
 struct Pin
@@ -153,6 +154,8 @@ struct FluvialErosionSettings
     float shearX = 0.0f;
     float shearY = 0.0f;
     float referenceDetailSize = 1.0f;
+    float sourceTerrainDetailSmoothing = 1.0f;
+    bool useMultigrid = true;
 };
 
 struct HeightmapBlurSettings
@@ -284,6 +287,7 @@ struct HeightfieldGrid
     std::vector<float> mask;
     std::vector<float> deposits;
     std::vector<float> flows;
+    std::vector<float> age;
 };
 
 using FluvialGpuEvaluator = bool (*)(HeightfieldGrid& grid, const FluvialErosionSettings& settings, std::string* error);
