@@ -1294,11 +1294,6 @@ void ApplyGraphEditSnapshot(const GraphEditSnapshot& snapshot)
     {
         g_graph.SetPreviewNode(snapshot.previewNodeId);
     }
-    else if (g_graph.FindNode(snapshot.selectedNodeId) != nullptr)
-    {
-        g_graph.SetPreviewNode(snapshot.selectedNodeId);
-    }
-
     g_pendingNodePositions = snapshot.nodePositions;
     g_nodePositionCache = snapshot.nodePositions;
     g_pendingSelectedNodeIds = snapshot.selectedNodeIds;
@@ -2889,6 +2884,8 @@ ImVec2 RotatePoint(float x, float y, float z, float, float)
 
 ImU32 ColorToU32(const ImVec4& color);
 ImU32 ThemeColor(const std::string& name, const ImVec4& fallback);
+ImVec4 PinColor(const rock::Pin& pin);
+ImVec4 PinLabelColor(const rock::Pin& pin, bool hovered, bool selected);
 
 bool EnsureMeshPreviewRenderTarget(int width, int height, std::string* error)
 {
@@ -3901,6 +3898,19 @@ ImU32 ThemeColor(const std::string& name, const ImVec4& fallback)
     return ColorToU32(g_themeManager.AppColor(name, fallback));
 }
 
+ImVec4 PinLabelColor(const rock::Pin& pin, bool hovered, bool selected)
+{
+    if (selected)
+    {
+        return PinColor(pin);
+    }
+    if (hovered)
+    {
+        return ImVec4(0.94f, 0.94f, 0.92f, 1.0f);
+    }
+    return ImVec4(0.62f, 0.64f, 0.62f, 1.0f);
+}
+
 ImVec4 PinTypeColor(rock::ValueType valueType)
 {
     switch (valueType)
@@ -4067,6 +4077,7 @@ void DrawRockNode(const rock::Node& node)
     ed::PushStyleVar(ed::StyleVar_SelectedNodeBorderWidth, 1.8f);
     ed::PushStyleColor(ed::StyleColor_NodeBg, ImVec4(0.080f, 0.080f, 0.080f, 0.98f));
     ed::PushStyleColor(ed::StyleColor_NodeBorder, ImVec4(0.22f, 0.22f, 0.22f, 1.0f));
+    ed::PushStyleColor(ed::StyleColor_HovNodeBorder, ImVec4(0.22f, 0.22f, 0.22f, 1.0f));
     ed::PushStyleColor(ed::StyleColor_SelNodeBorder, accent);
 
     ed::BeginNode(ed::NodeId(node.id));
@@ -4095,7 +4106,12 @@ void DrawRockNode(const rock::Node& node)
         ed::EndPin();
         ImGui::SameLine();
         ImGui::SetCursorPosY(rowY + 2.0f);
-        ImGui::TextColored(PinColor(node.inputs.front()), "%s", node.inputs.front().label.c_str());
+        const ImVec2 textPos = ImGui::GetCursorScreenPos();
+        const ImVec2 textSize = ImGui::CalcTextSize(node.inputs.front().label.c_str());
+        const bool inputTextHovered = ImGui::IsMouseHoveringRect(
+            textPos,
+            ImVec2(textPos.x + textSize.x, textPos.y + textSize.y));
+        ImGui::TextColored(PinLabelColor(node.inputs.front(), inputTextHovered, false), "%s", node.inputs.front().label.c_str());
     }
     else
     {
@@ -4110,13 +4126,18 @@ void DrawRockNode(const rock::Node& node)
         const float outputY = rowY + static_cast<float>(outputIndex) * 24.0f;
         const float labelWidth = ImGui::CalcTextSize(output.label.c_str()).x + (outputSelected ? 2.0f : 0.0f);
         ImGui::SetCursorPos(ImVec2(rowStartX + nodeWidth - labelWidth - 22.0f, outputY + 2.0f));
-        const ImVec4 outputColor = PinColor(output);
-        ImGui::TextColored(outputColor, "%s", output.label.c_str());
+        const ImVec2 textPos = ImGui::GetCursorScreenPos();
+        const ImVec2 textSize = ImGui::CalcTextSize(output.label.c_str());
+        const bool outputTextHovered = ImGui::IsMouseHoveringRect(
+            textPos,
+            ImVec2(textPos.x + textSize.x, textPos.y + textSize.y));
+        const ImVec4 outputTextColor = PinLabelColor(output, outputTextHovered, outputSelected);
+        ImGui::TextColored(outputTextColor, "%s", output.label.c_str());
         if (outputSelected)
         {
             ImDrawList* drawList = ImGui::GetWindowDrawList();
             const ImVec2 textMin = ImGui::GetItemRectMin();
-            drawList->AddText(ImVec2(textMin.x + 0.7f, textMin.y), ColorToU32(outputColor), output.label.c_str());
+            drawList->AddText(ImVec2(textMin.x + 0.7f, textMin.y), ColorToU32(outputTextColor), output.label.c_str());
         }
         if (ImGui::IsItemClicked(ImGuiMouseButton_Left))
         {
@@ -4135,7 +4156,7 @@ void DrawRockNode(const rock::Node& node)
     ImGui::Dummy(ImVec2(nodeWidth, std::max(4.0f, static_cast<float>(node.outputs.size()) * 24.0f - 20.0f)));
 
     ed::EndNode();
-    ed::PopStyleColor(3);
+    ed::PopStyleColor(4);
     ed::PopStyleVar(4);
 }
 
@@ -4508,42 +4529,26 @@ void DrawNodeGraph()
     ed::Resume();
 
     ed::NodeId selectedNodes[1];
-    bool handledPreviewPinClick = false;
     if (g_pendingPreviewPinId != 0)
     {
         const rock::GraphId pinId = g_pendingPreviewPinId;
         g_pendingPreviewPinId = 0;
-        handledPreviewPinClick = true;
         if (g_graph.SetPreviewPin(pinId))
         {
-            if (const rock::Pin* pin = g_graph.FindPin(pinId))
-            {
-                g_selectedNodeId = pin->nodeId;
-                g_pendingSelectedNodeIds = {pin->nodeId};
-            }
             if (g_graph.Evaluation().dirty)
             {
                 EvaluateGraph();
             }
         }
     }
-    if (!handledPreviewPinClick && ed::GetSelectedNodes(selectedNodes, 1) > 0)
+    if (ed::GetSelectedNodes(selectedNodes, 1) > 0)
     {
         const rock::GraphId selectedNodeId = ToGraphId(selectedNodes[0].Get());
         g_selectedNodeId = selectedNodeId;
-        if (const rock::Node* selectedNode = g_graph.FindNode(selectedNodeId))
-        {
-            if (g_graph.SetPreviewNode(selectedNode->id))
-            {
-                EvaluateGraph();
-            }
-            g_lastFinalOutputNodeId = 0;
-        }
     }
     else
     {
         g_selectedNodeId = 0;
-        g_lastFinalOutputNodeId = 0;
     }
 
     ed::End();
