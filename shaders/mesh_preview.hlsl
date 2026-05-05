@@ -67,7 +67,7 @@ VSOut VSMain(VSIn i)
     float3 view = i.pos - cameraPosition.xyz;
     float cx = dot(view, cameraRight.xyz);
     float cy = dot(view, cameraUp.xyz);
-    float d = max(nearPlane, dot(view, cameraForward.xyz));
+    float d = dot(view, cameraForward.xyz);
 
     VSOut o;
     o.pos = float4(

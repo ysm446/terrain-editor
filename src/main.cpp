@@ -3191,16 +3191,10 @@ void DrawViewportAxisGizmo(ImDrawList* drawList, const ImVec2& min, const ImVec2
         float depth;
     };
 
-    auto projectDirection = [](float x, float y, float z) {
-        const CameraBasis basis = BuildCameraBasis();
+    const CameraBasis basis = BuildCameraBasis();
+    auto projectDirection = [&basis](float x, float y, float z) {
         const Vec3 axis(x, y, z);
-        ImVec2 dir(Dot(axis, basis.right), -Dot(axis, basis.up));
-        const float length = std::sqrt(dir.x * dir.x + dir.y * dir.y);
-        if (length > 0.0001f)
-        {
-            dir.x /= length;
-            dir.y /= length;
-        }
+        const ImVec2 dir(Dot(axis, basis.right), -Dot(axis, basis.up));
         return std::pair<ImVec2, float>(dir, Dot(axis, basis.forward));
     };
 
@@ -3214,18 +3208,18 @@ void DrawViewportAxisGizmo(ImDrawList* drawList, const ImVec2& min, const ImVec2
     }};
 
     std::ranges::sort(axes, [](const AxisLine& a, const AxisLine& b) {
-        return a.depth < b.depth;
+        return a.depth > b.depth;
     });
 
     drawList->PushClipRect(min, max, true);
-    drawList->AddCircleFilled(center, 4.0f, IM_COL32(235, 235, 235, 220), 16);
     for (const AxisLine& axis : axes)
     {
         const ImVec2 end(center.x + axis.dir.x * axisLength, center.y + axis.dir.y * axisLength);
-        const float thickness = axis.depth >= 0.0f ? 2.6f : 1.8f;
+        const float thickness = axis.depth < 0.0f ? 2.6f : 1.8f;
         drawList->AddLine(center, end, axis.color, thickness);
         drawList->AddText(ImVec2(end.x + 8.0f, end.y - 8.0f), axis.color, axis.label);
     }
+    drawList->AddCircleFilled(center, 4.0f, IM_COL32(235, 235, 235, 220), 16);
     drawList->PopClipRect();
 }
 
