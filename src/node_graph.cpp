@@ -27,8 +27,6 @@ using Microsoft::WRL::ComPtr;
 
 FluvialGpuEvaluator g_fluvialGpuEvaluator = nullptr;
 constexpr int kFluvialSeed = 1;
-constexpr float kFluvialSedimentCapacity = 0.4f;
-constexpr float kFluvialDepositionRate = 0.42f;
 constexpr std::array<float, 6> kFluvialLevelStrengths = {0.18f, 0.28f, 0.52f, 0.68f, 0.78f, 0.58f};
 
 std::string NoisePipelineSummary(const SdfPipeline& pipeline)
