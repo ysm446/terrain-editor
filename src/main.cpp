@@ -1421,6 +1421,11 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
                     {"verticalOffsetMeters", node.heightmap.verticalOffsetMeters},
                     {"simulationResolution", node.heightmap.simulationResolution},
                 }},
+                {"shape", {
+                    {"kind", static_cast<int>(node.shape.kind)},
+                    {"scaleMeters", node.shape.scaleMeters},
+                    {"relativeHeightPercent", node.shape.relativeHeightPercent},
+                }},
                 {"fluvialErosion", {
                     {"featureSize", node.fluvialErosion.featureSize},
                     {"geologicalAge", node.fluvialErosion.geologicalAge},
@@ -1587,7 +1592,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
             {
                 rock::Node node;
                 node.id = nodeJson.value("id", 0);
-                node.kind = static_cast<rock::NodeKind>(std::clamp(nodeJson.value("kind", 0), 0, 6));
+                node.kind = static_cast<rock::NodeKind>(std::clamp(nodeJson.value("kind", 0), 0, 7));
                 if (!IsTerrainNodeKind(node.kind))
                 {
                     continue;
@@ -1602,6 +1607,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 const nlohmann::json nodeCrackJson = nodeJson.value("crack", crackJson);
                 const nlohmann::json nodeOutputMeshJson = nodeJson.value("outputMesh", nlohmann::json::object());
                 const nlohmann::json nodeHeightmapJson = nodeJson.value("heightmap", nlohmann::json::object());
+                const nlohmann::json nodeShapeJson = nodeJson.value("shape", nlohmann::json::object());
                 const nlohmann::json nodeFluvialJson = nodeJson.value("fluvialErosion", nlohmann::json::object());
                 const nlohmann::json nodeBlurJson = nodeJson.value("heightmapBlur", nlohmann::json::object());
                 node.primitive.kind = static_cast<rock::PrimitiveKind>(std::clamp(nodePrimitiveJson.value("kind", static_cast<int>(node.primitive.kind)), 0, 4));
@@ -1620,6 +1626,9 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 node.heightmap.relativeVerticalScalePercent = std::clamp(nodeHeightmapJson.value("relativeVerticalScalePercent", node.heightmap.relativeVerticalScalePercent), 0.0f, 10000.0f);
                 node.heightmap.verticalOffsetMeters = std::clamp(nodeHeightmapJson.value("verticalOffsetMeters", node.heightmap.verticalOffsetMeters), -1000000.0f, 1000000.0f);
                 node.heightmap.simulationResolution = std::clamp(nodeHeightmapJson.value("simulationResolution", node.heightmap.simulationResolution), 2, 2048);
+                node.shape.kind = static_cast<rock::ShapeKind>(std::clamp(nodeShapeJson.value("kind", static_cast<int>(node.shape.kind)), 0, 1));
+                node.shape.scaleMeters = std::clamp(nodeShapeJson.value("scaleMeters", node.shape.scaleMeters), 1.0f, 1000000.0f);
+                node.shape.relativeHeightPercent = std::clamp(nodeShapeJson.value("relativeHeightPercent", node.shape.relativeHeightPercent), 0.0f, 10000.0f);
                 node.fluvialErosion.featureSize = std::clamp(nodeFluvialJson.value("featureSize", node.fluvialErosion.featureSize), 0.0f, 32.0f);
                 node.fluvialErosion.geologicalAge = std::clamp(nodeFluvialJson.value("geologicalAge", node.fluvialErosion.geologicalAge), 0.0f, 20.0f);
                 node.fluvialErosion.iterations = std::clamp(nodeFluvialJson.value("iterations", node.fluvialErosion.iterations), 0, 100);
@@ -1783,7 +1792,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
         {
             g_pendingSelectedNodeIds.push_back(g_selectedNodeId);
         }
-        g_graph.SetPreviewStage(static_cast<rock::PreviewStage>(std::clamp(root.value("previewStage", static_cast<int>(g_graph.Preview())), 0, 5)));
+        g_graph.SetPreviewStage(static_cast<rock::PreviewStage>(std::clamp(root.value("previewStage", static_cast<int>(g_graph.Preview())), 0, 6)));
         const rock::GraphId previewPinId = root.value("previewPinId", 0);
         if (previewPinId != 0 && g_graph.FindPin(previewPinId) != nullptr)
         {
@@ -2577,7 +2586,10 @@ int EffectiveMeshResolution(int resolution, int lod)
 
 bool IsTerrainNodeKind(rock::NodeKind kind)
 {
-    return kind == rock::NodeKind::HeightmapLoad || kind == rock::NodeKind::FluvialErosion || kind == rock::NodeKind::HeightmapBlur;
+    return kind == rock::NodeKind::HeightmapLoad ||
+        kind == rock::NodeKind::Shape ||
+        kind == rock::NodeKind::FluvialErosion ||
+        kind == rock::NodeKind::HeightmapBlur;
 }
 
 int CurrentPreviewMeshResolution()
@@ -3803,6 +3815,8 @@ ImVec4 NodeAccentColor(rock::NodeKind kind)
         return ImVec4(0.53f, 0.71f, 0.61f, 1.0f);
     case rock::NodeKind::HeightmapLoad:
         return ImVec4(0.38f, 0.62f, 0.53f, 1.0f);
+    case rock::NodeKind::Shape:
+        return ImVec4(0.50f, 0.68f, 0.48f, 1.0f);
     case rock::NodeKind::FluvialErosion:
         return ImVec4(0.36f, 0.58f, 0.78f, 1.0f);
     case rock::NodeKind::HeightmapBlur:
@@ -3826,6 +3840,8 @@ ImVec2 InitialNodePosition(rock::NodeKind kind)
         return ImVec2(40.0f, 64.0f);
     case rock::NodeKind::HeightmapLoad:
         return ImVec2(40.0f, 240.0f);
+    case rock::NodeKind::Shape:
+        return ImVec2(40.0f, 360.0f);
     case rock::NodeKind::FluvialErosion:
         return ImVec2(320.0f, 240.0f);
     case rock::NodeKind::HeightmapBlur:
@@ -4237,6 +4253,7 @@ void PasteNodesFromClipboard(const ImVec2& pasteCenter)
             newMutableNode->crack = clipboardNode.node.crack;
             newMutableNode->outputMesh = clipboardNode.node.outputMesh;
             newMutableNode->heightmap = clipboardNode.node.heightmap;
+            newMutableNode->shape = clipboardNode.node.shape;
             newMutableNode->fluvialErosion = clipboardNode.node.fluvialErosion;
             newMutableNode->heightmapBlur = clipboardNode.node.heightmapBlur;
         }
@@ -4486,6 +4503,7 @@ void DrawNodeGraph()
             }
         };
         addNodeMenuItem(rock::NodeKind::HeightmapLoad);
+        addNodeMenuItem(rock::NodeKind::Shape);
         addNodeMenuItem(rock::NodeKind::FluvialErosion);
         addNodeMenuItem(rock::NodeKind::HeightmapBlur);
         ImGui::EndPopup();
@@ -4613,7 +4631,7 @@ bool DrawPropertyComboRow(const char* label, const char* id, int* value, const c
     return changed;
 }
 
-bool DrawResetToDefaultButton(const char* id)
+bool DrawResetToDefaultButton(const char* id, bool isDefaultValue)
 {
     ImGui::SameLine();
     ImGui::PushID(id);
@@ -4629,7 +4647,8 @@ bool DrawResetToDefaultButton(const char* id)
         buttonMin.x + ((buttonMax.x - buttonMin.x) - iconSize.x) * 0.5f,
         buttonMin.y + ((buttonMax.y - buttonMin.y) - iconSize.y) * 0.5f,
     };
-    ImGui::GetWindowDrawList()->AddText(font, iconFontSize, iconPos, ImGui::GetColorU32(ImGuiCol_Text), resetIcon);
+    const ImU32 iconColor = ImGui::GetColorU32(isDefaultValue ? ImGuiCol_TextDisabled : ImGuiCol_Text);
+    ImGui::GetWindowDrawList()->AddText(font, iconFontSize, iconPos, iconColor, resetIcon);
     if (ImGui::IsItemHovered())
     {
         ImGui::SetTooltip("既定値に戻す");
@@ -4643,7 +4662,8 @@ bool DrawPropertyFloatRow(const char* label, const char* id, float* value, float
     bool editEnded = false;
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
-    DrawPropertyLabel(label, tooltip, FloatDiffersFromDefault(*value, defaultValue));
+    bool differsFromDefault = FloatDiffersFromDefault(*value, defaultValue);
+    DrawPropertyLabel(label, tooltip, differsFromDefault);
     ImGui::TableSetColumnIndex(1);
 
     ImGui::PushID(id);
@@ -4677,7 +4697,8 @@ bool DrawPropertyFloatRow(const char* label, const char* id, float* value, float
         BeginPropertyUndoEdit();
     }
     editEnded = editEnded || ImGui::IsItemDeactivatedAfterEdit();
-    if (DrawResetToDefaultButton("reset"))
+    differsFromDefault = FloatDiffersFromDefault(*value, defaultValue);
+    if (DrawResetToDefaultButton("reset", !differsFromDefault))
     {
         if (recordUndo)
         {
@@ -4716,7 +4737,8 @@ bool DrawPropertyIntRow(const char* label, const char* id, int* value, int minVa
     bool editEnded = false;
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
-    DrawPropertyLabel(label, tooltip, *value != defaultValue);
+    bool differsFromDefault = *value != defaultValue;
+    DrawPropertyLabel(label, tooltip, differsFromDefault);
     ImGui::TableSetColumnIndex(1);
 
     ImGui::PushID(id);
@@ -4750,7 +4772,8 @@ bool DrawPropertyIntRow(const char* label, const char* id, int* value, int minVa
         BeginPropertyUndoEdit();
     }
     editEnded = editEnded || ImGui::IsItemDeactivatedAfterEdit();
-    if (DrawResetToDefaultButton("reset"))
+    differsFromDefault = *value != defaultValue;
+    if (DrawResetToDefaultButton("reset", !differsFromDefault))
     {
         if (recordUndo)
         {
@@ -4836,7 +4859,8 @@ bool DrawColorRgbRow(const char* label, const char* id, std::array<float, 3>& va
 {
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
-    DrawPropertyLabel(label, nullptr, ColorDiffersFromDefault(value, defaultValue));
+    bool differsFromDefault = ColorDiffersFromDefault(value, defaultValue);
+    DrawPropertyLabel(label, nullptr, differsFromDefault);
     ImGui::TableSetColumnIndex(1);
 
     ImGui::PushID(id);
@@ -4849,7 +4873,8 @@ bool DrawColorRgbRow(const char* label, const char* id, std::array<float, 3>& va
     value[0] = std::clamp(value[0], 0.0f, 1.0f);
     value[1] = std::clamp(value[1], 0.0f, 1.0f);
     value[2] = std::clamp(value[2], 0.0f, 1.0f);
-    if (DrawResetToDefaultButton("reset"))
+    differsFromDefault = ColorDiffersFromDefault(value, defaultValue);
+    if (DrawResetToDefaultButton("reset", !differsFromDefault))
     {
         value = defaultValue;
         changed = true;
@@ -4884,7 +4909,8 @@ bool DrawCameraFloatRow(const char* label, const char* id, float* value, float m
         *value = std::clamp(*value, minValue, maxValue);
         changed = true;
     }
-    if (DrawResetToDefaultButton("reset"))
+    const bool differsFromDefault = FloatDiffersFromDefault(*value, defaultValue);
+    if (DrawResetToDefaultButton("reset", !differsFromDefault))
     {
         *value = std::clamp(defaultValue, minValue, maxValue);
         changed = true;
@@ -4939,6 +4965,34 @@ void DrawPropertiesPanel()
             EvaluateGraph();
         }
         if (DrawPropertyIntRow("Simulation Resolution", "HeightmapSimulationResolution", &editableNode->heightmap.simulationResolution, 2, 2048, rock::HeightmapLoadSettings{}.simulationResolution, "Heightmap simulation resolution changed", true, "侵食や地形処理に使う内部ハイトフィールド解像度です。表示設定の Resolution はメッシュ表示の細かさだけを変更します。"))
+        {
+            EvaluateGraph();
+        }
+
+        ImGui::EndTable();
+        return;
+    }
+
+    if (selectedNode->kind == rock::NodeKind::Shape && ImGui::BeginTable("ShapePropertyRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 184.0f);
+        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+        rock::ShapeSettings& shape = editableNode->shape;
+        shape.scaleMeters = std::clamp(shape.scaleMeters, 1.0f, 8096.0f);
+        shape.relativeHeightPercent = std::clamp(shape.relativeHeightPercent, 0.0f, 100.0f);
+
+        int shapeKind = static_cast<int>(shape.kind);
+        if (DrawPropertyComboRow("Shape Type", "ShapeType", &shapeKind, "Hemisphere\0Pyramid\0", "デバッグ用の基本ハイトフィールド形状です。", static_cast<int>(rock::ShapeSettings{}.kind)))
+        {
+            shape.kind = static_cast<rock::ShapeKind>(std::clamp(shapeKind, 0, 1));
+            g_graph.MarkDirty("Shape type changed");
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Scale (m)", "ShapeScaleMeters", &shape.scaleMeters, 1.0f, 8096.0f, rock::ShapeSettings{}.scaleMeters, "Shape scale changed", true, "シェープの横幅と奥行きです。1 unit = 1 m として描画します。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Relative Height (%)", "ShapeRelativeHeight", &shape.relativeHeightPercent, 0.0f, 100.0f, rock::ShapeSettings{}.relativeHeightPercent, "Shape height changed", true, "最大高さです。実際の高さは Scale (m) x この値 / 100 になります。"))
         {
             EvaluateGraph();
         }

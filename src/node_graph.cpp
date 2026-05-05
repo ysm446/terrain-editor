@@ -78,6 +78,16 @@ uint64_t HashHeightmapSettings(const HeightmapLoadSettings& settings, int resolu
     return hash;
 }
 
+uint64_t HashShapeSettings(const ShapeSettings& settings, int resolution)
+{
+    uint64_t hash = 1469598103934665603ull;
+    HashCombine(hash, static_cast<uint64_t>(settings.kind));
+    HashCombine(hash, HashFloat(settings.scaleMeters));
+    HashCombine(hash, HashFloat(settings.relativeHeightPercent));
+    HashCombine(hash, static_cast<uint64_t>(resolution));
+    return hash;
+}
+
 uint64_t HashFluvialSettings(const FluvialErosionSettings& settings, int resolution)
 {
     uint64_t hash = 1099511628211ull;
@@ -445,6 +455,53 @@ HeightfieldGrid BuildHeightfieldFromHeightmap(const HeightmapLoadSettings& setti
             grid.resolution,
             grid.resolution,
             settings.scaleMeters);
+    }
+    return grid;
+}
+
+HeightfieldGrid BuildHeightfieldFromShape(const ShapeSettings& settings, int resolution, std::string* message)
+{
+    HeightfieldGrid grid;
+    grid.resolution = std::clamp(resolution, 2, 2048);
+    grid.terrainSizeMeters = std::max(1.0f, settings.scaleMeters);
+    const float heightMeters = grid.terrainSizeMeters * std::max(0.0f, settings.relativeHeightPercent) / 100.0f;
+    const size_t cellCount = static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution);
+    grid.heights.reserve(cellCount);
+    grid.mask.assign(cellCount, 0.0f);
+    grid.deposits.assign(cellCount, 0.0f);
+    grid.flows.assign(cellCount, 0.0f);
+
+    for (int z = 0; z < grid.resolution; ++z)
+    {
+        const float v = grid.resolution > 1 ? static_cast<float>(z) / static_cast<float>(grid.resolution - 1) : 0.0f;
+        const float nz = v * 2.0f - 1.0f;
+        for (int x = 0; x < grid.resolution; ++x)
+        {
+            const float u = grid.resolution > 1 ? static_cast<float>(x) / static_cast<float>(grid.resolution - 1) : 0.0f;
+            const float nx = u * 2.0f - 1.0f;
+            float normalizedHeight = 0.0f;
+            if (settings.kind == ShapeKind::Hemisphere)
+            {
+                const float radiusSq = nx * nx + nz * nz;
+                normalizedHeight = radiusSq < 1.0f ? std::sqrt(1.0f - radiusSq) : 0.0f;
+            }
+            else
+            {
+                normalizedHeight = std::max(0.0f, 1.0f - std::max(std::abs(nx), std::abs(nz)));
+            }
+            grid.heights.push_back(normalizedHeight * heightMeters);
+        }
+    }
+
+    if (message != nullptr)
+    {
+        *message = std::format(
+            "{} shape {} x {}, scale {:.0f}m, height {:.0f}m",
+            ToString(settings.kind),
+            grid.resolution,
+            grid.resolution,
+            grid.terrainSizeMeters,
+            heightMeters);
     }
     return grid;
 }
@@ -1289,7 +1346,9 @@ MeshData BuildMeshFromSdf(const GraphSettings& settings, const SdfPipeline& pipe
 
 MeshData BuildMeshFromHeightPipeline(const SdfPipeline& pipeline, int resolution, std::string* message, HeightfieldPreviewField previewField = HeightfieldPreviewField::Heightmap)
 {
-    HeightfieldGrid grid = BuildHeightfieldFromHeightmap(pipeline.heightmap, resolution, message);
+    HeightfieldGrid grid = pipeline.useShape
+        ? BuildHeightfieldFromShape(pipeline.shape, resolution, message)
+        : BuildHeightfieldFromHeightmap(pipeline.heightmap, resolution, message);
     if (grid.resolution <= 0)
     {
         return {};
@@ -1316,35 +1375,42 @@ MeshData BuildMeshFromHeightPipeline(const SdfPipeline& pipeline, int resolution
 
 MeshData NodeGraph::BuildMeshFromHeightPipelineCached(const SdfPipeline& pipeline, int resolution, std::string* message, HeightfieldPreviewField previewField)
 {
-    if (pipeline.heightmapNodeId == 0)
+    const GraphId sourceNodeId = pipeline.useShape ? pipeline.shapeNodeId : pipeline.heightmapNodeId;
+    if (sourceNodeId == 0)
     {
         return BuildMeshFromHeightPipeline(pipeline, resolution, message, previewField);
     }
 
-    const int simulationResolution = std::clamp(pipeline.heightmap.simulationResolution, 2, 2048);
+    const int simulationResolution = pipeline.useShape
+        ? std::clamp(resolution, 2, 2048)
+        : std::clamp(pipeline.heightmap.simulationResolution, 2, 2048);
     uint64_t inputHash = 0;
-    const uint64_t heightmapHash = HashHeightmapSettings(pipeline.heightmap, simulationResolution);
-    HeightfieldNodeCache& heightmapCache = heightfieldCache_[pipeline.heightmapNodeId];
-    if (!heightmapCache.valid ||
-        heightmapCache.resolution != simulationResolution ||
-        heightmapCache.inputHash != inputHash ||
-        heightmapCache.parameterHash != heightmapHash)
+    const uint64_t sourceHash = pipeline.useShape
+        ? HashShapeSettings(pipeline.shape, simulationResolution)
+        : HashHeightmapSettings(pipeline.heightmap, simulationResolution);
+    HeightfieldNodeCache& sourceCache = heightfieldCache_[sourceNodeId];
+    if (!sourceCache.valid ||
+        sourceCache.resolution != simulationResolution ||
+        sourceCache.inputHash != inputHash ||
+        sourceCache.parameterHash != sourceHash)
     {
-        std::string heightmapMessage;
-        heightmapCache.grid = BuildHeightfieldFromHeightmap(pipeline.heightmap, simulationResolution, &heightmapMessage);
-        heightmapCache.message = heightmapMessage;
-        heightmapCache.valid = true;
-        heightmapCache.resolution = simulationResolution;
-        heightmapCache.inputHash = inputHash;
-        heightmapCache.parameterHash = heightmapHash;
-        heightmapCache.outputHash = heightmapHash;
+        std::string sourceMessage;
+        sourceCache.grid = pipeline.useShape
+            ? BuildHeightfieldFromShape(pipeline.shape, simulationResolution, &sourceMessage)
+            : BuildHeightfieldFromHeightmap(pipeline.heightmap, simulationResolution, &sourceMessage);
+        sourceCache.message = sourceMessage;
+        sourceCache.valid = true;
+        sourceCache.resolution = simulationResolution;
+        sourceCache.inputHash = inputHash;
+        sourceCache.parameterHash = sourceHash;
+        sourceCache.outputHash = sourceHash;
     }
 
-    HeightfieldGrid grid = heightmapCache.grid;
-    inputHash = heightmapCache.outputHash;
+    HeightfieldGrid grid = sourceCache.grid;
+    inputHash = sourceCache.outputHash;
     if (message != nullptr)
     {
-        *message = heightmapCache.message;
+        *message = sourceCache.message;
     }
     if (grid.resolution <= 0)
     {
@@ -1615,6 +1681,7 @@ GraphId NodeGraph::CreateNode(NodeKind kind)
         AddPin(nodeId, PinKind::Input, ValueType::HeightField, "HeightField");
         break;
     case NodeKind::HeightmapLoad:
+    case NodeKind::Shape:
         AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
         break;
     case NodeKind::FluvialErosion:
@@ -1768,6 +1835,8 @@ SdfPipeline NodeGraph::PipelineFor(PreviewStage stage) const
         return PipelineTo(NodeKind::FluvialErosion);
     case PreviewStage::HeightmapBlur:
         return PipelineTo(NodeKind::HeightmapBlur);
+    case PreviewStage::Shape:
+        return PipelineTo(NodeKind::Shape);
     case PreviewStage::Output:
     default:
         return PipelineTo(NodeKind::OutputMesh);
@@ -1932,6 +2001,15 @@ SdfPipeline NodeGraph::PipelineToNode(const Node& targetNode) const
             pipeline.useHeightmap = true;
             pipeline.heightmapNodeId = node->id;
             pipeline.heightmap = node->heightmap;
+            break;
+        }
+        else if (node->kind == NodeKind::Shape)
+        {
+            pipeline.hasSource = true;
+            pipeline.useHeightmap = true;
+            pipeline.useShape = true;
+            pipeline.shapeNodeId = node->id;
+            pipeline.shape = node->shape;
             break;
         }
 
@@ -2120,6 +2198,19 @@ std::string_view ToString(PrimitiveKind kind)
     }
 }
 
+std::string_view ToString(ShapeKind kind)
+{
+    switch (kind)
+    {
+    case ShapeKind::Hemisphere:
+        return "Hemisphere";
+    case ShapeKind::Pyramid:
+        return "Pyramid";
+    default:
+        return "Unknown";
+    }
+}
+
 std::string_view ToString(NodeKind kind)
 {
     switch (kind)
@@ -2138,6 +2229,8 @@ std::string_view ToString(NodeKind kind)
         return "Fluvial Erosion";
     case NodeKind::HeightmapBlur:
         return "Heightmap Blur";
+    case NodeKind::Shape:
+        return "Shape";
     default:
         return "Unknown";
     }
@@ -2159,6 +2252,8 @@ std::string_view ToString(PreviewStage stage)
         return "Output Mesh";
     case PreviewStage::HeightmapBlur:
         return "Heightmap Blur";
+    case PreviewStage::Shape:
+        return "Shape";
     default:
         return "Unknown";
     }
@@ -2197,6 +2292,8 @@ PreviewStage PreviewStageFor(NodeKind kind)
         return PreviewStage::HeightmapBlur;
     case NodeKind::HeightmapLoad:
         return PreviewStage::Primitive;
+    case NodeKind::Shape:
+        return PreviewStage::Shape;
     case NodeKind::OutputMesh:
     default:
         return PreviewStage::Output;

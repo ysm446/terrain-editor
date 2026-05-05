@@ -21,6 +21,7 @@ enum class NodeKind
     HeightmapLoad,
     FluvialErosion,
     HeightmapBlur,
+    Shape,
 };
 
 enum class PinKind
@@ -52,6 +53,12 @@ enum class FluvialBackend
     GpuCompute,
 };
 
+enum class ShapeKind
+{
+    Hemisphere,
+    Pyramid,
+};
+
 enum class PreviewStage
 {
     Primitive,
@@ -60,6 +67,7 @@ enum class PreviewStage
     Fluvial,
     Output,
     HeightmapBlur,
+    Shape,
 };
 
 enum class HeightfieldPreviewField
@@ -114,6 +122,13 @@ struct HeightmapLoadSettings
     int simulationResolution = 512;
 };
 
+struct ShapeSettings
+{
+    ShapeKind kind = ShapeKind::Hemisphere;
+    float scaleMeters = 1024.0f;
+    float relativeHeightPercent = 50.0f;
+};
+
 struct FluvialErosionSettings
 {
     float featureSize = 8.0f;
@@ -158,6 +173,7 @@ struct Node
     CrackSettings crack;
     OutputMeshSettings outputMesh;
     HeightmapLoadSettings heightmap;
+    ShapeSettings shape;
     FluvialErosionSettings fluvialErosion;
     HeightmapBlurSettings heightmapBlur;
 };
@@ -333,6 +349,9 @@ struct SdfPipeline
     bool useHeightmap = false;
     GraphId heightmapNodeId = 0;
     HeightmapLoadSettings heightmap;
+    bool useShape = false;
+    GraphId shapeNodeId = 0;
+    ShapeSettings shape;
     std::vector<HeightfieldOperation> heightfieldOperations;
 };
 
@@ -430,6 +449,7 @@ private:
 };
 
 std::string_view ToString(PrimitiveKind kind);
+std::string_view ToString(ShapeKind kind);
 std::string_view ToString(NodeKind kind);
 std::string_view ToString(PreviewStage stage);
 std::string_view ToString(ValueType type);
