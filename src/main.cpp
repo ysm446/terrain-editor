@@ -4589,15 +4589,10 @@ bool ColorDiffersFromDefault(const std::array<float, 3>& value, const std::array
            FloatDiffersFromDefault(value[2], defaultValue[2]);
 }
 
-void DrawPropertyLabel(const char* label, const char* tooltip = nullptr, bool modified = false)
+void DrawPropertyLabel(const char* label, const char* tooltip = nullptr, bool = false)
 {
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted(label);
-    if (modified)
-    {
-        const ImVec2 textMin = ImGui::GetItemRectMin();
-        ImGui::GetWindowDrawList()->AddText(ImVec2(textMin.x + 0.7f, textMin.y), ImGui::GetColorU32(ImGuiCol_Text), label);
-    }
     if (tooltip != nullptr && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
     {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
