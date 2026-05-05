@@ -267,6 +267,7 @@ struct GpuMeshPreview
     int shadowMapResolution = 0;
     float shadowBias = 0.0f;
     std::array<float, 3> pbrAlbedo = {};
+    std::array<float, 3> gridColor = {};
     ComPtr<ID3D12Resource> colorTarget;
     ComPtr<ID3D12Resource> depthTarget;
     ComPtr<ID3D12Resource> shadowTarget;
@@ -287,6 +288,8 @@ struct GpuMeshPreview
     UINT triIndexCount = 0;
     UINT edgeIndexCount = 0;
     UINT gridVertexCount = 0;
+    int gridCellCount = 0;
+    float gridCellSizeMeters = 0.0f;
     D3D12_RESOURCE_STATES colorState = D3D12_RESOURCE_STATE_COMMON;
     D3D12_RESOURCE_STATES shadowState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 };
@@ -294,6 +297,7 @@ struct GpuMeshPreview
 ComPtr<ID3D12RootSignature> g_meshPreviewRootSignature;
 ComPtr<ID3D12PipelineState> g_meshPreviewSurfacePso;
 ComPtr<ID3D12PipelineState> g_meshPreviewWirePso;
+ComPtr<ID3D12PipelineState> g_meshPreviewGridPso;
 ComPtr<ID3D12PipelineState> g_meshPreviewShadowPso;
 ComPtr<ID3D12RootSignature> g_fluvialComputeRootSignature;
 ComPtr<ID3D12PipelineState> g_fluvialGridErosionPso;
@@ -617,6 +621,7 @@ void CleanupD3D()
     g_gpuMeshPreview.gridVertexCount = 0;
     g_meshPreviewSurfacePso.Reset();
     g_meshPreviewWirePso.Reset();
+    g_meshPreviewGridPso.Reset();
     g_meshPreviewRootSignature.Reset();
     g_fluvialGridErosionPso.Reset();
     g_fluvialFlowAccumulationPso.Reset();
@@ -865,6 +870,8 @@ bool SaveAppSettings(std::string* error = nullptr)
             {"meshWireframe", settings.preview.showWireframe},
             {"surfacePoints", settings.preview.showPoints},
             {"grid", settings.preview.showGrid},
+            {"gridCellCount", settings.preview.gridCellCount},
+            {"gridCellSizeMeters", settings.preview.gridCellSizeMeters},
             {"previewResolution", settings.preview.resolution},
             {"previewLod", settings.preview.lod},
             {"lightingMode", settings.preview.lightingMode},
@@ -879,6 +886,11 @@ bool SaveAppSettings(std::string* error = nullptr)
                 settings.preview.pbrAlbedo[0],
                 settings.preview.pbrAlbedo[1],
                 settings.preview.pbrAlbedo[2],
+            }},
+            {"gridColor", {
+                settings.preview.gridColor[0],
+                settings.preview.gridColor[1],
+                settings.preview.gridColor[2],
             }},
             {"viewportBackground", {
                 settings.preview.viewportBackground[0],
@@ -1003,6 +1015,8 @@ bool LoadAppSettings(std::string* error = nullptr)
         settings.preview.showWireframe = visibilityJson.value("meshWireframe", settings.preview.showWireframe);
         settings.preview.showPoints = visibilityJson.value("surfacePoints", settings.preview.showPoints);
         settings.preview.showGrid = visibilityJson.value("grid", settings.preview.showGrid);
+        settings.preview.gridCellCount = std::clamp(visibilityJson.value("gridCellCount", settings.preview.gridCellCount), 1, 200);
+        settings.preview.gridCellSizeMeters = std::clamp(visibilityJson.value("gridCellSizeMeters", settings.preview.gridCellSizeMeters), 1.0f, 10000.0f);
         settings.preview.resolution = std::clamp(visibilityJson.value("previewResolution", settings.preview.resolution), 16, 512);
         settings.preview.lod = std::clamp(visibilityJson.value("previewLod", settings.preview.lod), 0, 4);
         settings.preview.lightingMode = std::clamp(visibilityJson.value("lightingMode", settings.preview.lightingMode), 0, 2);
@@ -1018,6 +1032,12 @@ bool LoadAppSettings(std::string* error = nullptr)
             settings.preview.pbrAlbedo[0] = std::clamp(visibilityJson["pbrAlbedo"][0].get<float>(), 0.0f, 1.0f);
             settings.preview.pbrAlbedo[1] = std::clamp(visibilityJson["pbrAlbedo"][1].get<float>(), 0.0f, 1.0f);
             settings.preview.pbrAlbedo[2] = std::clamp(visibilityJson["pbrAlbedo"][2].get<float>(), 0.0f, 1.0f);
+        }
+        if (visibilityJson.contains("gridColor") && visibilityJson["gridColor"].is_array() && visibilityJson["gridColor"].size() == 3)
+        {
+            settings.preview.gridColor[0] = std::clamp(visibilityJson["gridColor"][0].get<float>(), 0.0f, 1.0f);
+            settings.preview.gridColor[1] = std::clamp(visibilityJson["gridColor"][1].get<float>(), 0.0f, 1.0f);
+            settings.preview.gridColor[2] = std::clamp(visibilityJson["gridColor"][2].get<float>(), 0.0f, 1.0f);
         }
         if (visibilityJson.contains("viewportBackground") && visibilityJson["viewportBackground"].is_array() && visibilityJson["viewportBackground"].size() == 3)
         {
@@ -1901,6 +1921,10 @@ bool EnsureMeshPreviewPipeline(std::string* error)
     psoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
     hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewWirePso));
     if (FAILED(hr)) { if (error) *error = "Create mesh wire PSO failed"; return false; }
+
+    psoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
+    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewGridPso));
+    if (FAILED(hr)) { if (error) *error = "Create mesh grid PSO failed"; return false; }
 
     psoDesc.VS = {vsShadowBlob->GetBufferPointer(), vsShadowBlob->GetBufferSize()};
     psoDesc.PS = {};
@@ -3013,25 +3037,44 @@ void UpdateMeshPreviewBuffers(const rock::MeshData& mesh)
 
 void EnsureGridPreviewBuffer()
 {
-    if (g_gpuMeshPreview.gridVertexBuffer && g_gpuMeshPreview.gridVertexCount > 0)
+    const rock::PreviewSettings& preview = g_graph.Settings().preview;
+    const int cellCount = std::clamp(preview.gridCellCount, 1, 200);
+    const float cellSizeMeters = std::clamp(preview.gridCellSizeMeters, 1.0f, 10000.0f);
+    if (g_gpuMeshPreview.gridVertexBuffer &&
+        g_gpuMeshPreview.gridVertexCount > 0 &&
+        g_gpuMeshPreview.gridCellCount == cellCount &&
+        g_gpuMeshPreview.gridCellSizeMeters == cellSizeMeters)
     {
         return;
     }
 
-    constexpr int halfCellCount = 20;
-    constexpr float cellSizeMeters = 100.0f;
+    g_gpuMeshPreview.gridVertexBuffer.Reset();
+    g_gpuMeshPreview.gridVertexCount = 0;
     std::vector<rock::MeshVertex> vertices;
-    vertices.reserve(static_cast<size_t>(halfCellCount * 2 + 1) * 4u);
-    const auto addVertex = [&](float x, float z) {
-        vertices.push_back({x, 0.0f, z, 0.0f, 1.0f, 0.0f, 0.0f});
+    vertices.reserve(static_cast<size_t>(cellCount + 1) * 4u);
+    const auto addVertex = [&](float x, float z, float axisTag) {
+        vertices.push_back({x, 0.0f, z, 0.0f, 1.0f, 0.0f, axisTag});
     };
-    for (int i = -halfCellCount; i <= halfCellCount; ++i)
+    const float halfExtent = static_cast<float>(cellCount) * cellSizeMeters * 0.5f;
+    for (int i = 0; i <= cellCount; ++i)
     {
-        const float offset = static_cast<float>(i) * cellSizeMeters;
-        addVertex(-halfCellCount * cellSizeMeters, offset);
-        addVertex(halfCellCount * cellSizeMeters, offset);
-        addVertex(offset, -halfCellCount * cellSizeMeters);
-        addVertex(offset, halfCellCount * cellSizeMeters);
+        const float offset = (static_cast<float>(i) - static_cast<float>(cellCount) * 0.5f) * cellSizeMeters;
+        const bool axisLine = std::abs(offset) <= 0.0001f;
+        if (axisLine)
+        {
+            continue;
+        }
+        addVertex(-halfExtent, offset, 0.0f);
+        addVertex(halfExtent, offset, 0.0f);
+        addVertex(offset, -halfExtent, 0.0f);
+        addVertex(offset, halfExtent, 0.0f);
+    }
+    if (cellCount % 2 == 0)
+    {
+        addVertex(-halfExtent, 0.0f, -1.0f);
+        addVertex(halfExtent, 0.0f, -1.0f);
+        addVertex(0.0f, -halfExtent, -2.0f);
+        addVertex(0.0f, halfExtent, -2.0f);
     }
 
     const D3D12_HEAP_PROPERTIES uploadHeap = HeapProperties(D3D12_HEAP_TYPE_UPLOAD);
@@ -3046,6 +3089,8 @@ void EnsureGridPreviewBuffer()
     std::memcpy(mapped, vertices.data(), static_cast<size_t>(vbSize));
     g_gpuMeshPreview.gridVertexBuffer->Unmap(0, nullptr);
     g_gpuMeshPreview.gridVertexCount = static_cast<UINT>(vertices.size());
+    g_gpuMeshPreview.gridCellCount = cellCount;
+    g_gpuMeshPreview.gridCellSizeMeters = cellSizeMeters;
 }
 
 void DrawSurfacePointPreview(ImDrawList* drawList, const ImVec2& min, const ImVec2& max, const rock::SdfPreviewStats& sdf)
@@ -3105,28 +3150,6 @@ ImVec2 ProjectPreviewPoint(float x, float y, float z, const ImVec2& center, floa
 {
     ImVec2 p = RotatePoint(x, y, z, g_viewport.yaw, g_viewport.pitch);
     return ImVec2(center.x + p.x * scale, center.y + p.y * scale);
-}
-
-void DrawViewportGrid3D(ImDrawList* drawList, const ImVec2& min, const ImVec2& max, const ImVec2& center, float scale)
-{
-    const ImU32 minorColor = ThemeColor("viewportGrid", ImVec4(0.24f, 0.27f, 0.25f, 0.35f));
-    const ImU32 axisXColor = IM_COL32(210, 76, 76, 210);
-    const ImU32 axisZColor = IM_COL32(76, 130, 220, 210);
-    constexpr int halfCellCount = 10;
-    constexpr float cellSizeMeters = 100.0f;
-
-    drawList->PushClipRect(min, max, true);
-    for (int i = -halfCellCount; i <= halfCellCount; ++i)
-    {
-        const float offset = static_cast<float>(i) * cellSizeMeters;
-        const ImVec2 xLineA = ProjectPreviewPoint(-halfCellCount * cellSizeMeters, 0.0f, offset, center, scale);
-        const ImVec2 xLineB = ProjectPreviewPoint(halfCellCount * cellSizeMeters, 0.0f, offset, center, scale);
-        const ImVec2 zLineA = ProjectPreviewPoint(offset, 0.0f, -halfCellCount * cellSizeMeters, center, scale);
-        const ImVec2 zLineB = ProjectPreviewPoint(offset, 0.0f, halfCellCount * cellSizeMeters, center, scale);
-        drawList->AddLine(xLineA, xLineB, i == 0 ? axisXColor : minorColor, i == 0 ? 1.8f : 1.0f);
-        drawList->AddLine(zLineA, zLineB, i == 0 ? axisZColor : minorColor, i == 0 ? 1.8f : 1.0f);
-    }
-    drawList->PopClipRect();
 }
 
 void DrawViewportAxisGizmo(ImDrawList* drawList, const ImVec2& min, const ImVec2& max)
@@ -3266,7 +3289,8 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
 
     const rock::MeshData& mesh = g_graph.Evaluation().previewMesh;
     const uint64_t currentVersion = g_graph.Evaluation().version;
-    const bool meshDirty = (g_gpuMeshPreview.graphVersion != currentVersion || !g_gpuMeshPreview.vertexBuffer);
+    const bool meshHasVertices = !mesh.vertices.empty();
+    const bool meshDirty = (g_gpuMeshPreview.graphVersion != currentVersion || (meshHasVertices && !g_gpuMeshPreview.vertexBuffer));
     const bool viewportDirty =
         g_gpuMeshPreview.yaw != g_viewport.yaw ||
         g_gpuMeshPreview.pitch != g_viewport.pitch ||
@@ -3287,6 +3311,9 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.shadowStrength != g_graph.Settings().preview.shadowStrength ||
         g_gpuMeshPreview.shadowBias != g_graph.Settings().preview.shadowBias ||
         g_gpuMeshPreview.pbrAlbedo != g_graph.Settings().preview.pbrAlbedo ||
+        g_gpuMeshPreview.gridColor != g_graph.Settings().preview.gridColor ||
+        g_gpuMeshPreview.gridCellCount != std::clamp(g_graph.Settings().preview.gridCellCount, 1, 200) ||
+        g_gpuMeshPreview.gridCellSizeMeters != std::clamp(g_graph.Settings().preview.gridCellSizeMeters, 1.0f, 10000.0f) ||
         (showGrid && !g_gpuMeshPreview.gridVertexBuffer) ||
         g_gpuMeshPreview.colorState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     if (!meshDirty && !viewportDirty) return true;
@@ -3302,7 +3329,8 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         {
             EnsureGridPreviewBuffer();
         }
-        if (g_gpuMeshPreview.vertexCount == 0)
+        const bool hasMeshVertices = g_gpuMeshPreview.vertexCount > 0 && g_gpuMeshPreview.vertexBuffer;
+        if (!hasMeshVertices && (!showGrid || g_gpuMeshPreview.gridVertexCount == 0))
         {
             return false;
         }
@@ -3379,14 +3407,22 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
 
         Vec3 boundsMin(FLT_MAX, FLT_MAX, FLT_MAX);
         Vec3 boundsMax(-FLT_MAX, -FLT_MAX, -FLT_MAX);
-        for (const rock::MeshVertex& vertex : mesh.vertices)
+        if (hasMeshVertices)
         {
-            boundsMin.x = std::min(boundsMin.x, vertex.x);
-            boundsMin.y = std::min(boundsMin.y, vertex.y);
-            boundsMin.z = std::min(boundsMin.z, vertex.z);
-            boundsMax.x = std::max(boundsMax.x, vertex.x);
-            boundsMax.y = std::max(boundsMax.y, vertex.y);
-            boundsMax.z = std::max(boundsMax.z, vertex.z);
+            for (const rock::MeshVertex& vertex : mesh.vertices)
+            {
+                boundsMin.x = std::min(boundsMin.x, vertex.x);
+                boundsMin.y = std::min(boundsMin.y, vertex.y);
+                boundsMin.z = std::min(boundsMin.z, vertex.z);
+                boundsMax.x = std::max(boundsMax.x, vertex.x);
+                boundsMax.y = std::max(boundsMax.y, vertex.y);
+                boundsMax.z = std::max(boundsMax.z, vertex.z);
+            }
+        }
+        else
+        {
+            boundsMin = Vec3(-2000.0f, 0.0f, -2000.0f);
+            boundsMax = Vec3(2000.0f, 0.0f, 2000.0f);
         }
         const Vec3 boundsCenter = Scale(Add(boundsMin, boundsMax), 0.5f);
         const float boundsDiagonal = Length(Subtract(boundsMax, boundsMin));
@@ -3423,14 +3459,17 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         constants.padding2 = lightDepthMin;
 
         D3D12_VERTEX_BUFFER_VIEW vbv{};
-        vbv.BufferLocation = g_gpuMeshPreview.vertexBuffer->GetGPUVirtualAddress();
-        vbv.SizeInBytes    = g_gpuMeshPreview.vertexCount * static_cast<UINT>(sizeof(rock::MeshVertex));
-        vbv.StrideInBytes  = static_cast<UINT>(sizeof(rock::MeshVertex));
-        commandList->IASetVertexBuffers(0, 1, &vbv);
+        if (hasMeshVertices)
+        {
+            vbv.BufferLocation = g_gpuMeshPreview.vertexBuffer->GetGPUVirtualAddress();
+            vbv.SizeInBytes    = g_gpuMeshPreview.vertexCount * static_cast<UINT>(sizeof(rock::MeshVertex));
+            vbv.StrideInBytes  = static_cast<UINT>(sizeof(rock::MeshVertex));
+            commandList->IASetVertexBuffers(0, 1, &vbv);
+        }
         commandList->SetGraphicsRootSignature(g_meshPreviewRootSignature.Get());
         commandList->SetGraphicsRoot32BitConstants(0, sizeof(constants) / 4, &constants, 0);
 
-        if (constants.shadowEnabled > 0.5f && showSurface && g_gpuMeshPreview.triIndexCount > 0)
+        if (hasMeshVertices && constants.shadowEnabled > 0.5f && showSurface && g_gpuMeshPreview.triIndexCount > 0)
         {
             if (g_gpuMeshPreview.shadowState != D3D12_RESOURCE_STATE_DEPTH_WRITE)
             {
@@ -3484,18 +3523,31 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         }
         if (showGrid && g_gpuMeshPreview.gridVertexCount > 0)
         {
+            constants.albedoColor[0] = g_graph.Settings().preview.gridColor[0];
+            constants.albedoColor[1] = g_graph.Settings().preview.gridColor[1];
+            constants.albedoColor[2] = g_graph.Settings().preview.gridColor[2];
+            constants.albedoColor[3] = 1.0f;
+            commandList->SetGraphicsRoot32BitConstants(0, sizeof(constants) / 4, &constants, 0);
             D3D12_VERTEX_BUFFER_VIEW gridVbv{};
             gridVbv.BufferLocation = g_gpuMeshPreview.gridVertexBuffer->GetGPUVirtualAddress();
             gridVbv.SizeInBytes = g_gpuMeshPreview.gridVertexCount * static_cast<UINT>(sizeof(rock::MeshVertex));
             gridVbv.StrideInBytes = static_cast<UINT>(sizeof(rock::MeshVertex));
             commandList->IASetVertexBuffers(0, 1, &gridVbv);
-            commandList->SetPipelineState(g_meshPreviewWirePso.Get());
+            commandList->SetPipelineState(g_meshPreviewGridPso.Get());
             commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
             commandList->DrawInstanced(g_gpuMeshPreview.gridVertexCount, 1, 0, 0);
-            commandList->IASetVertexBuffers(0, 1, &vbv);
+            if (hasMeshVertices)
+            {
+                commandList->IASetVertexBuffers(0, 1, &vbv);
+            }
         }
         if (showWireframe && g_gpuMeshPreview.edgeIndexCount > 0)
         {
+            constants.albedoColor[0] = 0.18f;
+            constants.albedoColor[1] = 0.20f;
+            constants.albedoColor[2] = 0.19f;
+            constants.albedoColor[3] = 1.0f;
+            commandList->SetGraphicsRoot32BitConstants(0, sizeof(constants) / 4, &constants, 0);
             D3D12_INDEX_BUFFER_VIEW ibv{g_gpuMeshPreview.edgeIndexBuffer->GetGPUVirtualAddress(), g_gpuMeshPreview.edgeIndexCount * sizeof(UINT), DXGI_FORMAT_R32_UINT};
             commandList->IASetIndexBuffer(&ibv);
             commandList->SetPipelineState(g_meshPreviewWirePso.Get());
@@ -3536,6 +3588,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.shadowStrength = g_graph.Settings().preview.shadowStrength;
         g_gpuMeshPreview.shadowBias = g_graph.Settings().preview.shadowBias;
         g_gpuMeshPreview.pbrAlbedo = g_graph.Settings().preview.pbrAlbedo;
+        g_gpuMeshPreview.gridColor = g_graph.Settings().preview.gridColor;
         g_gpuMeshPreview.colorState    = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         return true;
     }
@@ -3569,22 +3622,19 @@ void DrawViewportCube(const ImVec2& min, const ImVec2& max, float timeSeconds)
     UpdateViewportInteraction(min, max);
 
     ImDrawList* drawList = ImGui::GetWindowDrawList();
-    const ImVec2 center((min.x + max.x) * 0.5f + g_viewport.pan.x, (min.y + max.y) * 0.5f + g_viewport.pan.y);
-    const float viewportSize = std::min(max.x - min.x, max.y - min.y);
-    const float scale = viewportSize * 1.20f * g_viewport.zoom;
-
     const std::array<float, 3>& viewportBackground = g_graph.Settings().preview.viewportBackground;
     drawList->AddRectFilled(min, max, ColorToU32(ImVec4(viewportBackground[0], viewportBackground[1], viewportBackground[2], 1.0f)));
-    if (g_graph.Settings().preview.showGrid && !g_ui.meshPreview)
+    const rock::PreviewSettings& preview = g_graph.Settings().preview;
+    const bool drawMeshSurface = g_ui.meshPreview || g_graph.Evaluation().previewIsHeightmap;
+    const bool drawGpuViewport = drawMeshSurface || preview.showGrid;
+    if (drawGpuViewport)
     {
-        DrawViewportGrid3D(drawList, min, max, center, scale);
-    }
-
-    if (g_ui.meshPreview)
-    {
-        const rock::PreviewSettings& preview = g_graph.Settings().preview;
         DrawGpuMeshPreview(drawList, min, max, g_graph.Evaluation().previewMesh,
-                           preview.showSurface, preview.showWireframe);
+                           drawMeshSurface && preview.showSurface,
+                           drawMeshSurface && preview.showWireframe);
+    }
+    if (g_ui.meshPreview || !g_graph.Evaluation().previewIsHeightmap)
+    {
         if (preview.showPoints && !g_graph.Evaluation().previewIsHeightmap)
         {
             DrawSurfacePointPreview(drawList, min, max, g_graph.Evaluation().previewSdf);
@@ -3610,7 +3660,12 @@ void DrawViewportCube(const ImVec2& min, const ImVec2& max, float timeSeconds)
             ? "Heightmap Preview"
             : "SDF Preview: " + std::string(rock::ToString(g_graph.Preview())));
     drawList->AddText(ImVec2(min.x + 16.0f, min.y + 14.0f), ThemeColor("accentText", ImVec4(0.86f, 0.88f, 0.85f, 1.0f)), title.c_str());
-    drawList->AddText(ImVec2(min.x + 16.0f, min.y + 36.0f), ThemeColor("mutedText", ImVec4(0.54f, 0.59f, 0.56f, 1.0f)), "Right-handed, Y-up, 100 m cells");
+    const std::string gridInfo = std::format(
+        "Right-handed, Y-up, {} x {}, {:.0f} m cells",
+        preview.gridCellCount,
+        preview.gridCellCount,
+        preview.gridCellSizeMeters);
+    drawList->AddText(ImVec2(min.x + 16.0f, min.y + 36.0f), ThemeColor("mutedText", ImVec4(0.54f, 0.59f, 0.56f, 1.0f)), gridInfo.c_str());
     char fpsText[32]{};
     std::snprintf(fpsText, sizeof(fpsText), "FPS %.1f", ImGui::GetIO().Framerate);
     const ImVec2 fpsSize = ImGui::CalcTextSize(fpsText);
@@ -5131,6 +5186,20 @@ void DrawDisplaySettingsPanel()
         {
             SaveAppSettingsSilently();
         }
+        if (DrawPropertyIntRow("Grid Cells", "DisplayGridCells", &settings.preview.gridCellCount, 1, 200, rock::PreviewSettings{}.gridCellCount, "Grid cell count changed", false, "グリッド全体の1辺あたりのマス数です。10なら10 x 10です。"))
+        {
+            settings.preview.gridCellCount = std::clamp(settings.preview.gridCellCount, 1, 200);
+            SaveAppSettingsSilently();
+        }
+        if (DrawPropertyFloatRow("Grid Cell Size (m)", "DisplayGridCellSize", &settings.preview.gridCellSizeMeters, 1.0f, 10000.0f, rock::PreviewSettings{}.gridCellSizeMeters, "Grid cell size changed", false, "グリッド1マスの長さです。"))
+        {
+            settings.preview.gridCellSizeMeters = std::clamp(settings.preview.gridCellSizeMeters, 1.0f, 10000.0f);
+            SaveAppSettingsSilently();
+        }
+        if (DrawColorRgbRow("Grid Color", "DisplayGridColor", settings.preview.gridColor, rock::PreviewSettings{}.gridColor))
+        {
+            SaveAppSettingsSilently();
+        }
         if (DrawPropertyComboRow("Lighting Mode", "DisplayLightingMode", &settings.preview.lightingMode, "Simple\0PBR Preview\0Shadow Debug\0", "3Dビューのライティングモードです。Simple はマスク確認向け、PBR Preview は地形の陰影確認向け、Shadow Debug はシャドウ判定の確認用です。", rock::PreviewSettings{}.lightingMode))
         {
             settings.preview.lightingMode = std::clamp(settings.preview.lightingMode, 0, 2);
@@ -5212,7 +5281,10 @@ void DrawCameraPanel()
 
     ImGui::Spacing();
     ImGui::TextDisabled("Right-handed / Y-up");
-    ImGui::TextDisabled("Grid: 20 x 20, 100 m cells");
+    ImGui::TextDisabled("Grid: %d x %d, %.0f m cells",
+        g_graph.Settings().preview.gridCellCount,
+        g_graph.Settings().preview.gridCellCount,
+        g_graph.Settings().preview.gridCellSizeMeters);
 }
 
 void DrawStatsPanel()

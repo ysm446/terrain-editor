@@ -973,8 +973,6 @@ MeshData BuildMeshFromHeightfield(const HeightfieldGrid& grid, int meshResolutio
     mesh.triangles.reserve(static_cast<size_t>(meshResolution - 1) * static_cast<size_t>(meshResolution - 1) * 4u + static_cast<size_t>(meshResolution - 1) * 8u);
     mesh.edges.reserve(mesh.triangles.capacity() * 3u);
 
-    float minHeight = FLT_MAX;
-    float maxHeight = -FLT_MAX;
     for (int z = 0; z < meshResolution; ++z)
     {
         const float v = meshResolution > 1 ? static_cast<float>(z) / static_cast<float>(meshResolution - 1) : 0.0f;
@@ -982,8 +980,6 @@ MeshData BuildMeshFromHeightfield(const HeightfieldGrid& grid, int meshResolutio
         {
             const float u = meshResolution > 1 ? static_cast<float>(x) / static_cast<float>(meshResolution - 1) : 0.0f;
             const float height = SampleHeightfieldValue(grid.heights, gridResolution, u, v);
-            minHeight = std::min(minHeight, height);
-            maxHeight = std::max(maxHeight, height);
             mesh.vertices.push_back({
                 std::lerp(-halfSize, halfSize, u),
                 height,
@@ -1042,9 +1038,7 @@ MeshData BuildMeshFromHeightfield(const HeightfieldGrid& grid, int meshResolutio
         }
     }
 
-    const float heightRange = std::max(0.0f, maxHeight - minHeight);
-    const float baseDepth = std::max({grid.terrainSizeMeters * 0.08f, heightRange * 0.15f, 32.0f});
-    const float baseY = minHeight - baseDepth;
+    const float baseY = 0.0f;
     const auto addVertex = [&](float x, float y, float z, float mask = 0.0f) {
         const uint32_t index = static_cast<uint32_t>(mesh.vertices.size());
         mesh.vertices.push_back({x, y, z, 0.0f, 0.0f, 0.0f, mask});

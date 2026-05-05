@@ -215,5 +215,13 @@ float4 PSSurface(VSOut i) : SV_TARGET
 
 float4 PSEdge(VSOut i) : SV_TARGET
 {
-    return float4(0.18, 0.20, 0.19, 0.88);
+    if (i.mask < -1.5)
+    {
+        return float4(0.30, 0.51, 0.86, 0.88);
+    }
+    if (i.mask < -0.5)
+    {
+        return float4(0.82, 0.30, 0.30, 0.88);
+    }
+    return float4(albedoColor.rgb, 0.88);
 }
