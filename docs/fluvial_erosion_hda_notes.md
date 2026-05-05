@@ -46,7 +46,7 @@ Flow Lines 入力は初期段階では未接続でも、将来の River / Flowli
 | KTT パラメータ | 初期値 | 範囲 | 意味 |
 | --- | ---: | ---: | --- |
 | Erosion Strength | 1 | 0-1 | 侵食処理全体の強さ |
-| Channeling | 0.25 | 0-1 | 水路状の削り込みをどれだけ強めるか |
+| Channeling | 0.25 | 0-1 | 水路状の削り込みをどれだけ強めるか。実装上は「堆積のキャンセル」として機能する |
 
 ### Sediment Transport
 
@@ -62,8 +62,8 @@ Flow Lines 入力は初期段階では未接続でも、将来の River / Flowli
 | KTT パラメータ | 初期値 | 範囲 | 意味 |
 | --- | ---: | ---: | --- |
 | Erosion Granularity | 10 | 0-100 | 侵食粒子の密度。高いほど粒子が疎になり柔らかい形になる |
-| Flow Volume | 0 | 0-1 | sediment flow が粒子を引き寄せる/反発する度合い |
-| Small Channel Influence | 0 | 0-1 | 小さい水路の影響度 |
+| Flow Volume | 0 | 0-1 | `Transport_Particles` カーネルには存在しない。`Smooth_Flows` 等で使用と推定。力場フィードバック強度への影響と考えられる |
+| Small Channel Influence | 0 | 0-1 | 小さい水路の影響度。粒子密度の解像度依存指数を変化させる |
 | Sediment Velocity | 1 | 0-2 | 粒子の移動速度 |
 
 ### Directionality
@@ -142,33 +142,59 @@ Terrain Editor でも、KTT に近い調整を行うには補助フィールド�
 
 ### Update_Forces
 
-`Update_Forces` は高さの近傍サンプルから勾配を計算し、流れの力場を `fx/fy` に書き込みます。
+カーネル名: `Fluvial_Sim_Test`。高さの近傍サンプルから勾配を計算し、流れの力場を `fx/fy` に書き込みます。
 
 要点:
 
 - 3 x 3 近傍を使って高さ差を取る
-- 勾配を `grad_x`、`grad_y` として計算する
+- 勾配計算の基準高さは `hbase = height + wear * Flow_Cutting`。`wear`（侵食痕フィールド）が力場にフィードバックされる。`Flow_Cutting` は `dx <= Detail_Scale` のときのみ有効で、細かいスケール専用
+- `grad_x = sum / (dx * 6)`、`grad_y = sum / (dy * 6)` として正規化する
 - `fx = -grad_x`、`fy = -grad_y`
 - 外力 `Force Vector` を加算する
 - `mask` をリセットする
-- 境界の高さを隣接セルに合わせて補正する
+- `Age[idx] += 0.1 * dx`（ボクセルサイズ比例）。反復ごとの増分は解像度依存
+- 境界の高さを隣接セルにコピーして補正する
 
 ### Transport_Particles
 
-`Transport_Particles` が侵食の中心です。
+カーネル名: `Fluvial_Sim`。侵食の中心処理です。
 地表に散布された粒子が `fx/fy` の力場に沿って移動しながら、高さを削る/堆積させます。
 
 要点:
 
-- 各セル付近に乱数で粒子を散布する
-- 勾配、曲率、Wear Angle から侵食するか判定する
-- `Erosion Granularity` で粒子密度を調整する
-- `Erode Mask` と `Hardness` を参照する
-- `Sediment Velocity` と `Friction` で粒子速度を更新する
-- 進行方向の前後サンプルから高さ差を見て、現在セルの高さを更新する
-- `Channeling` で水路状の削り込みを強調する
-- `wear` と `deposit` に削り量/堆積量を蓄積する
-- 高さは前後サンプルの範囲内にクランプして破綻を抑える
+**粒子の初期化と起動チェック**
+- 各グリッドスレッド（1スレッド = 1地形セル）が1粒子を担当する
+- 開始位置は `Iteration[0]` を種として `Random2` で地形全体に散布される（スレッド位置とは独立）
+- 開始セルで勾配と曲率を計算し `max(slope, -curvature) > Wear_Angle` を満たすか判定する
+  - **`-curvature` は凸型の尾根で正値になる**。平坦でも凸尾根なら侵食が開始できる（渓谷が凹なので侵食しやすいわけではない）
+- `Erosion_Granularity` で粒子密度を調整する。式は `1 - 1 / (Granularity / pow(dx/Detail_Scale, e))`（指数 `e` は `Small_Channel_Influence` で変化）
+- `visitMask[startPos] > 0.1` なら同一反復内での重複起動を防ぐ
+- `Erode_Mask` が 0 のセルはスキップ
+
+**粒子の移動**
+- 位置更新: `p += Sediment_Velocity * v / (1 + length(f))`
+  - 急斜面では分母が大きくなり**粒子が自動的に減速する**
+- 速度更新（スケール依存）:
+  - `v *= pow(1 - Friction, dx/Detail_Scale)` — 高解像度ほど1ステップあたりの摩擦が少ない
+  - `v += f * dx/Detail_Scale` — 力もスケール依存で加算
+- ループ上限: `Spread_Iterations / (dx / Detail_Scale)` — 高解像度ほどステップ数が増える
+- 速度方向は L2 正規化後に L1 スケールを掛けて正規化する（対角方向と軸方向のステップ長を揃える）
+  - `vs = normalize(v); vs *= (|vs.x| + |vs.y|)`
+- 前後サンプル位置: `p2 = p + vs + shear`、`p3 = p - vs + shear`
+
+**侵食の判定と高さ更新**
+- 各ステップで Deposit Angle と Max Erosion Angle を判定し `DO_EROSION` を決める
+  - 範囲外でも粒子は移動し続ける（`break` ではなく `DO_EROSION = 0` で継続）
+- 高さ更新式: `dh = Flow_Strength * DO_EROSION * ((h2 + h3) / 2 - h1)`
+  - 前後平均との差分をブレンドするだけ。sediment capacity の概念はない
+  - `Flow_Strength = Erosion_Strength`（パラメータ直値）
+- **Channeling の実際の動作**: `height -= Channeling * max(height - h1, 0)` — 高さが上がった（堆積）分を `Channeling` 割合でキャンセルする。侵食量を増やすのではなく堆積を打ち消す
+- **carry による保存則**: `carry += h1 - height`。`carry < 0`（堆積が過剰）になった場合は `height = h1 - carry; carry = 0` で高さを戻す。土砂が無から生まれないことを保証する
+- 高さを `[min(h2, h3), max(h2, h3)]` の範囲にクランプして破綻を抑える
+- `wear += max(h1 - height, 0)`、`deposit += max(height - h1, 0)` で各フィールドを蓄積する
+
+**Flow_Volume について**
+- `Flow_Volume` パラメータは `Transport_Particles` カーネルのシグネチャに存在しない。`Smooth_Flows` など別ノードで使用されていると考えられる
 
 KTT の核はこの粒子輸送処理です。
 Terrain Editor でも、単なる斜面方向の削り込みではなく、力場、粒子輸送、堆積、flow/deposit 補助フィールド、マルチスケール処理を組み合わせて、かなり KTT に似せた構成を目指します。
@@ -222,21 +248,26 @@ KTT の UI に存在しない `Sediment Capacity`、`Deposition Rate`、`Large/M
 ### CPU 実装方針
 
 1. 入力 heightfield を作業バッファへコピーする
-2. 高さと `wear` フィードバックから `fx/fy` の力場を計算する
+2. 高さと `wear` フィードバックから `fx/fy` の力場を計算する。KTT の `Flow_Cutting` に相当する係数で `wear` を力場に反映する
 3. 下がっている複数近傍へ flow を分配し、multi-flow 風の drainage area を作る
-4. Feature Size と内部スケール係数から、粗い谷筋、中規模支流、細かいリルの複数スケールに分ける。ただし粗いスケールは地形を均しすぎないよう弱めに扱う
-5. `VoxelScale` と `Geological Age` に応じて、KTT の反復数スケーリングに近い形でスケール別反復数を決める
-6. iteration ごとにKTTの `Transport_Particles` に近い式で粒子開始点を乱数散布する
-7. 粒子ごとに `Channel_Length / (dx / Detail_Scale)` に近い距離だけ移動する
-8. flow、斜面角、Wear Angle、Deposit Angle、Max Erosion Angle から侵食/堆積を判定する
-9. `Channeling` と `Flow Volume` で流路状の削り込みと輸送力を調整する
-10. `Small Channel Influence` と micro/detail pass で浅い細リルを追加する
-11. 粒子が削った土砂を `sediment` として運び、谷底や緩斜面へ `deposits` として残す
-12. 粒子通過量を `flows` として蓄積する
-13. 同一反復内の重複侵食をマスクで抑え、削れた流路へ次の力場が集まるようにする
-14. 高さを bedrock floor や近傍関係でクランプして破綻を抑える
-15. KTT の `Smooth_Flows` / `Add_Detail_Pass` に近い形で、最終段に平滑化した元地形との差分を侵食後へ戻す
-16. 一定間隔で `fx/fy` と flow を再計算する
+4. Feature Size と内部スケール係数から、粗い谷筋、中規模支流、細かいリルの複数スケールに分ける。粗いスケールは coarse level fade で反復数を絞る。`Geological Age` による反復スケーリングは単一レベル関数内で一元管理する（レベルループと二重適用しない）
+5. iteration ごとにKTTの `Transport_Particles` に近い式で粒子開始点を乱数散布する。開始位置はスレッド座標ではなく `iteration + Random2(x, z)` で地形全体に分散させる
+6. 粒子ごとに `Channel_Length / (dx / Detail_Scale)` に近いステップ数だけ移動する（高解像度ほどステップ数増）
+7. 位置更新は `p += Sediment_Velocity * v / (1 + length(f))` — 急斜面では自動的に減速する
+8. 速度更新はスケール依存: `v *= pow(1 - Friction, dx/Detail_Scale)`、`v += f * dx/Detail_Scale`
+9. 速度方向は L1 ノルムで正規化して対角/軸方向のステップ長を揃える
+10. Wear Angle + 曲率チェックで起動判定: `max(slope, -curvature) > Wear_Angle`（`-curvature` は凸尾根で正値）
+11. Deposit Angle と Max Erosion Angle を各ステップで判定し、範囲外でも粒子は移動継続（`break` ではなく skip）
+12. 高さ更新は `lerp(before, (ahead + behind) / 2, flowStrength)` によるブレンド。capacity ベースではない
+13. `Channeling` は堆積分のキャンセルに使う: `height -= channeling * max(height - before, 0)`
+14. `carry` 変数で土砂の保存則を維持する。`carry < 0` になったら高さを戻して `carry = 0` にする
+15. 同一反復内の重複侵食を `visitMask` で抑える
+16. 高さを bedrock floor や前後サンプル範囲でクランプして破綻を抑える
+17. `Flow Volume` は `Transport_Particles` に存在しないため、力場フィードバックの強度や Smooth_Flows 相当の処理で間接的に制御する
+18. `Small Channel Influence` と micro pass で浅い細リルを追加する
+19. 粒子通過量を `flows`、堆積量を `deposits` として蓄積・出力する
+20. KTT の `Add_Detail_Pass` に近い形で、最終段に元地形の高周波成分を侵食度合いに応じて戻す
+21. 一定間隔で `fx/fy` と flow を再計算する
 
 ### 追加で近づけたい機能
 
