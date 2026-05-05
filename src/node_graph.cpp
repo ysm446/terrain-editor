@@ -1877,7 +1877,10 @@ bool NodeGraph::SetPreviewPin(GraphId pinId)
         return false;
     }
 
-    const bool pipelineChanged = evaluation_.previewNodeId != node->id || evaluation_.previewStage != stage;
+    const bool pipelineChanged = evaluation_.previewNodeId != node->id ||
+                                 evaluation_.previewStage != stage ||
+                                 evaluation_.previewField != previewField ||
+                                 evaluation_.previewShowsMask != showsMask;
     evaluation_.previewNodeId = node->id;
     evaluation_.previewPinId = pinId;
     evaluation_.previewShowsMask = showsMask;
