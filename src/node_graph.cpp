@@ -27,7 +27,13 @@ using Microsoft::WRL::ComPtr;
 
 FluvialGpuEvaluator g_fluvialGpuEvaluator = nullptr;
 constexpr int kFluvialSeed = 1;
-constexpr std::array<float, 6> kFluvialLevelStrengths = {0.18f, 0.28f, 0.52f, 0.68f, 0.78f, 0.58f};
+// Strengths for the multi-level pyramid (resolutions 16, 32, 64, 128, 256, 512).
+// The three coarsest levels are zeroed because their cellSize >> referenceDetailSize
+// makes stepScale large enough that particles teleport across the terrain in one
+// or two steps, leaving chunky cell-aligned blocks that show up as rectangular
+// artifacts after bilinear upsampling. The active levels (128, 256, 512) keep
+// stepScale around 8/4/2, which produces natural-looking flow paths.
+constexpr std::array<float, 6> kFluvialLevelStrengths = {0.0f, 0.0f, 0.0f, 0.68f, 0.78f, 0.58f};
 
 std::string NoisePipelineSummary(const SdfPipeline& pipeline)
 {
