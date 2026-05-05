@@ -95,6 +95,7 @@ std::vector<std::filesystem::path> g_recentProjectPaths;
 std::vector<std::pair<rock::GraphId, ImVec2>> g_pendingNodePositions;
 std::vector<std::pair<rock::GraphId, ImVec2>> g_nodePositionCache;
 std::vector<rock::GraphId> g_pendingSelectedNodeIds;
+std::optional<std::vector<rock::GraphId>> g_pendingPreviewSelectionRestore;
 rock::UiThemeManager g_themeManager;
 rock::GraphId g_selectedNodeId = 0;
 rock::GraphId g_lastFinalOutputNodeId = 0;
@@ -1189,6 +1190,27 @@ std::vector<rock::GraphId> CurrentSelectedNodeIds()
         selectedNodeIds.push_back(g_selectedNodeId);
     }
     return selectedNodeIds;
+}
+
+void ApplyNodeSelection(const std::vector<rock::GraphId>& nodeIds)
+{
+    ed::ClearSelection();
+    g_selectedNodeId = 0;
+    bool append = false;
+    for (const rock::GraphId nodeId : nodeIds)
+    {
+        if (g_graph.FindNode(nodeId) == nullptr)
+        {
+            continue;
+        }
+
+        ed::SelectNode(ed::NodeId(nodeId), append);
+        append = true;
+        if (g_selectedNodeId == 0)
+        {
+            g_selectedNodeId = nodeId;
+        }
+    }
 }
 
 GraphEditSnapshot CaptureGraphEditSnapshot()
@@ -4071,14 +4093,16 @@ void DrawRockNode(const rock::Node& node)
 {
     constexpr float nodeWidth = 250.0f;
     const ImVec4 accent = NodeAccentColor(node.kind);
+    const ImVec4 nodeBorderColor(0.22f, 0.22f, 0.22f, 1.0f);
+    const ImVec4 activeNodeBorderColor(0.24f, 0.72f, 0.92f, 1.0f);
     ed::PushStyleVar(ed::StyleVar_NodePadding, ImVec4(12.0f, 10.0f, 12.0f, 10.0f));
     ed::PushStyleVar(ed::StyleVar_NodeRounding, 8.0f);
     ed::PushStyleVar(ed::StyleVar_NodeBorderWidth, 1.0f);
     ed::PushStyleVar(ed::StyleVar_SelectedNodeBorderWidth, 1.8f);
     ed::PushStyleColor(ed::StyleColor_NodeBg, ImVec4(0.080f, 0.080f, 0.080f, 0.98f));
-    ed::PushStyleColor(ed::StyleColor_NodeBorder, ImVec4(0.22f, 0.22f, 0.22f, 1.0f));
-    ed::PushStyleColor(ed::StyleColor_HovNodeBorder, ImVec4(0.22f, 0.22f, 0.22f, 1.0f));
-    ed::PushStyleColor(ed::StyleColor_SelNodeBorder, accent);
+    ed::PushStyleColor(ed::StyleColor_NodeBorder, nodeBorderColor);
+    ed::PushStyleColor(ed::StyleColor_HovNodeBorder, activeNodeBorderColor);
+    ed::PushStyleColor(ed::StyleColor_SelNodeBorder, activeNodeBorderColor);
 
     ed::BeginNode(ed::NodeId(node.id));
 
@@ -4097,6 +4121,7 @@ void DrawRockNode(const rock::Node& node)
     ImGui::Dummy(ImVec2(nodeWidth, 10.0f));
     const float rowStartX = ImGui::GetCursorPosX();
     const float rowY = ImGui::GetCursorPosY();
+    bool suppressNodeHoverBorder = false;
 
     if (!node.inputs.empty())
     {
@@ -4131,6 +4156,7 @@ void DrawRockNode(const rock::Node& node)
         const bool outputTextHovered = ImGui::IsMouseHoveringRect(
             textPos,
             ImVec2(textPos.x + textSize.x, textPos.y + textSize.y));
+        suppressNodeHoverBorder = suppressNodeHoverBorder || outputTextHovered;
         const ImVec4 outputTextColor = PinLabelColor(output, outputTextHovered, outputSelected);
         ImGui::TextColored(outputTextColor, "%s", output.label.c_str());
         if (outputSelected)
@@ -4141,6 +4167,10 @@ void DrawRockNode(const rock::Node& node)
         }
         if (ImGui::IsItemClicked(ImGuiMouseButton_Left))
         {
+            if (!g_pendingPreviewSelectionRestore)
+            {
+                g_pendingPreviewSelectionRestore = CurrentSelectedNodeIds();
+            }
             g_pendingPreviewPinId = output.id;
         }
         ImGui::SameLine();
@@ -4149,14 +4179,22 @@ void DrawRockNode(const rock::Node& node)
         DrawRoundPin(output);
         if (ImGui::IsItemClicked(ImGuiMouseButton_Left))
         {
+            if (!g_pendingPreviewSelectionRestore)
+            {
+                g_pendingPreviewSelectionRestore = CurrentSelectedNodeIds();
+            }
             g_pendingPreviewPinId = output.id;
         }
         ed::EndPin();
     }
     ImGui::Dummy(ImVec2(nodeWidth, std::max(4.0f, static_cast<float>(node.outputs.size()) * 24.0f - 20.0f)));
 
+    if (suppressNodeHoverBorder)
+    {
+        ed::PushStyleColor(ed::StyleColor_HovNodeBorder, nodeBorderColor);
+    }
     ed::EndNode();
-    ed::PopStyleColor(4);
+    ed::PopStyleColor(suppressNodeHoverBorder ? 5 : 4);
     ed::PopStyleVar(4);
 }
 
@@ -4325,8 +4363,11 @@ void DrawNodeGraph()
     g_nodeEditorFrameActive = true;
     const ImVec2 canvasMin = ImGui::GetCursorScreenPos();
     const ImVec2 canvasMax(canvasMin.x + ImGui::GetContentRegionAvail().x, canvasMin.y + ImGui::GetContentRegionAvail().y);
+    const ImVec4 activeNodeBorderColor(0.24f, 0.72f, 0.92f, 1.0f);
     ed::PushStyleColor(ed::StyleColor_Bg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
     ed::PushStyleColor(ed::StyleColor_Grid, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+    ed::PushStyleColor(ed::StyleColor_HovNodeBorder, activeNodeBorderColor);
+    ed::PushStyleColor(ed::StyleColor_SelNodeBorder, activeNodeBorderColor);
     ed::Begin("Rock Node Graph", ImGui::GetContentRegionAvail());
     DrawNodeGraphDots(canvasMin, canvasMax);
 
@@ -4367,23 +4408,7 @@ void DrawNodeGraph()
 
     if (!g_pendingSelectedNodeIds.empty())
     {
-        ed::ClearSelection();
-        bool append = false;
-        g_selectedNodeId = 0;
-        for (const rock::GraphId nodeId : g_pendingSelectedNodeIds)
-        {
-            if (g_graph.FindNode(nodeId) == nullptr)
-            {
-                continue;
-            }
-
-            ed::SelectNode(ed::NodeId(nodeId), append);
-            append = true;
-            if (g_selectedNodeId == 0)
-            {
-                g_selectedNodeId = nodeId;
-            }
-        }
+        ApplyNodeSelection(g_pendingSelectedNodeIds);
         g_pendingSelectedNodeIds.clear();
     }
 
@@ -4529,6 +4554,7 @@ void DrawNodeGraph()
     ed::Resume();
 
     ed::NodeId selectedNodes[1];
+    bool restoredPreviewSelection = false;
     if (g_pendingPreviewPinId != 0)
     {
         const rock::GraphId pinId = g_pendingPreviewPinId;
@@ -4540,13 +4566,19 @@ void DrawNodeGraph()
                 EvaluateGraph();
             }
         }
+        if (g_pendingPreviewSelectionRestore)
+        {
+            ApplyNodeSelection(*g_pendingPreviewSelectionRestore);
+            g_pendingPreviewSelectionRestore.reset();
+            restoredPreviewSelection = true;
+        }
     }
-    if (ed::GetSelectedNodes(selectedNodes, 1) > 0)
+    if (!restoredPreviewSelection && ed::GetSelectedNodes(selectedNodes, 1) > 0)
     {
         const rock::GraphId selectedNodeId = ToGraphId(selectedNodes[0].Get());
         g_selectedNodeId = selectedNodeId;
     }
-    else
+    else if (!restoredPreviewSelection)
     {
         g_selectedNodeId = 0;
     }
@@ -4577,7 +4609,7 @@ void DrawNodeGraph()
     }
     g_nodePositionCache = std::move(currentNodePositions);
     g_skipNodeMoveUndoThisFrame = false;
-    ed::PopStyleColor(2);
+    ed::PopStyleColor(4);
     g_nodeEditorFrameActive = false;
     ed::SetCurrentEditor(nullptr);
 }
