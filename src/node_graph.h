@@ -55,6 +55,12 @@ enum class FluvialBackend
     GpuCompute,
 };
 
+enum class MultiScaleErosionBackend
+{
+    CpuReference,
+    GpuCompute,
+};
+
 enum class ShapeKind
 {
     Hemisphere,
@@ -160,6 +166,7 @@ struct FluvialErosionSettings
     float referenceDetailSize = 1.0f;
     float sourceTerrainDetailSmoothing = 1.0f;
     bool useMultigrid = true;
+    MultiScaleErosionBackend backend = MultiScaleErosionBackend::CpuReference;
 };
 
 struct HeightmapBlurSettings
@@ -212,6 +219,8 @@ struct MultiScaleErosionSettings
     // Deposition (deposition.glsl)
     float depositionStrength = 1.0f;
     float rain = 2.6f;
+
+    MultiScaleErosionBackend backend = MultiScaleErosionBackend::CpuReference;
 };
 
 struct Node
@@ -342,6 +351,7 @@ struct HeightfieldGrid
 };
 
 using FluvialGpuEvaluator = bool (*)(HeightfieldGrid& grid, const FluvialErosionSettings& settings, std::string* error);
+using MultiScaleErosionGpuEvaluator = bool (*)(HeightfieldGrid& grid, const MultiScaleErosionSettings& settings, std::string* error);
 
 struct SdfPreviewStats
 {
@@ -515,5 +525,6 @@ std::string_view ToString(PreviewStage stage);
 std::string_view ToString(ValueType type);
 PreviewStage PreviewStageFor(NodeKind kind);
 void SetFluvialGpuEvaluator(FluvialGpuEvaluator evaluator);
+void SetMultiScaleErosionGpuEvaluator(MultiScaleErosionGpuEvaluator evaluator);
 
 } // namespace rock

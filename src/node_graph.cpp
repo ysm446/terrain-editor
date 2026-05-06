@@ -27,6 +27,7 @@ namespace
 using Microsoft::WRL::ComPtr;
 
 FluvialGpuEvaluator g_fluvialGpuEvaluator = nullptr;
+MultiScaleErosionGpuEvaluator g_mseGpuEvaluator = nullptr;
 constexpr int kFluvialSeed = 1;
 // Strengths for the multi-level pyramid (resolutions 16, 32, 64, 128, 256, 512).
 // The three coarsest levels are zeroed because their cellSize >> referenceDetailSize
@@ -170,6 +171,7 @@ uint64_t HashMultiScaleErosionSettings(const MultiScaleErosionSettings& settings
     HashCombine(hash, HashFloat(settings.depositionStrength));
     HashCombine(hash, HashFloat(settings.rain));
     HashCombine(hash, static_cast<uint64_t>(settings.useMultigrid ? 1 : 0));
+    HashCombine(hash, static_cast<uint64_t>(settings.backend));
     HashCombine(hash, static_cast<uint64_t>(resolution));
     return hash;
 }
@@ -1614,6 +1616,21 @@ void ApplyMultiScaleErosionSingleLevel(HeightfieldGrid& grid, const MultiScaleEr
     if (n < 3 || grid.heights.size() < cellCount || settings.iterations <= 0)
     {
         return;
+    }
+
+    // GPU compute path. Falls back to CPU if the evaluator hasn't been
+    // registered (no D3D12 device) or returns failure (e.g. shader compile
+    // error, runtime issue). The evaluator is responsible for filling
+    // grid.heights / flows / deposits and for normalizing the auxiliary
+    // fields just like the CPU branch below.
+    if (settings.backend == MultiScaleErosionBackend::GpuCompute && g_mseGpuEvaluator != nullptr)
+    {
+        std::string ignoredError;
+        if (g_mseGpuEvaluator(grid, settings, &ignoredError))
+        {
+            return;
+        }
+        // Fall through to CPU path on GPU failure.
     }
 
     const float cellSize = grid.terrainSizeMeters / static_cast<float>(std::max(1, n - 1));
@@ -3085,6 +3102,11 @@ PreviewStage PreviewStageFor(NodeKind kind)
 void SetFluvialGpuEvaluator(FluvialGpuEvaluator evaluator)
 {
     g_fluvialGpuEvaluator = evaluator;
+}
+
+void SetMultiScaleErosionGpuEvaluator(MultiScaleErosionGpuEvaluator evaluator)
+{
+    g_mseGpuEvaluator = evaluator;
 }
 
 } // namespace rock

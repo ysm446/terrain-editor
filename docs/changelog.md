@@ -2,6 +2,8 @@
 
 ## 未リリース
 
+- `Multi-Scale Erosion` に GPU Compute バックエンドを追加しました。`shaders/multi_scale_erosion_compute.hlsl` (Schott et al. の `erosion.glsl` / `thermal.glsl` / `deposition.glsl` を HLSL 移植) を D3D12 compute pipeline で実行します。プロパティの `Backend` で `CPU Reference` / `GPU Compute` を切り替えます。GPU 経路はバックグラウンド評価スレッドからメインスレッドへジョブを積んで D3D12 上で実行する KTT と同じスケジューラを使い、初期化や実行時に失敗すると CPU 版へフォールバックします。
+- `Multi-Scale Erosion` のアルゴリズム入門ガイド `docs/multi_scale_erosion/multi_scale_erosion_algorithm_guide.md` を追加しました。KTT のガイドと同じ形式で、SPE / Thermal / Deposition の各パスの直感的な役割、マルチグリッド処理の意味、解像度不変性の仕組み、見た目が崩れたときの調整順を解説しています。
 - `Multi-Scale Erosion` にマルチグリッドピラミッド処理を追加し、`Use Multigrid` トグルで切り替え可能にしました (既定 ON)。粗い解像度 (`64`) から目標解像度へ `x2` でアップサンプルしながら段階的に浸食を適用する Schott et al. 論文本来の構成です。粗い段階で大局の谷ネットワークが決まり、細かい段階は細部の追加だけになるので、解像度を変えても大局構造がほぼ変わらなくなります。OFF にすると従来通り入力解像度のみで実行する単一段階モードになります。`Iterations` は Multigrid 有効時は各レベルでの反復数を意味します。
 - `Multi-Scale Erosion` の Thermal の `matter` (= `eps × cellArea`) と Deposition の雨量基準 `cellArea` を、実 cellSize ではなく **基準 cellSize 4 m** (= 解像度 512 / 2048 m terrain) で固定するように変更しました。これまでは解像度を変えると Thermal の効きが cellSize² で変わって見た目が大きくドリフトしていた問題を解消します。基準 4 m での既存チューニングはそのままです。なお SPE の `stream` 累積は前進反復のため完全な解像度不変は構造上できず、解像度を上げる場合は `Iterations` の比例的な増量を推奨します。
 - `Multi-Scale Erosion` の `Thermal Strength` 上限を `0.001` から `0.01` に引き上げました。タラス崩壊をより強くかけて V 字谷を U 字に丸めたい用途で頭打ちになっていたためです。
