@@ -147,6 +147,31 @@ uint64_t HashErosionNoiseSettings(const ErosionNoiseSettings& settings, int reso
     return hash;
 }
 
+uint64_t HashMultiScaleErosionSettings(const MultiScaleErosionSettings& settings, int resolution)
+{
+    uint64_t hash = 11400714819323198485ull;
+    HashCombine(hash, static_cast<uint64_t>(settings.iterations));
+    HashCombine(hash, static_cast<uint64_t>(settings.enableStreamPower ? 1 : 0));
+    HashCombine(hash, static_cast<uint64_t>(settings.enableThermal ? 1 : 0));
+    HashCombine(hash, static_cast<uint64_t>(settings.enableDeposition ? 1 : 0));
+    HashCombine(hash, HashFloat(settings.speStrength));
+    HashCombine(hash, HashFloat(settings.streamExponent));
+    HashCombine(hash, HashFloat(settings.slopeExponent));
+    HashCombine(hash, HashFloat(settings.maxStreamPower));
+    HashCombine(hash, HashFloat(settings.flowExponent));
+    HashCombine(hash, HashFloat(settings.speTimeStep));
+    HashCombine(hash, HashFloat(settings.thermalAngleDegrees));
+    HashCombine(hash, HashFloat(settings.thermalStrength));
+    HashCombine(hash, static_cast<uint64_t>(settings.thermalNoisifyAngle ? 1 : 0));
+    HashCombine(hash, HashFloat(settings.thermalNoiseMin));
+    HashCombine(hash, HashFloat(settings.thermalNoiseMax));
+    HashCombine(hash, HashFloat(settings.thermalNoiseWavelength));
+    HashCombine(hash, HashFloat(settings.depositionStrength));
+    HashCombine(hash, HashFloat(settings.rain));
+    HashCombine(hash, static_cast<uint64_t>(resolution));
+    return hash;
+}
+
 std::wstring Utf8ToWidePath(const std::string& value)
 {
     if (value.empty())
@@ -1268,6 +1293,322 @@ void ApplyErosionNoise(HeightfieldGrid& grid, const ErosionNoiseSettings& settin
     grid.heights = std::move(output);
 }
 
+// Multi-Scale Erosion — CPU port of Schott et al. (SIGGRAPH 2024) shaders:
+//   data/shaders/erosion.glsl      (Stream Power Erosion)
+//   data/shaders/thermal.glsl      (Thermal / talus)
+//   data/shaders/deposition.glsl   (Sediment deposition)
+// Source repo: https://github.com/H-Schott/MultiScaleErosion (MIT)
+//
+// Each pass uses ping-pong buffers and reads upstream contributions through
+// the previous iteration's stream/sediment field. SPE/Deposition use the same
+// D8 weighted-flow direction (`flow_p` exponent on slope). Thermal is a 3x3
+// stencil with wraparound boundary, matching the shader.
+namespace mse
+{
+constexpr std::array<std::pair<int, int>, 8> kNext8 = {{
+    {0, 1}, {1, 1}, {1, 0}, {1, -1},
+    {0, -1}, {-1, -1}, {-1, 0}, {-1, 1},
+}};
+
+inline int Index1D(int x, int z, int n)
+{
+    return z * n + x;
+}
+
+// 2D value-noise approximation used to perturb the thermal threshold angle.
+// The reference shader samples 3D simplex noise on (x, y, height); we keep a
+// cheaper 2D variant since the spatial variation is what matters visually.
+inline float Hash2(float x, float y)
+{
+    const float s = std::sin(x * 12.9898f + y * 78.233f) * 43758.5453123f;
+    return s - std::floor(s);
+}
+
+inline float ValueNoise2D(float x, float y)
+{
+    const float xi = std::floor(x);
+    const float yi = std::floor(y);
+    const float xf = x - xi;
+    const float yf = y - yi;
+    const float a = Hash2(xi, yi);
+    const float b = Hash2(xi + 1.0f, yi);
+    const float c = Hash2(xi, yi + 1.0f);
+    const float d = Hash2(xi + 1.0f, yi + 1.0f);
+    const float u = xf * xf * (3.0f - 2.0f * xf);
+    const float v = yf * yf * (3.0f - 2.0f * yf);
+    return std::lerp(std::lerp(a, b, u), std::lerp(c, d, v), v) * 2.0f - 1.0f;
+}
+
+struct WeightedFlow
+{
+    std::array<float, 8> w{};
+};
+
+// Compute the weighted D8 outflow distribution for cell p. `pow(slope, flow_p)`
+// over downhill neighbours, normalized; uphill neighbours get 0.
+inline WeightedFlow GetFlowWeighted(const std::vector<float>& heights, int n, float cellSize, int x, int z, float flowP)
+{
+    WeightedFlow out{};
+    float sum = 0.0f;
+    const float h = heights[static_cast<size_t>(Index1D(x, z, n))];
+    for (int i = 0; i < 8; ++i)
+    {
+        const int qx = x + kNext8[i].first;
+        const int qz = z + kNext8[i].second;
+        if (qx < 0 || qx >= n || qz < 0 || qz >= n) { out.w[static_cast<size_t>(i)] = 0.0f; continue; }
+        const float hq = heights[static_cast<size_t>(Index1D(qx, qz, n))];
+        const float dx = static_cast<float>(kNext8[i].first) * cellSize;
+        const float dz = static_cast<float>(kNext8[i].second) * cellSize;
+        const float d = std::sqrt(dx * dx + dz * dz);
+        const float slope = (h - hq) / d;
+        if (slope > 0.0f)
+        {
+            const float w = std::pow(slope, flowP);
+            out.w[static_cast<size_t>(i)] = w;
+            sum += w;
+        }
+        else
+        {
+            out.w[static_cast<size_t>(i)] = 0.0f;
+        }
+    }
+    if (sum > 1e-6f)
+    {
+        for (float& w : out.w) { w /= sum; }
+    }
+    return out;
+}
+
+// Steepest descent direction (i, j) at p, plus its slope magnitude.
+inline void GetSteepestDescent(const std::vector<float>& heights, int n, float cellSize, int x, int z,
+                                int& dx, int& dz, float& slope)
+{
+    dx = 0;
+    dz = 0;
+    slope = 0.0f;
+    const float h = heights[static_cast<size_t>(Index1D(x, z, n))];
+    for (int i = 0; i < 8; ++i)
+    {
+        const int qx = x + kNext8[i].first;
+        const int qz = z + kNext8[i].second;
+        if (qx < 0 || qx >= n || qz < 0 || qz >= n) { continue; }
+        const float hq = heights[static_cast<size_t>(Index1D(qx, qz, n))];
+        const float ax = static_cast<float>(kNext8[i].first) * cellSize;
+        const float az = static_cast<float>(kNext8[i].second) * cellSize;
+        const float d = std::sqrt(ax * ax + az * az);
+        const float s = (h - hq) / d;
+        if (s > slope)
+        {
+            slope = s;
+            dx = kNext8[i].first;
+            dz = kNext8[i].second;
+        }
+    }
+}
+
+void StepStreamPower(std::vector<float>& heightsIn, std::vector<float>& heightsOut,
+                     std::vector<float>& streamIn, std::vector<float>& streamOut,
+                     int n, float cellSize, const MultiScaleErosionSettings& s)
+{
+    const float cellDiag = cellSize * std::sqrt(2.0f);
+    const float baseStream = cellDiag;
+    for (int z = 0; z < n; ++z)
+    {
+        for (int x = 0; x < n; ++x)
+        {
+            const int id = Index1D(x, z, n);
+
+            // Incoming flow from neighbours' weighted outflow towards p.
+            float incoming = 0.0f;
+            for (int i = 0; i < 8; ++i)
+            {
+                const int qx = x + kNext8[i].first;
+                const int qz = z + kNext8[i].second;
+                if (qx < 0 || qx >= n || qz < 0 || qz >= n) { continue; }
+                const WeightedFlow wf = GetFlowWeighted(heightsIn, n, cellSize, qx, qz, s.flowExponent);
+                const float w = wf.w[static_cast<size_t>((i + 4) % 8)];
+                if (w > 0.0f)
+                {
+                    incoming += w * streamIn[static_cast<size_t>(Index1D(qx, qz, n))];
+                }
+            }
+            const float stream = baseStream + incoming;
+
+            int dx = 0, dz = 0;
+            float steepest = 0.0f;
+            GetSteepestDescent(heightsIn, n, cellSize, x, z, dx, dz, steepest);
+            const float receiverHeight = (dx == 0 && dz == 0)
+                ? heightsIn[static_cast<size_t>(id)]
+                : heightsIn[static_cast<size_t>(Index1D(x + dx, z + dz, n))];
+
+            float spe = std::pow(stream, s.streamExponent) * std::clamp(std::pow(steepest, s.slopeExponent), 0.0f, 1.0f);
+            spe = std::clamp(spe, 0.0f, s.maxStreamPower) * s.speStrength;
+
+            const float oldHeight = heightsIn[static_cast<size_t>(id)];
+            float newHeight = oldHeight - s.speTimeStep * spe;
+            newHeight = std::max(newHeight, receiverHeight);
+            heightsOut[static_cast<size_t>(id)] = newHeight;
+            streamOut[static_cast<size_t>(id)] = stream;
+        }
+    }
+}
+
+void StepThermal(std::vector<float>& heightsIn, std::vector<float>& heightsOut,
+                 int n, float cellSize, const MultiScaleErosionSettings& s)
+{
+    const float cellArea = cellSize * cellSize;
+    const float baseTan = std::tan(s.thermalAngleDegrees * 3.14159265358979323846f / 180.0f);
+    const float matter = s.thermalStrength * cellArea;
+    for (int z = 0; z < n; ++z)
+    {
+        for (int x = 0; x < n; ++x)
+        {
+            const int id = Index1D(x, z, n);
+            const float h = heightsIn[static_cast<size_t>(id)];
+
+            float tanAngle = baseTan;
+            if (s.thermalNoisifyAngle)
+            {
+                const float t = ValueNoise2D(static_cast<float>(x) * s.thermalNoiseWavelength * static_cast<float>(n),
+                                             static_cast<float>(z) * s.thermalNoiseWavelength * static_cast<float>(n)) * 0.5f + 0.5f;
+                tanAngle = baseTan * std::lerp(s.thermalNoiseMin, s.thermalNoiseMax, t);
+            }
+
+            float receiveMul = 0.0f;
+            float distributeMul = 0.0f;
+            for (int j = -1; j <= 1; ++j)
+            {
+                for (int i = -1; i <= 1; ++i)
+                {
+                    if (i == 0 && j == 0) { continue; }
+                    // Wraparound (matches thermal.glsl).
+                    const int qx = ((x + i) % n + n) % n;
+                    const int qz = ((z + j) % n + n) % n;
+                    const float ax = static_cast<float>(i) * cellSize;
+                    const float az = static_cast<float>(j) * cellSize;
+                    const float d = std::sqrt(ax * ax + az * az);
+                    const float hq = heightsIn[static_cast<size_t>(Index1D(qx, qz, n))];
+                    if ((hq - h) / d > tanAngle) { receiveMul += 1.0f; }
+                    if ((h - hq) / d > tanAngle) { distributeMul += 1.0f; }
+                }
+            }
+            heightsOut[static_cast<size_t>(id)] = h + matter * (receiveMul - distributeMul);
+        }
+    }
+}
+
+void StepDeposition(std::vector<float>& heightsIn, std::vector<float>& heightsOut,
+                    std::vector<float>& streamIn, std::vector<float>& streamOut,
+                    std::vector<float>& sedIn, std::vector<float>& sedOut,
+                    int n, float cellSize, const MultiScaleErosionSettings& s)
+{
+    // Match deposition.glsl: cellArea is the world-space area scaled by 1e-5.
+    const float cellArea = cellSize * cellSize * 0.00001f;
+    for (int z = 0; z < n; ++z)
+    {
+        for (int x = 0; x < n; ++x)
+        {
+            const int id = Index1D(x, z, n);
+            const float h = heightsIn[static_cast<size_t>(id)];
+            float sed = sedIn[static_cast<size_t>(id)];
+
+            int dx = 0, dz = 0;
+            float steepest = 0.0f;
+            GetSteepestDescent(heightsIn, n, cellSize, x, z, dx, dz, steepest);
+            // Match deposition.glsl `if (!CheckPit(p)) sed = 0;`: only local minima
+            // (no lower neighbour) retain sediment between iterations. Non-pit cells
+            // flush their sediment downstream and start fresh from incoming + pickup.
+            const bool isPit = (dx == 0 && dz == 0);
+            if (!isPit) { sed = 0.0f; }
+
+            // Add rain and incoming weighted flow / sediment.
+            float incomingStream = 0.0f;
+            float incomingSed = 0.0f;
+            for (int i = 0; i < 8; ++i)
+            {
+                const int qx = x + kNext8[i].first;
+                const int qz = z + kNext8[i].second;
+                if (qx < 0 || qx >= n || qz < 0 || qz >= n) { continue; }
+                const WeightedFlow wf = GetFlowWeighted(heightsIn, n, cellSize, qx, qz, s.flowExponent);
+                const float w = wf.w[static_cast<size_t>((i + 4) % 8)];
+                if (w > 0.0f)
+                {
+                    incomingStream += w * streamIn[static_cast<size_t>(Index1D(qx, qz, n))];
+                    incomingSed += w * sedIn[static_cast<size_t>(Index1D(qx, qz, n))];
+                }
+            }
+            const float stream = s.rain * cellArea + incomingStream;
+            sed += incomingSed;
+
+            const float speed = std::clamp(std::pow(steepest, 2.0f), 0.0f, 1.0f);
+            const float streamPower = std::pow(std::max(stream, 1e-12f), 0.3f) * speed;
+
+            float newHeight = h;
+            if (s.depositionStrength * sed > streamPower)
+            {
+                const float deposit = std::min(sed, (s.depositionStrength * sed - streamPower) * 0.1f);
+                newHeight += deposit;
+                sed = std::max(0.0f, sed - deposit);
+            }
+            sed += 0.1f * streamPower;
+
+            heightsOut[static_cast<size_t>(id)] = newHeight;
+            streamOut[static_cast<size_t>(id)] = stream;
+            sedOut[static_cast<size_t>(id)] = sed;
+        }
+    }
+}
+} // namespace mse
+
+void ApplyMultiScaleErosion(HeightfieldGrid& grid, const MultiScaleErosionSettings& settings)
+{
+    const int n = grid.resolution;
+    const size_t cellCount = static_cast<size_t>(n) * static_cast<size_t>(n);
+    if (n < 3 || grid.heights.size() < cellCount || settings.iterations <= 0)
+    {
+        return;
+    }
+
+    const float cellSize = grid.terrainSizeMeters / static_cast<float>(std::max(1, n - 1));
+
+    std::vector<float> heightsA = grid.heights;
+    std::vector<float> heightsB(cellCount, 0.0f);
+    std::vector<float> streamA(cellCount, 0.0f);
+    std::vector<float> streamB(cellCount, 0.0f);
+    std::vector<float> sedA(cellCount, 0.0f);
+    std::vector<float> sedB(cellCount, 0.0f);
+
+    const int iterations = std::clamp(settings.iterations, 0, 500);
+    for (int it = 0; it < iterations; ++it)
+    {
+        if (settings.enableStreamPower)
+        {
+            mse::StepStreamPower(heightsA, heightsB, streamA, streamB, n, cellSize, settings);
+            std::swap(heightsA, heightsB);
+            std::swap(streamA, streamB);
+        }
+        if (settings.enableThermal)
+        {
+            mse::StepThermal(heightsA, heightsB, n, cellSize, settings);
+            std::swap(heightsA, heightsB);
+        }
+        if (settings.enableDeposition)
+        {
+            mse::StepDeposition(heightsA, heightsB, streamA, streamB, sedA, sedB, n, cellSize, settings);
+            std::swap(heightsA, heightsB);
+            std::swap(streamA, streamB);
+            std::swap(sedA, sedB);
+        }
+    }
+
+    grid.heights = std::move(heightsA);
+    grid.flows = std::move(streamA);
+    grid.deposits = std::move(sedA);
+    grid.mask.assign(cellCount, 0.0f);
+    grid.age.assign(cellCount, 0.0f);
+    NormalizeHeightfieldFields(grid);
+}
+
 MeshData BuildMeshFromHeightfield(const HeightfieldGrid& grid, int meshResolution)
 {
     MeshData mesh;
@@ -1607,6 +1948,10 @@ MeshData BuildMeshFromHeightPipeline(const SdfPipeline& pipeline, int resolution
         {
             ApplyErosionNoise(grid, operation.erosionNoise);
         }
+        else if (operation.kind == SdfPipeline::HeightfieldOperation::Kind::MultiScaleErosion)
+        {
+            ApplyMultiScaleErosion(grid, operation.multiScaleErosion);
+        }
     }
     if (message != nullptr && !pipeline.heightfieldOperations.empty())
     {
@@ -1677,6 +2022,10 @@ MeshData NodeGraph::BuildMeshFromHeightPipelineCached(const SdfPipeline& pipelin
             {
                 ApplyErosionNoise(grid, operation.erosionNoise);
             }
+            else if (operation.kind == SdfPipeline::HeightfieldOperation::Kind::MultiScaleErosion)
+            {
+                ApplyMultiScaleErosion(grid, operation.multiScaleErosion);
+            }
             continue;
         }
 
@@ -1691,6 +2040,9 @@ MeshData NodeGraph::BuildMeshFromHeightPipelineCached(const SdfPipeline& pipelin
             break;
         case SdfPipeline::HeightfieldOperation::Kind::ErosionNoise:
             parameterHash = HashErosionNoiseSettings(operation.erosionNoise, simulationResolution);
+            break;
+        case SdfPipeline::HeightfieldOperation::Kind::MultiScaleErosion:
+            parameterHash = HashMultiScaleErosionSettings(operation.multiScaleErosion, simulationResolution);
             break;
         }
         HeightfieldNodeCache& operationCache = heightfieldCache_[operation.nodeId];
@@ -1711,6 +2063,10 @@ MeshData NodeGraph::BuildMeshFromHeightPipelineCached(const SdfPipeline& pipelin
             else if (operation.kind == SdfPipeline::HeightfieldOperation::Kind::ErosionNoise)
             {
                 ApplyErosionNoise(operationGrid, operation.erosionNoise);
+            }
+            else if (operation.kind == SdfPipeline::HeightfieldOperation::Kind::MultiScaleErosion)
+            {
+                ApplyMultiScaleErosion(operationGrid, operation.multiScaleErosion);
             }
             operationCache.grid = std::move(operationGrid);
             operationCache.message.clear();
@@ -1961,6 +2317,12 @@ GraphId NodeGraph::CreateNode(NodeKind kind)
         AddPin(nodeId, PinKind::Input, ValueType::HeightField, "HeightField");
         AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
         break;
+    case NodeKind::MultiScaleErosion:
+        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "HeightField");
+        AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
+        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Flows");
+        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Deposits");
+        break;
     default:
         break;
     }
@@ -2113,6 +2475,8 @@ SdfPipeline NodeGraph::PipelineFor(PreviewStage stage) const
         return PipelineTo(NodeKind::Shape);
     case PreviewStage::ErosionNoise:
         return PipelineTo(NodeKind::ErosionNoise);
+    case PreviewStage::MultiScaleErosion:
+        return PipelineTo(NodeKind::MultiScaleErosion);
     case PreviewStage::Output:
     default:
         return PipelineTo(NodeKind::OutputMesh);
@@ -2275,6 +2639,18 @@ SdfPipeline NodeGraph::PipelineToNode(const Node& targetNode) const
                 {},
                 {},
                 node->erosionNoise,
+                {},
+            });
+        }
+        else if (node->kind == NodeKind::MultiScaleErosion)
+        {
+            pipeline.heightfieldOperations.push_back({
+                SdfPipeline::HeightfieldOperation::Kind::MultiScaleErosion,
+                node->id,
+                {},
+                {},
+                {},
+                node->multiScaleErosion,
             });
         }
         else if (node->kind == NodeKind::PrimitiveSdf)
@@ -2521,6 +2897,8 @@ std::string_view ToString(NodeKind kind)
         return "Shape";
     case NodeKind::ErosionNoise:
         return "Erosion Noise";
+    case NodeKind::MultiScaleErosion:
+        return "Multi-Scale Erosion";
     default:
         return "Unknown";
     }
@@ -2546,6 +2924,8 @@ std::string_view ToString(PreviewStage stage)
         return "Shape";
     case PreviewStage::ErosionNoise:
         return "Erosion Noise";
+    case PreviewStage::MultiScaleErosion:
+        return "Multi-Scale Erosion";
     default:
         return "Unknown";
     }
@@ -2584,6 +2964,8 @@ PreviewStage PreviewStageFor(NodeKind kind)
         return PreviewStage::HeightmapBlur;
     case NodeKind::ErosionNoise:
         return PreviewStage::ErosionNoise;
+    case NodeKind::MultiScaleErosion:
+        return PreviewStage::MultiScaleErosion;
     case NodeKind::HeightmapLoad:
         return PreviewStage::Primitive;
     case NodeKind::Shape:

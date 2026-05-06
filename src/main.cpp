@@ -52,8 +52,8 @@ namespace
 constexpr int kFrameCount = 2;
 constexpr int kSrvDescriptorCount = 64;
 constexpr float kFullFrameSensorHeightMm = 24.0f;
-constexpr int kMaxSerializedNodeKind = static_cast<int>(rock::NodeKind::ErosionNoise);
-constexpr int kMaxSerializedPreviewStage = static_cast<int>(rock::PreviewStage::ErosionNoise);
+constexpr int kMaxSerializedNodeKind = static_cast<int>(rock::NodeKind::MultiScaleErosion);
+constexpr int kMaxSerializedPreviewStage = static_cast<int>(rock::PreviewStage::MultiScaleErosion);
 
 struct FrameContext
 {
@@ -1476,6 +1476,26 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
                     {"strength", node.heightmapBlur.strength},
                     {"iterations", node.heightmapBlur.iterations},
                 }},
+                {"multiScaleErosion", {
+                    {"iterations", node.multiScaleErosion.iterations},
+                    {"enableStreamPower", node.multiScaleErosion.enableStreamPower},
+                    {"enableThermal", node.multiScaleErosion.enableThermal},
+                    {"enableDeposition", node.multiScaleErosion.enableDeposition},
+                    {"speStrength", node.multiScaleErosion.speStrength},
+                    {"streamExponent", node.multiScaleErosion.streamExponent},
+                    {"slopeExponent", node.multiScaleErosion.slopeExponent},
+                    {"maxStreamPower", node.multiScaleErosion.maxStreamPower},
+                    {"flowExponent", node.multiScaleErosion.flowExponent},
+                    {"speTimeStep", node.multiScaleErosion.speTimeStep},
+                    {"thermalAngleDegrees", node.multiScaleErosion.thermalAngleDegrees},
+                    {"thermalStrength", node.multiScaleErosion.thermalStrength},
+                    {"thermalNoisifyAngle", node.multiScaleErosion.thermalNoisifyAngle},
+                    {"thermalNoiseMin", node.multiScaleErosion.thermalNoiseMin},
+                    {"thermalNoiseMax", node.multiScaleErosion.thermalNoiseMax},
+                    {"thermalNoiseWavelength", node.multiScaleErosion.thermalNoiseWavelength},
+                    {"depositionStrength", node.multiScaleErosion.depositionStrength},
+                    {"rain", node.multiScaleErosion.rain},
+                }},
                 {"erosionNoise", {
                     {"frequency", node.erosionNoise.frequency},
                     {"octaves", node.erosionNoise.octaves},
@@ -1642,6 +1662,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 const nlohmann::json nodeFluvialJson = nodeJson.value("fluvialErosion", nlohmann::json::object());
                 const nlohmann::json nodeBlurJson = nodeJson.value("heightmapBlur", nlohmann::json::object());
                 const nlohmann::json nodeErosionNoiseJson = nodeJson.value("erosionNoise", nlohmann::json::object());
+                const nlohmann::json nodeMultiScaleErosionJson = nodeJson.value("multiScaleErosion", nlohmann::json::object());
                 node.primitive.kind = static_cast<rock::PrimitiveKind>(std::clamp(nodePrimitiveJson.value("kind", static_cast<int>(node.primitive.kind)), 0, 4));
                 node.noise.amplitude = nodeNoiseJson.value("amplitude", node.noise.amplitude);
                 node.noise.frequency = nodeNoiseJson.value("frequency", node.noise.frequency);
@@ -1695,6 +1716,24 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 node.erosionNoise.valleyLow = std::clamp(nodeErosionNoiseJson.value("valleyLow", node.erosionNoise.valleyLow), 0.0f, 1.0f);
                 node.erosionNoise.valleyHigh = std::clamp(nodeErosionNoiseJson.value("valleyHigh", node.erosionNoise.valleyHigh), 0.0f, 1.0f);
                 node.erosionNoise.seed = std::clamp(nodeErosionNoiseJson.value("seed", node.erosionNoise.seed), 0, 999999);
+                node.multiScaleErosion.iterations = std::clamp(nodeMultiScaleErosionJson.value("iterations", node.multiScaleErosion.iterations), 0, 500);
+                node.multiScaleErosion.enableStreamPower = nodeMultiScaleErosionJson.value("enableStreamPower", node.multiScaleErosion.enableStreamPower);
+                node.multiScaleErosion.enableThermal = nodeMultiScaleErosionJson.value("enableThermal", node.multiScaleErosion.enableThermal);
+                node.multiScaleErosion.enableDeposition = nodeMultiScaleErosionJson.value("enableDeposition", node.multiScaleErosion.enableDeposition);
+                node.multiScaleErosion.speStrength = std::clamp(nodeMultiScaleErosionJson.value("speStrength", node.multiScaleErosion.speStrength), 0.0f, 0.01f);
+                node.multiScaleErosion.streamExponent = std::clamp(nodeMultiScaleErosionJson.value("streamExponent", node.multiScaleErosion.streamExponent), 0.0f, 2.0f);
+                node.multiScaleErosion.slopeExponent = std::clamp(nodeMultiScaleErosionJson.value("slopeExponent", node.multiScaleErosion.slopeExponent), 0.0f, 4.0f);
+                node.multiScaleErosion.maxStreamPower = std::clamp(nodeMultiScaleErosionJson.value("maxStreamPower", node.multiScaleErosion.maxStreamPower), 1.0f, 1000000.0f);
+                node.multiScaleErosion.flowExponent = std::clamp(nodeMultiScaleErosionJson.value("flowExponent", node.multiScaleErosion.flowExponent), 0.5f, 4.0f);
+                node.multiScaleErosion.speTimeStep = std::clamp(nodeMultiScaleErosionJson.value("speTimeStep", node.multiScaleErosion.speTimeStep), 0.0f, 4.0f);
+                node.multiScaleErosion.thermalAngleDegrees = std::clamp(nodeMultiScaleErosionJson.value("thermalAngleDegrees", node.multiScaleErosion.thermalAngleDegrees), 0.0f, 60.0f);
+                node.multiScaleErosion.thermalStrength = std::clamp(nodeMultiScaleErosionJson.value("thermalStrength", node.multiScaleErosion.thermalStrength), 0.0f, 0.001f);
+                node.multiScaleErosion.thermalNoisifyAngle = nodeMultiScaleErosionJson.value("thermalNoisifyAngle", node.multiScaleErosion.thermalNoisifyAngle);
+                node.multiScaleErosion.thermalNoiseMin = std::clamp(nodeMultiScaleErosionJson.value("thermalNoiseMin", node.multiScaleErosion.thermalNoiseMin), 0.0f, 4.0f);
+                node.multiScaleErosion.thermalNoiseMax = std::clamp(nodeMultiScaleErosionJson.value("thermalNoiseMax", node.multiScaleErosion.thermalNoiseMax), 0.0f, 4.0f);
+                node.multiScaleErosion.thermalNoiseWavelength = std::clamp(nodeMultiScaleErosionJson.value("thermalNoiseWavelength", node.multiScaleErosion.thermalNoiseWavelength), 0.0f, 0.05f);
+                node.multiScaleErosion.depositionStrength = std::clamp(nodeMultiScaleErosionJson.value("depositionStrength", node.multiScaleErosion.depositionStrength), 0.0f, 8.0f);
+                node.multiScaleErosion.rain = std::clamp(nodeMultiScaleErosionJson.value("rain", node.multiScaleErosion.rain), 0.0f, 10.0f);
 
                 const auto readPins = [&](const nlohmann::json& pinsJson, rock::PinKind pinKind, std::vector<rock::Pin>& pins) {
                     if (!pinsJson.is_array())
@@ -2637,7 +2676,8 @@ bool IsTerrainNodeKind(rock::NodeKind kind)
         kind == rock::NodeKind::Shape ||
         kind == rock::NodeKind::FluvialErosion ||
         kind == rock::NodeKind::HeightmapBlur ||
-        kind == rock::NodeKind::ErosionNoise;
+        kind == rock::NodeKind::ErosionNoise ||
+        kind == rock::NodeKind::MultiScaleErosion;
 }
 
 int CurrentPreviewMeshResolution()
@@ -3871,6 +3911,8 @@ ImVec4 NodeAccentColor(rock::NodeKind kind)
         return ImVec4(0.58f, 0.61f, 0.44f, 1.0f);
     case rock::NodeKind::ErosionNoise:
         return ImVec4(0.66f, 0.55f, 0.42f, 1.0f);
+    case rock::NodeKind::MultiScaleErosion:
+        return ImVec4(0.42f, 0.66f, 0.74f, 1.0f);
     case rock::NodeKind::NoiseWarp:
         return ImVec4(0.46f, 0.65f, 0.76f, 1.0f);
     case rock::NodeKind::CrackField:
@@ -3898,6 +3940,8 @@ ImVec2 InitialNodePosition(rock::NodeKind kind)
         return ImVec2(600.0f, 240.0f);
     case rock::NodeKind::ErosionNoise:
         return ImVec2(600.0f, 380.0f);
+    case rock::NodeKind::MultiScaleErosion:
+        return ImVec2(320.0f, 380.0f);
     case rock::NodeKind::NoiseWarp:
         return ImVec2(320.0f, 64.0f);
     case rock::NodeKind::CrackField:
@@ -4349,6 +4393,7 @@ void PasteNodesFromClipboard(const ImVec2& pasteCenter)
             newMutableNode->fluvialErosion = clipboardNode.node.fluvialErosion;
             newMutableNode->heightmapBlur = clipboardNode.node.heightmapBlur;
             newMutableNode->erosionNoise = clipboardNode.node.erosionNoise;
+            newMutableNode->multiScaleErosion = clipboardNode.node.multiScaleErosion;
         }
         const rock::Node* newNode = g_graph.FindNode(newNodeId);
         if (newNode == nullptr)
@@ -4587,6 +4632,7 @@ void DrawNodeGraph()
         addNodeMenuItem(rock::NodeKind::FluvialErosion);
         addNodeMenuItem(rock::NodeKind::HeightmapBlur);
         addNodeMenuItem(rock::NodeKind::ErosionNoise);
+        addNodeMenuItem(rock::NodeKind::MultiScaleErosion);
         ImGui::EndPopup();
     }
     ImGui::PopStyleVar(4);
@@ -5137,6 +5183,103 @@ void DrawPropertiesPanel()
             EvaluateGraph();
         }
         if (DrawPropertyIntRow("Seed", "ErosionNoiseSeed", &en.seed, 0, 999999, rock::ErosionNoiseSettings{}.seed, "Erosion noise seed changed", true, "ハッシュのオフセットです。同じパラメータでも異なるパターンを得るために使います。"))
+        {
+            EvaluateGraph();
+        }
+
+        ImGui::EndTable();
+        return;
+    }
+
+    if (selectedNode->kind == rock::NodeKind::MultiScaleErosion && ImGui::BeginTable("MultiScaleErosionRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 210.0f);
+        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+        rock::MultiScaleErosionSettings& mse = editableNode->multiScaleErosion;
+        mse.iterations = std::clamp(mse.iterations, 0, 500);
+        mse.speStrength = std::clamp(mse.speStrength, 0.0f, 0.01f);
+        mse.streamExponent = std::clamp(mse.streamExponent, 0.0f, 2.0f);
+        mse.slopeExponent = std::clamp(mse.slopeExponent, 0.0f, 4.0f);
+        mse.maxStreamPower = std::clamp(mse.maxStreamPower, 1.0f, 1000000.0f);
+        mse.flowExponent = std::clamp(mse.flowExponent, 0.5f, 4.0f);
+        mse.speTimeStep = std::clamp(mse.speTimeStep, 0.0f, 4.0f);
+        mse.thermalAngleDegrees = std::clamp(mse.thermalAngleDegrees, 0.0f, 60.0f);
+        mse.thermalStrength = std::clamp(mse.thermalStrength, 0.0f, 0.001f);
+        mse.thermalNoiseMin = std::clamp(mse.thermalNoiseMin, 0.0f, 4.0f);
+        mse.thermalNoiseMax = std::clamp(mse.thermalNoiseMax, 0.0f, 4.0f);
+        mse.thermalNoiseWavelength = std::clamp(mse.thermalNoiseWavelength, 0.0f, 0.05f);
+        mse.depositionStrength = std::clamp(mse.depositionStrength, 0.0f, 8.0f);
+        mse.rain = std::clamp(mse.rain, 0.0f, 10.0f);
+
+        if (DrawPropertyIntRow("Iterations", "MseIterations", &mse.iterations, 0, 500, rock::MultiScaleErosionSettings{}.iterations, "Multi-scale erosion iterations changed", true, "SPE → Thermal → Deposition の 3 パスを繰り返す回数です。多いほど浸食が進みますが計算時間も増えます。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyBoolRow("Enable Stream Power", "MseEnableSpe", &mse.enableStreamPower, "Multi-scale erosion SPE toggled", "河川浸食 (Stream Power Erosion) パスの ON/OFF。", rock::MultiScaleErosionSettings{}.enableStreamPower))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyBoolRow("Enable Thermal", "MseEnableThermal", &mse.enableThermal, "Multi-scale erosion thermal toggled", "タラス崩壊 (角度しきい値による斜面安定化) パスの ON/OFF。", rock::MultiScaleErosionSettings{}.enableThermal))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyBoolRow("Enable Deposition", "MseEnableDeposition", &mse.enableDeposition, "Multi-scale erosion deposition toggled", "土砂堆積パスの ON/OFF。流量と搬送能の差から谷底や合流部に土砂を残します。", rock::MultiScaleErosionSettings{}.enableDeposition))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("SPE Strength", "MseSpeStrength", &mse.speStrength, 0.0f, 0.01f, rock::MultiScaleErosionSettings{}.speStrength, "Multi-scale erosion SPE strength changed", true, "SPE シェーダーの k 係数。1 反復あたりの削り量倍率です。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Stream Exponent", "MseStreamExp", &mse.streamExponent, 0.0f, 2.0f, rock::MultiScaleErosionSettings{}.streamExponent, "Multi-scale erosion stream exponent changed", true, "SPE の p_sa。流量に対する非線形性です。大きいほど流量集中部で削れが強くなります。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Slope Exponent", "MseSlopeExp", &mse.slopeExponent, 0.0f, 4.0f, rock::MultiScaleErosionSettings{}.slopeExponent, "Multi-scale erosion slope exponent changed", true, "SPE の p_sl。勾配に対する非線形性です。大きいほど急斜面でのみ削ります。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Max Stream Power", "MseMaxSpe", &mse.maxStreamPower, 1.0f, 1000000.0f, rock::MultiScaleErosionSettings{}.maxStreamPower, "Multi-scale erosion max SPE changed", true, "SPE シェーダーの max_spe 上限。極端な削れの暴走を防ぎます。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Flow Exponent", "MseFlowExp", &mse.flowExponent, 0.5f, 4.0f, rock::MultiScaleErosionSettings{}.flowExponent, "Multi-scale erosion flow exponent changed", true, "D8 重み付きフローの集中度 (flow_p)。大きいほど最急方向に流量が集まります。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Time Step", "MseTimeStep", &mse.speTimeStep, 0.0f, 4.0f, rock::MultiScaleErosionSettings{}.speTimeStep, "Multi-scale erosion time step changed", true, "SPE の dt。1 反復あたりの時間刻みです。大きいほど速いが不安定になります。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Threshold Angle (deg)", "MseThermalAngle", &mse.thermalAngleDegrees, 0.0f, 60.0f, rock::MultiScaleErosionSettings{}.thermalAngleDegrees, "Multi-scale erosion thermal angle changed", true, "タラス崩壊の安息角。これを超える勾配は崩落します。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Thermal Strength", "MseThermalStrength", &mse.thermalStrength, 0.0f, 0.001f, rock::MultiScaleErosionSettings{}.thermalStrength, "Multi-scale erosion thermal strength changed", true, "タラスシェーダーの ε。1 反復あたりに移動する土砂量です。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyBoolRow("Noisify Angle", "MseThermalNoisify", &mse.thermalNoisifyAngle, "Multi-scale erosion noisify angle toggled", "安息角を空間ノイズで揺らし、岩質の不均一を表現します。", rock::MultiScaleErosionSettings{}.thermalNoisifyAngle))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Noise Min", "MseThermalNoiseMin", &mse.thermalNoiseMin, 0.0f, 4.0f, rock::MultiScaleErosionSettings{}.thermalNoiseMin, "Multi-scale erosion thermal noise min changed", true, "tan(角度) 倍率の下限。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Noise Max", "MseThermalNoiseMax", &mse.thermalNoiseMax, 0.0f, 4.0f, rock::MultiScaleErosionSettings{}.thermalNoiseMax, "Multi-scale erosion thermal noise max changed", true, "tan(角度) 倍率の上限。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Noise Wavelength", "MseThermalNoiseWavelength", &mse.thermalNoiseWavelength, 0.0f, 0.05f, rock::MultiScaleErosionSettings{}.thermalNoiseWavelength, "Multi-scale erosion thermal noise wavelength changed", true, "角度ノイズの空間周波数。小さいほど広い範囲で同じ角度になります。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Deposition Strength", "MseDepositionStrength", &mse.depositionStrength, 0.0f, 8.0f, rock::MultiScaleErosionSettings{}.depositionStrength, "Multi-scale erosion deposition strength changed", true, "搬送能を超えた分の堆積率。大きいほど土砂が早く落ちます。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Rain", "MseRain", &mse.rain, 0.0f, 10.0f, rock::MultiScaleErosionSettings{}.rain, "Multi-scale erosion rain changed", true, "セルあたりに降る水量。大きいほど流量が増え、堆積も活発になります。"))
         {
             EvaluateGraph();
         }

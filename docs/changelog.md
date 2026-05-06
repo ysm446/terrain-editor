@@ -2,7 +2,9 @@
 
 ## 未リリース
 
-- なし
+- `Multi-Scale Erosion` の Deposition パスで pit 判定を逆向きに移植していたため、反復するごとに非 pit セルへ sediment が無制限に蓄積し、針状のスパイクが伸び続ける不具合を修正しました。`deposition.glsl` の `if (!CheckPit(p)) sed = 0;` に合わせて、局所最小 (pit) のみが sediment を保持し、それ以外のセルは毎反復クリアされるようにしました。
+
+- 新しい浸食ノード `Multi-Scale Erosion` を追加しました。Schott et al. "Terrain Amplification using Multi-scale Erosion" (SIGGRAPH 2024, MIT) のコンピュートシェーダー 3 本 (Stream Power Erosion / Thermal / Deposition) を CPU 移植し、グリッドベースの河川浸食・タラス崩壊・土砂堆積を 1 ノードに束ねました。出力ピンは `Heightmap` / `Flows` / `Deposits` の 3 つで、KTT (粒子ベース) と並んで使い分けられます。詳細は `docs/multi_scale_erosion/multi_scale_erosion_node.md` を参照してください。
 
 ## 0.17.2 - 2026-05-06 00:42
 

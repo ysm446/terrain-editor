@@ -23,6 +23,7 @@ enum class NodeKind
     HeightmapBlur,
     Shape,
     ErosionNoise,
+    MultiScaleErosion,
 };
 
 enum class PinKind
@@ -70,6 +71,7 @@ enum class PreviewStage
     HeightmapBlur,
     Shape,
     ErosionNoise,
+    MultiScaleErosion,
 };
 
 enum class HeightfieldPreviewField
@@ -178,6 +180,34 @@ struct ErosionNoiseSettings
     int seed = 0;
 };
 
+struct MultiScaleErosionSettings
+{
+    int iterations = 50;
+    bool enableStreamPower = true;
+    bool enableThermal = true;
+    bool enableDeposition = true;
+
+    // Stream Power Erosion (erosion.glsl)
+    float speStrength = 0.0005f;        // k
+    float streamExponent = 0.8f;        // p_sa
+    float slopeExponent = 2.0f;         // p_sl
+    float maxStreamPower = 10000.0f;    // max_spe
+    float flowExponent = 1.3f;          // flow_p
+    float speTimeStep = 1.0f;           // dt
+
+    // Thermal (thermal.glsl)
+    float thermalAngleDegrees = 30.0f;  // tanThresholdAngle (in degrees)
+    float thermalStrength = 0.00005f;   // eps
+    bool thermalNoisifyAngle = true;
+    float thermalNoiseMin = 0.9f;
+    float thermalNoiseMax = 1.4f;
+    float thermalNoiseWavelength = 0.0023f;
+
+    // Deposition (deposition.glsl)
+    float depositionStrength = 1.0f;
+    float rain = 2.6f;
+};
+
 struct Node
 {
     GraphId id = 0;
@@ -194,6 +224,7 @@ struct Node
     FluvialErosionSettings fluvialErosion;
     HeightmapBlurSettings heightmapBlur;
     ErosionNoiseSettings erosionNoise;
+    MultiScaleErosionSettings multiScaleErosion;
 };
 
 struct Link
@@ -348,6 +379,7 @@ struct SdfPipeline
             FluvialErosion,
             HeightmapBlur,
             ErosionNoise,
+            MultiScaleErosion,
         };
 
         Kind kind = Kind::FluvialErosion;
@@ -355,6 +387,7 @@ struct SdfPipeline
         FluvialErosionSettings fluvialErosion;
         HeightmapBlurSettings heightmapBlur;
         ErosionNoiseSettings erosionNoise;
+        MultiScaleErosionSettings multiScaleErosion;
     };
 
     PrimitiveKind primitiveKind = PrimitiveKind::RockBlob;
