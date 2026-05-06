@@ -54,6 +54,15 @@ constexpr int kSrvDescriptorCount = 64;
 constexpr float kFullFrameSensorHeightMm = 24.0f;
 constexpr int kMaxSerializedNodeKind = static_cast<int>(rock::NodeKind::MultiScaleErosion);
 constexpr int kMaxSerializedPreviewStage = static_cast<int>(rock::PreviewStage::MultiScaleErosion);
+constexpr std::array<int, 5> kResolutionPresets = {128, 256, 512, 1024, 2048};
+
+int NearestResolutionPreset(int value)
+{
+    const auto nearest = std::ranges::min_element(kResolutionPresets, [value](int lhs, int rhs) {
+        return std::abs(lhs - value) < std::abs(rhs - value);
+    });
+    return nearest != kResolutionPresets.end() ? *nearest : 512;
+}
 
 struct FrameContext
 {
@@ -1041,7 +1050,7 @@ bool LoadAppSettings(std::string* error = nullptr)
         settings.preview.showGrid = visibilityJson.value("grid", settings.preview.showGrid);
         settings.preview.gridCellCount = std::clamp(visibilityJson.value("gridCellCount", settings.preview.gridCellCount), 1, 200);
         settings.preview.gridCellSizeMeters = std::clamp(visibilityJson.value("gridCellSizeMeters", settings.preview.gridCellSizeMeters), 1.0f, 10000.0f);
-        settings.preview.resolution = std::clamp(visibilityJson.value("previewResolution", settings.preview.resolution), 16, 2048);
+        settings.preview.resolution = NearestResolutionPreset(visibilityJson.value("previewResolution", settings.preview.resolution));
         settings.preview.lod = std::clamp(visibilityJson.value("previewLod", settings.preview.lod), 0, 4);
         settings.preview.lightingMode = std::clamp(visibilityJson.value("lightingMode", settings.preview.lightingMode), 0, 2);
         settings.preview.sunAzimuthDegrees = std::clamp(visibilityJson.value("sunAzimuthDegrees", settings.preview.sunAzimuthDegrees), 0.0f, 360.0f);
@@ -1645,11 +1654,11 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 node.heightmap.scaleMeters = std::clamp(nodeHeightmapJson.value("scaleMeters", node.heightmap.scaleMeters), 1.0f, 1000000.0f);
                 node.heightmap.relativeVerticalScalePercent = std::clamp(nodeHeightmapJson.value("relativeVerticalScalePercent", node.heightmap.relativeVerticalScalePercent), 0.0f, 10000.0f);
                 node.heightmap.verticalOffsetMeters = std::clamp(nodeHeightmapJson.value("verticalOffsetMeters", node.heightmap.verticalOffsetMeters), -1000000.0f, 1000000.0f);
-                node.heightmap.simulationResolution = std::clamp(nodeHeightmapJson.value("simulationResolution", node.heightmap.simulationResolution), 2, 2048);
+                node.heightmap.simulationResolution = NearestResolutionPreset(nodeHeightmapJson.value("simulationResolution", node.heightmap.simulationResolution));
                 node.shape.kind = static_cast<rock::ShapeKind>(std::clamp(nodeShapeJson.value("kind", static_cast<int>(node.shape.kind)), 0, 1));
                 node.shape.scaleMeters = std::clamp(nodeShapeJson.value("scaleMeters", node.shape.scaleMeters), 1.0f, 1000000.0f);
                 node.shape.relativeHeightPercent = std::clamp(nodeShapeJson.value("relativeHeightPercent", node.shape.relativeHeightPercent), 0.0f, 10000.0f);
-                node.shape.simulationResolution = std::clamp(nodeShapeJson.value("simulationResolution", node.shape.simulationResolution), 2, 2048);
+                node.shape.simulationResolution = NearestResolutionPreset(nodeShapeJson.value("simulationResolution", node.shape.simulationResolution));
                 node.heightmapBlur.radius = std::clamp(nodeBlurJson.value("radius", node.heightmapBlur.radius), 0.0f, 128.0f);
                 node.heightmapBlur.strength = std::clamp(nodeBlurJson.value("strength", node.heightmapBlur.strength), 0.0f, 1.0f);
                 node.heightmapBlur.iterations = std::clamp(nodeBlurJson.value("iterations", node.heightmapBlur.iterations), 0, 64);
@@ -4619,6 +4628,68 @@ bool DrawPropertyIntRow(const char* label, const char* id, int* value, int minVa
     return editEnded;
 }
 
+bool DrawResolutionPresetRow(const char* label, const char* id, int* value, int defaultValue, const char* dirtyReason, bool recordUndo = true, const char* tooltip = nullptr)
+{
+    bool changed = false;
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    const int normalizedValue = NearestResolutionPreset(*value);
+    if (*value != normalizedValue)
+    {
+        *value = normalizedValue;
+    }
+    const int normalizedDefault = NearestResolutionPreset(defaultValue);
+    DrawPropertyLabel(label, tooltip, *value != normalizedDefault);
+    ImGui::TableSetColumnIndex(1);
+
+    ImGui::PushID(id);
+    const float resetWidth = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x;
+    const float comboWidth = std::max(80.0f, ImGui::GetContentRegionAvail().x - resetWidth);
+    const std::string previewValue = std::to_string(*value);
+    ImGui::SetNextItemWidth(comboWidth);
+    if (ImGui::BeginCombo("##preset", previewValue.c_str()))
+    {
+        for (int preset : kResolutionPresets)
+        {
+            const bool selected = *value == preset;
+            const std::string presetText = std::to_string(preset);
+            if (ImGui::Selectable(presetText.c_str(), selected))
+            {
+                if (*value != preset)
+                {
+                    if (recordUndo)
+                    {
+                        PushUndoSnapshot();
+                    }
+                    *value = preset;
+                    g_graph.MarkDirty(dirtyReason);
+                    changed = true;
+                }
+            }
+            if (selected)
+            {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+
+    ImGui::SameLine();
+    const std::string defaultValueText = std::to_string(normalizedDefault);
+    if (DrawResetToDefaultButton("reset", *value == normalizedDefault, defaultValueText.c_str()))
+    {
+        if (recordUndo)
+        {
+            PushUndoSnapshot();
+        }
+        *value = normalizedDefault;
+        g_graph.MarkDirty(dirtyReason);
+        changed = true;
+    }
+    ImGui::PopID();
+    return changed;
+}
+
 bool DrawPropertyBoolRow(const char* label, const char* id, bool* value, const char* dirtyReason, const char* tooltip = nullptr, bool defaultValue = false)
 {
     ImGui::TableNextRow();
@@ -4776,7 +4847,7 @@ void DrawPropertiesPanel()
         editableNode->heightmap.scaleMeters = std::clamp(editableNode->heightmap.scaleMeters, 1.0f, 8096.0f);
         editableNode->heightmap.relativeVerticalScalePercent = std::clamp(editableNode->heightmap.relativeVerticalScalePercent, 0.0f, 100.0f);
         editableNode->heightmap.verticalOffsetMeters = std::clamp(editableNode->heightmap.verticalOffsetMeters, -4096.0f, 4096.0f);
-        editableNode->heightmap.simulationResolution = std::clamp(editableNode->heightmap.simulationResolution, 2, 2048);
+        editableNode->heightmap.simulationResolution = NearestResolutionPreset(editableNode->heightmap.simulationResolution);
 
         if (DrawPropertyPathRow("File", "HeightmapFile", &editableNode->heightmap.path, "Heightmap file changed", "読み込むハイトマップ画像です。明るいピクセルほど高い地形として扱います。"))
         {
@@ -4794,7 +4865,7 @@ void DrawPropertiesPanel()
         {
             EvaluateGraph();
         }
-        if (DrawPropertyIntRow("Simulation Resolution", "HeightmapSimulationResolution", &editableNode->heightmap.simulationResolution, 2, 2048, rock::HeightmapLoadSettings{}.simulationResolution, "Heightmap simulation resolution changed", true, "侵食や地形処理に使う内部ハイトフィールド解像度です。表示設定の Resolution はメッシュ表示の細かさだけを変更します。"))
+        if (DrawResolutionPresetRow("Simulation Resolution", "HeightmapSimulationResolution", &editableNode->heightmap.simulationResolution, rock::HeightmapLoadSettings{}.simulationResolution, "Heightmap simulation resolution changed", true, "侵食や地形処理に使う内部ハイトフィールド解像度です。表示設定の Resolution はメッシュ表示の細かさだけを変更します。"))
         {
             EvaluateGraph();
         }
@@ -4810,7 +4881,7 @@ void DrawPropertiesPanel()
         rock::ShapeSettings& shape = editableNode->shape;
         shape.scaleMeters = std::clamp(shape.scaleMeters, 1.0f, 8096.0f);
         shape.relativeHeightPercent = std::clamp(shape.relativeHeightPercent, 0.0f, 100.0f);
-        shape.simulationResolution = std::clamp(shape.simulationResolution, 2, 2048);
+        shape.simulationResolution = NearestResolutionPreset(shape.simulationResolution);
 
         int shapeKind = static_cast<int>(shape.kind);
         if (DrawPropertyComboRow("Shape Type", "ShapeType", &shapeKind, "Hemisphere\0Pyramid\0", "デバッグ用の基本ハイトフィールド形状です。", static_cast<int>(rock::ShapeSettings{}.kind)))
@@ -4827,7 +4898,7 @@ void DrawPropertiesPanel()
         {
             EvaluateGraph();
         }
-        if (DrawPropertyIntRow("Simulation Resolution", "ShapeSimulationResolution", &shape.simulationResolution, 2, 2048, rock::ShapeSettings{}.simulationResolution, "Shape simulation resolution changed", true, "侵食や地形処理に使う内部ハイトフィールド解像度です。表示設定の Resolution はメッシュ表示の細かさだけを変更します。"))
+        if (DrawResolutionPresetRow("Simulation Resolution", "ShapeSimulationResolution", &shape.simulationResolution, rock::ShapeSettings{}.simulationResolution, "Shape simulation resolution changed", true, "侵食や地形処理に使う内部ハイトフィールド解像度です。表示設定の Resolution はメッシュ表示の細かさだけを変更します。"))
         {
             EvaluateGraph();
         }
@@ -5076,7 +5147,7 @@ void DrawDisplaySettingsPanel()
         {
             SaveAppSettingsSilently();
         }
-        if (DrawPropertyIntRow("Resolution", "DisplayPreviewResolution", &settings.preview.resolution, 16, 2048, rock::PreviewSettings{}.resolution, "Preview resolution changed", false))
+        if (DrawResolutionPresetRow("Resolution", "DisplayPreviewResolution", &settings.preview.resolution, rock::PreviewSettings{}.resolution, "Preview resolution changed", false))
         {
             EvaluateGraph();
             SaveAppSettingsSilently();

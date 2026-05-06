@@ -174,7 +174,7 @@ struct Link
 
 struct PreviewSettings
 {
-    int resolution = 48;
+    int resolution = 512;
     int lod = 0;
     bool showSurface = true;
     bool showWireframe = true;
