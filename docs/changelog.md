@@ -6,6 +6,7 @@
 - プロパティパネルの float 行に `format` と `sliderFlags` の省略可能引数を追加し、`Multi-Scale Erosion` の `SPE Strength` (`%.5f`)、`Thermal Strength` (`%.6f`)、`Max Stream Power` (`%.0f`) を対数スケールスライダーで調整できるようにしました。`Thermal Noise Wavelength` も `%.4f` 表示にしました。既定値が小さく `%.3f` で常に `0.000` 表示になっていた問題を解消します。
 - `Multi-Scale Erosion` の SPE / Thermal / Deposition の各反復で、行 (z 軸) ループを `std::execution::par` で並列化しました。出力配列はピンポンバッファでセル独立なのでデータ競合なし。マルチコア環境で評価時間が大きく短縮されます。
 - `Multi-Scale Erosion` の Deposition パスで pit 判定を逆向きに移植していたため、反復するごとに非 pit セルへ sediment が無制限に蓄積し、針状のスパイクが伸び続ける不具合を修正しました。`deposition.glsl` の `if (!CheckPit(p)) sed = 0;` に合わせて、局所最小 (pit) のみが sediment を保持し、それ以外のセルは毎反復クリアされるようにしました。
+- プロパティ行の「既定値に戻す」ボタンのツールチップに、戻し先の既定値を表示するようにしました。
 
 - 新しい浸食ノード `Multi-Scale Erosion` を追加しました。Schott et al. "Terrain Amplification using Multi-scale Erosion" (SIGGRAPH 2024, MIT) のコンピュートシェーダー 3 本 (Stream Power Erosion / Thermal / Deposition) を CPU 移植し、グリッドベースの河川浸食・タラス崩壊・土砂堆積を 1 ノードに束ねました。出力ピンは `Heightmap` / `Flows` / `Deposits` の 3 つで、KTT (粒子ベース) と並んで使い分けられます。詳細は `docs/multi_scale_erosion/multi_scale_erosion_node.md` を参照してください。
 

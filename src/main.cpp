@@ -4711,6 +4711,13 @@ bool ColorDiffersFromDefault(const std::array<float, 3>& value, const std::array
            FloatDiffersFromDefault(value[2], defaultValue[2]);
 }
 
+std::string FormatDefaultFloat(float value, const char* format)
+{
+    char buffer[64]{};
+    std::snprintf(buffer, sizeof(buffer), format != nullptr ? format : "%.3f", value);
+    return buffer;
+}
+
 void DrawPropertyLabel(const char* label, const char* tooltip = nullptr, bool = false)
 {
     ImGui::AlignTextToFramePadding();
@@ -4744,7 +4751,7 @@ bool DrawPropertyComboRow(const char* label, const char* id, int* value, const c
     return changed;
 }
 
-bool DrawResetToDefaultButton(const char* id, bool isDefaultValue)
+bool DrawResetToDefaultButton(const char* id, bool isDefaultValue, const char* defaultValueText = nullptr)
 {
     ImGui::SameLine();
     ImGui::PushID(id);
@@ -4764,7 +4771,14 @@ bool DrawResetToDefaultButton(const char* id, bool isDefaultValue)
     ImGui::GetWindowDrawList()->AddText(font, iconFontSize, iconPos, iconColor, resetIcon);
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("既定値に戻す");
+        if (defaultValueText != nullptr && defaultValueText[0] != '\0')
+        {
+            ImGui::SetTooltip("既定値に戻す\n既定値: %s", defaultValueText);
+        }
+        else
+        {
+            ImGui::SetTooltip("既定値に戻す");
+        }
     }
     ImGui::PopID();
     return pressed;
@@ -4811,7 +4825,8 @@ bool DrawPropertyFloatRow(const char* label, const char* id, float* value, float
     }
     editEnded = editEnded || ImGui::IsItemDeactivatedAfterEdit();
     differsFromDefault = FloatDiffersFromDefault(*value, defaultValue);
-    if (DrawResetToDefaultButton("reset", !differsFromDefault))
+    const std::string defaultValueText = FormatDefaultFloat(defaultValue, format);
+    if (DrawResetToDefaultButton("reset", !differsFromDefault, defaultValueText.c_str()))
     {
         if (recordUndo)
         {
@@ -4886,7 +4901,8 @@ bool DrawPropertyIntRow(const char* label, const char* id, int* value, int minVa
     }
     editEnded = editEnded || ImGui::IsItemDeactivatedAfterEdit();
     differsFromDefault = *value != defaultValue;
-    if (DrawResetToDefaultButton("reset", !differsFromDefault))
+    const std::string defaultValueText = std::to_string(defaultValue);
+    if (DrawResetToDefaultButton("reset", !differsFromDefault, defaultValueText.c_str()))
     {
         if (recordUndo)
         {
@@ -4987,7 +5003,8 @@ bool DrawColorRgbRow(const char* label, const char* id, std::array<float, 3>& va
     value[1] = std::clamp(value[1], 0.0f, 1.0f);
     value[2] = std::clamp(value[2], 0.0f, 1.0f);
     differsFromDefault = ColorDiffersFromDefault(value, defaultValue);
-    if (DrawResetToDefaultButton("reset", !differsFromDefault))
+    const std::string defaultValueText = std::format("{:.3f}, {:.3f}, {:.3f}", defaultValue[0], defaultValue[1], defaultValue[2]);
+    if (DrawResetToDefaultButton("reset", !differsFromDefault, defaultValueText.c_str()))
     {
         value = defaultValue;
         changed = true;
@@ -5023,7 +5040,8 @@ bool DrawCameraFloatRow(const char* label, const char* id, float* value, float m
         changed = true;
     }
     const bool differsFromDefault = FloatDiffersFromDefault(*value, defaultValue);
-    if (DrawResetToDefaultButton("reset", !differsFromDefault))
+    const std::string defaultValueText = FormatDefaultFloat(defaultValue, format);
+    if (DrawResetToDefaultButton("reset", !differsFromDefault, defaultValueText.c_str()))
     {
         *value = std::clamp(defaultValue, minValue, maxValue);
         changed = true;
