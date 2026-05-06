@@ -20,6 +20,8 @@ enum class NodeKind
     Shape = 6,
     ErosionNoise = 7,
     MultiScaleErosion = 8,
+    MaskNoise = 9,
+    MaskBlend = 10,
 };
 
 enum class PinKind
@@ -47,6 +49,14 @@ enum class ShapeKind
     Pyramid,
 };
 
+enum class MaskBlendMode
+{
+    Add,
+    Multiply,
+    Min,
+    Max,
+};
+
 enum class PreviewStage
 {
     Output = 3,
@@ -54,6 +64,8 @@ enum class PreviewStage
     Shape = 5,
     ErosionNoise = 6,
     MultiScaleErosion = 7,
+    MaskNoise = 8,
+    MaskBlend = 9,
 };
 
 enum class HeightfieldPreviewField
@@ -62,6 +74,7 @@ enum class HeightfieldPreviewField
     Deposits,
     Flows,
     Age,
+    Mask,
 };
 
 struct Pin
@@ -114,6 +127,22 @@ struct ErosionNoiseSettings
     int seed = 0;
 };
 
+struct MaskNoiseSettings
+{
+    int seed = 0;
+    int octaves = 4;
+    float frequency = 4.0f;
+    float lacunarity = 2.0f;
+    float persistence = 0.5f;
+    int simulationResolution = 512;
+};
+
+struct MaskBlendSettings
+{
+    MaskBlendMode mode = MaskBlendMode::Add;
+    float intensity = 1.0f;
+};
+
 struct MultiScaleErosionSettings
 {
     int iterations = 50;
@@ -163,6 +192,8 @@ struct Node
     HeightmapBlurSettings heightmapBlur;
     ErosionNoiseSettings erosionNoise;
     MultiScaleErosionSettings multiScaleErosion;
+    MaskNoiseSettings maskNoise;
+    MaskBlendSettings maskBlend;
 };
 
 struct Link
@@ -305,6 +336,7 @@ public:
     const Pin* FindPin(GraphId pinId) const;
     const Node* FindNode(GraphId nodeId) const;
     Node* FindMutableNode(GraphId nodeId);
+    const Node* FindUpstreamForPin(GraphId pinId) const;
     bool IsInputPin(GraphId pinId) const;
     bool IsOutputPin(GraphId pinId) const;
     bool PinHasLink(GraphId pinId) const;
@@ -338,6 +370,7 @@ private:
     const Node* FindUpstreamNode(const Node& node) const;
     HeightfieldPipeline PipelineTo(NodeKind targetKind) const;
     HeightfieldPipeline PipelineToNode(const Node& targetNode) const;
+    HeightfieldGrid EvaluateMaskAsHeightfield(const Node& node, std::string* message) const;
     MeshData BuildMeshFromHeightPipelineCached(const HeightfieldPipeline& pipeline, int resolution, std::string* message, HeightfieldPreviewField previewField = HeightfieldPreviewField::Heightmap, HeightfieldGrid* previewGrid = nullptr);
 
     struct HeightfieldNodeCache
@@ -362,10 +395,12 @@ private:
 };
 
 std::string_view ToString(ShapeKind kind);
+std::string_view ToString(MaskBlendMode mode);
 std::string_view ToString(NodeKind kind);
 std::string_view ToString(PreviewStage stage);
 std::string_view ToString(ValueType type);
 PreviewStage PreviewStageFor(NodeKind kind);
+bool IsMaskOnlyNodeKind(NodeKind kind);
 void SetMultiScaleErosionGpuEvaluator(MultiScaleErosionGpuEvaluator evaluator);
 
 } // namespace rock

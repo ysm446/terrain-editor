@@ -52,8 +52,8 @@ namespace
 constexpr int kFrameCount = 2;
 constexpr int kSrvDescriptorCount = 64;
 constexpr float kFullFrameSensorHeightMm = 24.0f;
-constexpr int kMaxSerializedNodeKind = static_cast<int>(rock::NodeKind::MultiScaleErosion);
-constexpr int kMaxSerializedPreviewStage = static_cast<int>(rock::PreviewStage::MultiScaleErosion);
+constexpr int kMaxSerializedNodeKind = static_cast<int>(rock::NodeKind::MaskBlend);
+constexpr int kMaxSerializedPreviewStage = static_cast<int>(rock::PreviewStage::MaskBlend);
 constexpr std::array<int, 5> kResolutionPresets = {128, 256, 512, 1024, 2048};
 
 int NearestResolutionPreset(int value)
@@ -1498,6 +1498,18 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
                     {"valleyHigh", node.erosionNoise.valleyHigh},
                     {"seed", node.erosionNoise.seed},
                 }},
+                {"maskNoise", {
+                    {"seed", node.maskNoise.seed},
+                    {"octaves", node.maskNoise.octaves},
+                    {"frequency", node.maskNoise.frequency},
+                    {"lacunarity", node.maskNoise.lacunarity},
+                    {"persistence", node.maskNoise.persistence},
+                    {"simulationResolution", node.maskNoise.simulationResolution},
+                }},
+                {"maskBlend", {
+                    {"mode", static_cast<int>(node.maskBlend.mode)},
+                    {"intensity", node.maskBlend.intensity},
+                }},
             };
             for (const rock::Pin& pin : node.inputs)
             {
@@ -1648,6 +1660,8 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 const nlohmann::json nodeBlurJson = nodeJson.value("heightmapBlur", nlohmann::json::object());
                 const nlohmann::json nodeErosionNoiseJson = nodeJson.value("erosionNoise", nlohmann::json::object());
                 const nlohmann::json nodeMultiScaleErosionJson = nodeJson.value("multiScaleErosion", nlohmann::json::object());
+                const nlohmann::json nodeMaskNoiseJson = nodeJson.value("maskNoise", nlohmann::json::object());
+                const nlohmann::json nodeMaskBlendJson = nodeJson.value("maskBlend", nlohmann::json::object());
                 node.outputMesh.resolution = std::clamp(nodeOutputMeshJson.value("resolution", node.outputMesh.resolution), 16, 512);
                 node.outputMesh.lod = std::clamp(nodeOutputMeshJson.value("lod", node.outputMesh.lod), 0, 4);
                 node.heightmap.path = nodeHeightmapJson.value("path", node.heightmap.path);
@@ -1694,6 +1708,19 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                                                        static_cast<int>(rock::MultiScaleErosionBackend::GpuCompute));
                     node.multiScaleErosion.backend = static_cast<rock::MultiScaleErosionBackend>(backendInt);
                 }
+                node.maskNoise.seed = std::clamp(nodeMaskNoiseJson.value("seed", node.maskNoise.seed), 0, 999999);
+                node.maskNoise.octaves = std::clamp(nodeMaskNoiseJson.value("octaves", node.maskNoise.octaves), 1, 12);
+                node.maskNoise.frequency = std::clamp(nodeMaskNoiseJson.value("frequency", node.maskNoise.frequency), 0.0f, 256.0f);
+                node.maskNoise.lacunarity = std::clamp(nodeMaskNoiseJson.value("lacunarity", node.maskNoise.lacunarity), 0.0f, 8.0f);
+                node.maskNoise.persistence = std::clamp(nodeMaskNoiseJson.value("persistence", node.maskNoise.persistence), 0.0f, 1.0f);
+                node.maskNoise.simulationResolution = NearestResolutionPreset(nodeMaskNoiseJson.value("simulationResolution", node.maskNoise.simulationResolution));
+                {
+                    const int modeInt = std::clamp(nodeMaskBlendJson.value("mode", static_cast<int>(node.maskBlend.mode)),
+                                                    static_cast<int>(rock::MaskBlendMode::Add),
+                                                    static_cast<int>(rock::MaskBlendMode::Max));
+                    node.maskBlend.mode = static_cast<rock::MaskBlendMode>(modeInt);
+                }
+                node.maskBlend.intensity = std::clamp(nodeMaskBlendJson.value("intensity", node.maskBlend.intensity), 0.0f, 1.0f);
 
                 const auto readPins = [&](const nlohmann::json& pinsJson, rock::PinKind pinKind, std::vector<rock::Pin>& pins) {
                     if (!pinsJson.is_array())
@@ -2453,7 +2480,9 @@ bool IsTerrainNodeKind(rock::NodeKind kind)
         kind == rock::NodeKind::Shape ||
         kind == rock::NodeKind::HeightmapBlur ||
         kind == rock::NodeKind::ErosionNoise ||
-        kind == rock::NodeKind::MultiScaleErosion;
+        kind == rock::NodeKind::MultiScaleErosion ||
+        kind == rock::NodeKind::MaskNoise ||
+        kind == rock::NodeKind::MaskBlend;
 }
 
 int CurrentPreviewMeshResolution()
@@ -3475,6 +3504,8 @@ void DrawViewportCube(const ImVec2& min, const ImVec2& max, float timeSeconds)
             return "Flows";
         case rock::HeightfieldPreviewField::Age:
             return "Age";
+        case rock::HeightfieldPreviewField::Mask:
+            return "Mask";
         case rock::HeightfieldPreviewField::Heightmap:
         default:
             return "Heightmap";
@@ -3542,6 +3573,8 @@ void DrawHeightfieldMapPreview(const ImVec2& min, const ImVec2& max)
             return "Flows";
         case rock::HeightfieldPreviewField::Age:
             return "Age";
+        case rock::HeightfieldPreviewField::Mask:
+            return "Mask";
         case rock::HeightfieldPreviewField::Heightmap:
         default:
             return "Heightmap";
@@ -3640,6 +3673,10 @@ ImVec4 NodeAccentColor(rock::NodeKind kind)
         return ImVec4(0.66f, 0.55f, 0.42f, 1.0f);
     case rock::NodeKind::MultiScaleErosion:
         return ImVec4(0.42f, 0.66f, 0.74f, 1.0f);
+    case rock::NodeKind::MaskNoise:
+        return ImVec4(0.62f, 0.46f, 0.74f, 1.0f);
+    case rock::NodeKind::MaskBlend:
+        return ImVec4(0.50f, 0.42f, 0.78f, 1.0f);
     case rock::NodeKind::OutputMesh:
         return ImVec4(0.70f, 0.52f, 0.62f, 1.0f);
     default:
@@ -3661,6 +3698,10 @@ ImVec2 InitialNodePosition(rock::NodeKind kind)
         return ImVec2(600.0f, 380.0f);
     case rock::NodeKind::MultiScaleErosion:
         return ImVec2(320.0f, 380.0f);
+    case rock::NodeKind::MaskNoise:
+        return ImVec2(40.0f, 520.0f);
+    case rock::NodeKind::MaskBlend:
+        return ImVec2(320.0f, 520.0f);
     case rock::NodeKind::OutputMesh:
         return ImVec2(880.0f, 64.0f);
     default:
@@ -4103,6 +4144,8 @@ void PasteNodesFromClipboard(const ImVec2& pasteCenter)
             newMutableNode->heightmapBlur = clipboardNode.node.heightmapBlur;
             newMutableNode->erosionNoise = clipboardNode.node.erosionNoise;
             newMutableNode->multiScaleErosion = clipboardNode.node.multiScaleErosion;
+            newMutableNode->maskNoise = clipboardNode.node.maskNoise;
+            newMutableNode->maskBlend = clipboardNode.node.maskBlend;
         }
         const rock::Node* newNode = g_graph.FindNode(newNodeId);
         if (newNode == nullptr)
@@ -4341,6 +4384,8 @@ void DrawNodeGraph()
         addNodeMenuItem(rock::NodeKind::HeightmapBlur);
         addNodeMenuItem(rock::NodeKind::ErosionNoise);
         addNodeMenuItem(rock::NodeKind::MultiScaleErosion);
+        addNodeMenuItem(rock::NodeKind::MaskNoise);
+        addNodeMenuItem(rock::NodeKind::MaskBlend);
         ImGui::EndPopup();
     }
     ImGui::PopStyleVar(4);
@@ -4643,8 +4688,7 @@ bool DrawResolutionPresetRow(const char* label, const char* id, int* value, int 
     ImGui::TableSetColumnIndex(1);
 
     ImGui::PushID(id);
-    const float resetWidth = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x;
-    const float comboWidth = std::max(80.0f, ImGui::GetContentRegionAvail().x - resetWidth);
+    constexpr float comboWidth = 110.0f;
     const std::string previewValue = std::to_string(*value);
     ImGui::SetNextItemWidth(comboWidth);
     if (ImGui::BeginCombo("##preset", previewValue.c_str()))
@@ -5097,6 +5141,71 @@ void DrawPropertiesPanel()
             EvaluateGraph();
         }
         if (DrawPropertyFloatRow("Rain", "MseRain", &mse.rain, 0.0f, 10.0f, rock::MultiScaleErosionSettings{}.rain, "Multi-scale erosion rain changed", true, "セルあたりに降る水量。大きいほど流量が増え、堆積も活発になります。"))
+        {
+            EvaluateGraph();
+        }
+
+        ImGui::EndTable();
+        return;
+    }
+
+    if (selectedNode->kind == rock::NodeKind::MaskNoise && ImGui::BeginTable("MaskNoiseRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 200.0f);
+        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+        rock::MaskNoiseSettings& mn = editableNode->maskNoise;
+        mn.seed = std::clamp(mn.seed, 0, 999999);
+        mn.octaves = std::clamp(mn.octaves, 1, 12);
+        mn.frequency = std::clamp(mn.frequency, 0.0f, 256.0f);
+        mn.lacunarity = std::clamp(mn.lacunarity, 0.0f, 8.0f);
+        mn.persistence = std::clamp(mn.persistence, 0.0f, 1.0f);
+        mn.simulationResolution = NearestResolutionPreset(mn.simulationResolution);
+
+        if (DrawPropertyIntRow("Seed", "MaskNoiseSeed", &mn.seed, 0, 999999, rock::MaskNoiseSettings{}.seed, "Mask noise seed changed", true, "ハッシュのオフセットです。同じパラメータでも異なるパターンを得るために使います。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyIntRow("Octaves", "MaskNoiseOctaves", &mn.octaves, 1, 12, rock::MaskNoiseSettings{}.octaves, "Mask noise octaves changed", true, "重ねる Perlin ノイズのオクターブ数です。多いほど細かい階層が増えますが計算時間も増えます。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Frequency", "MaskNoiseFrequency", &mn.frequency, 0.0f, 256.0f, rock::MaskNoiseSettings{}.frequency, "Mask noise frequency changed", true, "地形範囲に対する基本周波数です。大きいほど細かい模様になります。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Lacunarity", "MaskNoiseLacunarity", &mn.lacunarity, 0.0f, 8.0f, rock::MaskNoiseSettings{}.lacunarity, "Mask noise lacunarity changed", true, "オクターブごとに周波数を何倍にするかです。標準は 2.0。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Persistence", "MaskNoisePersistence", &mn.persistence, 0.0f, 1.0f, rock::MaskNoiseSettings{}.persistence, "Mask noise persistence changed", true, "オクターブごとに振幅を何倍にするかです。標準は 0.5。大きいほど高オクターブが目立ちます。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawResolutionPresetRow("Simulation Resolution", "MaskNoiseSimulationResolution", &mn.simulationResolution, rock::MaskNoiseSettings{}.simulationResolution, "Mask noise simulation resolution changed", true, "Mask の評価解像度です。高いほど細かい模様を解像できます。"))
+        {
+            EvaluateGraph();
+        }
+
+        ImGui::EndTable();
+        return;
+    }
+
+    if (selectedNode->kind == rock::NodeKind::MaskBlend && ImGui::BeginTable("MaskBlendRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 200.0f);
+        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+        rock::MaskBlendSettings& mb = editableNode->maskBlend;
+        mb.intensity = std::clamp(mb.intensity, 0.0f, 1.0f);
+
+        int modeInt = static_cast<int>(mb.mode);
+        if (DrawPropertyComboRow("Blend Mode", "MaskBlendMode", &modeInt, "Add\0Multiply\0Min\0Max\0\0", "A と B を合成する方式です。Add は加算、Multiply は乗算、Min / Max はチャンネルごとの最小値・最大値です。", static_cast<int>(rock::MaskBlendSettings{}.mode)))
+        {
+            mb.mode = static_cast<rock::MaskBlendMode>(std::clamp(modeInt,
+                static_cast<int>(rock::MaskBlendMode::Add),
+                static_cast<int>(rock::MaskBlendMode::Max)));
+            EvaluateGraph();
+        }
+        if (DrawPropertyPercentRow("Blend Intensity (%)", "MaskBlendIntensity", &mb.intensity, 0.0f, 1.0f, rock::MaskBlendSettings{}.intensity, "Mask blend intensity changed", "A をベースに、A と Blend(A, B) の間を補間する強さです。0 で A のみ、1 で完全に合成結果を使います。"))
         {
             EvaluateGraph();
         }
