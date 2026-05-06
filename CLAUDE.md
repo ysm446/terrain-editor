@@ -33,10 +33,10 @@ The application is a single executable. `src/main.cpp` (~270 KB) owns the Win32 
 
 ### NodeGraph evaluation pipeline
 
-`rock::NodeGraph` holds `nodes_`, `links_`, per-node settings, and an in-memory `heightfieldCache_` keyed by node id. The graph is evaluated in two passes per frame, both built around `HeightfieldPipeline`:
+`rock::NodeGraph` holds `nodes_`, `links_`, per-node settings, and an in-memory `heightfieldCache_` keyed by node id. The graph is evaluated through a preview pipeline built around `HeightfieldPipeline`:
 
 - **Preview pipeline** — built from the currently selected node back to the source. Drives the 3D and 2D viewports. Runs asynchronously: `StartAsyncEvaluation()` in `main.cpp` snapshots the graph, hands it to `std::async`, and the main thread polls the future. The current graph carries `Evaluating...` status until the result is merged via `ApplyEvaluationResultFrom`.
-- **Final pipeline** — built from the `OutputMesh` node. Used for OBJ export.
+- **OBJ export** — writes the currently evaluated preview mesh.
 
 `HeightfieldPipeline` is built from the graph by walking upstream from the target node. It collects heightfield operations layered on top of a `Heightmap Load` or `Shape` source.
 

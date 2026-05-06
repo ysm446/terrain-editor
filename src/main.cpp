@@ -109,7 +109,6 @@ std::vector<rock::GraphId> g_pendingSelectedNodeIds;
 std::optional<std::vector<rock::GraphId>> g_pendingPreviewSelectionRestore;
 rock::UiThemeManager g_themeManager;
 rock::GraphId g_selectedNodeId = 0;
-rock::GraphId g_lastFinalOutputNodeId = 0;
 rock::GraphId g_pendingPreviewPinId = 0;
 
 struct AsyncEvaluationResult
@@ -148,7 +147,7 @@ struct GraphEditSnapshot
     rock::GraphId selectedNodeId = 0;
     rock::GraphId previewNodeId = 0;
     rock::GraphId previewPinId = 0;
-    rock::PreviewStage previewStage = rock::PreviewStage::Output;
+    rock::PreviewStage previewStage = rock::PreviewStage::Graph;
 };
 
 std::vector<GraphEditSnapshot> g_undoStack;
@@ -672,7 +671,7 @@ std::filesystem::path MseComputeShaderPath()
 
 void EvaluateGraph();
 void ProcessPendingMseGpuRequests();
-void EnsureFinalMesh(rock::GraphId outputNodeId = 0);
+void EnsurePreviewMesh();
 int CurrentPreviewMeshResolution();
 bool IsTerrainNodeKind(rock::NodeKind kind);
 void ResetViewport();
@@ -1353,7 +1352,6 @@ void ApplyGraphEditSnapshot(const GraphEditSnapshot& snapshot)
     g_pendingSelectedNodeIds = snapshot.selectedNodeIds;
     g_selectedNodeId = snapshot.selectedNodeId;
     g_nodePositionsInitialized = false;
-    g_lastFinalOutputNodeId = 0;
     EvaluateGraph();
 }
 
@@ -1414,18 +1412,6 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
         root["settings"] = nlohmann::json::object();
 
         root["nodeSettings"] = nlohmann::json::object();
-        for (const rock::Node& node : g_graph.Nodes())
-        {
-            if (node.kind == rock::NodeKind::OutputMesh)
-            {
-                root["nodeSettings"][std::to_string(node.id)] = {
-                    {"outputMesh", {
-                        {"resolution", node.outputMesh.resolution},
-                        {"lod", node.outputMesh.lod},
-                    }},
-                };
-            }
-        }
 
         root["viewport"] = {
             {"yaw", g_viewport.yaw},
@@ -1445,10 +1431,6 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
                 {"title", node.title},
                 {"inputs", nlohmann::json::array()},
                 {"outputs", nlohmann::json::array()},
-                {"outputMesh", {
-                    {"resolution", node.outputMesh.resolution},
-                    {"lod", node.outputMesh.lod},
-                }},
                 {"heightmap", {
                     {"path", node.heightmap.path},
                     {"scaleMeters", node.heightmap.scaleMeters},
@@ -1634,8 +1616,6 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
             return false;
         }
 
-        const nlohmann::json settingsJson = root.value("settings", nlohmann::json::object());
-        const nlohmann::json outputMeshJson = settingsJson.value("outputMesh", nlohmann::json::object());
         const nlohmann::json nodesJson = root.value("nodes", nlohmann::json::array());
         if (nodesJson.is_array() && !nodesJson.empty())
         {
@@ -1654,7 +1634,6 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 {
                     node.title = std::string(rock::ToString(node.kind));
                 }
-                const nlohmann::json nodeOutputMeshJson = nodeJson.value("outputMesh", nlohmann::json::object());
                 const nlohmann::json nodeHeightmapJson = nodeJson.value("heightmap", nlohmann::json::object());
                 const nlohmann::json nodeShapeJson = nodeJson.value("shape", nlohmann::json::object());
                 const nlohmann::json nodeBlurJson = nodeJson.value("heightmapBlur", nlohmann::json::object());
@@ -1662,8 +1641,6 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 const nlohmann::json nodeMultiScaleErosionJson = nodeJson.value("multiScaleErosion", nlohmann::json::object());
                 const nlohmann::json nodeMaskNoiseJson = nodeJson.value("maskNoise", nlohmann::json::object());
                 const nlohmann::json nodeMaskBlendJson = nodeJson.value("maskBlend", nlohmann::json::object());
-                node.outputMesh.resolution = std::clamp(nodeOutputMeshJson.value("resolution", node.outputMesh.resolution), 16, 512);
-                node.outputMesh.lod = std::clamp(nodeOutputMeshJson.value("lod", node.outputMesh.lod), 0, 4);
                 node.heightmap.path = nodeHeightmapJson.value("path", node.heightmap.path);
                 node.heightmap.scaleMeters = std::clamp(nodeHeightmapJson.value("scaleMeters", node.heightmap.scaleMeters), 1.0f, 1000000.0f);
                 node.heightmap.relativeVerticalScalePercent = std::clamp(nodeHeightmapJson.value("relativeVerticalScalePercent", node.heightmap.relativeVerticalScalePercent), 0.0f, 10000.0f);
@@ -1757,32 +1734,6 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 g_graph.ReplaceNodes(std::move(nodes));
             }
         }
-        rock::OutputMeshSettings legacyOutputMesh = g_graph.OutputMeshSettingsFor();
-        legacyOutputMesh.resolution = std::clamp(outputMeshJson.value("resolution", legacyOutputMesh.resolution), 16, 512);
-        legacyOutputMesh.lod = std::clamp(outputMeshJson.value("lod", legacyOutputMesh.lod), 0, 4);
-        for (const rock::Node& node : g_graph.Nodes())
-        {
-            rock::Node* mutableNode = g_graph.FindMutableNode(node.id);
-            if (mutableNode == nullptr)
-            {
-                continue;
-            }
-            if (rock::OutputMeshSettings* nodeOutputMesh = g_graph.FindOutputMeshSettings(node.id))
-            {
-                *nodeOutputMesh = legacyOutputMesh;
-            }
-        }
-        const nlohmann::json nodeSettingsJson = root.value("nodeSettings", nlohmann::json::object());
-        for (const auto& [nodeIdText, nodeSettingsJsonValue] : nodeSettingsJson.items())
-        {
-            const int nodeId = std::stoi(nodeIdText);
-            if (rock::OutputMeshSettings* nodeOutputMesh = g_graph.FindOutputMeshSettings(nodeId))
-            {
-                const nlohmann::json nodeOutputMeshJson = nodeSettingsJsonValue.value("outputMesh", nlohmann::json::object());
-                nodeOutputMesh->resolution = std::clamp(nodeOutputMeshJson.value("resolution", nodeOutputMesh->resolution), 16, 512);
-                nodeOutputMesh->lod = std::clamp(nodeOutputMeshJson.value("lod", nodeOutputMesh->lod), 0, 4);
-            }
-        }
         const nlohmann::json viewportJson = root.value("viewport", nlohmann::json::object());
         g_viewport.yaw = viewportJson.value("yaw", g_viewport.yaw);
         g_viewport.pitch = viewportJson.value("pitch", g_viewport.pitch);
@@ -1832,9 +1783,9 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
             g_pendingSelectedNodeIds.push_back(g_selectedNodeId);
         }
         const int serializedPreviewStage = std::clamp(root.value("previewStage", static_cast<int>(g_graph.Preview())), 0, kMaxSerializedPreviewStage);
-        const rock::PreviewStage previewStage = serializedPreviewStage >= static_cast<int>(rock::PreviewStage::Output)
+        const rock::PreviewStage previewStage = serializedPreviewStage >= static_cast<int>(rock::PreviewStage::Graph)
             ? static_cast<rock::PreviewStage>(serializedPreviewStage)
-            : rock::PreviewStage::Output;
+            : rock::PreviewStage::Graph;
         g_graph.SetPreviewStage(previewStage);
         const rock::GraphId previewPinId = root.value("previewPinId", 0);
         if (previewPinId != 0 && g_graph.FindPin(previewPinId) != nullptr)
@@ -2475,8 +2426,7 @@ int EffectiveMeshResolution(int resolution, int lod)
 
 bool IsTerrainNodeKind(rock::NodeKind kind)
 {
-    return kind == rock::NodeKind::OutputMesh ||
-        kind == rock::NodeKind::HeightmapLoad ||
+    return kind == rock::NodeKind::HeightmapLoad ||
         kind == rock::NodeKind::Shape ||
         kind == rock::NodeKind::HeightmapBlur ||
         kind == rock::NodeKind::ErosionNoise ||
@@ -2608,15 +2558,11 @@ void WaitForAsyncEvaluationForShutdown()
     g_evaluationPending = false;
 }
 
-void EnsureFinalMesh(rock::GraphId outputNodeId)
+void EnsurePreviewMesh()
 {
     if (g_graph.Evaluation().dirty)
     {
         EvaluateGraphSync();
-    }
-    if (g_graph.Evaluation().finalDirty)
-    {
-        g_graph.EvaluateFinal(outputNodeId);
     }
 }
 
@@ -3677,8 +3623,6 @@ ImVec4 NodeAccentColor(rock::NodeKind kind)
         return ImVec4(0.62f, 0.46f, 0.74f, 1.0f);
     case rock::NodeKind::MaskBlend:
         return ImVec4(0.50f, 0.42f, 0.78f, 1.0f);
-    case rock::NodeKind::OutputMesh:
-        return ImVec4(0.70f, 0.52f, 0.62f, 1.0f);
     default:
         return ImVec4(0.75f, 0.75f, 0.75f, 1.0f);
     }
@@ -3702,8 +3646,6 @@ ImVec2 InitialNodePosition(rock::NodeKind kind)
         return ImVec2(40.0f, 520.0f);
     case rock::NodeKind::MaskBlend:
         return ImVec2(320.0f, 520.0f);
-    case rock::NodeKind::OutputMesh:
-        return ImVec2(880.0f, 64.0f);
     default:
         return ImVec2(40.0f, 64.0f);
     }
@@ -4138,7 +4080,6 @@ void PasteNodesFromClipboard(const ImVec2& pasteCenter)
         const rock::GraphId newNodeId = g_graph.CreateNode(clipboardNode.node.kind);
         if (rock::Node* newMutableNode = g_graph.FindMutableNode(newNodeId))
         {
-            newMutableNode->outputMesh = clipboardNode.node.outputMesh;
             newMutableNode->heightmap = clipboardNode.node.heightmap;
             newMutableNode->shape = clipboardNode.node.shape;
             newMutableNode->heightmapBlur = clipboardNode.node.heightmapBlur;
@@ -4186,7 +4127,6 @@ void PasteNodesFromClipboard(const ImVec2& pasteCenter)
 
     g_pendingSelectedNodeIds = pastedNodeIds;
     g_selectedNodeId = pastedNodeIds.empty() ? 0 : pastedNodeIds.front();
-    g_lastFinalOutputNodeId = 0;
     g_projectStatus = std::format("Pasted {} node{}", pastedNodeIds.size(), pastedNodeIds.size() == 1 ? "" : "s");
     EvaluateGraph();
 }
@@ -4326,10 +4266,6 @@ void DrawNodeGraph()
                     {
                         g_selectedNodeId = 0;
                     }
-                    if (g_lastFinalOutputNodeId == nodeId)
-                    {
-                        g_lastFinalOutputNodeId = 0;
-                    }
                     std::erase_if(g_nodePositionCache, [nodeId](const auto& entry) {
                         return entry.first == nodeId;
                     });
@@ -4374,7 +4310,6 @@ void DrawNodeGraph()
                 g_pendingNodePositions.push_back({nodeId, addNodePosition});
                 g_pendingSelectedNodeIds = {nodeId};
                 g_selectedNodeId = nodeId;
-                g_lastFinalOutputNodeId = 0;
                 g_projectStatus = "Added " + std::string(rock::ToString(kind));
                 EvaluateGraph();
             }
@@ -5214,25 +5149,6 @@ void DrawPropertiesPanel()
         return;
     }
 
-    if (selectedNode->kind == rock::NodeKind::OutputMesh)
-    {
-        rock::OutputMeshSettings* outputMesh = g_graph.FindOutputMeshSettings(selectedNode->id);
-        if (outputMesh != nullptr && ImGui::BeginTable("OutputMeshRows", 2, ImGuiTableFlags_SizingStretchProp))
-        {
-            ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 112.0f);
-            ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-
-            if (DrawPropertyIntRow("Resolution", "OutputMeshResolution", &outputMesh->resolution, 16, 512, rock::OutputMeshSettings{}.resolution, "Output mesh resolution changed", true, "出力メッシュの分割数です。高いほど細かくなりますが処理負荷も増えます。"))
-            {
-                EvaluateGraph();
-            }
-            if (DrawPropertyIntRow("LOD", "OutputMeshLod", &outputMesh->lod, 0, 4, rock::OutputMeshSettings{}.lod, "Output mesh LOD changed", true, "表示や出力時の簡略化レベルです。値を上げるほど軽くなりますがディテールは減ります。"))
-            {
-                EvaluateGraph();
-            }
-            ImGui::EndTable();
-        }
-    }
 }
 
 void DrawDisplaySettingsPanel()
@@ -5386,7 +5302,6 @@ void DrawStatsPanel()
     ImGui::Text("Graph Version: %llu", static_cast<unsigned long long>(evaluation.version));
     ImGui::Text("%s", g_lastEvaluationDuration.c_str());
     ImGui::TextColored(evaluation.dirty ? ImVec4(0.90f, 0.64f, 0.30f, 1.0f) : ImVec4(0.54f, 0.78f, 0.58f, 1.0f), "%s", evaluation.dirty ? "Dirty" : "Evaluated");
-    ImGui::TextColored(evaluation.finalDirty ? ImVec4(0.90f, 0.64f, 0.30f, 1.0f) : ImVec4(0.54f, 0.78f, 0.58f, 1.0f), "%s", evaluation.finalDirty ? "Terrain Mesh: pending" : "Terrain Mesh: ready");
     ImGui::TextWrapped("%s", evaluation.status.c_str());
 
     ImGui::SeparatorText("Preview");
@@ -5399,31 +5314,23 @@ void DrawStatsPanel()
 
 void DrawAssetExportPanel()
 {
-    const rock::OutputMeshSettings& outputMesh = g_graph.OutputMeshSettingsFor(g_selectedNodeId);
-    const int effectiveResolution = std::clamp(outputMesh.resolution / (1 << std::clamp(outputMesh.lod, 0, 4)), 16, 512);
-    ImGui::Columns(4, nullptr, false);
-    ImGui::TextUnformatted("High mesh");
-    ImGui::Text("%s", g_graph.Evaluation().finalDirty ? "needs build" : "ready");
+    ImGui::Columns(3, nullptr, false);
+    ImGui::TextUnformatted("Preview mesh");
+    ImGui::Text("%s", g_graph.Evaluation().dirty ? "needs evaluation" : "ready");
     ImGui::NextColumn();
-    ImGui::TextUnformatted("LOD");
-    ImGui::Text("%d / output %d^3", outputMesh.lod, effectiveResolution);
-    ImGui::NextColumn();
-    ImGui::TextUnformatted("Textures");
-    ImGui::TextUnformatted("normal / AO later");
+    ImGui::TextUnformatted("Topology");
+    ImGui::Text("%zu verts / %zu tris",
+                g_graph.Evaluation().previewMesh.vertices.size(),
+                g_graph.Evaluation().previewMesh.triangles.size());
     ImGui::NextColumn();
     ImGui::TextUnformatted("Export");
-    if (ImGui::Button("Build Mesh"))
-    {
-        EnsureFinalMesh(g_selectedNodeId);
-    }
-    ImGui::SameLine();
     if (ImGui::Button("Export OBJ"))
     {
-        EnsureFinalMesh(g_selectedNodeId);
+        EnsurePreviewMesh();
 
         std::string error;
         const std::filesystem::path exportPath = std::filesystem::path("exports") / "terrain_mesh.obj";
-        if (rock::ExportMeshObj(g_graph.Evaluation().finalMesh, exportPath, &error))
+        if (rock::ExportMeshObj(g_graph.Evaluation().previewMesh, exportPath, &error))
         {
             g_exportStatus = "Exported " + exportPath.string();
         }
@@ -5815,11 +5722,11 @@ void DrawUi()
         {
             if (ImGui::MenuItem("OBJ"))
             {
-                EnsureFinalMesh(g_selectedNodeId);
+                EnsurePreviewMesh();
 
                 std::string error;
                 const std::filesystem::path exportPath = std::filesystem::path("exports") / "terrain_mesh.obj";
-                if (rock::ExportMeshObj(g_graph.Evaluation().finalMesh, exportPath, &error))
+                if (rock::ExportMeshObj(g_graph.Evaluation().previewMesh, exportPath, &error))
                 {
                     g_exportStatus = "Exported " + exportPath.string();
                 }

@@ -1803,33 +1803,6 @@ const EvaluationSummary& NodeGraph::Evaluation() const
     return evaluation_;
 }
 
-OutputMeshSettings* NodeGraph::FindOutputMeshSettings(GraphId nodeId)
-{
-    Node* node = FindMutableNode(nodeId);
-    return node != nullptr && node->kind == NodeKind::OutputMesh ? &node->outputMesh : nullptr;
-}
-
-const OutputMeshSettings* NodeGraph::FindOutputMeshSettings(GraphId nodeId) const
-{
-    const Node* node = FindNode(nodeId);
-    return node != nullptr && node->kind == NodeKind::OutputMesh ? &node->outputMesh : nullptr;
-}
-
-const OutputMeshSettings& NodeGraph::OutputMeshSettingsFor(GraphId nodeId) const
-{
-    if (const OutputMeshSettings* settings = FindOutputMeshSettings(nodeId))
-    {
-        return *settings;
-    }
-    if (const Node* outputNode = FindFirstNode(NodeKind::OutputMesh))
-    {
-        return outputNode->outputMesh;
-    }
-
-    static constexpr OutputMeshSettings fallback{};
-    return fallback;
-}
-
 const Pin* NodeGraph::FindPin(GraphId pinId) const
 {
     for (const Node& node : nodes_)
@@ -1967,9 +1940,6 @@ GraphId NodeGraph::CreateNode(NodeKind kind)
     const GraphId nodeId = AddNode(kind, std::string(ToString(kind)));
     switch (kind)
     {
-    case NodeKind::OutputMesh:
-        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "HeightField");
-        break;
     case NodeKind::HeightmapLoad:
     case NodeKind::Shape:
         AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
@@ -2146,9 +2116,13 @@ HeightfieldPipeline NodeGraph::PipelineFor(PreviewStage stage) const
         return PipelineTo(NodeKind::ErosionNoise);
     case PreviewStage::MultiScaleErosion:
         return PipelineTo(NodeKind::MultiScaleErosion);
-    case PreviewStage::Output:
+    case PreviewStage::Graph:
     default:
-        return PipelineTo(NodeKind::OutputMesh);
+        if (const Node* node = FindFirstNode(NodeKind::MultiScaleErosion)) { return PipelineToNode(*node); }
+        if (const Node* node = FindFirstNode(NodeKind::ErosionNoise)) { return PipelineToNode(*node); }
+        if (const Node* node = FindFirstNode(NodeKind::HeightmapBlur)) { return PipelineToNode(*node); }
+        if (const Node* node = FindFirstNode(NodeKind::Shape)) { return PipelineToNode(*node); }
+        return PipelineTo(NodeKind::HeightmapLoad);
     }
 }
 
@@ -2161,15 +2135,9 @@ HeightfieldPipeline NodeGraph::PreviewPipeline() const
     return PipelineFor(evaluation_.previewStage);
 }
 
-HeightfieldPipeline NodeGraph::FinalPipeline() const
-{
-    return PipelineFor(PreviewStage::Output);
-}
-
 void NodeGraph::MarkDirty(std::string_view reason)
 {
     evaluation_.dirty = true;
-    evaluation_.finalDirty = true;
     evaluation_.status = std::string(reason);
 }
 
@@ -2332,10 +2300,7 @@ HeightfieldPipeline NodeGraph::PipelineToNode(const Node& targetNode) const
     int guard = 0;
     while (node != nullptr && guard++ < 16)
     {
-        if (node->kind == NodeKind::OutputMesh)
-        {
-        }
-        else if (node->kind == NodeKind::HeightmapBlur)
+        if (node->kind == NodeKind::HeightmapBlur)
         {
             pipeline.heightfieldOperations.push_back({
                 HeightfieldPipeline::HeightfieldOperation::Kind::HeightmapBlur,
@@ -2410,11 +2375,10 @@ void NodeGraph::Evaluate(int previewMeshResolution)
         ++evaluation_.version;
         evaluation_.dirty = false;
         evaluation_.status = std::format(
-            "Mask preview [{}] -> {} verts / {} tris{}",
+            "Mask preview [{}] -> {} verts / {} tris",
             evaluation_.previewMessage,
             evaluation_.previewMesh.vertices.size(),
-            evaluation_.previewMesh.triangles.size(),
-            evaluation_.finalDirty ? " / output mesh pending" : "");
+            evaluation_.previewMesh.triangles.size());
         return;
     }
 
@@ -2444,39 +2408,12 @@ void NodeGraph::Evaluate(int previewMeshResolution)
     else
     {
         evaluation_.status = std::format(
-            "Heightmap preview [{}] -> {} verts / {} tris{}{}",
+            "Heightmap preview [{}] -> {} verts / {} tris{}",
             evaluation_.previewMessage,
             evaluation_.previewMesh.vertices.size(),
             evaluation_.previewMesh.triangles.size(),
-            evaluation_.finalDirty ? " / output mesh pending" : "",
             evaluation_.previewMesh.vertices.empty() ? " / no mesh" : "");
     }
-}
-
-void NodeGraph::EvaluateFinal(GraphId outputNodeId)
-{
-    const OutputMeshSettings& outputMesh = OutputMeshSettingsFor(outputNodeId);
-    const int outputMeshResolution = EffectiveMeshResolution(outputMesh);
-    const Node* outputNode = FindNode(outputNodeId);
-    HeightfieldPipeline finalPipeline = outputNode != nullptr && outputNode->kind == NodeKind::OutputMesh
-        ? PipelineToNode(*outputNode)
-        : FinalPipeline();
-    if (!finalPipeline.hasSource)
-    {
-        evaluation_.finalMesh = {};
-    }
-    else
-    {
-        evaluation_.finalMesh = BuildMeshFromHeightPipelineCached(finalPipeline, outputMeshResolution, nullptr);
-    }
-    ++evaluation_.finalVersion;
-    evaluation_.finalDirty = false;
-    evaluation_.status = std::format(
-        "{} preview / output mesh LOD {} -> {} verts / {} tris",
-        ToString(evaluation_.previewStage),
-        outputMesh.lod,
-        evaluation_.finalMesh.vertices.size(),
-        evaluation_.finalMesh.triangles.size());
 }
 
 GraphId NodeGraph::AddNode(NodeKind kind, std::string title)
@@ -2555,8 +2492,6 @@ std::string_view ToString(NodeKind kind)
 {
     switch (kind)
     {
-    case NodeKind::OutputMesh:
-        return "Output Mesh";
     case NodeKind::HeightmapLoad:
         return "Import Heightmap";
     case NodeKind::HeightmapBlur:
@@ -2580,8 +2515,8 @@ std::string_view ToString(PreviewStage stage)
 {
     switch (stage)
     {
-    case PreviewStage::Output:
-        return "Output Mesh";
+    case PreviewStage::Graph:
+        return "Graph";
     case PreviewStage::HeightmapBlur:
         return "Heightmap Blur";
     case PreviewStage::Shape:
@@ -2625,16 +2560,15 @@ PreviewStage PreviewStageFor(NodeKind kind)
     case NodeKind::MultiScaleErosion:
         return PreviewStage::MultiScaleErosion;
     case NodeKind::HeightmapLoad:
-        return PreviewStage::Output;
+        return PreviewStage::Graph;
     case NodeKind::Shape:
         return PreviewStage::Shape;
     case NodeKind::MaskNoise:
         return PreviewStage::MaskNoise;
     case NodeKind::MaskBlend:
         return PreviewStage::MaskBlend;
-    case NodeKind::OutputMesh:
     default:
-        return PreviewStage::Output;
+        return PreviewStage::Graph;
     }
 }
 

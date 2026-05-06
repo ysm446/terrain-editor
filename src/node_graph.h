@@ -14,7 +14,6 @@ using GraphId = int;
 
 enum class NodeKind
 {
-    OutputMesh = 3,
     HeightmapLoad = 4,
     HeightmapBlur = 5,
     Shape = 6,
@@ -59,7 +58,7 @@ enum class MaskBlendMode
 
 enum class PreviewStage
 {
-    Output = 3,
+    Graph = 3,
     HeightmapBlur = 4,
     Shape = 5,
     ErosionNoise = 6,
@@ -84,12 +83,6 @@ struct Pin
     PinKind kind = PinKind::Input;
     ValueType valueType = ValueType::HeightField;
     std::string label;
-};
-
-struct OutputMeshSettings
-{
-    int resolution = 512;
-    int lod = 0;
 };
 
 struct HeightmapLoadSettings
@@ -182,11 +175,10 @@ struct MultiScaleErosionSettings
 struct Node
 {
     GraphId id = 0;
-    NodeKind kind = NodeKind::OutputMesh;
+    NodeKind kind = NodeKind::HeightmapLoad;
     std::string title;
     std::vector<Pin> inputs;
     std::vector<Pin> outputs;
-    OutputMeshSettings outputMesh;
     HeightmapLoadSettings heightmap;
     ShapeSettings shape;
     HeightmapBlurSettings heightmapBlur;
@@ -304,11 +296,9 @@ struct HeightfieldPipeline
 struct EvaluationSummary
 {
     uint64_t version = 0;
-    uint64_t finalVersion = 0;
     bool dirty = true;
-    bool finalDirty = true;
     std::string status = "Graph has not been evaluated";
-    PreviewStage previewStage = PreviewStage::Output;
+    PreviewStage previewStage = PreviewStage::Graph;
     GraphId previewNodeId = 0;
     GraphId previewPinId = 0;
     bool previewShowsMask = false;
@@ -316,7 +306,6 @@ struct EvaluationSummary
     std::string previewMessage;
     HeightfieldGrid previewHeightfield;
     MeshData previewMesh;
-    MeshData finalMesh;
 };
 
 class NodeGraph
@@ -329,9 +318,6 @@ public:
     GraphSettings& Settings();
     const GraphSettings& Settings() const;
     const EvaluationSummary& Evaluation() const;
-    OutputMeshSettings* FindOutputMeshSettings(GraphId nodeId);
-    const OutputMeshSettings* FindOutputMeshSettings(GraphId nodeId) const;
-    const OutputMeshSettings& OutputMeshSettingsFor(GraphId nodeId = 0) const;
 
     const Pin* FindPin(GraphId pinId) const;
     const Node* FindNode(GraphId nodeId) const;
@@ -354,12 +340,10 @@ public:
     PreviewStage Preview() const;
     HeightfieldPipeline PipelineFor(PreviewStage stage) const;
     HeightfieldPipeline PreviewPipeline() const;
-    HeightfieldPipeline FinalPipeline() const;
     void MarkDirty(std::string_view reason);
     void SetEvaluationPending(std::string_view status);
     void ApplyEvaluationResultFrom(const NodeGraph& evaluatedGraph);
     void Evaluate(int previewMeshResolution = 0);
-    void EvaluateFinal(GraphId outputNodeId = 0);
 
 private:
     GraphId AddNode(NodeKind kind, std::string title);

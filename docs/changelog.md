@@ -2,6 +2,9 @@
 
 ## 未リリース
 
+## 2.0.0 - 2026-05-07 03:38
+
+- `Output Mesh` ノードと専用の最終メッシュ評価経路を削除し、プレビューで評価済みのメッシュをそのまま OBJ エクスポートに使う構成へ整理しました。`finalMesh` / `finalDirty` / `EvaluateFinal` / `OutputMeshSettings` を廃止し、グラフの既定プレビューは `Graph` として扱います。
 - 新しいマスクノード `Mask Noise` と `Mask Blend` を追加しました。`Mask Noise` は入力なしの Perlin / fBM 生成ノードで、`Seed` / `Octaves` / `Frequency` / `Lacunarity` / `Persistence` / `Simulation Resolution` を調整して 0–1 の Mask Texture を出力します。`Mask Blend` は 2 本の Mask 入力を `Add` / `Multiply` / `Min` / `Max` のいずれかで合成し、`Blend Intensity` で `A` と合成結果の補間量を指定します。どちらか片方の入力が未接続の場合はもう一方をそのまま通します。
 - マスクノード (`Mask Noise` / `Mask Blend`) の出力ピンを選択した際のプレビューを、平面メッシュ + Mask テクスチャの形で表示するようにしました。これらのノードはハイトフィールドを持たないため、3D ビューはフラットな板の上に Mask の濃淡を描画し、2D ビューは Mask 値を直接マップ表示します。`HeightfieldPreviewField` に `Mask` を追加し、タイトルにも `Mask Preview` と表示します。
 - `NodeGraph::Evaluate` にマスク専用ノードのプレビュー分岐を追加しました。プレビュー対象ノードが `Mask Noise` / `Mask Blend` の場合は通常のハイトフィールドパイプラインを経由せず、`EvaluateMaskAsHeightfield` で Mask グラフを再帰的にたどり (Mask Blend の 2 入力分岐に対応)、フラット平面の `HeightfieldGrid` に Mask 値を載せて描画します。
