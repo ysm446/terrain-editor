@@ -39,7 +39,6 @@
 #include "obj_exporter.h"
 #include "resource.h"
 #include "screenshot_capture.h"
-#include "sdf_preview.h"
 #include "ui/UiTheme.h"
 #include "Version.h"
 
@@ -150,13 +149,6 @@ std::optional<GraphEditSnapshot> g_pendingNodeMoveUndo;
 
 struct UiState
 {
-    int primitive = 0;
-    float noiseAmplitude = 0.35f;
-    float noiseFrequency = 2.0f;
-    int noiseOctaves = 4;
-    float crackWidth = 0.035f;
-    float crackDepth = 0.42f;
-    float crackRoughness = 0.65f;
     bool meshPreview = true;
     float rightPaneWidth = 0.0f;
     float nodePaneHeight = 0.0f;
@@ -902,7 +894,6 @@ bool SaveAppSettings(std::string* error = nullptr)
             {"mesh", g_ui.meshPreview},
             {"meshSurface", settings.preview.showSurface},
             {"meshWireframe", settings.preview.showWireframe},
-            {"surfacePoints", settings.preview.showPoints},
             {"grid", settings.preview.showGrid},
             {"gridCellCount", settings.preview.gridCellCount},
             {"gridCellSizeMeters", settings.preview.gridCellSizeMeters},
@@ -1047,11 +1038,10 @@ bool LoadAppSettings(std::string* error = nullptr)
         g_ui.meshPreview = visibilityJson.value("mesh", g_ui.meshPreview);
         settings.preview.showSurface = visibilityJson.value("meshSurface", settings.preview.showSurface);
         settings.preview.showWireframe = visibilityJson.value("meshWireframe", settings.preview.showWireframe);
-        settings.preview.showPoints = visibilityJson.value("surfacePoints", settings.preview.showPoints);
         settings.preview.showGrid = visibilityJson.value("grid", settings.preview.showGrid);
         settings.preview.gridCellCount = std::clamp(visibilityJson.value("gridCellCount", settings.preview.gridCellCount), 1, 200);
         settings.preview.gridCellSizeMeters = std::clamp(visibilityJson.value("gridCellSizeMeters", settings.preview.gridCellSizeMeters), 1.0f, 10000.0f);
-        settings.preview.resolution = std::clamp(visibilityJson.value("previewResolution", settings.preview.resolution), 16, 512);
+        settings.preview.resolution = std::clamp(visibilityJson.value("previewResolution", settings.preview.resolution), 16, 2048);
         settings.preview.lod = std::clamp(visibilityJson.value("previewLod", settings.preview.lod), 0, 4);
         settings.preview.lightingMode = std::clamp(visibilityJson.value("lightingMode", settings.preview.lightingMode), 0, 2);
         settings.preview.sunAzimuthDegrees = std::clamp(visibilityJson.value("sunAzimuthDegrees", settings.preview.sunAzimuthDegrees), 0.0f, 360.0f);
@@ -1423,7 +1413,6 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
                     {"outputMesh", {
                         {"resolution", node.outputMesh.resolution},
                         {"lod", node.outputMesh.lod},
-                        {"isoValue", node.outputMesh.isoValue},
                     }},
                 };
             }
@@ -1447,22 +1436,9 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
                 {"title", node.title},
                 {"inputs", nlohmann::json::array()},
                 {"outputs", nlohmann::json::array()},
-                {"primitive", {{"kind", static_cast<int>(node.primitive.kind)}}},
-                {"noise", {
-                    {"amplitude", node.noise.amplitude},
-                    {"frequency", node.noise.frequency},
-                    {"octaves", node.noise.octaves},
-                    {"seed", node.noise.seed},
-                }},
-                {"crack", {
-                    {"width", node.crack.width},
-                    {"depth", node.crack.depth},
-                    {"roughness", node.crack.roughness},
-                }},
                 {"outputMesh", {
                     {"resolution", node.outputMesh.resolution},
                     {"lod", node.outputMesh.lod},
-                    {"isoValue", node.outputMesh.isoValue},
                 }},
                 {"heightmap", {
                     {"path", node.heightmap.path},
@@ -1638,9 +1614,6 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
         }
 
         const nlohmann::json settingsJson = root.value("settings", nlohmann::json::object());
-        const nlohmann::json primitiveJson = settingsJson.value("primitive", nlohmann::json::object());
-        const nlohmann::json noiseJson = settingsJson.value("noise", nlohmann::json::object());
-        const nlohmann::json crackJson = settingsJson.value("crack", nlohmann::json::object());
         const nlohmann::json outputMeshJson = settingsJson.value("outputMesh", nlohmann::json::object());
         const nlohmann::json nodesJson = root.value("nodes", nlohmann::json::array());
         if (nodesJson.is_array() && !nodesJson.empty())
@@ -1660,26 +1633,14 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 {
                     node.title = std::string(rock::ToString(node.kind));
                 }
-                const nlohmann::json nodePrimitiveJson = nodeJson.value("primitive", primitiveJson);
-                const nlohmann::json nodeNoiseJson = nodeJson.value("noise", noiseJson);
-                const nlohmann::json nodeCrackJson = nodeJson.value("crack", crackJson);
                 const nlohmann::json nodeOutputMeshJson = nodeJson.value("outputMesh", nlohmann::json::object());
                 const nlohmann::json nodeHeightmapJson = nodeJson.value("heightmap", nlohmann::json::object());
                 const nlohmann::json nodeShapeJson = nodeJson.value("shape", nlohmann::json::object());
                 const nlohmann::json nodeBlurJson = nodeJson.value("heightmapBlur", nlohmann::json::object());
                 const nlohmann::json nodeErosionNoiseJson = nodeJson.value("erosionNoise", nlohmann::json::object());
                 const nlohmann::json nodeMultiScaleErosionJson = nodeJson.value("multiScaleErosion", nlohmann::json::object());
-                node.primitive.kind = static_cast<rock::PrimitiveKind>(std::clamp(nodePrimitiveJson.value("kind", static_cast<int>(node.primitive.kind)), 0, 4));
-                node.noise.amplitude = nodeNoiseJson.value("amplitude", node.noise.amplitude);
-                node.noise.frequency = nodeNoiseJson.value("frequency", node.noise.frequency);
-                node.noise.octaves = std::clamp(nodeNoiseJson.value("octaves", node.noise.octaves), 1, 8);
-                node.noise.seed = std::clamp(nodeNoiseJson.value("seed", node.noise.seed), 0, 999999);
-                node.crack.width = nodeCrackJson.value("width", node.crack.width);
-                node.crack.depth = nodeCrackJson.value("depth", node.crack.depth);
-                node.crack.roughness = nodeCrackJson.value("roughness", node.crack.roughness);
                 node.outputMesh.resolution = std::clamp(nodeOutputMeshJson.value("resolution", node.outputMesh.resolution), 16, 512);
                 node.outputMesh.lod = std::clamp(nodeOutputMeshJson.value("lod", node.outputMesh.lod), 0, 4);
-                node.outputMesh.isoValue = std::clamp(nodeOutputMeshJson.value("isoValue", node.outputMesh.isoValue), -0.2f, 0.2f);
                 node.heightmap.path = nodeHeightmapJson.value("path", node.heightmap.path);
                 node.heightmap.scaleMeters = std::clamp(nodeHeightmapJson.value("scaleMeters", node.heightmap.scaleMeters), 1.0f, 1000000.0f);
                 node.heightmap.relativeVerticalScalePercent = std::clamp(nodeHeightmapJson.value("relativeVerticalScalePercent", node.heightmap.relativeVerticalScalePercent), 0.0f, 10000.0f);
@@ -1736,7 +1697,10 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                         pin.id = pinJson.value("id", 0);
                         pin.nodeId = node.id;
                         pin.kind = pinKind;
-                        pin.valueType = static_cast<rock::ValueType>(std::clamp(pinJson.value("valueType", 0), 0, 3));
+                        const int serializedValueType = std::clamp(pinJson.value("valueType", static_cast<int>(rock::ValueType::HeightField)), 0, 3);
+                        pin.valueType = serializedValueType == static_cast<int>(rock::ValueType::Mask)
+                            ? rock::ValueType::Mask
+                            : rock::ValueType::HeightField;
                         pin.label = pinJson.value("label", std::string(rock::ToString(pin.valueType)));
                         if (pin.valueType == rock::ValueType::HeightField && pin.kind == rock::PinKind::Output)
                         {
@@ -1758,31 +1722,14 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
             }
         }
         rock::OutputMeshSettings legacyOutputMesh = g_graph.OutputMeshSettingsFor();
-        rock::PrimitiveSettings legacyPrimitive;
-        rock::NoiseSettings legacyNoise;
-        rock::CrackSettings legacyCrack;
-        legacyPrimitive.kind = static_cast<rock::PrimitiveKind>(std::clamp(primitiveJson.value("kind", static_cast<int>(legacyPrimitive.kind)), 0, 4));
-        legacyNoise.amplitude = noiseJson.value("amplitude", legacyNoise.amplitude);
-        legacyNoise.frequency = noiseJson.value("frequency", legacyNoise.frequency);
-        legacyNoise.octaves = std::clamp(noiseJson.value("octaves", legacyNoise.octaves), 1, 8);
-        legacyCrack.width = crackJson.value("width", legacyCrack.width);
-        legacyCrack.depth = crackJson.value("depth", legacyCrack.depth);
-        legacyCrack.roughness = crackJson.value("roughness", legacyCrack.roughness);
         legacyOutputMesh.resolution = std::clamp(outputMeshJson.value("resolution", legacyOutputMesh.resolution), 16, 512);
         legacyOutputMesh.lod = std::clamp(outputMeshJson.value("lod", legacyOutputMesh.lod), 0, 4);
-        legacyOutputMesh.isoValue = std::clamp(outputMeshJson.value("isoValue", legacyOutputMesh.isoValue), -0.2f, 0.2f);
         for (const rock::Node& node : g_graph.Nodes())
         {
             rock::Node* mutableNode = g_graph.FindMutableNode(node.id);
             if (mutableNode == nullptr)
             {
                 continue;
-            }
-            if (!nodesJson.is_array() || nodesJson.empty())
-            {
-                mutableNode->primitive = legacyPrimitive;
-                mutableNode->noise = legacyNoise;
-                mutableNode->crack = legacyCrack;
             }
             if (rock::OutputMeshSettings* nodeOutputMesh = g_graph.FindOutputMeshSettings(node.id))
             {
@@ -1798,7 +1745,6 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 const nlohmann::json nodeOutputMeshJson = nodeSettingsJsonValue.value("outputMesh", nlohmann::json::object());
                 nodeOutputMesh->resolution = std::clamp(nodeOutputMeshJson.value("resolution", nodeOutputMesh->resolution), 16, 512);
                 nodeOutputMesh->lod = std::clamp(nodeOutputMeshJson.value("lod", nodeOutputMesh->lod), 0, 4);
-                nodeOutputMesh->isoValue = std::clamp(nodeOutputMeshJson.value("isoValue", nodeOutputMesh->isoValue), -0.2f, 0.2f);
             }
         }
         const nlohmann::json viewportJson = root.value("viewport", nlohmann::json::object());
@@ -1849,7 +1795,11 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
         {
             g_pendingSelectedNodeIds.push_back(g_selectedNodeId);
         }
-        g_graph.SetPreviewStage(static_cast<rock::PreviewStage>(std::clamp(root.value("previewStage", static_cast<int>(g_graph.Preview())), 0, kMaxSerializedPreviewStage)));
+        const int serializedPreviewStage = std::clamp(root.value("previewStage", static_cast<int>(g_graph.Preview())), 0, kMaxSerializedPreviewStage);
+        const rock::PreviewStage previewStage = serializedPreviewStage >= static_cast<int>(rock::PreviewStage::Output)
+            ? static_cast<rock::PreviewStage>(serializedPreviewStage)
+            : rock::PreviewStage::Output;
+        g_graph.SetPreviewStage(previewStage);
         const rock::GraphId previewPinId = root.value("previewPinId", 0);
         if (previewPinId != 0 && g_graph.FindPin(previewPinId) != nullptr)
         {
@@ -2484,12 +2434,13 @@ void ProcessPendingMseGpuRequests()
 
 int EffectiveMeshResolution(int resolution, int lod)
 {
-    return std::clamp(resolution / (1 << std::clamp(lod, 0, 4)), 16, 512);
+    return std::clamp(resolution / (1 << std::clamp(lod, 0, 4)), 16, 2048);
 }
 
 bool IsTerrainNodeKind(rock::NodeKind kind)
 {
-    return kind == rock::NodeKind::HeightmapLoad ||
+    return kind == rock::NodeKind::OutputMesh ||
+        kind == rock::NodeKind::HeightmapLoad ||
         kind == rock::NodeKind::Shape ||
         kind == rock::NodeKind::HeightmapBlur ||
         kind == rock::NodeKind::ErosionNoise ||
@@ -3025,59 +2976,6 @@ void EnsureGridPreviewBuffer()
     g_gpuMeshPreview.gridCellSizeMeters = cellSizeMeters;
 }
 
-void DrawSurfacePointPreview(ImDrawList* drawList, const ImVec2& min, const ImVec2& max, const rock::SdfPreviewStats& sdf)
-{
-    if (sdf.surfacePoints.empty())
-    {
-        return;
-    }
-
-    const ImVec2 center((min.x + max.x) * 0.5f + g_viewport.pan.x, (min.y + max.y) * 0.5f + g_viewport.pan.y);
-    const float viewportSize = std::min(max.x - min.x, max.y - min.y);
-    const float scale = viewportSize * 1.20f * g_viewport.zoom;
-
-    for (const rock::SurfacePoint& point : sdf.surfacePoints)
-    {
-        ImVec2 p = RotatePoint(point.x, point.y, point.z, g_viewport.yaw, g_viewport.pitch);
-        const ImVec2 screen(center.x + p.x * scale, center.y + p.y * scale);
-        if (screen.x < min.x + 8.0f || screen.x > max.x - 8.0f || screen.y < min.y + 8.0f || screen.y > max.y - 8.0f)
-        {
-            continue;
-        }
-
-        const float nearSurface = std::clamp(1.0f - std::fabs(point.sdf) / std::max(sdf.voxelSize, 0.0001f), 0.0f, 1.0f);
-        const ImVec4 base = g_themeManager.AppColor("surfacePoint", ImVec4(0.78f, 0.84f, 0.72f, 0.82f));
-        drawList->AddCircleFilled(screen, 1.35f, ColorToU32(ImVec4(base.x, base.y, base.z, std::clamp(base.w + nearSurface * 0.12f, 0.0f, 1.0f))));
-    }
-}
-
-void DrawSurfaceWirePreview(ImDrawList* drawList, const ImVec2& min, const ImVec2& max, const rock::SdfPreviewStats& sdf)
-{
-    if (sdf.surfaceSegments.empty())
-    {
-        return;
-    }
-
-    const ImVec2 center((min.x + max.x) * 0.5f + g_viewport.pan.x, (min.y + max.y) * 0.5f + g_viewport.pan.y);
-    const float viewportSize = std::min(max.x - min.x, max.y - min.y);
-    const float scale = viewportSize * 1.20f * g_viewport.zoom;
-
-    for (const rock::SurfaceSegment& segment : sdf.surfaceSegments)
-    {
-        ImVec2 a = RotatePoint(segment.ax, segment.ay, segment.az, g_viewport.yaw, g_viewport.pitch);
-        ImVec2 b = RotatePoint(segment.bx, segment.by, segment.bz, g_viewport.yaw, g_viewport.pitch);
-        a = ImVec2(center.x + a.x * scale, center.y + a.y * scale);
-        b = ImVec2(center.x + b.x * scale, center.y + b.y * scale);
-
-        if ((a.x < min.x && b.x < min.x) || (a.x > max.x && b.x > max.x) || (a.y < min.y && b.y < min.y) || (a.y > max.y && b.y > max.y))
-        {
-            continue;
-        }
-
-        drawList->AddLine(a, b, ThemeColor("surfaceWire", ImVec4(0.34f, 0.34f, 0.34f, 0.70f)), 1.0f);
-    }
-}
-
 ImVec2 ProjectPreviewPoint(float x, float y, float z, const ImVec2& center, float scale)
 {
     ImVec2 p = RotatePoint(x, y, z, g_viewport.yaw, g_viewport.pitch);
@@ -3551,7 +3449,7 @@ void DrawViewportCube(const ImVec2& min, const ImVec2& max, float timeSeconds)
     const std::array<float, 3>& viewportBackground = g_graph.Settings().preview.viewportBackground;
     drawList->AddRectFilled(min, max, ColorToU32(ImVec4(viewportBackground[0], viewportBackground[1], viewportBackground[2], 1.0f)));
     const rock::PreviewSettings& preview = g_graph.Settings().preview;
-    const bool drawMeshSurface = g_ui.meshPreview || g_graph.Evaluation().previewIsHeightmap;
+    const bool drawMeshSurface = g_ui.meshPreview;
     const bool drawGpuViewport = drawMeshSurface || preview.showGrid;
     if (drawGpuViewport)
     {
@@ -3559,14 +3457,6 @@ void DrawViewportCube(const ImVec2& min, const ImVec2& max, float timeSeconds)
                            drawMeshSurface && preview.showSurface,
                            drawMeshSurface && preview.showWireframe);
     }
-    if (g_ui.meshPreview || !g_graph.Evaluation().previewIsHeightmap)
-    {
-        if (preview.showPoints && !g_graph.Evaluation().previewIsHeightmap)
-        {
-            DrawSurfacePointPreview(drawList, min, max, g_graph.Evaluation().previewSdf);
-        }
-    }
-
     const auto heightfieldFieldName = [](rock::HeightfieldPreviewField field) {
         switch (field)
         {
@@ -3584,9 +3474,7 @@ void DrawViewportCube(const ImVec2& min, const ImVec2& max, float timeSeconds)
 
     const std::string title = g_graph.Evaluation().previewShowsMask
         ? std::string(heightfieldFieldName(g_graph.Evaluation().previewField)) + " Preview"
-        : (g_graph.Evaluation().previewIsHeightmap
-            ? "Heightmap Preview"
-            : "SDF Preview: " + std::string(rock::ToString(g_graph.Preview())));
+        : "Heightmap Preview";
     drawList->AddText(ImVec2(min.x + 16.0f, min.y + 14.0f), ThemeColor("accentText", ImVec4(0.86f, 0.88f, 0.85f, 1.0f)), title.c_str());
     const std::string gridInfo = std::format(
         "Right-handed, Y-up, {} x {}, {:.0f} m cells",
@@ -3633,8 +3521,7 @@ void DrawHeightfieldMapPreview(const ImVec2& min, const ImVec2& max)
     const rock::HeightfieldGrid& grid = evaluation.previewHeightfield;
     const int gridResolution = grid.resolution;
     const size_t cellCount = static_cast<size_t>(gridResolution) * static_cast<size_t>(gridResolution);
-    const bool canDrawMap = evaluation.previewIsHeightmap &&
-        gridResolution >= 2 &&
+    const bool canDrawMap = gridResolution >= 2 &&
         grid.heights.size() >= cellCount;
     const bool maskPreview = evaluation.previewShowsMask;
     const auto heightfieldFieldName = [](rock::HeightfieldPreviewField field) {
@@ -3734,8 +3621,6 @@ ImVec4 NodeAccentColor(rock::NodeKind kind)
 {
     switch (kind)
     {
-    case rock::NodeKind::PrimitiveSdf:
-        return ImVec4(0.53f, 0.71f, 0.61f, 1.0f);
     case rock::NodeKind::HeightmapLoad:
         return ImVec4(0.38f, 0.62f, 0.53f, 1.0f);
     case rock::NodeKind::Shape:
@@ -3746,10 +3631,6 @@ ImVec4 NodeAccentColor(rock::NodeKind kind)
         return ImVec4(0.66f, 0.55f, 0.42f, 1.0f);
     case rock::NodeKind::MultiScaleErosion:
         return ImVec4(0.42f, 0.66f, 0.74f, 1.0f);
-    case rock::NodeKind::NoiseWarp:
-        return ImVec4(0.46f, 0.65f, 0.76f, 1.0f);
-    case rock::NodeKind::CrackField:
-        return ImVec4(0.77f, 0.61f, 0.43f, 1.0f);
     case rock::NodeKind::OutputMesh:
         return ImVec4(0.70f, 0.52f, 0.62f, 1.0f);
     default:
@@ -3761,8 +3642,6 @@ ImVec2 InitialNodePosition(rock::NodeKind kind)
 {
     switch (kind)
     {
-    case rock::NodeKind::PrimitiveSdf:
-        return ImVec2(40.0f, 64.0f);
     case rock::NodeKind::HeightmapLoad:
         return ImVec2(40.0f, 240.0f);
     case rock::NodeKind::Shape:
@@ -3773,10 +3652,6 @@ ImVec2 InitialNodePosition(rock::NodeKind kind)
         return ImVec2(600.0f, 380.0f);
     case rock::NodeKind::MultiScaleErosion:
         return ImVec2(320.0f, 380.0f);
-    case rock::NodeKind::NoiseWarp:
-        return ImVec2(320.0f, 64.0f);
-    case rock::NodeKind::CrackField:
-        return ImVec2(600.0f, 64.0f);
     case rock::NodeKind::OutputMesh:
         return ImVec2(880.0f, 64.0f);
     default:
@@ -3853,8 +3728,6 @@ ImVec4 PinTypeColor(rock::ValueType valueType)
         return ImVec4(0.70f, 0.93f, 0.78f, 1.0f);
     case rock::ValueType::Mask:
         return ImVec4(0.82f, 0.64f, 0.36f, 1.0f);
-    case rock::ValueType::SdfGrid:
-        return ImVec4(0.58f, 0.72f, 0.86f, 1.0f);
     case rock::ValueType::Mesh:
     default:
         return ImVec4(0.52f, 0.58f, 0.56f, 1.0f);
@@ -4215,9 +4088,6 @@ void PasteNodesFromClipboard(const ImVec2& pasteCenter)
         const rock::GraphId newNodeId = g_graph.CreateNode(clipboardNode.node.kind);
         if (rock::Node* newMutableNode = g_graph.FindMutableNode(newNodeId))
         {
-            newMutableNode->primitive = clipboardNode.node.primitive;
-            newMutableNode->noise = clipboardNode.node.noise;
-            newMutableNode->crack = clipboardNode.node.crack;
             newMutableNode->outputMesh = clipboardNode.node.outputMesh;
             newMutableNode->heightmap = clipboardNode.node.heightmap;
             newMutableNode->shape = clipboardNode.node.shape;
@@ -5164,72 +5034,6 @@ void DrawPropertiesPanel()
         return;
     }
 
-    if (selectedNode->kind == rock::NodeKind::PrimitiveSdf && ImGui::BeginTable("PrimitivePropertyRows", 2, ImGuiTableFlags_SizingStretchProp))
-    {
-        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 112.0f);
-        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-
-        int primitive = static_cast<int>(editableNode->primitive.kind);
-        if (DrawPropertyComboRow("Primitive", "Primitive", &primitive, "Sphere\0Box\0Capsule\0Ellipsoid\0Rock Blob\0", "生成する基本形状です。現在は古い SDF 系ノードとの互換用です。", static_cast<int>(rock::PrimitiveSettings{}.kind)))
-        {
-            PushUndoSnapshot();
-            editableNode->primitive.kind = static_cast<rock::PrimitiveKind>(primitive);
-            g_graph.MarkDirty("Primitive changed");
-            EvaluateGraph();
-        }
-
-        ImGui::EndTable();
-        return;
-    }
-
-    if (selectedNode->kind == rock::NodeKind::NoiseWarp && ImGui::BeginTable("NoisePropertyRows", 2, ImGuiTableFlags_SizingStretchProp))
-    {
-        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 112.0f);
-        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-
-        if (DrawPropertyFloatRow("Amplitude", "NoiseAmplitude", &editableNode->noise.amplitude, 0.0f, 2.0f, rock::NoiseSettings{}.amplitude, "Noise amplitude changed", true, "ノイズ変形の強さです。値を上げるほど形状が大きく歪みます。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Frequency", "NoiseFrequency", &editableNode->noise.frequency, 0.1f, 12.0f, rock::NoiseSettings{}.frequency, "Noise frequency changed", true, "ノイズの細かさです。値を上げるほど細かい変化になります。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyIntRow("Octaves", "NoiseOctaves", &editableNode->noise.octaves, 1, 8, rock::NoiseSettings{}.octaves, "Noise octaves changed", true, "重ねるノイズ階層の数です。増やすとディテールが増えます。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyIntRow("Seed", "NoiseSeed", &editableNode->noise.seed, 0, 999999, rock::NoiseSettings{}.seed, "Noise seed changed", true, "ノイズパターンの乱数シードです。同じ値なら同じ結果を再現できます。"))
-        {
-            EvaluateGraph();
-        }
-
-        ImGui::EndTable();
-        return;
-    }
-
-    if (selectedNode->kind == rock::NodeKind::CrackField && ImGui::BeginTable("CrackPropertyRows", 2, ImGuiTableFlags_SizingStretchProp))
-    {
-        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 112.0f);
-        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-
-        if (DrawPropertyFloatRow("Width", "CrackWidth", &editableNode->crack.width, 0.0f, 0.2f, rock::CrackSettings{}.width, "Crack width changed", true, "亀裂の太さです。値を上げるほど広い割れ目になります。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Depth", "CrackDepth", &editableNode->crack.depth, 0.0f, 1.0f, rock::CrackSettings{}.depth, "Crack depth changed", true, "亀裂の深さです。値を上げるほど強く彫り込まれます。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Roughness", "CrackRoughness", &editableNode->crack.roughness, 0.0f, 1.0f, rock::CrackSettings{}.roughness, "Crack roughness changed", true, "亀裂境界の荒さです。高いほど不規則な割れ目になります。"))
-        {
-            EvaluateGraph();
-        }
-
-        ImGui::EndTable();
-        return;
-    }
-
     if (selectedNode->kind == rock::NodeKind::OutputMesh)
     {
         rock::OutputMeshSettings* outputMesh = g_graph.FindOutputMeshSettings(selectedNode->id);
@@ -5246,11 +5050,6 @@ void DrawPropertiesPanel()
             {
                 EvaluateGraph();
             }
-            if (DrawPropertyFloatRow("Iso Value", "OutputMeshIsoValue", &outputMesh->isoValue, -0.2f, 0.2f, rock::OutputMeshSettings{}.isoValue, "Output mesh iso value changed", true, "SDF 互換用の等値面しきい値です。ハイトフィールドの通常出力ではほぼ使いません。"))
-            {
-                EvaluateGraph();
-            }
-
             ImGui::EndTable();
         }
     }
@@ -5277,7 +5076,7 @@ void DrawDisplaySettingsPanel()
         {
             SaveAppSettingsSilently();
         }
-        if (DrawPropertyIntRow("Resolution", "DisplayPreviewResolution", &settings.preview.resolution, 16, 512, rock::PreviewSettings{}.resolution, "Preview resolution changed", false))
+        if (DrawPropertyIntRow("Resolution", "DisplayPreviewResolution", &settings.preview.resolution, 16, 2048, rock::PreviewSettings{}.resolution, "Preview resolution changed", false))
         {
             EvaluateGraph();
             SaveAppSettingsSilently();
@@ -5293,10 +5092,6 @@ void DrawDisplaySettingsPanel()
             SaveAppSettingsSilently();
         }
         if (DrawPropertyBoolRow("Wireframe", "DisplayWireframe", &settings.preview.showWireframe, "Wireframe visibility changed", nullptr, rock::PreviewSettings{}.showWireframe))
-        {
-            SaveAppSettingsSilently();
-        }
-        if (DrawPropertyBoolRow("Points", "DisplayPoints", &settings.preview.showPoints, "Surface points visibility changed", nullptr, rock::PreviewSettings{}.showPoints))
         {
             SaveAppSettingsSilently();
         }
@@ -5416,17 +5211,6 @@ void DrawStatsPanel()
 
     ImGui::SeparatorText("Preview");
     ImGui::Text("Stage: %s", rock::ToString(evaluation.previewStage).data());
-    const rock::SdfPreviewStats& previewSdf = evaluation.previewSdf;
-    if (!evaluation.previewIsHeightmap && previewSdf.totalVoxels > 0)
-    {
-        ImGui::Text("Dense SDF: %d^3", previewSdf.resolution);
-        ImGui::Text("SDF Range: %.3f / %.3f", previewSdf.minSdf, previewSdf.maxSdf);
-        ImGui::Text("Fill: %.1f%%", previewSdf.fillRatio * 100.0f);
-        ImGui::Text("Volume: %.3f", previewSdf.estimatedVolume);
-        ImGui::Text("Surface Points: %zu", previewSdf.surfacePoints.size());
-        ImGui::Text("Surface Lines: %zu", previewSdf.surfaceSegments.size());
-        ImGui::Text("Surface Triangles: %zu", previewSdf.surfaceTriangles.size());
-    }
     ImGui::SeparatorText("Mesh Topology");
     ImGui::Text("Vertices: %zu", evaluation.previewMesh.vertices.size());
     ImGui::Text("Edges: %zu", evaluation.previewMesh.edges.size());

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(TerrainEditor VERSION 0.21.2 LANGUAGES CXX RC)
+project(TerrainEditor VERSION 1.0.0 LANGUAGES CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -22,7 +22,6 @@ add_executable(terrain_editor WIN32
     src/node_graph.cpp
     src/obj_exporter.cpp
     src/screenshot_capture.cpp
-    src/sdf_preview.cpp
     src/ui/UiTheme.cpp
 )
 

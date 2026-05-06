@@ -2,6 +2,10 @@
 
 ## 未リリース
 
+## 1.0.0 - 2026-05-07 02:54
+
+- 旧 SDF 系ノードと互換コードを削除し、評価パイプラインをハイトフィールド専用に整理しました。`Primitive SDF` / `Noise Warp` / `Crack Field`、SDF プレビュー生成、SDF デバッグ OBJ 出力、`Output Mesh` の `Iso Value` は廃止しました。
+- 表示設定の `Resolution` 上限を `512` から `2048` に引き上げ、保存済み設定の読み込み時も `2048` まで保持できるようにしました。
 - `2Dビュー` が表示用メッシュ解像度ではなく、`Simulation Resolution` の評価済みハイトフィールドを元にマップ表示するようにしました。表示負荷が高い場合は画面密度に合わせて間引きつつ、元のシミュレーション解像度をステータスに表示します。
 - `Heightmap Blur` の水平・垂直 Gaussian パスの z ループを `std::execution::par` で並列化しました。Multi-Scale Erosion と同じ `ParallelForRows` ヘルパーを共有します。マルチコア環境で大半径やマルチイテレーション時の評価時間が短縮されます。
 - 実験的な `Fluvial Erosion` (KTT) ノードを削除しました。`Multi-Scale Erosion` ノードが本命の浸食ノードとして定着したため、KTT 系の粒子輸送実装、GPU compute 経路、シェーダー (`shaders/fluvial_erosion_compute.hlsl`)、UI、シリアライズ、関連ヘルパー (`KttRandom2`、`ResampleHeightfieldGrid`、`SmoothHeightfieldHeights`、`AddResampledHeightDelta`) をまとめて除去しました。`docs/fluvial_erosion/` のアルゴリズムガイドは履歴として残しています。

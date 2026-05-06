@@ -29,19 +29,18 @@ There is no test framework, lint task, or CI configured. Verification is manual 
 
 ## Architecture
 
-The application is a single executable. `src/main.cpp` (~270 KB) owns the Win32 window, D3D12 device/swapchain, ImGui setup, file IO, viewport rendering, and all property-panel UI. `src/node_graph.{h,cpp}` owns the data model and evaluation. `src/sdf_preview.cpp` and `src/obj_exporter.cpp` are isolated utilities.
+The application is a single executable. `src/main.cpp` (~270 KB) owns the Win32 window, D3D12 device/swapchain, ImGui setup, file IO, viewport rendering, and all property-panel UI. `src/node_graph.{h,cpp}` owns the data model and evaluation. `src/obj_exporter.cpp` is an isolated utility.
 
 ### NodeGraph evaluation pipeline
 
-`rock::NodeGraph` holds `nodes_`, `links_`, per-node settings, and an in-memory `heightfieldCache_` keyed by node id. The graph is evaluated in two passes per frame, both built around `SdfPipeline`:
+`rock::NodeGraph` holds `nodes_`, `links_`, per-node settings, and an in-memory `heightfieldCache_` keyed by node id. The graph is evaluated in two passes per frame, both built around `HeightfieldPipeline`:
 
 - **Preview pipeline** — built from the currently selected node back to the source. Drives the 3D and 2D viewports. Runs asynchronously: `StartAsyncEvaluation()` in `main.cpp` snapshots the graph, hands it to `std::async`, and the main thread polls the future. The current graph carries `Evaluating...` status until the result is merged via `ApplyEvaluationResultFrom`.
 - **Final pipeline** — built from the `OutputMesh` node. Used for OBJ export.
 
-`SdfPipeline` is built from the graph by walking upstream from the target node. It collects two parallel operation chains:
+`HeightfieldPipeline` is built from the graph by walking upstream from the target node. It collects heightfield operations layered on top of a `Heightmap Load` or `Shape` source.
 
-- **SDF chain** (`Operation`): noise/crack/iso operations that deform a primitive SDF.
-- **Heightfield chain** (`HeightfieldOperation`): heightfield ops (Fluvial Erosion, Heightmap Blur) layered on top of a `Heightmap Load` or `Shape` source.
+- **Heightfield chain** (`HeightfieldOperation`): heightfield ops (`Heightmap Blur`, `Erosion Noise`, `Multi-Scale Erosion`) layered on top of a `Heightmap Load` or `Shape` source.
 
 Caching: `BuildMeshFromHeightPipelineCached` caches each heightfield operation's output by (input hash, parameter hash, resolution). Touching unrelated nodes does not re-run upstream work. Hash functions live next to each settings struct (e.g. `HashFluvialSettings`).
 

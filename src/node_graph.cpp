@@ -1,6 +1,4 @@
-﻿#include "node_graph.h"
-
-#include "sdf_preview.h"
+#include "node_graph.h"
 
 #include <algorithm>
 #include <cmath>
@@ -27,20 +25,6 @@ namespace
 using Microsoft::WRL::ComPtr;
 
 MultiScaleErosionGpuEvaluator g_mseGpuEvaluator = nullptr;
-
-std::string NoisePipelineSummary(const SdfPipeline& pipeline)
-{
-    if (pipeline.noiseLayers.empty())
-    {
-        return "";
-    }
-    if (pipeline.noiseLayers.size() == 1)
-    {
-        const NoiseSettings& noise = pipeline.noiseLayers.front();
-        return std::format(" -> noise {:.2f}/{:.2f}/{} seed {}", noise.amplitude, noise.frequency, noise.octaves, noise.seed);
-    }
-    return std::format(" -> noise x{}", pipeline.noiseLayers.size());
-}
 
 struct HeightmapImage
 {
@@ -1235,7 +1219,7 @@ MeshData BuildMeshFromHeightfield(const HeightfieldGrid& grid, int meshResolutio
     {
         return mesh;
     }
-    meshResolution = std::clamp(meshResolution, 2, 512);
+    meshResolution = std::clamp(meshResolution, 2, 2048);
 
     const float halfSize = grid.terrainSizeMeters * 0.5f;
     const size_t surfaceVertexCount = static_cast<size_t>(meshResolution) * static_cast<size_t>(meshResolution);
@@ -1381,44 +1365,12 @@ MeshData BuildMeshFromHeightfield(const HeightfieldGrid& grid, int meshResolutio
     return mesh;
 }
 
-std::string OperationPipelineSummary(const SdfPipeline& pipeline)
-{
-    if (pipeline.operations.empty())
-    {
-        return "";
-    }
-    return std::format(" -> {} op{}", pipeline.operations.size(), pipeline.operations.size() == 1 ? "" : "s");
-}
-
 template <typename Settings>
-int EffectiveMeshResolution(const Settings& settings)
+int EffectiveMeshResolution(const Settings& settings, int maxResolution = 512)
 {
     const int divisor = 1 << std::clamp(settings.lod, 0, 4);
-    return std::clamp(settings.resolution / divisor, 16, 512);
+    return std::clamp(settings.resolution / divisor, 16, maxResolution);
 }
-
-struct QuantizedVertex
-{
-    int x = 0;
-    int y = 0;
-    int z = 0;
-
-    bool operator==(const QuantizedVertex& other) const
-    {
-        return x == other.x && y == other.y && z == other.z;
-    }
-};
-
-struct QuantizedVertexHash
-{
-    size_t operator()(const QuantizedVertex& value) const
-    {
-        size_t h = static_cast<size_t>(value.x) * 73856093u;
-        h ^= static_cast<size_t>(value.y) * 19349663u;
-        h ^= static_cast<size_t>(value.z) * 83492791u;
-        return h;
-    }
-};
 
 uint64_t EdgeKey(uint32_t a, uint32_t b)
 {
@@ -1443,107 +1395,7 @@ void AccumulateNormal(MeshVertex& vertex, float nx, float ny, float nz)
     vertex.nz += nz;
 }
 
-void ApplySdfGradientNormals(const GraphSettings& settings, const SdfPipeline& pipeline, const SdfPreviewStats& sdf, MeshData& mesh)
-{
-    const float e = std::max(sdf.voxelSize * 0.35f, 0.001f);
-    for (MeshVertex& vertex : mesh.vertices)
-    {
-        const float dx = EvaluateSdfAt(settings, pipeline, vertex.x + e, vertex.y, vertex.z) -
-            EvaluateSdfAt(settings, pipeline, vertex.x - e, vertex.y, vertex.z);
-        const float dy = EvaluateSdfAt(settings, pipeline, vertex.x, vertex.y + e, vertex.z) -
-            EvaluateSdfAt(settings, pipeline, vertex.x, vertex.y - e, vertex.z);
-        const float dz = EvaluateSdfAt(settings, pipeline, vertex.x, vertex.y, vertex.z + e) -
-            EvaluateSdfAt(settings, pipeline, vertex.x, vertex.y, vertex.z - e);
-        const float length = std::sqrt(dx * dx + dy * dy + dz * dz);
-        if (length > 0.000001f)
-        {
-            vertex.nx = dx / length;
-            vertex.ny = dy / length;
-            vertex.nz = dz / length;
-        }
-    }
-}
-
-MeshData BuildMeshFromSdf(const GraphSettings& settings, const SdfPipeline& pipeline, const SdfPreviewStats& sdf)
-{
-    MeshData mesh;
-    mesh.vertices.reserve(sdf.surfaceTriangles.size());
-    mesh.triangles.reserve(sdf.surfaceTriangles.size());
-    mesh.edges.reserve(sdf.surfaceTriangles.size() * 3);
-
-    std::unordered_map<QuantizedVertex, uint32_t, QuantizedVertexHash> vertexMap;
-    std::unordered_set<uint64_t> edgeKeys;
-    constexpr float kQuantizeScale = 10000.0f;
-
-    const auto vertexIndex = [&](float x, float y, float z) -> uint32_t {
-        const QuantizedVertex key{
-            static_cast<int>(std::lround(x * kQuantizeScale)),
-            static_cast<int>(std::lround(y * kQuantizeScale)),
-            static_cast<int>(std::lround(z * kQuantizeScale)),
-        };
-        if (const auto it = vertexMap.find(key); it != vertexMap.end())
-        {
-            return it->second;
-        }
-
-        const uint32_t index = static_cast<uint32_t>(mesh.vertices.size());
-        mesh.vertices.push_back({x, y, z, 0.0f, 0.0f, 0.0f});
-        vertexMap.emplace(key, index);
-        return index;
-    };
-
-    for (const SurfaceTriangle& triangle : sdf.surfaceTriangles)
-    {
-        const uint32_t a = vertexIndex(triangle.ax, triangle.ay, triangle.az);
-        const uint32_t b = vertexIndex(triangle.bx, triangle.by, triangle.bz);
-        const uint32_t c = vertexIndex(triangle.cx, triangle.cy, triangle.cz);
-        if (a == b || b == c || c == a)
-        {
-            continue;
-        }
-
-        const float ux = triangle.bx - triangle.ax;
-        const float uy = triangle.by - triangle.ay;
-        const float uz = triangle.bz - triangle.az;
-        const float vx = triangle.cx - triangle.ax;
-        const float vy = triangle.cy - triangle.ay;
-        const float vz = triangle.cz - triangle.az;
-        const float nx = uy * vz - uz * vy;
-        const float ny = uz * vx - ux * vz;
-        const float nz = ux * vy - uy * vx;
-
-        AccumulateNormal(mesh.vertices[a], nx, ny, nz);
-        AccumulateNormal(mesh.vertices[b], nx, ny, nz);
-        AccumulateNormal(mesh.vertices[c], nx, ny, nz);
-        mesh.triangles.push_back({a, b, c});
-        AddEdge(mesh, edgeKeys, a, b);
-        AddEdge(mesh, edgeKeys, b, c);
-        AddEdge(mesh, edgeKeys, c, a);
-    }
-
-    for (MeshVertex& vertex : mesh.vertices)
-    {
-        const float length = std::sqrt(vertex.nx * vertex.nx + vertex.ny * vertex.ny + vertex.nz * vertex.nz);
-        if (length > 0.000001f)
-        {
-            vertex.nx /= length;
-            vertex.ny /= length;
-            vertex.nz /= length;
-        }
-        else
-        {
-            vertex.nx = 0.0f;
-            vertex.ny = 1.0f;
-            vertex.nz = 0.0f;
-        }
-    }
-
-    ApplySdfGradientNormals(settings, pipeline, sdf, mesh);
-
-    return mesh;
-}
-
-MeshData BuildMeshFromHeightPipeline(const SdfPipeline& pipeline, int resolution, std::string* message, HeightfieldPreviewField previewField = HeightfieldPreviewField::Heightmap, HeightfieldGrid* previewGrid = nullptr)
+MeshData BuildMeshFromHeightPipeline(const HeightfieldPipeline& pipeline, int resolution, std::string* message, HeightfieldPreviewField previewField = HeightfieldPreviewField::Heightmap, HeightfieldGrid* previewGrid = nullptr)
 {
     HeightfieldGrid grid = pipeline.useShape
         ? BuildHeightfieldFromShape(pipeline.shape, std::clamp(pipeline.shape.simulationResolution, 2, 2048), message)
@@ -1552,17 +1404,17 @@ MeshData BuildMeshFromHeightPipeline(const SdfPipeline& pipeline, int resolution
     {
         return {};
     }
-    for (const SdfPipeline::HeightfieldOperation& operation : pipeline.heightfieldOperations)
+    for (const HeightfieldPipeline::HeightfieldOperation& operation : pipeline.heightfieldOperations)
     {
-        if (operation.kind == SdfPipeline::HeightfieldOperation::Kind::HeightmapBlur)
+        if (operation.kind == HeightfieldPipeline::HeightfieldOperation::Kind::HeightmapBlur)
         {
             ApplyHeightmapBlur(grid, operation.heightmapBlur);
         }
-        else if (operation.kind == SdfPipeline::HeightfieldOperation::Kind::ErosionNoise)
+        else if (operation.kind == HeightfieldPipeline::HeightfieldOperation::Kind::ErosionNoise)
         {
             ApplyErosionNoise(grid, operation.erosionNoise);
         }
-        else if (operation.kind == SdfPipeline::HeightfieldOperation::Kind::MultiScaleErosion)
+        else if (operation.kind == HeightfieldPipeline::HeightfieldOperation::Kind::MultiScaleErosion)
         {
             ApplyMultiScaleErosion(grid, operation.multiScaleErosion);
         }
@@ -1580,7 +1432,7 @@ MeshData BuildMeshFromHeightPipeline(const SdfPipeline& pipeline, int resolution
 }
 } // namespace
 
-MeshData NodeGraph::BuildMeshFromHeightPipelineCached(const SdfPipeline& pipeline, int resolution, std::string* message, HeightfieldPreviewField previewField, HeightfieldGrid* previewGrid)
+MeshData NodeGraph::BuildMeshFromHeightPipelineCached(const HeightfieldPipeline& pipeline, int resolution, std::string* message, HeightfieldPreviewField previewField, HeightfieldGrid* previewGrid)
 {
     const GraphId sourceNodeId = pipeline.useShape ? pipeline.shapeNodeId : pipeline.heightmapNodeId;
     if (sourceNodeId == 0)
@@ -1624,19 +1476,19 @@ MeshData NodeGraph::BuildMeshFromHeightPipelineCached(const SdfPipeline& pipelin
         return {};
     }
 
-    for (const SdfPipeline::HeightfieldOperation& operation : pipeline.heightfieldOperations)
+    for (const HeightfieldPipeline::HeightfieldOperation& operation : pipeline.heightfieldOperations)
     {
         if (operation.nodeId == 0)
         {
-            if (operation.kind == SdfPipeline::HeightfieldOperation::Kind::HeightmapBlur)
+            if (operation.kind == HeightfieldPipeline::HeightfieldOperation::Kind::HeightmapBlur)
             {
                 ApplyHeightmapBlur(grid, operation.heightmapBlur);
             }
-            else if (operation.kind == SdfPipeline::HeightfieldOperation::Kind::ErosionNoise)
+            else if (operation.kind == HeightfieldPipeline::HeightfieldOperation::Kind::ErosionNoise)
             {
                 ApplyErosionNoise(grid, operation.erosionNoise);
             }
-            else if (operation.kind == SdfPipeline::HeightfieldOperation::Kind::MultiScaleErosion)
+            else if (operation.kind == HeightfieldPipeline::HeightfieldOperation::Kind::MultiScaleErosion)
             {
                 ApplyMultiScaleErosion(grid, operation.multiScaleErosion);
             }
@@ -1646,13 +1498,13 @@ MeshData NodeGraph::BuildMeshFromHeightPipelineCached(const SdfPipeline& pipelin
         uint64_t parameterHash = 0;
         switch (operation.kind)
         {
-        case SdfPipeline::HeightfieldOperation::Kind::HeightmapBlur:
+        case HeightfieldPipeline::HeightfieldOperation::Kind::HeightmapBlur:
             parameterHash = HashHeightmapBlurSettings(operation.heightmapBlur, simulationResolution);
             break;
-        case SdfPipeline::HeightfieldOperation::Kind::ErosionNoise:
+        case HeightfieldPipeline::HeightfieldOperation::Kind::ErosionNoise:
             parameterHash = HashErosionNoiseSettings(operation.erosionNoise, simulationResolution);
             break;
-        case SdfPipeline::HeightfieldOperation::Kind::MultiScaleErosion:
+        case HeightfieldPipeline::HeightfieldOperation::Kind::MultiScaleErosion:
             parameterHash = HashMultiScaleErosionSettings(operation.multiScaleErosion, simulationResolution);
             break;
         }
@@ -1663,15 +1515,15 @@ MeshData NodeGraph::BuildMeshFromHeightPipelineCached(const SdfPipeline& pipelin
             operationCache.parameterHash != parameterHash)
         {
             HeightfieldGrid operationGrid = grid;
-            if (operation.kind == SdfPipeline::HeightfieldOperation::Kind::HeightmapBlur)
+            if (operation.kind == HeightfieldPipeline::HeightfieldOperation::Kind::HeightmapBlur)
             {
                 ApplyHeightmapBlur(operationGrid, operation.heightmapBlur);
             }
-            else if (operation.kind == SdfPipeline::HeightfieldOperation::Kind::ErosionNoise)
+            else if (operation.kind == HeightfieldPipeline::HeightfieldOperation::Kind::ErosionNoise)
             {
                 ApplyErosionNoise(operationGrid, operation.erosionNoise);
             }
-            else if (operation.kind == SdfPipeline::HeightfieldOperation::Kind::MultiScaleErosion)
+            else if (operation.kind == HeightfieldPipeline::HeightfieldOperation::Kind::MultiScaleErosion)
             {
                 ApplyMultiScaleErosion(operationGrid, operation.multiScaleErosion);
             }
@@ -1898,14 +1750,6 @@ GraphId NodeGraph::CreateNode(NodeKind kind)
     const GraphId nodeId = AddNode(kind, std::string(ToString(kind)));
     switch (kind)
     {
-    case NodeKind::PrimitiveSdf:
-        AddPin(nodeId, PinKind::Output, ValueType::SdfGrid, "SDFGrid");
-        break;
-    case NodeKind::NoiseWarp:
-    case NodeKind::CrackField:
-        AddPin(nodeId, PinKind::Input, ValueType::SdfGrid, "SDFGrid");
-        AddPin(nodeId, PinKind::Output, ValueType::SdfGrid, "SDFGrid");
-        break;
     case NodeKind::OutputMesh:
         AddPin(nodeId, PinKind::Input, ValueType::HeightField, "HeightField");
         break;
@@ -2061,16 +1905,10 @@ PreviewStage NodeGraph::Preview() const
     return evaluation_.previewStage;
 }
 
-SdfPipeline NodeGraph::PipelineFor(PreviewStage stage) const
+HeightfieldPipeline NodeGraph::PipelineFor(PreviewStage stage) const
 {
     switch (stage)
     {
-    case PreviewStage::Primitive:
-        return PipelineTo(NodeKind::PrimitiveSdf);
-    case PreviewStage::Noise:
-        return PipelineTo(NodeKind::NoiseWarp);
-    case PreviewStage::Crack:
-        return PipelineTo(NodeKind::CrackField);
     case PreviewStage::HeightmapBlur:
         return PipelineTo(NodeKind::HeightmapBlur);
     case PreviewStage::Shape:
@@ -2085,7 +1923,7 @@ SdfPipeline NodeGraph::PipelineFor(PreviewStage stage) const
     }
 }
 
-SdfPipeline NodeGraph::PreviewPipeline() const
+HeightfieldPipeline NodeGraph::PreviewPipeline() const
 {
     if (const Node* previewNode = FindNode(evaluation_.previewNodeId))
     {
@@ -2094,7 +1932,7 @@ SdfPipeline NodeGraph::PreviewPipeline() const
     return PipelineFor(evaluation_.previewStage);
 }
 
-SdfPipeline NodeGraph::FinalPipeline() const
+HeightfieldPipeline NodeGraph::FinalPipeline() const
 {
     return PipelineFor(PreviewStage::Output);
 }
@@ -2165,58 +2003,26 @@ const Node* NodeGraph::FindUpstreamNode(const Node& node) const
     return FindNodeByOutputPin(linkIt->startPin);
 }
 
-SdfPipeline NodeGraph::PipelineTo(NodeKind targetKind) const
+HeightfieldPipeline NodeGraph::PipelineTo(NodeKind targetKind) const
 {
     const Node* node = FindFirstNode(targetKind);
-    return node != nullptr ? PipelineToNode(*node) : SdfPipeline{};
+    return node != nullptr ? PipelineToNode(*node) : HeightfieldPipeline{};
 }
 
-SdfPipeline NodeGraph::PipelineToNode(const Node& targetNode) const
+HeightfieldPipeline NodeGraph::PipelineToNode(const Node& targetNode) const
 {
-    SdfPipeline pipeline;
+    HeightfieldPipeline pipeline;
     const Node* node = &targetNode;
     int guard = 0;
     while (node != nullptr && guard++ < 16)
     {
-        if (node->kind == NodeKind::NoiseWarp)
+        if (node->kind == NodeKind::OutputMesh)
         {
-            pipeline.noiseLayers.push_back(node->noise);
-            pipeline.operations.push_back({
-                SdfPipeline::OperationKind::NoiseWarp,
-                node->id,
-                node->noise,
-                {},
-                0.0f,
-            });
-        }
-        else if (node->kind == NodeKind::CrackField)
-        {
-            pipeline.useCrack = true;
-            pipeline.crack = node->crack;
-            pipeline.operations.push_back({
-                SdfPipeline::OperationKind::CrackField,
-                node->id,
-                {},
-                node->crack,
-                0.0f,
-            });
-        }
-        else if (node->kind == NodeKind::OutputMesh)
-        {
-            pipeline.applyOutputIso = true;
-            pipeline.outputIsoValue = node->outputMesh.isoValue;
-            pipeline.operations.push_back({
-                SdfPipeline::OperationKind::OutputIso,
-                node->id,
-                {},
-                {},
-                node->outputMesh.isoValue,
-            });
         }
         else if (node->kind == NodeKind::HeightmapBlur)
         {
             pipeline.heightfieldOperations.push_back({
-                SdfPipeline::HeightfieldOperation::Kind::HeightmapBlur,
+                HeightfieldPipeline::HeightfieldOperation::Kind::HeightmapBlur,
                 node->id,
                 node->heightmapBlur,
                 {},
@@ -2226,7 +2032,7 @@ SdfPipeline NodeGraph::PipelineToNode(const Node& targetNode) const
         else if (node->kind == NodeKind::ErosionNoise)
         {
             pipeline.heightfieldOperations.push_back({
-                SdfPipeline::HeightfieldOperation::Kind::ErosionNoise,
+                HeightfieldPipeline::HeightfieldOperation::Kind::ErosionNoise,
                 node->id,
                 {},
                 node->erosionNoise,
@@ -2236,23 +2042,16 @@ SdfPipeline NodeGraph::PipelineToNode(const Node& targetNode) const
         else if (node->kind == NodeKind::MultiScaleErosion)
         {
             pipeline.heightfieldOperations.push_back({
-                SdfPipeline::HeightfieldOperation::Kind::MultiScaleErosion,
+                HeightfieldPipeline::HeightfieldOperation::Kind::MultiScaleErosion,
                 node->id,
                 {},
                 {},
                 node->multiScaleErosion,
             });
         }
-        else if (node->kind == NodeKind::PrimitiveSdf)
-        {
-            pipeline.hasSource = true;
-            pipeline.primitiveKind = node->primitive.kind;
-            break;
-        }
         else if (node->kind == NodeKind::HeightmapLoad)
         {
             pipeline.hasSource = true;
-            pipeline.useHeightmap = true;
             pipeline.heightmapNodeId = node->id;
             pipeline.heightmap = node->heightmap;
             break;
@@ -2260,7 +2059,6 @@ SdfPipeline NodeGraph::PipelineToNode(const Node& targetNode) const
         else if (node->kind == NodeKind::Shape)
         {
             pipeline.hasSource = true;
-            pipeline.useHeightmap = true;
             pipeline.useShape = true;
             pipeline.shapeNodeId = node->id;
             pipeline.shape = node->shape;
@@ -2269,14 +2067,7 @@ SdfPipeline NodeGraph::PipelineToNode(const Node& targetNode) const
 
         node = FindUpstreamNode(*node);
     }
-    std::ranges::reverse(pipeline.noiseLayers);
-    std::ranges::reverse(pipeline.operations);
     std::ranges::reverse(pipeline.heightfieldOperations);
-    pipeline.useNoise = !pipeline.noiseLayers.empty();
-    if (pipeline.useNoise)
-    {
-        pipeline.noise = pipeline.noiseLayers.back();
-    }
     return pipeline;
 }
 
@@ -2284,12 +2075,10 @@ void NodeGraph::Evaluate(int previewMeshResolution)
 {
     if (previewMeshResolution <= 0)
     {
-        previewMeshResolution = EffectiveMeshResolution(settings_.preview);
+        previewMeshResolution = EffectiveMeshResolution(settings_.preview, 2048);
     }
-    const SdfPipeline previewPipeline = PreviewPipeline();
-    const SdfPipeline finalPipeline = FinalPipeline();
-    evaluation_.previewIsHeightmap = previewPipeline.useHeightmap;
-    evaluation_.previewShowsMask = evaluation_.previewShowsMask && previewPipeline.useHeightmap;
+    const HeightfieldPipeline previewPipeline = PreviewPipeline();
+    evaluation_.previewShowsMask = evaluation_.previewShowsMask && previewPipeline.hasSource;
     if (!evaluation_.previewShowsMask)
     {
         evaluation_.previewField = HeightfieldPreviewField::Heightmap;
@@ -2297,21 +2086,13 @@ void NodeGraph::Evaluate(int previewMeshResolution)
     evaluation_.previewMessage.clear();
     if (!previewPipeline.hasSource)
     {
-        evaluation_.previewSdf = {};
         evaluation_.previewHeightfield = {};
         evaluation_.previewMesh = {};
         evaluation_.previewMessage = "No source node";
     }
-    else if (previewPipeline.useHeightmap)
-    {
-        evaluation_.previewSdf = {};
-        evaluation_.previewMesh = BuildMeshFromHeightPipelineCached(previewPipeline, previewMeshResolution, &evaluation_.previewMessage, evaluation_.previewField, &evaluation_.previewHeightfield);
-    }
     else
     {
-        evaluation_.previewHeightfield = {};
-        evaluation_.previewSdf = BuildDenseSdfPreview(settings_, previewPipeline, previewMeshResolution);
-        evaluation_.previewMesh = BuildMeshFromSdf(settings_, previewPipeline, evaluation_.previewSdf);
+        evaluation_.previewMesh = BuildMeshFromHeightPipelineCached(previewPipeline, previewMeshResolution, &evaluation_.previewMessage, evaluation_.previewField, &evaluation_.previewHeightfield);
     }
     ++evaluation_.version;
     evaluation_.dirty = false;
@@ -2319,7 +2100,7 @@ void NodeGraph::Evaluate(int previewMeshResolution)
     {
         evaluation_.status = "No source node";
     }
-    else if (previewPipeline.useHeightmap)
+    else
     {
         evaluation_.status = std::format(
             "Heightmap preview [{}] -> {} verts / {} tris{}{}",
@@ -2329,21 +2110,6 @@ void NodeGraph::Evaluate(int previewMeshResolution)
             evaluation_.finalDirty ? " / output mesh pending" : "",
             evaluation_.previewMesh.vertices.empty() ? " / no mesh" : "");
     }
-    else
-    {
-        evaluation_.status = std::format(
-            "{} preview -> {}{}{} -> preview LOD {} / output LOD {} / iso {:.3f} -> {} verts / {} tris{}",
-            ToString(evaluation_.previewStage),
-            ToString(previewPipeline.primitiveKind),
-            OperationPipelineSummary(finalPipeline),
-            "",
-            settings_.preview.lod,
-            OutputMeshSettingsFor().lod,
-            OutputMeshSettingsFor().isoValue,
-            evaluation_.previewMesh.vertices.size(),
-            evaluation_.previewMesh.triangles.size(),
-            evaluation_.finalDirty ? " / output mesh pending" : "");
-    }
 }
 
 void NodeGraph::EvaluateFinal(GraphId outputNodeId)
@@ -2351,44 +2117,23 @@ void NodeGraph::EvaluateFinal(GraphId outputNodeId)
     const OutputMeshSettings& outputMesh = OutputMeshSettingsFor(outputNodeId);
     const int outputMeshResolution = EffectiveMeshResolution(outputMesh);
     const Node* outputNode = FindNode(outputNodeId);
-    SdfPipeline finalPipeline = outputNode != nullptr && outputNode->kind == NodeKind::OutputMesh
+    HeightfieldPipeline finalPipeline = outputNode != nullptr && outputNode->kind == NodeKind::OutputMesh
         ? PipelineToNode(*outputNode)
         : FinalPipeline();
-    if (finalPipeline.applyOutputIso)
-    {
-        finalPipeline.outputIsoValue = outputMesh.isoValue;
-        for (SdfPipeline::Operation& operation : finalPipeline.operations)
-        {
-            if (operation.kind == SdfPipeline::OperationKind::OutputIso)
-            {
-                operation.isoValue = outputMesh.isoValue;
-            }
-        }
-    }
-    GraphSettings finalSettings = settings_;
     if (!finalPipeline.hasSource)
     {
-        evaluation_.finalSdf = {};
         evaluation_.finalMesh = {};
-    }
-    else if (finalPipeline.useHeightmap)
-    {
-        evaluation_.finalSdf = {};
-        evaluation_.finalMesh = BuildMeshFromHeightPipelineCached(finalPipeline, outputMeshResolution, nullptr);
     }
     else
     {
-        evaluation_.finalSdf = BuildDenseSdfPreview(finalSettings, finalPipeline, outputMeshResolution);
-        evaluation_.finalMesh = BuildMeshFromSdf(finalSettings, finalPipeline, evaluation_.finalSdf);
+        evaluation_.finalMesh = BuildMeshFromHeightPipelineCached(finalPipeline, outputMeshResolution, nullptr);
     }
     ++evaluation_.finalVersion;
     evaluation_.finalDirty = false;
     evaluation_.status = std::format(
-        "{} preview / output mesh {}^3 LOD {} iso {:.3f} -> {} verts / {} tris",
+        "{} preview / output mesh LOD {} -> {} verts / {} tris",
         ToString(evaluation_.previewStage),
-        evaluation_.finalSdf.resolution,
         outputMesh.lod,
-        outputMesh.isoValue,
         evaluation_.finalMesh.vertices.size(),
         evaluation_.finalMesh.triangles.size());
 }
@@ -2435,25 +2180,6 @@ void NodeGraph::AddInitialLink(GraphId startPin, GraphId endPin)
     links_.push_back({nextLinkId_++, startPin, endPin});
 }
 
-std::string_view ToString(PrimitiveKind kind)
-{
-    switch (kind)
-    {
-    case PrimitiveKind::Sphere:
-        return "Sphere";
-    case PrimitiveKind::Box:
-        return "Box";
-    case PrimitiveKind::Capsule:
-        return "Capsule";
-    case PrimitiveKind::Ellipsoid:
-        return "Ellipsoid";
-    case PrimitiveKind::RockBlob:
-        return "Rock Blob";
-    default:
-        return "Unknown";
-    }
-}
-
 std::string_view ToString(ShapeKind kind)
 {
     switch (kind)
@@ -2471,12 +2197,6 @@ std::string_view ToString(NodeKind kind)
 {
     switch (kind)
     {
-    case NodeKind::PrimitiveSdf:
-        return "Primitive SDF";
-    case NodeKind::NoiseWarp:
-        return "Noise Warp";
-    case NodeKind::CrackField:
-        return "Crack Field";
     case NodeKind::OutputMesh:
         return "Output Mesh";
     case NodeKind::HeightmapLoad:
@@ -2498,12 +2218,6 @@ std::string_view ToString(PreviewStage stage)
 {
     switch (stage)
     {
-    case PreviewStage::Primitive:
-        return "Primitive";
-    case PreviewStage::Noise:
-        return "Noise Warp";
-    case PreviewStage::Crack:
-        return "Crack Field";
     case PreviewStage::Output:
         return "Output Mesh";
     case PreviewStage::HeightmapBlur:
@@ -2523,8 +2237,6 @@ std::string_view ToString(ValueType type)
 {
     switch (type)
     {
-    case ValueType::SdfGrid:
-        return "SDFGrid";
     case ValueType::Mesh:
         return "Mesh";
     case ValueType::HeightField:
@@ -2540,12 +2252,6 @@ PreviewStage PreviewStageFor(NodeKind kind)
 {
     switch (kind)
     {
-    case NodeKind::PrimitiveSdf:
-        return PreviewStage::Primitive;
-    case NodeKind::NoiseWarp:
-        return PreviewStage::Noise;
-    case NodeKind::CrackField:
-        return PreviewStage::Crack;
     case NodeKind::HeightmapBlur:
         return PreviewStage::HeightmapBlur;
     case NodeKind::ErosionNoise:
@@ -2553,7 +2259,7 @@ PreviewStage PreviewStageFor(NodeKind kind)
     case NodeKind::MultiScaleErosion:
         return PreviewStage::MultiScaleErosion;
     case NodeKind::HeightmapLoad:
-        return PreviewStage::Primitive;
+        return PreviewStage::Output;
     case NodeKind::Shape:
         return PreviewStage::Shape;
     case NodeKind::OutputMesh:

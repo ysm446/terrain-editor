@@ -14,15 +14,12 @@ using GraphId = int;
 
 enum class NodeKind
 {
-    PrimitiveSdf,
-    NoiseWarp,
-    CrackField,
-    OutputMesh,
-    HeightmapLoad,
-    HeightmapBlur,
-    Shape,
-    ErosionNoise,
-    MultiScaleErosion,
+    OutputMesh = 3,
+    HeightmapLoad = 4,
+    HeightmapBlur = 5,
+    Shape = 6,
+    ErosionNoise = 7,
+    MultiScaleErosion = 8,
 };
 
 enum class PinKind
@@ -33,19 +30,9 @@ enum class PinKind
 
 enum class ValueType
 {
-    SdfGrid,
-    Mesh,
-    HeightField,
-    Mask,
-};
-
-enum class PrimitiveKind
-{
-    Sphere,
-    Box,
-    Capsule,
-    Ellipsoid,
-    RockBlob,
+    Mesh = 1,
+    HeightField = 2,
+    Mask = 3,
 };
 
 enum class MultiScaleErosionBackend
@@ -62,14 +49,11 @@ enum class ShapeKind
 
 enum class PreviewStage
 {
-    Primitive,
-    Noise,
-    Crack,
-    Output,
-    HeightmapBlur,
-    Shape,
-    ErosionNoise,
-    MultiScaleErosion,
+    Output = 3,
+    HeightmapBlur = 4,
+    Shape = 5,
+    ErosionNoise = 6,
+    MultiScaleErosion = 7,
 };
 
 enum class HeightfieldPreviewField
@@ -85,35 +69,14 @@ struct Pin
     GraphId id = 0;
     GraphId nodeId = 0;
     PinKind kind = PinKind::Input;
-    ValueType valueType = ValueType::SdfGrid;
+    ValueType valueType = ValueType::HeightField;
     std::string label;
-};
-
-struct PrimitiveSettings
-{
-    PrimitiveKind kind = PrimitiveKind::RockBlob;
-};
-
-struct NoiseSettings
-{
-    float amplitude = 0.35f;
-    float frequency = 2.0f;
-    int octaves = 4;
-    int seed = 0;
-};
-
-struct CrackSettings
-{
-    float width = 0.035f;
-    float depth = 0.42f;
-    float roughness = 0.65f;
 };
 
 struct OutputMeshSettings
 {
     int resolution = 512;
     int lod = 0;
-    float isoValue = 0.0f;
 };
 
 struct HeightmapLoadSettings
@@ -190,13 +153,10 @@ struct MultiScaleErosionSettings
 struct Node
 {
     GraphId id = 0;
-    NodeKind kind = NodeKind::PrimitiveSdf;
+    NodeKind kind = NodeKind::OutputMesh;
     std::string title;
     std::vector<Pin> inputs;
     std::vector<Pin> outputs;
-    PrimitiveSettings primitive;
-    NoiseSettings noise;
-    CrackSettings crack;
     OutputMeshSettings outputMesh;
     HeightmapLoadSettings heightmap;
     ShapeSettings shape;
@@ -218,7 +178,6 @@ struct PreviewSettings
     int lod = 0;
     bool showSurface = true;
     bool showWireframe = true;
-    bool showPoints = false;
     bool showGrid = true;
     int lightingMode = 0;
     float sunAzimuthDegrees = 315.0f;
@@ -238,37 +197,6 @@ struct PreviewSettings
 struct GraphSettings
 {
     PreviewSettings preview;
-};
-
-struct SurfacePoint
-{
-    float x = 0.0f;
-    float y = 0.0f;
-    float z = 0.0f;
-    float sdf = 0.0f;
-};
-
-struct SurfaceSegment
-{
-    float ax = 0.0f;
-    float ay = 0.0f;
-    float az = 0.0f;
-    float bx = 0.0f;
-    float by = 0.0f;
-    float bz = 0.0f;
-};
-
-struct SurfaceTriangle
-{
-    float ax = 0.0f;
-    float ay = 0.0f;
-    float az = 0.0f;
-    float bx = 0.0f;
-    float by = 0.0f;
-    float bz = 0.0f;
-    float cx = 0.0f;
-    float cy = 0.0f;
-    float cz = 0.0f;
 };
 
 struct MeshVertex
@@ -315,41 +243,8 @@ struct HeightfieldGrid
 
 using MultiScaleErosionGpuEvaluator = bool (*)(HeightfieldGrid& grid, const MultiScaleErosionSettings& settings, std::string* error);
 
-struct SdfPreviewStats
+struct HeightfieldPipeline
 {
-    int resolution = 0;
-    int sliceResolution = 0;
-    int totalVoxels = 0;
-    int insideVoxels = 0;
-    float voxelSize = 0.0f;
-    float minSdf = 0.0f;
-    float maxSdf = 0.0f;
-    float fillRatio = 0.0f;
-    float estimatedVolume = 0.0f;
-    std::vector<float> centerSlice;
-    std::vector<SurfacePoint> surfacePoints;
-    std::vector<SurfaceSegment> surfaceSegments;
-    std::vector<SurfaceTriangle> surfaceTriangles;
-};
-
-struct SdfPipeline
-{
-    enum class OperationKind
-    {
-        NoiseWarp = 1,
-        CrackField = 2,
-        OutputIso = 3,
-    };
-
-    struct Operation
-    {
-        OperationKind kind = OperationKind::NoiseWarp;
-        GraphId nodeId = 0;
-        NoiseSettings noise;
-        CrackSettings crack;
-        float isoValue = 0.0f;
-    };
-
     struct HeightfieldOperation
     {
         enum class Kind
@@ -366,17 +261,7 @@ struct SdfPipeline
         MultiScaleErosionSettings multiScaleErosion;
     };
 
-    PrimitiveKind primitiveKind = PrimitiveKind::RockBlob;
-    std::vector<Operation> operations;
-    bool useNoise = false;
-    NoiseSettings noise;
-    std::vector<NoiseSettings> noiseLayers;
-    bool useCrack = false;
-    CrackSettings crack;
-    bool applyOutputIso = false;
-    float outputIsoValue = 0.0f;
     bool hasSource = false;
-    bool useHeightmap = false;
     GraphId heightmapNodeId = 0;
     HeightmapLoadSettings heightmap;
     bool useShape = false;
@@ -395,12 +280,9 @@ struct EvaluationSummary
     PreviewStage previewStage = PreviewStage::Output;
     GraphId previewNodeId = 0;
     GraphId previewPinId = 0;
-    bool previewIsHeightmap = false;
     bool previewShowsMask = false;
     HeightfieldPreviewField previewField = HeightfieldPreviewField::Heightmap;
     std::string previewMessage;
-    SdfPreviewStats previewSdf;
-    SdfPreviewStats finalSdf;
     HeightfieldGrid previewHeightfield;
     MeshData previewMesh;
     MeshData finalMesh;
@@ -438,9 +320,9 @@ public:
     bool SetPreviewNode(GraphId nodeId);
     bool SetPreviewPin(GraphId pinId);
     PreviewStage Preview() const;
-    SdfPipeline PipelineFor(PreviewStage stage) const;
-    SdfPipeline PreviewPipeline() const;
-    SdfPipeline FinalPipeline() const;
+    HeightfieldPipeline PipelineFor(PreviewStage stage) const;
+    HeightfieldPipeline PreviewPipeline() const;
+    HeightfieldPipeline FinalPipeline() const;
     void MarkDirty(std::string_view reason);
     void SetEvaluationPending(std::string_view status);
     void ApplyEvaluationResultFrom(const NodeGraph& evaluatedGraph);
@@ -454,9 +336,9 @@ private:
     const Node* FindFirstNode(NodeKind kind) const;
     const Node* FindNodeByOutputPin(GraphId pinId) const;
     const Node* FindUpstreamNode(const Node& node) const;
-    SdfPipeline PipelineTo(NodeKind targetKind) const;
-    SdfPipeline PipelineToNode(const Node& targetNode) const;
-    MeshData BuildMeshFromHeightPipelineCached(const SdfPipeline& pipeline, int resolution, std::string* message, HeightfieldPreviewField previewField = HeightfieldPreviewField::Heightmap, HeightfieldGrid* previewGrid = nullptr);
+    HeightfieldPipeline PipelineTo(NodeKind targetKind) const;
+    HeightfieldPipeline PipelineToNode(const Node& targetNode) const;
+    MeshData BuildMeshFromHeightPipelineCached(const HeightfieldPipeline& pipeline, int resolution, std::string* message, HeightfieldPreviewField previewField = HeightfieldPreviewField::Heightmap, HeightfieldGrid* previewGrid = nullptr);
 
     struct HeightfieldNodeCache
     {
@@ -479,7 +361,6 @@ private:
     GraphId nextLinkId_ = 101;
 };
 
-std::string_view ToString(PrimitiveKind kind);
 std::string_view ToString(ShapeKind kind);
 std::string_view ToString(NodeKind kind);
 std::string_view ToString(PreviewStage stage);
