@@ -301,6 +301,18 @@ struct GpuMeshPreview
     float skySunSizeDegrees = 0.0f;
     float skyHorizonSoftness = 0.0f;
     float skySunGlowStrength = 0.0f;
+    int cloudsEnabled = -1;
+    int cloudSeed = INT_MIN;
+    float cloudCoverage = 0.0f;
+    float cloudDensityMultiplier = 0.0f;
+    float cloudAltitudeMin = 0.0f;
+    float cloudAltitudeMax = 0.0f;
+    float cloudHorizontalScale = 0.0f;
+    float cloudAbsorption = 0.0f;
+    std::array<float, 3> cloudColor = {};
+    float cloudWindDirectionDegrees = 0.0f;
+    float cloudWindSpeed = 0.0f;
+    int cloudQualitySamples = 0;
     D3D12_RESOURCE_STATES colorState = D3D12_RESOURCE_STATE_COMMON;
     D3D12_RESOURCE_STATES shadowState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 };
@@ -320,6 +332,24 @@ ComPtr<ID3D12RootSignature> g_skyRootSignature;
 ComPtr<ID3D12PipelineState> g_skyPso;
 bool g_skyPipelineReady = false;
 std::string g_skyPipelineStatus = "Sky pipeline not initialized";
+ComPtr<ID3D12RootSignature> g_cloudVolumeRootSignature;
+ComPtr<ID3D12PipelineState> g_cloudVolumePso;
+ComPtr<ID3D12RootSignature> g_cloudRenderRootSignature;
+ComPtr<ID3D12PipelineState> g_cloudRenderPso;
+bool g_cloudPipelinesReady = false;
+std::string g_cloudPipelineStatus = "Cloud pipelines not initialized";
+
+struct GpuClouds
+{
+    ComPtr<ID3D12Resource> volumeTexture;       // 128^3 R8_UNORM density volume
+    D3D12_RESOURCE_STATES volumeState = D3D12_RESOURCE_STATE_COMMON;
+    D3D12_CPU_DESCRIPTOR_HANDLE volumeSrvCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE volumeSrvGpu{};
+    bool volumeSrvAllocated = false;
+    bool volumeReady = false;
+    int cachedSeed = INT_MIN;
+};
+GpuClouds g_gpuClouds;
 ComPtr<ID3D12DescriptorHeap> g_meshPreviewRtvHeap;
 ComPtr<ID3D12DescriptorHeap> g_meshPreviewDsvHeap;
 GpuMeshPreview g_gpuMeshPreview;
@@ -672,6 +702,16 @@ void CleanupD3D()
     g_skyPso.Reset();
     g_skyRootSignature.Reset();
     g_skyPipelineReady = false;
+    g_cloudVolumePso.Reset();
+    g_cloudVolumeRootSignature.Reset();
+    g_cloudRenderPso.Reset();
+    g_cloudRenderRootSignature.Reset();
+    g_cloudPipelinesReady = false;
+    g_gpuClouds.volumeTexture.Reset();
+    g_gpuClouds.volumeReady = false;
+    g_gpuClouds.cachedSeed = INT_MIN;
+    g_gpuClouds.volumeState = D3D12_RESOURCE_STATE_COMMON;
+    g_gpuClouds.volumeSrvAllocated = false;
     g_meshPreviewRtvHeap.Reset();
     g_meshPreviewDsvHeap.Reset();
     if (g_fenceEvent)
@@ -716,6 +756,16 @@ std::filesystem::path MaskNoiseShaderPath()
 std::filesystem::path SkyShaderPath()
 {
     return ShaderPath("sky.hlsl");
+}
+
+std::filesystem::path CloudDensityShaderPath()
+{
+    return ShaderPath("cloud_density.hlsl");
+}
+
+std::filesystem::path CloudRenderShaderPath()
+{
+    return ShaderPath("cloud_render.hlsl");
 }
 
 void EvaluateGraph();
@@ -1460,6 +1510,7 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
         root["previewPinId"] = g_graph.Evaluation().previewPinId;
 
         const rock::SkySettings& sky = g_graph.Settings().sky;
+        const rock::CloudSettings& clouds = g_graph.Settings().clouds;
         root["settings"] = {
             {"sky", {
                 {"mode", static_cast<int>(sky.mode)},
@@ -1469,6 +1520,20 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
                 {"sunSizeDegrees", sky.sunSizeDegrees},
                 {"horizonSoftness", sky.horizonSoftness},
                 {"sunGlowStrength", sky.sunGlowStrength},
+            }},
+            {"clouds", {
+                {"enabled", clouds.enabled},
+                {"seed", clouds.seed},
+                {"coverage", clouds.coverage},
+                {"densityMultiplier", clouds.densityMultiplier},
+                {"altitudeMin", clouds.altitudeMin},
+                {"altitudeMax", clouds.altitudeMax},
+                {"horizontalScale", clouds.horizontalScale},
+                {"absorption", clouds.absorption},
+                {"color", {clouds.color[0], clouds.color[1], clouds.color[2]}},
+                {"windDirectionDegrees", clouds.windDirectionDegrees},
+                {"windSpeedMetersPerSec", clouds.windSpeedMetersPerSec},
+                {"qualitySamples", clouds.qualitySamples},
             }},
         };
 
@@ -1702,6 +1767,30 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
             sky.sunSizeDegrees = std::clamp(skyJson.value("sunSizeDegrees", sky.sunSizeDegrees), 0.1f, 30.0f);
             sky.horizonSoftness = std::clamp(skyJson.value("horizonSoftness", sky.horizonSoftness), 0.05f, 8.0f);
             sky.sunGlowStrength = std::clamp(skyJson.value("sunGlowStrength", sky.sunGlowStrength), 0.0f, 4.0f);
+        }
+
+        const nlohmann::json cloudsJson = settingsJson.value("clouds", nlohmann::json::object());
+        rock::CloudSettings& clouds = g_graph.Settings().clouds;
+        clouds = rock::CloudSettings{};
+        if (!cloudsJson.empty())
+        {
+            clouds.enabled = cloudsJson.value("enabled", clouds.enabled);
+            clouds.seed = std::clamp(cloudsJson.value("seed", clouds.seed), 0, 999999);
+            clouds.coverage = std::clamp(cloudsJson.value("coverage", clouds.coverage), 0.0f, 1.0f);
+            clouds.densityMultiplier = std::clamp(cloudsJson.value("densityMultiplier", clouds.densityMultiplier), 0.0f, 8.0f);
+            clouds.altitudeMin = std::clamp(cloudsJson.value("altitudeMin", clouds.altitudeMin), 0.0f, 30000.0f);
+            clouds.altitudeMax = std::clamp(cloudsJson.value("altitudeMax", clouds.altitudeMax), 0.0f, 30000.0f);
+            clouds.horizontalScale = std::clamp(cloudsJson.value("horizontalScale", clouds.horizontalScale), 50.0f, 100000.0f);
+            clouds.absorption = std::clamp(cloudsJson.value("absorption", clouds.absorption), 0.0f, 2.0f);
+            if (cloudsJson.contains("color") && cloudsJson["color"].is_array() && cloudsJson["color"].size() == 3)
+            {
+                clouds.color[0] = std::clamp(cloudsJson["color"][0].get<float>(), 0.0f, 8.0f);
+                clouds.color[1] = std::clamp(cloudsJson["color"][1].get<float>(), 0.0f, 8.0f);
+                clouds.color[2] = std::clamp(cloudsJson["color"][2].get<float>(), 0.0f, 8.0f);
+            }
+            clouds.windDirectionDegrees = std::clamp(cloudsJson.value("windDirectionDegrees", clouds.windDirectionDegrees), 0.0f, 360.0f);
+            clouds.windSpeedMetersPerSec = std::clamp(cloudsJson.value("windSpeedMetersPerSec", clouds.windSpeedMetersPerSec), 0.0f, 500.0f);
+            clouds.qualitySamples = std::clamp(cloudsJson.value("qualitySamples", clouds.qualitySamples), 8, 128);
         }
 
         const nlohmann::json nodesJson = root.value("nodes", nlohmann::json::array());
@@ -2916,6 +3005,344 @@ void RenderSkyPass(ID3D12GraphicsCommandList* commandList, const rock::SkySettin
     commandList->DrawInstanced(3, 1, 0, 0);
 }
 
+// 128^3 cloud density volume — small enough to regenerate quickly when params
+// change (a few ms on the GPU) and big enough to give the noise some variety.
+static constexpr UINT kCloudVolumeResolution = 128u;
+
+struct CloudVolumeShaderConstants
+{
+    UINT  resolution;
+    INT   seed;
+    float pad0;
+    float pad1;
+};
+static_assert(sizeof(CloudVolumeShaderConstants) == 4 * sizeof(UINT), "CloudVolumeShaderConstants must be 4 DWORDs");
+
+struct CloudRenderShaderConstants
+{
+    float cameraPosition[4];
+    float cameraRight[4];
+    float cameraUp[4];
+    float cameraForward[4];
+    float projScaleX;
+    float projScaleY;
+    float panNdcX;
+    float panNdcY;
+    float sunDirection[4];
+    float cloudColor[4];
+    float altitudeMin;
+    float altitudeMax;
+    float horizontalScale;
+    float coverage;
+    float densityMultiplier;
+    float absorption;
+    float windOffsetX;
+    float windOffsetZ;
+    INT   qualitySamples;
+    float pad0;
+    float pad1;
+    float pad2;
+};
+static_assert(sizeof(CloudRenderShaderConstants) == 40 * sizeof(UINT), "CloudRenderShaderConstants must be 40 DWORDs");
+
+bool EnsureCloudPipelines(std::string* error)
+{
+    if (g_cloudPipelinesReady && g_cloudVolumePso && g_cloudVolumeRootSignature && g_cloudRenderPso && g_cloudRenderRootSignature)
+    {
+        return true;
+    }
+    if (!g_device)
+    {
+        if (error) *error = "D3D12 device is not available";
+        g_cloudPipelineStatus = "Cloud pipelines unavailable";
+        return false;
+    }
+
+    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
+#if defined(_DEBUG)
+    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+#endif
+
+    // -------- Cloud volume compute pipeline --------
+    {
+        D3D12_DESCRIPTOR_RANGE uavRange{};
+        uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+        uavRange.NumDescriptors = 1;
+        uavRange.BaseShaderRegister = 0;
+        uavRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+        D3D12_ROOT_PARAMETER rootParams[2]{};
+        rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+        rootParams[0].Constants.ShaderRegister = 0;
+        rootParams[0].Constants.Num32BitValues = 4;
+        rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
+        rootParams[1].DescriptorTable.pDescriptorRanges = &uavRange;
+        rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+        D3D12_ROOT_SIGNATURE_DESC rsDesc{};
+        rsDesc.NumParameters = 2;
+        rsDesc.pParameters = rootParams;
+
+        ComPtr<ID3DBlob> sigBlob, errBlob;
+        HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
+        if (FAILED(hr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Serialize cloud volume root sig failed"; g_cloudPipelineStatus = "Cloud volume root signature failed"; return false; }
+        hr = g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_cloudVolumeRootSignature));
+        if (FAILED(hr)) { if (error) *error = "Create cloud volume root sig failed"; g_cloudPipelineStatus = "Cloud volume root signature failed"; return false; }
+
+        ComPtr<ID3DBlob> csBlob;
+        errBlob.Reset();
+        const std::filesystem::path shaderPath = CloudDensityShaderPath();
+        const HRESULT compileHr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE,
+                                                      "CSGenerate", "cs_5_0", compileFlags, 0, &csBlob, &errBlob);
+        if (FAILED(compileHr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile cloud volume shader failed"; g_cloudPipelineStatus = "Cloud volume shader compile failed"; return false; }
+
+        D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{};
+        psoDesc.pRootSignature = g_cloudVolumeRootSignature.Get();
+        psoDesc.CS = {csBlob->GetBufferPointer(), csBlob->GetBufferSize()};
+        hr = g_device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&g_cloudVolumePso));
+        if (FAILED(hr)) { if (error) *error = "Create cloud volume PSO failed"; g_cloudPipelineStatus = "Cloud volume PSO failed"; return false; }
+    }
+
+    // -------- Cloud render graphics pipeline --------
+    {
+        D3D12_DESCRIPTOR_RANGE srvRange{};
+        srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        srvRange.NumDescriptors = 1;
+        srvRange.BaseShaderRegister = 0;
+        srvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+        D3D12_ROOT_PARAMETER rootParams[2]{};
+        rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+        rootParams[0].Constants.ShaderRegister = 0;
+        rootParams[0].Constants.Num32BitValues = 40;
+        rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
+        rootParams[1].DescriptorTable.pDescriptorRanges = &srvRange;
+        rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        D3D12_STATIC_SAMPLER_DESC sampler{};
+        sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+        sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+        sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+        sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+        sampler.ShaderRegister = 0;
+        sampler.RegisterSpace = 0;
+        sampler.MaxLOD = D3D12_FLOAT32_MAX;
+        sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        D3D12_ROOT_SIGNATURE_DESC rsDesc{};
+        rsDesc.NumParameters = 2;
+        rsDesc.pParameters = rootParams;
+        rsDesc.NumStaticSamplers = 1;
+        rsDesc.pStaticSamplers = &sampler;
+        rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+
+        ComPtr<ID3DBlob> sigBlob, errBlob;
+        HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
+        if (FAILED(hr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Serialize cloud render root sig failed"; g_cloudPipelineStatus = "Cloud render root signature failed"; return false; }
+        hr = g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_cloudRenderRootSignature));
+        if (FAILED(hr)) { if (error) *error = "Create cloud render root sig failed"; g_cloudPipelineStatus = "Cloud render root signature failed"; return false; }
+
+        const std::filesystem::path shaderPath = CloudRenderShaderPath();
+        auto compileEntry = [&](const char* entryPoint, const char* target, ComPtr<ID3DBlob>& outBlob) -> bool {
+            errBlob.Reset();
+            const HRESULT compileHr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE,
+                                                          entryPoint, target, compileFlags, 0, &outBlob, &errBlob);
+            if (FAILED(compileHr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile cloud render shader failed"; return false; }
+            return true;
+        };
+        ComPtr<ID3DBlob> vsBlob, psBlob;
+        if (!compileEntry("CloudVS", "vs_5_0", vsBlob)) { g_cloudPipelineStatus = "Cloud VS compile failed"; return false; }
+        if (!compileEntry("CloudPS", "ps_5_0", psBlob)) { g_cloudPipelineStatus = "Cloud PS compile failed"; return false; }
+
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
+        psoDesc.pRootSignature = g_cloudRenderRootSignature.Get();
+        psoDesc.VS = {vsBlob->GetBufferPointer(), vsBlob->GetBufferSize()};
+        psoDesc.PS = {psBlob->GetBufferPointer(), psBlob->GetBufferSize()};
+        psoDesc.SampleMask = UINT_MAX;
+        psoDesc.SampleDesc.Count = 1;
+        psoDesc.NumRenderTargets = 1;
+        psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+        psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+        psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+        psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+        psoDesc.DepthStencilState.DepthEnable = FALSE;
+        psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+        // Standard alpha blend over the existing sky color in the RT.
+        D3D12_RENDER_TARGET_BLEND_DESC& blend = psoDesc.BlendState.RenderTarget[0];
+        blend.BlendEnable = TRUE;
+        blend.SrcBlend = D3D12_BLEND_SRC_ALPHA;
+        blend.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+        blend.BlendOp = D3D12_BLEND_OP_ADD;
+        blend.SrcBlendAlpha = D3D12_BLEND_ONE;
+        blend.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+        blend.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+        blend.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+        psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+
+        HRESULT psoHr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_cloudRenderPso));
+        if (FAILED(psoHr)) { if (error) *error = "Create cloud render PSO failed"; g_cloudPipelineStatus = "Cloud render PSO failed"; return false; }
+    }
+
+    g_cloudPipelinesReady = true;
+    g_cloudPipelineStatus = "Cloud pipelines ready";
+    return true;
+}
+
+bool EnsureCloudVolume(int seed, std::string* error)
+{
+    if (!EnsureCloudPipelines(error)) return false;
+
+    if (!g_gpuClouds.volumeTexture)
+    {
+        D3D12_HEAP_PROPERTIES heap = HeapProperties(D3D12_HEAP_TYPE_DEFAULT);
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE3D;
+        desc.Width = kCloudVolumeResolution;
+        desc.Height = kCloudVolumeResolution;
+        desc.DepthOrArraySize = static_cast<UINT16>(kCloudVolumeResolution);
+        desc.MipLevels = 1;
+        desc.Format = DXGI_FORMAT_R8_UNORM;
+        desc.SampleDesc.Count = 1;
+        desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+        HRESULT hr = g_device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
+                                                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+                                                       IID_PPV_ARGS(&g_gpuClouds.volumeTexture));
+        if (FAILED(hr)) { if (error) *error = "Create cloud volume texture failed"; return false; }
+        g_gpuClouds.volumeState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+
+        if (!g_gpuClouds.volumeSrvAllocated)
+        {
+            AllocateSrvDescriptor(nullptr, &g_gpuClouds.volumeSrvCpu, &g_gpuClouds.volumeSrvGpu);
+            g_gpuClouds.volumeSrvAllocated = true;
+        }
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+        srvDesc.Format = DXGI_FORMAT_R8_UNORM;
+        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D;
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Texture3D.MipLevels = 1;
+        g_device->CreateShaderResourceView(g_gpuClouds.volumeTexture.Get(), &srvDesc, g_gpuClouds.volumeSrvCpu);
+    }
+
+    if (g_gpuClouds.volumeReady && g_gpuClouds.cachedSeed == seed)
+    {
+        return true;
+    }
+
+    ComPtr<ID3D12CommandAllocator> allocator;
+    ComPtr<ID3D12GraphicsCommandList> commandList;
+    ThrowIfFailed(g_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)), "Cloud volume allocator failed");
+    ThrowIfFailed(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&commandList)), "Cloud volume CL failed");
+
+    if (g_gpuClouds.volumeState != D3D12_RESOURCE_STATE_UNORDERED_ACCESS)
+    {
+        D3D12_RESOURCE_BARRIER b{};
+        b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        b.Transition.pResource = g_gpuClouds.volumeTexture.Get();
+        b.Transition.StateBefore = g_gpuClouds.volumeState;
+        b.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        commandList->ResourceBarrier(1, &b);
+    }
+
+    // Per-call descriptor heap (1 UAV slot — cheap and avoids stomping the
+    // shared SRV heap that ImGui owns).
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    heapDesc.NumDescriptors = 1;
+    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    ComPtr<ID3D12DescriptorHeap> uavHeap;
+    HRESULT hr = g_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&uavHeap));
+    if (FAILED(hr)) { if (error) *error = "Create cloud volume UAV heap failed"; return false; }
+
+    D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+    uavDesc.Format = DXGI_FORMAT_R8_UNORM;
+    uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE3D;
+    uavDesc.Texture3D.WSize = kCloudVolumeResolution;
+    g_device->CreateUnorderedAccessView(g_gpuClouds.volumeTexture.Get(), nullptr, &uavDesc,
+                                         uavHeap->GetCPUDescriptorHandleForHeapStart());
+
+    CloudVolumeShaderConstants vc{};
+    vc.resolution = kCloudVolumeResolution;
+    vc.seed = seed;
+    vc.pad0 = 0.0f;
+    vc.pad1 = 0.0f;
+
+    ID3D12DescriptorHeap* heaps[] = {uavHeap.Get()};
+    commandList->SetDescriptorHeaps(1, heaps);
+    commandList->SetComputeRootSignature(g_cloudVolumeRootSignature.Get());
+    commandList->SetPipelineState(g_cloudVolumePso.Get());
+    commandList->SetComputeRoot32BitConstants(0, 4, &vc, 0);
+    commandList->SetComputeRootDescriptorTable(1, uavHeap->GetGPUDescriptorHandleForHeapStart());
+    const UINT groupCount = (kCloudVolumeResolution + 3u) / 4u;
+    commandList->Dispatch(groupCount, groupCount, groupCount);
+
+    D3D12_RESOURCE_BARRIER toSrv{};
+    toSrv.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    toSrv.Transition.pResource = g_gpuClouds.volumeTexture.Get();
+    toSrv.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    toSrv.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    toSrv.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    commandList->ResourceBarrier(1, &toSrv);
+    g_gpuClouds.volumeState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+
+    ThrowIfFailed(commandList->Close(), "Close cloud volume CL failed");
+    ID3D12CommandList* lists[] = {commandList.Get()};
+    g_commandQueue->ExecuteCommandLists(1, lists);
+    const UINT64 fenceValue = ++g_fenceLastSignaledValue;
+    ThrowIfFailed(g_commandQueue->Signal(g_fence.Get(), fenceValue), "Signal cloud volume fence failed");
+    WaitForFenceValue(fenceValue);
+
+    g_gpuClouds.cachedSeed = seed;
+    g_gpuClouds.volumeReady = true;
+    return true;
+}
+
+// Records the cloud render pass into the supplied command list. Caller must
+// have the color RT bound and the cloud volume in PIXEL_SHADER_RESOURCE state.
+// Caller is responsible for re-binding any other root signatures it needs.
+void RenderCloudPass(ID3D12GraphicsCommandList* commandList,
+                    const rock::CloudSettings& clouds,
+                    const CloudRenderShaderConstants& base,
+                    float windOffsetX,
+                    float windOffsetZ)
+{
+    if (!clouds.enabled) return;
+    if (!g_gpuClouds.volumeReady || !g_gpuClouds.volumeTexture) return;
+    if (!g_cloudPipelinesReady) return;
+
+    CloudRenderShaderConstants c = base;
+    c.cloudColor[0] = clouds.color[0];
+    c.cloudColor[1] = clouds.color[1];
+    c.cloudColor[2] = clouds.color[2];
+    c.cloudColor[3] = 1.0f;
+    c.altitudeMin = clouds.altitudeMin;
+    c.altitudeMax = std::max(clouds.altitudeMax, clouds.altitudeMin + 1.0f);
+    c.horizontalScale = std::max(clouds.horizontalScale, 1.0f);
+    c.coverage = std::clamp(clouds.coverage, 0.0f, 1.0f);
+    c.densityMultiplier = std::clamp(clouds.densityMultiplier, 0.0f, 8.0f);
+    c.absorption = std::max(clouds.absorption, 0.0f);
+    c.windOffsetX = windOffsetX;
+    c.windOffsetZ = windOffsetZ;
+    c.qualitySamples = std::clamp(clouds.qualitySamples, 8, 128);
+    c.pad0 = c.pad1 = c.pad2 = 0.0f;
+
+    // Cloud root sig has its own descriptor table for the volume SRV. We rely
+    // on the SRV heap (g_srvHeap) being bound by the caller; the cloud volume
+    // SRV was allocated from the same heap during EnsureCloudVolume.
+    commandList->SetGraphicsRootSignature(g_cloudRenderRootSignature.Get());
+    commandList->SetPipelineState(g_cloudRenderPso.Get());
+    commandList->SetGraphicsRoot32BitConstants(0, sizeof(c) / 4, &c, 0);
+    commandList->SetGraphicsRootDescriptorTable(1, g_gpuClouds.volumeSrvGpu);
+    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    commandList->DrawInstanced(3, 1, 0, 0);
+}
+
 int EffectiveMeshResolution(int resolution, int lod)
 {
     return std::clamp(resolution / (1 << std::clamp(lod, 0, 4)), 16, 2048);
@@ -3627,6 +4054,19 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.skySunSizeDegrees != g_graph.Settings().sky.sunSizeDegrees ||
         g_gpuMeshPreview.skyHorizonSoftness != g_graph.Settings().sky.horizonSoftness ||
         g_gpuMeshPreview.skySunGlowStrength != g_graph.Settings().sky.sunGlowStrength ||
+        g_gpuMeshPreview.cloudsEnabled != (g_graph.Settings().clouds.enabled ? 1 : 0) ||
+        g_gpuMeshPreview.cloudSeed != g_graph.Settings().clouds.seed ||
+        g_gpuMeshPreview.cloudCoverage != g_graph.Settings().clouds.coverage ||
+        g_gpuMeshPreview.cloudDensityMultiplier != g_graph.Settings().clouds.densityMultiplier ||
+        g_gpuMeshPreview.cloudAltitudeMin != g_graph.Settings().clouds.altitudeMin ||
+        g_gpuMeshPreview.cloudAltitudeMax != g_graph.Settings().clouds.altitudeMax ||
+        g_gpuMeshPreview.cloudHorizontalScale != g_graph.Settings().clouds.horizontalScale ||
+        g_gpuMeshPreview.cloudAbsorption != g_graph.Settings().clouds.absorption ||
+        g_gpuMeshPreview.cloudColor != g_graph.Settings().clouds.color ||
+        g_gpuMeshPreview.cloudWindDirectionDegrees != g_graph.Settings().clouds.windDirectionDegrees ||
+        g_gpuMeshPreview.cloudWindSpeed != g_graph.Settings().clouds.windSpeedMetersPerSec ||
+        g_gpuMeshPreview.cloudQualitySamples != g_graph.Settings().clouds.qualitySamples ||
+        (g_graph.Settings().clouds.enabled && g_graph.Settings().clouds.windSpeedMetersPerSec > 0.0f) ||
         (showGrid && !g_gpuMeshPreview.gridVertexBuffer) ||
         g_gpuMeshPreview.colorState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     if (!meshDirty && !viewportDirty) return true;
@@ -3845,8 +4285,49 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         skyBase.sunDirection[2] = constants.sunDirection[2];
         RenderSkyPass(commandList.Get(), g_graph.Settings().sky, skyBase);
 
+        // Cloud pass: alpha-blends volumetric clouds onto the sky color
+        // before terrain draws. The terrain mesh draws with depth test below
+        // and overwrites cloud pixels where it's closer to the camera, giving
+        // the "mountain breaks through clouds" look.
         ID3D12DescriptorHeap* descriptorHeaps[] = {g_srvHeap.Get()};
         commandList->SetDescriptorHeaps(1, descriptorHeaps);
+
+        const rock::CloudSettings& cloudSettings = g_graph.Settings().clouds;
+        if (cloudSettings.enabled)
+        {
+            CloudRenderShaderConstants cloudBase{};
+            cloudBase.cameraPosition[0] = constants.cameraPosition[0];
+            cloudBase.cameraPosition[1] = constants.cameraPosition[1];
+            cloudBase.cameraPosition[2] = constants.cameraPosition[2];
+            cloudBase.cameraRight[0] = constants.cameraRight[0];
+            cloudBase.cameraRight[1] = constants.cameraRight[1];
+            cloudBase.cameraRight[2] = constants.cameraRight[2];
+            cloudBase.cameraUp[0] = constants.cameraUp[0];
+            cloudBase.cameraUp[1] = constants.cameraUp[1];
+            cloudBase.cameraUp[2] = constants.cameraUp[2];
+            cloudBase.cameraForward[0] = constants.cameraForward[0];
+            cloudBase.cameraForward[1] = constants.cameraForward[1];
+            cloudBase.cameraForward[2] = constants.cameraForward[2];
+            cloudBase.projScaleX = constants.projScaleX;
+            cloudBase.projScaleY = constants.projScaleY;
+            cloudBase.panNdcX = constants.panNdcX;
+            cloudBase.panNdcY = constants.panNdcY;
+            cloudBase.sunDirection[0] = constants.sunDirection[0];
+            cloudBase.sunDirection[1] = constants.sunDirection[1];
+            cloudBase.sunDirection[2] = constants.sunDirection[2];
+
+            const float windRad = cloudSettings.windDirectionDegrees * 3.14159265358979323846f / 180.0f;
+            const float seconds = static_cast<float>(std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count());
+            const float windOffsetX = std::cos(windRad) * cloudSettings.windSpeedMetersPerSec * seconds;
+            const float windOffsetZ = std::sin(windRad) * cloudSettings.windSpeedMetersPerSec * seconds;
+
+            std::string cloudVolumeError;
+            if (EnsureCloudVolume(cloudSettings.seed, &cloudVolumeError))
+            {
+                RenderCloudPass(commandList.Get(), cloudSettings, cloudBase, windOffsetX, windOffsetZ);
+            }
+        }
+
         commandList->SetGraphicsRootSignature(g_meshPreviewRootSignature.Get());
         commandList->SetGraphicsRoot32BitConstants(0, sizeof(constants) / 4, &constants, 0);
         commandList->SetGraphicsRootDescriptorTable(1, g_gpuMeshPreview.shadowSrvGpu);
@@ -3934,6 +4415,18 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.skySunSizeDegrees = g_graph.Settings().sky.sunSizeDegrees;
         g_gpuMeshPreview.skyHorizonSoftness = g_graph.Settings().sky.horizonSoftness;
         g_gpuMeshPreview.skySunGlowStrength = g_graph.Settings().sky.sunGlowStrength;
+        g_gpuMeshPreview.cloudsEnabled = g_graph.Settings().clouds.enabled ? 1 : 0;
+        g_gpuMeshPreview.cloudSeed = g_graph.Settings().clouds.seed;
+        g_gpuMeshPreview.cloudCoverage = g_graph.Settings().clouds.coverage;
+        g_gpuMeshPreview.cloudDensityMultiplier = g_graph.Settings().clouds.densityMultiplier;
+        g_gpuMeshPreview.cloudAltitudeMin = g_graph.Settings().clouds.altitudeMin;
+        g_gpuMeshPreview.cloudAltitudeMax = g_graph.Settings().clouds.altitudeMax;
+        g_gpuMeshPreview.cloudHorizontalScale = g_graph.Settings().clouds.horizontalScale;
+        g_gpuMeshPreview.cloudAbsorption = g_graph.Settings().clouds.absorption;
+        g_gpuMeshPreview.cloudColor = g_graph.Settings().clouds.color;
+        g_gpuMeshPreview.cloudWindDirectionDegrees = g_graph.Settings().clouds.windDirectionDegrees;
+        g_gpuMeshPreview.cloudWindSpeed = g_graph.Settings().clouds.windSpeedMetersPerSec;
+        g_gpuMeshPreview.cloudQualitySamples = g_graph.Settings().clouds.qualitySamples;
         g_gpuMeshPreview.colorState    = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         return true;
     }
@@ -5823,6 +6316,23 @@ void DrawDisplaySettingsPanel()
             DrawPropertyFloatRow("太陽サイズ (deg)", "SkySunSize", &sky.sunSizeDegrees, 0.1f, 20.0f, rock::SkySettings{}.sunSizeDegrees, "Sky sun size changed", false, "太陽ディスクの直径(度)。実際の太陽は約 0.5 度ですが、視認性のためデフォルトはやや大きめです。");
             DrawPropertyFloatRow("地平ソフトネス", "SkyHorizonSoftness", &sky.horizonSoftness, 0.1f, 6.0f, rock::SkySettings{}.horizonSoftness, "Sky horizon softness changed", false, "天頂↔地平のグラデーション形状。大きいほど地平色が空高くまで広がります(=もやっとした地平)。1.0 で線形補間。");
             DrawPropertyFloatRow("太陽グロー", "SkySunGlow", &sky.sunGlowStrength, 0.0f, 2.0f, rock::SkySettings{}.sunGlowStrength, "Sky sun glow changed", false, "太陽周辺の柔らかい光の強さ。0 でグロー無し。");
+        }
+
+        rock::CloudSettings& clouds = settings.clouds;
+        DrawPropertyBoolRow("ボリューム雲", "CloudEnabled", &clouds.enabled, "Clouds enabled toggled", "ボリューム雲のレイマーチ描画を有効化します。3D 密度テクスチャ (128³ R8 = 2MB) を生成し、雲帯 [Altitude Min, Max] とのレイ交差をフルスクリーンパスで毎フレーム積分します。", rock::CloudSettings{}.enabled);
+        if (clouds.enabled)
+        {
+            DrawPropertyIntRow("Cloud Seed", "CloudSeed", &clouds.seed, 0, 999999, rock::CloudSettings{}.seed, "Cloud seed changed", false, "3D 密度ノイズのシード。変更すると雲のパターンが変わります(テクスチャを再生成)。");
+            DrawPropertyFloatRow("Coverage", "CloudCoverage", &clouds.coverage, 0.0f, 1.0f, rock::CloudSettings{}.coverage, "Cloud coverage changed", false, "空に占める雲の割合。0 で雲無し、1 で空一面が雲。");
+            DrawPropertyFloatRow("Density", "CloudDensity", &clouds.densityMultiplier, 0.0f, 4.0f, rock::CloudSettings{}.densityMultiplier, "Cloud density changed", false, "雲の濃さ倍率。大きいほど雲が不透明になります。");
+            DrawPropertyFloatRow("Altitude Min (m)", "CloudAltMin", &clouds.altitudeMin, 0.0f, 8000.0f, rock::CloudSettings{}.altitudeMin, "Cloud altitude min changed", false, "雲帯の下限高度 (m)。地形をすっぽり包むには地形最高点より低い値、上に浮かべるなら高い値を指定。", "%.0f");
+            DrawPropertyFloatRow("Altitude Max (m)", "CloudAltMax", &clouds.altitudeMax, 0.0f, 12000.0f, rock::CloudSettings{}.altitudeMax, "Cloud altitude max changed", false, "雲帯の上限高度 (m)。Max - Min が雲層の厚さです。", "%.0f");
+            DrawPropertyFloatRow("Horizontal Scale (m)", "CloudHorizScale", &clouds.horizontalScale, 200.0f, 30000.0f, rock::CloudSettings{}.horizontalScale, "Cloud scale changed", false, "雲の水平スケール。大きいほど雲塊が大きく、小さいほど細かい雲になります。", "%.0f");
+            DrawPropertyFloatRow("Absorption", "CloudAbsorption", &clouds.absorption, 0.0f, 0.5f, rock::CloudSettings{}.absorption, "Cloud absorption changed", false, "Beer-Lambert の吸収係数。大きいほど雲がはっきり不透明になります。", "%.4f");
+            DrawColorRgbRow("Cloud Color", "CloudColor", clouds.color, rock::CloudSettings{}.color);
+            DrawPropertyFloatRow("Wind Direction (deg)", "CloudWindDir", &clouds.windDirectionDegrees, 0.0f, 360.0f, rock::CloudSettings{}.windDirectionDegrees, "Cloud wind direction changed", false, "風の向き(度、北=0、東=90)。Wind Speed > 0 のときに雲が流れる方向。", "%.0f");
+            DrawPropertyFloatRow("Wind Speed (m/s)", "CloudWindSpeed", &clouds.windSpeedMetersPerSec, 0.0f, 200.0f, rock::CloudSettings{}.windSpeedMetersPerSec, "Cloud wind speed changed", false, "雲が流れる速度 (m/s)。0 で静止。動かすとフレーム毎にビューポートが再描画され負荷が増えます。");
+            DrawPropertyIntRow("Quality (samples)", "CloudQuality", &clouds.qualitySamples, 8, 96, rock::CloudSettings{}.qualitySamples, "Cloud quality changed", false, "1 ピクセルあたりのレイマーチサンプル数。大きいほど雲のディテールが上がりますが負荷も増えます。32 が標準、低スペックなら 16、高品質なら 64。");
         }
 
         ImGui::EndTable();

@@ -241,10 +241,27 @@ struct SkySettings
     float sunGlowStrength = 0.3f;
 };
 
+struct CloudSettings
+{
+    bool enabled = true;
+    int seed = 1;
+    float coverage = 0.55f;
+    float densityMultiplier = 1.0f;
+    float altitudeMin = 1500.0f;
+    float altitudeMax = 3500.0f;
+    float horizontalScale = 4000.0f;
+    float absorption = 0.06f;
+    std::array<float, 3> color = {1.0f, 1.0f, 1.0f};
+    float windDirectionDegrees = 45.0f;
+    float windSpeedMetersPerSec = 0.0f;
+    int qualitySamples = 32;
+};
+
 struct GraphSettings
 {
     PreviewSettings preview;
     SkySettings sky;
+    CloudSettings clouds;
 };
 
 struct MeshVertex
