@@ -1881,7 +1881,7 @@ bool NodeGraph::CreateLink(GraphId startPin, GraphId endPin)
     std::erase_if(links_, [endPin](const Link& link) {
         return link.endPin == endPin;
     });
-    links_.push_back({nextLinkId_++, startPin, endPin});
+    links_.push_back({AllocateGraphId(), startPin, endPin});
     MarkDirty("Link changed");
     return true;
 }
@@ -1976,31 +1976,14 @@ GraphId NodeGraph::CreateNode(NodeKind kind)
 void NodeGraph::ReplaceNodes(std::vector<Node> nodes)
 {
     nodes_ = std::move(nodes);
-    nextNodeId_ = 1;
-    nextPinId_ = 11;
-    for (const Node& node : nodes_)
-    {
-        nextNodeId_ = std::max(nextNodeId_, node.id + 1);
-        for (const Pin& pin : node.inputs)
-        {
-            nextPinId_ = std::max(nextPinId_, pin.id + 1);
-        }
-        for (const Pin& pin : node.outputs)
-        {
-            nextPinId_ = std::max(nextPinId_, pin.id + 1);
-        }
-    }
+    RebuildNextGraphId();
     MarkDirty("Project nodes loaded");
 }
 
 void NodeGraph::ReplaceLinks(std::vector<Link> links)
 {
     links_ = std::move(links);
-    nextLinkId_ = 101;
-    for (const Link& link : links_)
-    {
-        nextLinkId_ = std::max(nextLinkId_, link.id + 1);
-    }
+    RebuildNextGraphId();
     MarkDirty("Project links loaded");
 }
 
@@ -2418,7 +2401,7 @@ void NodeGraph::Evaluate(int previewMeshResolution)
 
 GraphId NodeGraph::AddNode(NodeKind kind, std::string title)
 {
-    const GraphId id = nextNodeId_++;
+    const GraphId id = AllocateGraphId();
     nodes_.push_back({id, kind, std::move(title), {}, {}});
     return id;
 }
@@ -2440,7 +2423,7 @@ GraphId NodeGraph::AddPin(GraphId nodeId, PinKind kind, ValueType valueType, std
         return 0;
     }
 
-    const GraphId id = nextPinId_++;
+    const GraphId id = AllocateGraphId();
     Pin pin{id, nodeId, kind, valueType, std::move(label)};
     if (kind == PinKind::Input)
     {
@@ -2455,7 +2438,34 @@ GraphId NodeGraph::AddPin(GraphId nodeId, PinKind kind, ValueType valueType, std
 
 void NodeGraph::AddInitialLink(GraphId startPin, GraphId endPin)
 {
-    links_.push_back({nextLinkId_++, startPin, endPin});
+    links_.push_back({AllocateGraphId(), startPin, endPin});
+}
+
+GraphId NodeGraph::AllocateGraphId()
+{
+    return nextGraphId_++;
+}
+
+void NodeGraph::RebuildNextGraphId()
+{
+    GraphId maxId = 0;
+    for (const Node& node : nodes_)
+    {
+        maxId = std::max(maxId, node.id);
+        for (const Pin& pin : node.inputs)
+        {
+            maxId = std::max(maxId, pin.id);
+        }
+        for (const Pin& pin : node.outputs)
+        {
+            maxId = std::max(maxId, pin.id);
+        }
+    }
+    for (const Link& link : links_)
+    {
+        maxId = std::max(maxId, link.id);
+    }
+    nextGraphId_ = maxId + 1;
 }
 
 std::string_view ToString(ShapeKind kind)

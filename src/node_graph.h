@@ -200,7 +200,7 @@ struct PreviewSettings
     int resolution = 512;
     int lod = 0;
     bool showSurface = true;
-    bool showWireframe = true;
+    bool showWireframe = false;
     bool showGrid = true;
     int lightingMode = 0;
     float sunAzimuthDegrees = 315.0f;
@@ -346,6 +346,8 @@ public:
     void Evaluate(int previewMeshResolution = 0);
 
 private:
+    GraphId AllocateGraphId();
+    void RebuildNextGraphId();
     GraphId AddNode(NodeKind kind, std::string title);
     GraphId AddPin(GraphId nodeId, PinKind kind, ValueType valueType, std::string label);
     void AddInitialLink(GraphId startPin, GraphId endPin);
@@ -373,9 +375,7 @@ private:
     GraphSettings settings_;
     std::unordered_map<GraphId, HeightfieldNodeCache> heightfieldCache_;
     EvaluationSummary evaluation_;
-    GraphId nextNodeId_ = 1;
-    GraphId nextPinId_ = 11;
-    GraphId nextLinkId_ = 101;
+    GraphId nextGraphId_ = 1;
 };
 
 std::string_view ToString(ShapeKind kind);

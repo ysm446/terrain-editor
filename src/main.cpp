@@ -5195,19 +5195,22 @@ void DrawDisplaySettingsPanel()
         {
             SaveAppSettingsSilently();
         }
-        if (DrawPropertyIntRow("Grid Cells", "DisplayGridCells", &settings.preview.gridCellCount, 1, 200, rock::PreviewSettings{}.gridCellCount, "Grid cell count changed", false, "グリッド全体の1辺あたりのマス数です。10なら10 x 10です。"))
+        if (settings.preview.showGrid)
         {
-            settings.preview.gridCellCount = std::clamp(settings.preview.gridCellCount, 1, 200);
-            SaveAppSettingsSilently();
-        }
-        if (DrawPropertyFloatRow("Grid Cell Size (m)", "DisplayGridCellSize", &settings.preview.gridCellSizeMeters, 1.0f, 10000.0f, rock::PreviewSettings{}.gridCellSizeMeters, "Grid cell size changed", false, "グリッド1マスの長さです。"))
-        {
-            settings.preview.gridCellSizeMeters = std::clamp(settings.preview.gridCellSizeMeters, 1.0f, 10000.0f);
-            SaveAppSettingsSilently();
-        }
-        if (DrawColorRgbRow("Grid Color", "DisplayGridColor", settings.preview.gridColor, rock::PreviewSettings{}.gridColor))
-        {
-            SaveAppSettingsSilently();
+            if (DrawPropertyIntRow("Grid Cells", "DisplayGridCells", &settings.preview.gridCellCount, 1, 200, rock::PreviewSettings{}.gridCellCount, "Grid cell count changed", false, "グリッド全体の1辺あたりのマス数です。10なら10 x 10です。"))
+            {
+                settings.preview.gridCellCount = std::clamp(settings.preview.gridCellCount, 1, 200);
+                SaveAppSettingsSilently();
+            }
+            if (DrawPropertyFloatRow("Grid Cell Size (m)", "DisplayGridCellSize", &settings.preview.gridCellSizeMeters, 1.0f, 10000.0f, rock::PreviewSettings{}.gridCellSizeMeters, "Grid cell size changed", false, "グリッド1マスの長さです。"))
+            {
+                settings.preview.gridCellSizeMeters = std::clamp(settings.preview.gridCellSizeMeters, 1.0f, 10000.0f);
+                SaveAppSettingsSilently();
+            }
+            if (DrawColorRgbRow("Grid Color", "DisplayGridColor", settings.preview.gridColor, rock::PreviewSettings{}.gridColor))
+            {
+                SaveAppSettingsSilently();
+            }
         }
         if (DrawPropertyComboRow("Lighting Mode", "DisplayLightingMode", &settings.preview.lightingMode, "Simple\0PBR Preview\0Shadow Debug\0", "3Dビューのライティングモードです。Simple はマスク確認向け、PBR Preview は地形の陰影確認向け、Shadow Debug はシャドウ判定の確認用です。", rock::PreviewSettings{}.lightingMode))
         {
