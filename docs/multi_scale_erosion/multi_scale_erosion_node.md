@@ -110,7 +110,27 @@ for i in 1..iterations:
     if enableDeposition  then  step_Deposition
 ```
 
-参照実装では「erosion → thermal → deposition」の順を推奨しています。論文の "Multi-scale" は粗→細グリッドへ x2 アップサンプリングしながら同じ三組を適用する戦略ですが、初期版では入力解像度に対する単一スケール処理に留めています (※「今後の課題」)。
+参照実装では「erosion → thermal → deposition」の順を推奨しています。
+
+## マルチグリッド (Use Multigrid)
+
+`useMultigrid` (既定 ON) で論文本来のマルチスケール処理が有効になります。粗い解像度から目標解像度へ x2 でアップサンプリングしながら、各段で `Iterations` 回ずつ上記の三組を反復します:
+
+```
+levels = [64, 128, ..., target_resolution]   // x2 で増やす
+heights = bilinear_downsample(input, levels[0])
+for level in levels:
+    if level > prev: heights = bilinear_upsample(heights, level)
+    for i in 1..iterations:
+        step_SPE / step_Thermal / step_Deposition
+```
+
+**効果:**
+- 粗いレベルで `path_length / cellSize` が小さく、`stream` 累積が少ない反復で steady state に達するため、大局の谷ネットワークが安定して決まります。
+- 細かいレベルは大局構造を引き継ぎつつ細部だけを追加するので、**解像度を変えても大局の谷の位置と本数がほぼ変わらない**結果になります。
+- 各段の cell 数は粗いほど少なく (1/4, 1/16, 1/64...)、並列化と組み合わせて全体の評価時間も控えめです (典型的に単一段階の 1.3 倍程度)。
+
+**OFF (単一段階モード):** 入力解像度に対して 1 段階だけ反復します。`Iterations` の意味が「総反復数」になります。実験的にチューニングしたい場合や、プレビューを高速化したい場合に有用です。
 
 ## パラメータ一覧
 
@@ -120,7 +140,8 @@ for i in 1..iterations:
 
 | パラメータ | 既定 | 範囲 | 役割 |
 | --- | --- | --- | --- |
-| `Iterations` | 50 | 0–500 | 1 ノード内で SPE→Thermal→Deposition を繰り返す回数 |
+| `Iterations` | 50 | 0–500 | 1 ノード内で SPE→Thermal→Deposition を繰り返す回数。Multigrid 有効時は各レベルでの反復数 |
+| `Use Multigrid` | true | – | マルチグリッドピラミッド処理 ON/OFF (上記参照) |
 | `Enable Stream Power` | true | – | SPE パス ON/OFF |
 | `Enable Thermal` | true | – | Thermal パス ON/OFF |
 | `Enable Deposition` | true | – | Deposition パス ON/OFF |
@@ -160,6 +181,23 @@ for i in 1..iterations:
 
 - **SPE / Deposition**: クランプ (範囲外は `0` を返す `Slope` / `Stream` / `Sed`)。
 - **Thermal**: ラップアラウンド (3×3 サンプリングが `% (nx, ny)`)。
+
+## 解像度不変性
+
+参照シェーダーは `eps * cellArea` (Thermal の matter) と `rain * cellArea` (Deposition の流量基準) を **実 cellSize の二乗** で計算します。これは解像度を変えると 1 反復あたりの効果が cellSize² で変わってしまい、同じパラメータで解像度だけ変えると見た目が大きくドリフトします (Thermal が高解像度ほど効かなくなり、SPE の V 字が丸まらない)。
+
+本実装ではこれらの `cellArea` を **基準 cellSize = 4 m** (= 解像度 512 / 2048 m terrain) で固定し、解像度に依存しないように補正しています:
+
+```cpp
+constexpr float kRefCellSize = 4.0f;
+constexpr float kRefCellArea = 16.0f;  // = 4 m × 4 m
+matter   = thermalStrength * kRefCellArea;
+cellArea = kRefCellArea * 0.00001f;     // for rain
+```
+
+これで 1 反復あたりの再配分量と雨量寄与は cellSize に依存しなくなります。基準 4 m での既存チューニングは挙動が変わりません。
+
+ただし **SPE の `stream` 累積** はピンポン式の前進反復で、長距離流路が成熟するのに必要な反復回数が `path_length / cellSize` に比例します。完全な解像度不変は構造上不可能なので、解像度を上げた場合は `Iterations` を比例的に増やすのが推奨です (例: 512 → 1024 で iterations を 50 → 80〜100)。
 
 ## 出力フィールドの正規化
 

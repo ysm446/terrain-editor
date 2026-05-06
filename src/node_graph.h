@@ -186,6 +186,12 @@ struct MultiScaleErosionSettings
     bool enableStreamPower = true;
     bool enableThermal = true;
     bool enableDeposition = true;
+    // Multi-grid pyramid: run progressively from a coarse grid up to the
+    // target resolution, with bilinear upsampling between levels. Drainage
+    // networks form quickly at coarse scales (path_length / cellSize is
+    // small) and finer levels only refine, giving near-resolution-invariant
+    // results. Disable to fall back to a single-resolution simulation.
+    bool useMultigrid = true;
 
     // Stream Power Erosion (erosion.glsl)
     float speStrength = 0.0005f;        // k

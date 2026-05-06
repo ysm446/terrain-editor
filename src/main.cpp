@@ -1507,6 +1507,7 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
                     {"thermalNoiseWavelength", node.multiScaleErosion.thermalNoiseWavelength},
                     {"depositionStrength", node.multiScaleErosion.depositionStrength},
                     {"rain", node.multiScaleErosion.rain},
+                    {"useMultigrid", node.multiScaleErosion.useMultigrid},
                 }},
                 {"erosionNoise", {
                     {"frequency", node.erosionNoise.frequency},
@@ -1746,6 +1747,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 node.multiScaleErosion.thermalNoiseWavelength = std::clamp(nodeMultiScaleErosionJson.value("thermalNoiseWavelength", node.multiScaleErosion.thermalNoiseWavelength), 0.0f, 0.05f);
                 node.multiScaleErosion.depositionStrength = std::clamp(nodeMultiScaleErosionJson.value("depositionStrength", node.multiScaleErosion.depositionStrength), 0.0f, 8.0f);
                 node.multiScaleErosion.rain = std::clamp(nodeMultiScaleErosionJson.value("rain", node.multiScaleErosion.rain), 0.0f, 10.0f);
+                node.multiScaleErosion.useMultigrid = nodeMultiScaleErosionJson.value("useMultigrid", node.multiScaleErosion.useMultigrid);
 
                 const auto readPins = [&](const nlohmann::json& pinsJson, rock::PinKind pinKind, std::vector<rock::Pin>& pins) {
                     if (!pinsJson.is_array())
@@ -5241,7 +5243,11 @@ void DrawPropertiesPanel()
         mse.depositionStrength = std::clamp(mse.depositionStrength, 0.0f, 8.0f);
         mse.rain = std::clamp(mse.rain, 0.0f, 10.0f);
 
-        if (DrawPropertyIntRow("Iterations", "MseIterations", &mse.iterations, 0, 500, rock::MultiScaleErosionSettings{}.iterations, "Multi-scale erosion iterations changed", true, "SPE → Thermal → Deposition の 3 パスを繰り返す回数です。多いほど浸食が進みますが計算時間も増えます。"))
+        if (DrawPropertyIntRow("Iterations", "MseIterations", &mse.iterations, 0, 500, rock::MultiScaleErosionSettings{}.iterations, "Multi-scale erosion iterations changed", true, "SPE → Thermal → Deposition の 3 パスを繰り返す回数です。Multigrid 有効時は各レベルで個別に反復します (粗→細の各段で同じ回数)。多いほど浸食が進みますが計算時間も増えます。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyBoolRow("Use Multigrid", "MseUseMultigrid", &mse.useMultigrid, "Multi-scale erosion multigrid toggled", "粗い解像度から目標解像度へ x2 アップサンプルしながら段階的に浸食を適用するピラミッド処理を有効にします。解像度を変えても結果が安定しやすくなります (Schott et al. 論文の本来の構成)。OFF にすると入力解像度で 1 段階のみの単純処理になります。", rock::MultiScaleErosionSettings{}.useMultigrid))
         {
             EvaluateGraph();
         }

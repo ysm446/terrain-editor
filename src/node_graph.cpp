@@ -169,6 +169,7 @@ uint64_t HashMultiScaleErosionSettings(const MultiScaleErosionSettings& settings
     HashCombine(hash, HashFloat(settings.thermalNoiseWavelength));
     HashCombine(hash, HashFloat(settings.depositionStrength));
     HashCombine(hash, HashFloat(settings.rain));
+    HashCombine(hash, static_cast<uint64_t>(settings.useMultigrid ? 1 : 0));
     HashCombine(hash, static_cast<uint64_t>(resolution));
     return hash;
 }
@@ -1306,6 +1307,22 @@ void ApplyErosionNoise(HeightfieldGrid& grid, const ErosionNoiseSettings& settin
 // stencil with wraparound boundary, matching the shader.
 namespace mse
 {
+// Coarsest resolution in the multi-grid pyramid. Anything coarser than this
+// has too few cells to be meaningful; anything finer is reached by repeated
+// x2 bilinear upsampling.
+constexpr int kCoarsestPyramidLevel = 64;
+
+// Reference cell size for resolution-invariant scaling of per-iter strengths.
+// The shader's `eps * cellArea` (and `rain * cellArea`) factors make the per-
+// iter effect scale with cellSize², which causes the visual outcome to drift
+// noticeably as the user changes Simulation Resolution. We anchor those
+// `cellArea` factors to a fixed reference so the same parameter set produces
+// roughly the same look across resolutions. 4 m matches the typical 512 grid
+// over a 2048 m terrain — existing tunings stay accurate there, and other
+// resolutions get the compensation.
+constexpr float kRefCellSize = 4.0f;
+constexpr float kRefCellArea = kRefCellSize * kRefCellSize;
+
 constexpr std::array<std::pair<int, int>, 8> kNext8 = {{
     {0, 1}, {1, 1}, {1, 0}, {1, -1},
     {0, -1}, {-1, -1}, {-1, 0}, {-1, 1},
@@ -1468,9 +1485,10 @@ void StepStreamPower(std::vector<float>& heightsIn, std::vector<float>& heightsO
 void StepThermal(std::vector<float>& heightsIn, std::vector<float>& heightsOut,
                  int n, float cellSize, const MultiScaleErosionSettings& s)
 {
-    const float cellArea = cellSize * cellSize;
     const float baseTan = std::tan(s.thermalAngleDegrees * 3.14159265358979323846f / 180.0f);
-    const float matter = s.thermalStrength * cellArea;
+    // Resolution-invariant: anchor matter to refCellArea instead of the
+    // current cellArea (see kRefCellSize comment above).
+    const float matter = s.thermalStrength * kRefCellArea;
     ParallelForRows(n, [&](int z) {
         for (int x = 0; x < n; ++x)
         {
@@ -1513,8 +1531,11 @@ void StepDeposition(std::vector<float>& heightsIn, std::vector<float>& heightsOu
                     std::vector<float>& sedIn, std::vector<float>& sedOut,
                     int n, float cellSize, const MultiScaleErosionSettings& s)
 {
-    // Match deposition.glsl: cellArea is the world-space area scaled by 1e-5.
-    const float cellArea = cellSize * cellSize * 0.00001f;
+    // Match deposition.glsl, but anchor cellArea to refCellArea for resolution
+    // invariance (see kRefCellSize comment near the top of the namespace).
+    // Otherwise rain * cellArea (the per-cell rain volume contribution) would
+    // scale with cellSize², shifting deposition behavior across resolutions.
+    constexpr float cellArea = kRefCellArea * 0.00001f;
     ParallelForRows(n, [&](int z) {
         for (int x = 0; x < n; ++x)
         {
@@ -1568,9 +1589,25 @@ void StepDeposition(std::vector<float>& heightsIn, std::vector<float>& heightsOu
         }
     });
 }
-} // namespace mse
+// Bilinear resample of a height array between arbitrary source/target
+// resolutions. Reuses SampleHeightfieldValue's bilinear sampler so the same
+// formula is used as elsewhere in the project.
+inline std::vector<float> ResampleHeightsBilinear(const std::vector<float>& source, int sourceN, int targetN)
+{
+    std::vector<float> result(static_cast<size_t>(targetN) * static_cast<size_t>(targetN), 0.0f);
+    for (int z = 0; z < targetN; ++z)
+    {
+        const float v = targetN > 1 ? static_cast<float>(z) / static_cast<float>(targetN - 1) : 0.0f;
+        for (int x = 0; x < targetN; ++x)
+        {
+            const float u = targetN > 1 ? static_cast<float>(x) / static_cast<float>(targetN - 1) : 0.0f;
+            result[static_cast<size_t>(z * targetN + x)] = SampleHeightfieldValue(source, sourceN, u, v);
+        }
+    }
+    return result;
+}
 
-void ApplyMultiScaleErosion(HeightfieldGrid& grid, const MultiScaleErosionSettings& settings)
+void ApplyMultiScaleErosionSingleLevel(HeightfieldGrid& grid, const MultiScaleErosionSettings& settings)
 {
     const int n = grid.resolution;
     const size_t cellCount = static_cast<size_t>(n) * static_cast<size_t>(n);
@@ -1593,18 +1630,18 @@ void ApplyMultiScaleErosion(HeightfieldGrid& grid, const MultiScaleErosionSettin
     {
         if (settings.enableStreamPower)
         {
-            mse::StepStreamPower(heightsA, heightsB, streamA, streamB, n, cellSize, settings);
+            StepStreamPower(heightsA, heightsB, streamA, streamB, n, cellSize, settings);
             std::swap(heightsA, heightsB);
             std::swap(streamA, streamB);
         }
         if (settings.enableThermal)
         {
-            mse::StepThermal(heightsA, heightsB, n, cellSize, settings);
+            StepThermal(heightsA, heightsB, n, cellSize, settings);
             std::swap(heightsA, heightsB);
         }
         if (settings.enableDeposition)
         {
-            mse::StepDeposition(heightsA, heightsB, streamA, streamB, sedA, sedB, n, cellSize, settings);
+            StepDeposition(heightsA, heightsB, streamA, streamB, sedA, sedB, n, cellSize, settings);
             std::swap(heightsA, heightsB);
             std::swap(streamA, streamB);
             std::swap(sedA, sedB);
@@ -1617,6 +1654,65 @@ void ApplyMultiScaleErosion(HeightfieldGrid& grid, const MultiScaleErosionSettin
     grid.mask.assign(cellCount, 0.0f);
     grid.age.assign(cellCount, 0.0f);
     NormalizeHeightfieldFields(grid);
+}
+} // namespace mse
+
+void ApplyMultiScaleErosion(HeightfieldGrid& grid, const MultiScaleErosionSettings& settings)
+{
+    const int targetN = grid.resolution;
+    const size_t targetCellCount = static_cast<size_t>(targetN) * static_cast<size_t>(targetN);
+    if (targetN < 3 || grid.heights.size() < targetCellCount || settings.iterations <= 0)
+    {
+        return;
+    }
+
+    if (!settings.useMultigrid)
+    {
+        mse::ApplyMultiScaleErosionSingleLevel(grid, settings);
+        return;
+    }
+
+    // Build pyramid: start at kCoarsestPyramidLevel and double up to the target
+    // resolution. The coarse pass establishes the drainage network quickly
+    // (stream propagation cost is O(path_length / cellSize), which is small at
+    // coarse cellSize). Each subsequent level only refines the existing
+    // structure with bilinear upsample + more iterations.
+    std::vector<int> levels;
+    for (int r = mse::kCoarsestPyramidLevel; r < targetN; r *= 2)
+    {
+        levels.push_back(r);
+    }
+    levels.push_back(targetN);
+
+    if (levels.size() <= 1)
+    {
+        // Target is already <= the coarsest level, no benefit from pyramid.
+        mse::ApplyMultiScaleErosionSingleLevel(grid, settings);
+        return;
+    }
+
+    HeightfieldGrid working;
+    working.terrainSizeMeters = grid.terrainSizeMeters;
+    working.resolution = levels[0];
+    working.heights = mse::ResampleHeightsBilinear(grid.heights, targetN, levels[0]);
+
+    for (size_t i = 0; i < levels.size(); ++i)
+    {
+        if (i > 0)
+        {
+            std::vector<float> upsampled = mse::ResampleHeightsBilinear(working.heights, levels[i - 1], levels[i]);
+            working.heights = std::move(upsampled);
+            working.resolution = levels[i];
+        }
+        mse::ApplyMultiScaleErosionSingleLevel(working, settings);
+    }
+
+    // Final level's output is already at target resolution.
+    grid.heights = std::move(working.heights);
+    grid.flows = std::move(working.flows);
+    grid.deposits = std::move(working.deposits);
+    grid.mask.assign(targetCellCount, 0.0f);
+    grid.age.assign(targetCellCount, 0.0f);
 }
 
 MeshData BuildMeshFromHeightfield(const HeightfieldGrid& grid, int meshResolution)
