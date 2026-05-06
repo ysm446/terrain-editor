@@ -3613,12 +3613,12 @@ void DrawHeightfieldMapPreview(const ImVec2& min, const ImVec2& max)
     drawList->AddRectFilled(min, max, ColorToU32(ImVec4(viewportBackground[0], viewportBackground[1], viewportBackground[2], 1.0f)));
 
     const rock::EvaluationSummary& evaluation = g_graph.Evaluation();
-    const rock::MeshData& mesh = evaluation.previewMesh;
-    const int gridResolution = CurrentPreviewMeshResolution();
-    const size_t surfaceVertexCount = static_cast<size_t>(gridResolution) * static_cast<size_t>(gridResolution);
+    const rock::HeightfieldGrid& grid = evaluation.previewHeightfield;
+    const int gridResolution = grid.resolution;
+    const size_t cellCount = static_cast<size_t>(gridResolution) * static_cast<size_t>(gridResolution);
     const bool canDrawMap = evaluation.previewIsHeightmap &&
         gridResolution >= 2 &&
-        surfaceVertexCount <= mesh.vertices.size();
+        grid.heights.size() >= cellCount;
     const bool maskPreview = evaluation.previewShowsMask;
     const auto heightfieldFieldName = [](rock::HeightfieldPreviewField field) {
         switch (field)
@@ -3645,12 +3645,15 @@ void DrawHeightfieldMapPreview(const ImVec2& min, const ImVec2& max)
         return;
     }
 
+    const std::vector<float>& mapValues = maskPreview && grid.mask.size() >= cellCount
+        ? grid.mask
+        : grid.heights;
     float minHeight = std::numeric_limits<float>::max();
     float maxHeight = std::numeric_limits<float>::lowest();
-    for (const rock::MeshVertex& vertex : mesh.vertices)
+    for (const float height : grid.heights)
     {
-        minHeight = std::min(minHeight, vertex.y);
-        maxHeight = std::max(maxHeight, vertex.y);
+        minHeight = std::min(minHeight, height);
+        maxHeight = std::max(maxHeight, height);
     }
     const float heightRange = std::max(0.0001f, maxHeight - minHeight);
 
@@ -3664,7 +3667,8 @@ void DrawHeightfieldMapPreview(const ImVec2& min, const ImVec2& max)
     drawList->PushClipRect(ImVec2(min.x + 1.0f, min.y + 42.0f), ImVec2(max.x - 1.0f, max.y - 1.0f), true);
     drawList->AddRectFilled(mapMin, mapMax, IM_COL32(18, 20, 20, 255));
 
-    const int samples = std::clamp(gridResolution, 2, 256);
+    const int maxVisibleSamples = std::clamp(static_cast<int>(std::ceil(mapSize)), 2, 1024);
+    const int samples = std::clamp(std::min(gridResolution, maxVisibleSamples), 2, gridResolution);
     const float cellSize = mapSize / static_cast<float>(samples);
     for (int z = 0; z < samples; ++z)
     {
@@ -3672,8 +3676,8 @@ void DrawHeightfieldMapPreview(const ImVec2& min, const ImVec2& max)
         for (int x = 0; x < samples; ++x)
         {
             const int srcX = samples > 1 ? static_cast<int>(std::lround(static_cast<float>(x) * static_cast<float>(gridResolution - 1) / static_cast<float>(samples - 1))) : 0;
-            const rock::MeshVertex& vertex = mesh.vertices[static_cast<size_t>(srcZ * gridResolution + srcX)];
-            const float value = maskPreview ? vertex.mask : (vertex.y - minHeight) / heightRange;
+            const float sourceValue = mapValues[static_cast<size_t>(srcZ * gridResolution + srcX)];
+            const float value = maskPreview ? sourceValue : (sourceValue - minHeight) / heightRange;
             const ImVec2 cellMin(mapMin.x + static_cast<float>(x) * cellSize, mapMin.y + static_cast<float>(z) * cellSize);
             const ImVec2 cellMax(mapMin.x + static_cast<float>(x + 1) * cellSize + 0.5f, mapMin.y + static_cast<float>(z + 1) * cellSize + 0.5f);
             drawList->AddRectFilled(cellMin, cellMax, MapPreviewColor(value, maskPreview));
@@ -3682,14 +3686,29 @@ void DrawHeightfieldMapPreview(const ImVec2& min, const ImVec2& max)
     drawList->AddRect(mapMin, mapMax, ThemeColor("border", ImVec4(0.20f, 0.23f, 0.22f, 0.85f)));
     drawList->PopClipRect();
 
-    char info[128]{};
+    char info[192]{};
+    const bool downsampled = samples != gridResolution;
     if (maskPreview)
     {
-        std::snprintf(info, sizeof(info), "%d x %d samples / zoom %.2fx", samples, samples, g_mapViewport.zoom);
+        if (downsampled)
+        {
+            std::snprintf(info, sizeof(info), "%d x %d simulation / %d x %d drawn / zoom %.2fx", gridResolution, gridResolution, samples, samples, g_mapViewport.zoom);
+        }
+        else
+        {
+            std::snprintf(info, sizeof(info), "%d x %d simulation / zoom %.2fx", gridResolution, gridResolution, g_mapViewport.zoom);
+        }
     }
     else
     {
-        std::snprintf(info, sizeof(info), "%d x %d samples / zoom %.2fx / height %.2f m to %.2f m", samples, samples, g_mapViewport.zoom, minHeight, maxHeight);
+        if (downsampled)
+        {
+            std::snprintf(info, sizeof(info), "%d x %d simulation / %d x %d drawn / zoom %.2fx / height %.2f m to %.2f m", gridResolution, gridResolution, samples, samples, g_mapViewport.zoom, minHeight, maxHeight);
+        }
+        else
+        {
+            std::snprintf(info, sizeof(info), "%d x %d simulation / zoom %.2fx / height %.2f m to %.2f m", gridResolution, gridResolution, g_mapViewport.zoom, minHeight, maxHeight);
+        }
     }
     drawList->AddText(ImVec2(min.x + 16.0f, max.y - 28.0f), ThemeColor("mutedText", ImVec4(0.54f, 0.59f, 0.56f, 1.0f)), info);
 }

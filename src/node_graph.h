@@ -401,6 +401,7 @@ struct EvaluationSummary
     std::string previewMessage;
     SdfPreviewStats previewSdf;
     SdfPreviewStats finalSdf;
+    HeightfieldGrid previewHeightfield;
     MeshData previewMesh;
     MeshData finalMesh;
 };
@@ -455,7 +456,7 @@ private:
     const Node* FindUpstreamNode(const Node& node) const;
     SdfPipeline PipelineTo(NodeKind targetKind) const;
     SdfPipeline PipelineToNode(const Node& targetNode) const;
-    MeshData BuildMeshFromHeightPipelineCached(const SdfPipeline& pipeline, int resolution, std::string* message, HeightfieldPreviewField previewField = HeightfieldPreviewField::Heightmap);
+    MeshData BuildMeshFromHeightPipelineCached(const SdfPipeline& pipeline, int resolution, std::string* message, HeightfieldPreviewField previewField = HeightfieldPreviewField::Heightmap, HeightfieldGrid* previewGrid = nullptr);
 
     struct HeightfieldNodeCache
     {

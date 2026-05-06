@@ -1543,11 +1543,11 @@ MeshData BuildMeshFromSdf(const GraphSettings& settings, const SdfPipeline& pipe
     return mesh;
 }
 
-MeshData BuildMeshFromHeightPipeline(const SdfPipeline& pipeline, int resolution, std::string* message, HeightfieldPreviewField previewField = HeightfieldPreviewField::Heightmap)
+MeshData BuildMeshFromHeightPipeline(const SdfPipeline& pipeline, int resolution, std::string* message, HeightfieldPreviewField previewField = HeightfieldPreviewField::Heightmap, HeightfieldGrid* previewGrid = nullptr)
 {
     HeightfieldGrid grid = pipeline.useShape
         ? BuildHeightfieldFromShape(pipeline.shape, std::clamp(pipeline.shape.simulationResolution, 2, 2048), message)
-        : BuildHeightfieldFromHeightmap(pipeline.heightmap, resolution, message);
+        : BuildHeightfieldFromHeightmap(pipeline.heightmap, std::clamp(pipeline.heightmap.simulationResolution, 2, 2048), message);
     if (grid.resolution <= 0)
     {
         return {};
@@ -1572,16 +1572,20 @@ MeshData BuildMeshFromHeightPipeline(const SdfPipeline& pipeline, int resolution
         *message += std::format(" + {} heightfield op{}", pipeline.heightfieldOperations.size(), pipeline.heightfieldOperations.size() == 1 ? "" : "s");
     }
     SelectHeightfieldPreviewField(grid, previewField);
+    if (previewGrid != nullptr)
+    {
+        *previewGrid = grid;
+    }
     return BuildMeshFromHeightfield(grid, resolution);
 }
 } // namespace
 
-MeshData NodeGraph::BuildMeshFromHeightPipelineCached(const SdfPipeline& pipeline, int resolution, std::string* message, HeightfieldPreviewField previewField)
+MeshData NodeGraph::BuildMeshFromHeightPipelineCached(const SdfPipeline& pipeline, int resolution, std::string* message, HeightfieldPreviewField previewField, HeightfieldGrid* previewGrid)
 {
     const GraphId sourceNodeId = pipeline.useShape ? pipeline.shapeNodeId : pipeline.heightmapNodeId;
     if (sourceNodeId == 0)
     {
-        return BuildMeshFromHeightPipeline(pipeline, resolution, message, previewField);
+        return BuildMeshFromHeightPipeline(pipeline, resolution, message, previewField, previewGrid);
     }
 
     const int simulationResolution = pipeline.useShape
@@ -1691,6 +1695,10 @@ MeshData NodeGraph::BuildMeshFromHeightPipelineCached(const SdfPipeline& pipelin
         *message += std::format(" + {} heightfield op{}", pipeline.heightfieldOperations.size(), pipeline.heightfieldOperations.size() == 1 ? "" : "s");
     }
     SelectHeightfieldPreviewField(grid, previewField);
+    if (previewGrid != nullptr)
+    {
+        *previewGrid = grid;
+    }
     return BuildMeshFromHeightfield(grid, resolution);
 }
 
@@ -2290,16 +2298,18 @@ void NodeGraph::Evaluate(int previewMeshResolution)
     if (!previewPipeline.hasSource)
     {
         evaluation_.previewSdf = {};
+        evaluation_.previewHeightfield = {};
         evaluation_.previewMesh = {};
         evaluation_.previewMessage = "No source node";
     }
     else if (previewPipeline.useHeightmap)
     {
         evaluation_.previewSdf = {};
-        evaluation_.previewMesh = BuildMeshFromHeightPipelineCached(previewPipeline, previewMeshResolution, &evaluation_.previewMessage, evaluation_.previewField);
+        evaluation_.previewMesh = BuildMeshFromHeightPipelineCached(previewPipeline, previewMeshResolution, &evaluation_.previewMessage, evaluation_.previewField, &evaluation_.previewHeightfield);
     }
     else
     {
+        evaluation_.previewHeightfield = {};
         evaluation_.previewSdf = BuildDenseSdfPreview(settings_, previewPipeline, previewMeshResolution);
         evaluation_.previewMesh = BuildMeshFromSdf(settings_, previewPipeline, evaluation_.previewSdf);
     }
