@@ -19,7 +19,6 @@ enum class NodeKind
     CrackField,
     OutputMesh,
     HeightmapLoad,
-    FluvialErosion,
     HeightmapBlur,
     Shape,
     ErosionNoise,
@@ -49,12 +48,6 @@ enum class PrimitiveKind
     RockBlob,
 };
 
-enum class FluvialBackend
-{
-    CpuReference,
-    GpuCompute,
-};
-
 enum class MultiScaleErosionBackend
 {
     CpuReference,
@@ -72,7 +65,6 @@ enum class PreviewStage
     Primitive,
     Noise,
     Crack,
-    Fluvial,
     Output,
     HeightmapBlur,
     Shape,
@@ -139,34 +131,6 @@ struct ShapeSettings
     float scaleMeters = 1024.0f;
     float relativeHeightPercent = 50.0f;
     int simulationResolution = 512;
-};
-
-struct FluvialErosionSettings
-{
-    float featureSize = 8.0f;
-    float geologicalAge = 20.0f;
-    int iterations = 25;
-    float channelLength = 128.0f;
-    float erosionStrength = 1.0f;
-    float channeling = 0.25f;
-    float friction = 0.1f;
-    float wearAngleDegrees = 15.0f;
-    float depositAngleDegrees = 0.0f;
-    float maxErosionAngleDegrees = 30.0f;
-    float erosionGranularity = 10.0f;
-    float flowVolume = 0.0f;
-    float smallChannelInfluence = 0.0f;
-    float sedimentVelocity = 1.0f;
-    float forceVectorX = 0.0f;
-    float forceVectorY = 0.0f;
-    float forceVectorZ = 0.0f;
-    float forceStrength = 1.0f;
-    float shearX = 0.0f;
-    float shearY = 0.0f;
-    float referenceDetailSize = 1.0f;
-    float sourceTerrainDetailSmoothing = 1.0f;
-    bool useMultigrid = true;
-    MultiScaleErosionBackend backend = MultiScaleErosionBackend::CpuReference;
 };
 
 struct HeightmapBlurSettings
@@ -236,7 +200,6 @@ struct Node
     OutputMeshSettings outputMesh;
     HeightmapLoadSettings heightmap;
     ShapeSettings shape;
-    FluvialErosionSettings fluvialErosion;
     HeightmapBlurSettings heightmapBlur;
     ErosionNoiseSettings erosionNoise;
     MultiScaleErosionSettings multiScaleErosion;
@@ -350,7 +313,6 @@ struct HeightfieldGrid
     std::vector<float> age;
 };
 
-using FluvialGpuEvaluator = bool (*)(HeightfieldGrid& grid, const FluvialErosionSettings& settings, std::string* error);
 using MultiScaleErosionGpuEvaluator = bool (*)(HeightfieldGrid& grid, const MultiScaleErosionSettings& settings, std::string* error);
 
 struct SdfPreviewStats
@@ -392,15 +354,13 @@ struct SdfPipeline
     {
         enum class Kind
         {
-            FluvialErosion,
             HeightmapBlur,
             ErosionNoise,
             MultiScaleErosion,
         };
 
-        Kind kind = Kind::FluvialErosion;
+        Kind kind = Kind::HeightmapBlur;
         GraphId nodeId = 0;
-        FluvialErosionSettings fluvialErosion;
         HeightmapBlurSettings heightmapBlur;
         ErosionNoiseSettings erosionNoise;
         MultiScaleErosionSettings multiScaleErosion;
@@ -524,7 +484,6 @@ std::string_view ToString(NodeKind kind);
 std::string_view ToString(PreviewStage stage);
 std::string_view ToString(ValueType type);
 PreviewStage PreviewStageFor(NodeKind kind);
-void SetFluvialGpuEvaluator(FluvialGpuEvaluator evaluator);
 void SetMultiScaleErosionGpuEvaluator(MultiScaleErosionGpuEvaluator evaluator);
 
 } // namespace rock

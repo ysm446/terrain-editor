@@ -303,9 +303,6 @@ ComPtr<ID3D12PipelineState> g_meshPreviewSurfacePso;
 ComPtr<ID3D12PipelineState> g_meshPreviewWirePso;
 ComPtr<ID3D12PipelineState> g_meshPreviewGridPso;
 ComPtr<ID3D12PipelineState> g_meshPreviewShadowPso;
-ComPtr<ID3D12RootSignature> g_fluvialComputeRootSignature;
-ComPtr<ID3D12PipelineState> g_fluvialGridErosionPso;
-ComPtr<ID3D12PipelineState> g_fluvialFlowAccumulationPso;
 ComPtr<ID3D12RootSignature> g_mseComputeRootSignature;
 ComPtr<ID3D12PipelineState> g_mseStreamPowerPso;
 ComPtr<ID3D12PipelineState> g_mseThermalPso;
@@ -313,31 +310,11 @@ ComPtr<ID3D12PipelineState> g_mseDepositionPso;
 ComPtr<ID3D12DescriptorHeap> g_meshPreviewRtvHeap;
 ComPtr<ID3D12DescriptorHeap> g_meshPreviewDsvHeap;
 GpuMeshPreview g_gpuMeshPreview;
-std::string g_fluvialComputeStatus = "GPU Compute not initialized";
-bool g_fluvialComputeSmokeTested = false;
-std::mutex g_fluvialComputeMutex;
-std::mutex g_fluvialGpuRequestMutex;
 std::string g_mseComputeStatus = "MSE GPU Compute not initialized";
 bool g_mseComputeReady = false;
 std::mutex g_mseComputeMutex;
 std::mutex g_mseGpuRequestMutex;
 std::thread::id g_mainThreadId;
-
-struct FluvialGpuRequestResult
-{
-    bool success = false;
-    rock::HeightfieldGrid grid;
-    std::string error;
-};
-
-struct FluvialGpuRequest
-{
-    rock::HeightfieldGrid grid;
-    rock::FluvialErosionSettings settings;
-    std::promise<FluvialGpuRequestResult> promise;
-};
-
-std::vector<std::shared_ptr<FluvialGpuRequest>> g_pendingFluvialGpuRequests;
 
 struct MseGpuRequestResult
 {
@@ -651,10 +628,6 @@ void CleanupD3D()
     g_meshPreviewWirePso.Reset();
     g_meshPreviewGridPso.Reset();
     g_meshPreviewRootSignature.Reset();
-    g_fluvialGridErosionPso.Reset();
-    g_fluvialFlowAccumulationPso.Reset();
-    g_fluvialComputeRootSignature.Reset();
-    g_fluvialComputeSmokeTested = false;
     g_mseStreamPowerPso.Reset();
     g_mseThermalPso.Reset();
     g_mseDepositionPso.Reset();
@@ -691,18 +664,12 @@ std::filesystem::path MeshPreviewShaderPath()
     return ShaderPath("mesh_preview.hlsl");
 }
 
-std::filesystem::path FluvialComputeShaderPath()
-{
-    return ShaderPath("fluvial_erosion_compute.hlsl");
-}
-
 std::filesystem::path MseComputeShaderPath()
 {
     return ShaderPath("multi_scale_erosion_compute.hlsl");
 }
 
 void EvaluateGraph();
-void ProcessPendingFluvialGpuRequests();
 void ProcessPendingMseGpuRequests();
 void EnsureFinalMesh(rock::GraphId outputNodeId = 0);
 int CurrentPreviewMeshResolution();
@@ -1493,31 +1460,6 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
                     {"relativeHeightPercent", node.shape.relativeHeightPercent},
                     {"simulationResolution", node.shape.simulationResolution},
                 }},
-                {"fluvialErosion", {
-                    {"featureSize", node.fluvialErosion.featureSize},
-                    {"geologicalAge", node.fluvialErosion.geologicalAge},
-                    {"iterations", node.fluvialErosion.iterations},
-                    {"channelLength", node.fluvialErosion.channelLength},
-                    {"erosionStrength", node.fluvialErosion.erosionStrength},
-                    {"channeling", node.fluvialErosion.channeling},
-                    {"friction", node.fluvialErosion.friction},
-                    {"wearAngleDegrees", node.fluvialErosion.wearAngleDegrees},
-                    {"depositAngleDegrees", node.fluvialErosion.depositAngleDegrees},
-                    {"maxErosionAngleDegrees", node.fluvialErosion.maxErosionAngleDegrees},
-                    {"erosionGranularity", node.fluvialErosion.erosionGranularity},
-                    {"flowVolume", node.fluvialErosion.flowVolume},
-                    {"smallChannelInfluence", node.fluvialErosion.smallChannelInfluence},
-                    {"sedimentVelocity", node.fluvialErosion.sedimentVelocity},
-                    {"forceVectorX", node.fluvialErosion.forceVectorX},
-                    {"forceVectorY", node.fluvialErosion.forceVectorY},
-                    {"forceVectorZ", node.fluvialErosion.forceVectorZ},
-                    {"forceStrength", node.fluvialErosion.forceStrength},
-                    {"shearX", node.fluvialErosion.shearX},
-                    {"shearY", node.fluvialErosion.shearY},
-                    {"referenceDetailSize", node.fluvialErosion.referenceDetailSize},
-                    {"sourceTerrainDetailSmoothing", node.fluvialErosion.sourceTerrainDetailSmoothing},
-                    {"useMultigrid", node.fluvialErosion.useMultigrid},
-                }},
                 {"heightmapBlur", {
                     {"radius", node.heightmapBlur.radius},
                     {"strength", node.heightmapBlur.strength},
@@ -1687,7 +1629,6 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
         if (nodesJson.is_array() && !nodesJson.empty())
         {
             std::vector<rock::Node> nodes;
-            rock::GraphId syntheticPinId = 100000;
             for (const nlohmann::json& nodeJson : nodesJson)
             {
                 rock::Node node;
@@ -1708,7 +1649,6 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 const nlohmann::json nodeOutputMeshJson = nodeJson.value("outputMesh", nlohmann::json::object());
                 const nlohmann::json nodeHeightmapJson = nodeJson.value("heightmap", nlohmann::json::object());
                 const nlohmann::json nodeShapeJson = nodeJson.value("shape", nlohmann::json::object());
-                const nlohmann::json nodeFluvialJson = nodeJson.value("fluvialErosion", nlohmann::json::object());
                 const nlohmann::json nodeBlurJson = nodeJson.value("heightmapBlur", nlohmann::json::object());
                 const nlohmann::json nodeErosionNoiseJson = nodeJson.value("erosionNoise", nlohmann::json::object());
                 const nlohmann::json nodeMultiScaleErosionJson = nodeJson.value("multiScaleErosion", nlohmann::json::object());
@@ -1732,29 +1672,6 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 node.shape.scaleMeters = std::clamp(nodeShapeJson.value("scaleMeters", node.shape.scaleMeters), 1.0f, 1000000.0f);
                 node.shape.relativeHeightPercent = std::clamp(nodeShapeJson.value("relativeHeightPercent", node.shape.relativeHeightPercent), 0.0f, 10000.0f);
                 node.shape.simulationResolution = std::clamp(nodeShapeJson.value("simulationResolution", node.shape.simulationResolution), 2, 2048);
-                node.fluvialErosion.featureSize = std::clamp(nodeFluvialJson.value("featureSize", node.fluvialErosion.featureSize), 0.0f, 32.0f);
-                node.fluvialErosion.geologicalAge = std::clamp(nodeFluvialJson.value("geologicalAge", node.fluvialErosion.geologicalAge), 0.0f, 20.0f);
-                node.fluvialErosion.iterations = std::clamp(nodeFluvialJson.value("iterations", node.fluvialErosion.iterations), 0, 100);
-                node.fluvialErosion.channelLength = std::clamp(nodeFluvialJson.value("channelLength", node.fluvialErosion.channelLength), 0.0f, 512.0f);
-                node.fluvialErosion.erosionStrength = std::clamp(nodeFluvialJson.value("erosionStrength", node.fluvialErosion.erosionStrength), 0.0f, 1.0f);
-                node.fluvialErosion.channeling = std::clamp(nodeFluvialJson.value("channeling", node.fluvialErosion.channeling), 0.0f, 1.0f);
-                node.fluvialErosion.friction = std::clamp(nodeFluvialJson.value("friction", node.fluvialErosion.friction), 0.0f, 1.0f);
-                node.fluvialErosion.wearAngleDegrees = std::clamp(nodeFluvialJson.value("wearAngleDegrees", node.fluvialErosion.wearAngleDegrees), 0.0f, 90.0f);
-                node.fluvialErosion.depositAngleDegrees = std::clamp(nodeFluvialJson.value("depositAngleDegrees", node.fluvialErosion.depositAngleDegrees), 0.0f, 90.0f);
-                node.fluvialErosion.maxErosionAngleDegrees = std::clamp(nodeFluvialJson.value("maxErosionAngleDegrees", node.fluvialErosion.maxErosionAngleDegrees), 0.0f, 90.0f);
-                node.fluvialErosion.erosionGranularity = std::clamp(nodeFluvialJson.value("erosionGranularity", node.fluvialErosion.erosionGranularity), 0.0f, 100.0f);
-                node.fluvialErosion.flowVolume = std::clamp(nodeFluvialJson.value("flowVolume", node.fluvialErosion.flowVolume), 0.0f, 1.0f);
-                node.fluvialErosion.smallChannelInfluence = std::clamp(nodeFluvialJson.value("smallChannelInfluence", node.fluvialErosion.smallChannelInfluence), 0.0f, 1.0f);
-                node.fluvialErosion.sedimentVelocity = std::clamp(nodeFluvialJson.value("sedimentVelocity", node.fluvialErosion.sedimentVelocity), 0.0f, 2.0f);
-                node.fluvialErosion.forceVectorX = std::clamp(nodeFluvialJson.value("forceVectorX", node.fluvialErosion.forceVectorX), -1.0f, 1.0f);
-                node.fluvialErosion.forceVectorY = std::clamp(nodeFluvialJson.value("forceVectorY", node.fluvialErosion.forceVectorY), -1.0f, 1.0f);
-                node.fluvialErosion.forceVectorZ = std::clamp(nodeFluvialJson.value("forceVectorZ", node.fluvialErosion.forceVectorZ), -1.0f, 1.0f);
-                node.fluvialErosion.forceStrength = std::clamp(nodeFluvialJson.value("forceStrength", node.fluvialErosion.forceStrength), 0.0f, 1.0f);
-                node.fluvialErosion.shearX = std::clamp(nodeFluvialJson.value("shearX", node.fluvialErosion.shearX), -0.1f, 0.1f);
-                node.fluvialErosion.shearY = std::clamp(nodeFluvialJson.value("shearY", node.fluvialErosion.shearY), -0.1f, 0.1f);
-                node.fluvialErosion.referenceDetailSize = std::clamp(nodeFluvialJson.value("referenceDetailSize", node.fluvialErosion.referenceDetailSize), 0.01f, 2.0f);
-                node.fluvialErosion.sourceTerrainDetailSmoothing = std::clamp(nodeFluvialJson.value("sourceTerrainDetailSmoothing", node.fluvialErosion.sourceTerrainDetailSmoothing), 0.0f, 10.0f);
-                node.fluvialErosion.useMultigrid = nodeFluvialJson.value("useMultigrid", node.fluvialErosion.useMultigrid);
                 node.heightmapBlur.radius = std::clamp(nodeBlurJson.value("radius", node.heightmapBlur.radius), 0.0f, 128.0f);
                 node.heightmapBlur.strength = std::clamp(nodeBlurJson.value("strength", node.heightmapBlur.strength), 0.0f, 1.0f);
                 node.heightmapBlur.iterations = std::clamp(nodeBlurJson.value("iterations", node.heightmapBlur.iterations), 0, 64);
@@ -1813,25 +1730,6 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 };
                 readPins(nodeJson.value("inputs", nlohmann::json::array()), rock::PinKind::Input, node.inputs);
                 readPins(nodeJson.value("outputs", nlohmann::json::array()), rock::PinKind::Output, node.outputs);
-                if (node.kind == rock::NodeKind::FluvialErosion)
-                {
-                    std::erase_if(node.outputs, [](const rock::Pin& pin) { return pin.label == "Fluvial Mask"; });
-                }
-                if (node.kind == rock::NodeKind::FluvialErosion &&
-                    std::ranges::none_of(node.outputs, [](const rock::Pin& pin) { return pin.label == "Deposits"; }))
-                {
-                    node.outputs.push_back({syntheticPinId++, node.id, rock::PinKind::Output, rock::ValueType::Mask, "Deposits"});
-                }
-                if (node.kind == rock::NodeKind::FluvialErosion &&
-                    std::ranges::none_of(node.outputs, [](const rock::Pin& pin) { return pin.label == "Flows"; }))
-                {
-                    node.outputs.push_back({syntheticPinId++, node.id, rock::PinKind::Output, rock::ValueType::Mask, "Flows"});
-                }
-                if (node.kind == rock::NodeKind::FluvialErosion &&
-                    std::ranges::none_of(node.outputs, [](const rock::Pin& pin) { return pin.label == "Age"; }))
-                {
-                    node.outputs.push_back({syntheticPinId++, node.id, rock::PinKind::Output, rock::ValueType::Mask, "Age"});
-                }
                 if (node.id != 0)
                 {
                     nodes.push_back(std::move(node));
@@ -2107,619 +2005,6 @@ bool EnsureMeshPreviewPipeline(std::string* error)
     return true;
 }
 
-bool RunFluvialComputeSmokeTest(std::string* error)
-{
-    if (g_fluvialComputeSmokeTested)
-    {
-        return true;
-    }
-    if (!g_device || !g_commandQueue || !g_fluvialComputeRootSignature || !g_fluvialGridErosionPso || !g_fluvialFlowAccumulationPso)
-    {
-        if (error) *error = "GPU Compute pipeline not initialized";
-        return false;
-    }
-
-    constexpr UINT resolution = 8;
-    constexpr UINT cellCount = resolution * resolution;
-    constexpr UINT64 bufferSize = cellCount * sizeof(float);
-    std::array<float, cellCount> inputHeights{};
-    std::array<float, cellCount> zeroData{};
-    for (UINT z = 0; z < resolution; ++z)
-    {
-        for (UINT x = 0; x < resolution; ++x)
-        {
-            inputHeights[z * resolution + x] = static_cast<float>(resolution - z) * 0.1f + static_cast<float>(x) * 0.01f;
-        }
-    }
-
-    const D3D12_HEAP_PROPERTIES defaultHeap = HeapProperties(D3D12_HEAP_TYPE_DEFAULT);
-    const D3D12_HEAP_PROPERTIES uploadHeap = HeapProperties(D3D12_HEAP_TYPE_UPLOAD);
-    const D3D12_HEAP_PROPERTIES readbackHeap = HeapProperties(D3D12_HEAP_TYPE_READBACK);
-    const D3D12_RESOURCE_DESC gpuDesc = BufferResourceDesc(bufferSize, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-    const D3D12_RESOURCE_DESC cpuDesc = BufferResourceDesc(bufferSize);
-
-    ComPtr<ID3D12Resource> heightIn;
-    ComPtr<ID3D12Resource> heightOut;
-    ComPtr<ID3D12Resource> maskOut;
-    ComPtr<ID3D12Resource> flowIn;
-    ComPtr<ID3D12Resource> flowOut;
-    ComPtr<ID3D12Resource> uploadHeights;
-    ComPtr<ID3D12Resource> uploadZero;
-    ComPtr<ID3D12Resource> uploadOne;
-    ComPtr<ID3D12Resource> readbackHeights;
-    ComPtr<ID3D12Resource> readbackMask;
-
-    HRESULT hr = g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &gpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&heightIn));
-    if (FAILED(hr)) { if (error) *error = "Create fluvial smoke height input failed"; return false; }
-    hr = g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &gpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&heightOut));
-    if (FAILED(hr)) { if (error) *error = "Create fluvial smoke height output failed"; return false; }
-    hr = g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &gpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&maskOut));
-    if (FAILED(hr)) { if (error) *error = "Create fluvial smoke mask output failed"; return false; }
-    hr = g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &gpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&flowIn));
-    if (FAILED(hr)) { if (error) *error = "Create fluvial smoke flow input failed"; return false; }
-    hr = g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &gpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&flowOut));
-    if (FAILED(hr)) { if (error) *error = "Create fluvial smoke flow output failed"; return false; }
-    hr = g_device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &cpuDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&uploadHeights));
-    if (FAILED(hr)) { if (error) *error = "Create fluvial smoke height upload failed"; return false; }
-    hr = g_device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &cpuDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&uploadZero));
-    if (FAILED(hr)) { if (error) *error = "Create fluvial smoke zero upload failed"; return false; }
-    hr = g_device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &cpuDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&uploadOne));
-    if (FAILED(hr)) { if (error) *error = "Create fluvial smoke one upload failed"; return false; }
-    hr = g_device->CreateCommittedResource(&readbackHeap, D3D12_HEAP_FLAG_NONE, &cpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readbackHeights));
-    if (FAILED(hr)) { if (error) *error = "Create fluvial smoke height readback failed"; return false; }
-    hr = g_device->CreateCommittedResource(&readbackHeap, D3D12_HEAP_FLAG_NONE, &cpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readbackMask));
-    if (FAILED(hr)) { if (error) *error = "Create fluvial smoke mask readback failed"; return false; }
-
-    void* mapped = nullptr;
-    D3D12_RANGE readRange{0, 0};
-    ThrowIfFailed(uploadHeights->Map(0, &readRange, &mapped), "Map fluvial smoke height upload failed");
-    std::memcpy(mapped, inputHeights.data(), bufferSize);
-    uploadHeights->Unmap(0, nullptr);
-    ThrowIfFailed(uploadZero->Map(0, &readRange, &mapped), "Map fluvial smoke zero upload failed");
-    std::memcpy(mapped, zeroData.data(), bufferSize);
-    uploadZero->Unmap(0, nullptr);
-    std::array<float, cellCount> oneData{};
-    oneData.fill(1.0f);
-    ThrowIfFailed(uploadOne->Map(0, &readRange, &mapped), "Map fluvial smoke one upload failed");
-    std::memcpy(mapped, oneData.data(), bufferSize);
-    uploadOne->Unmap(0, nullptr);
-
-    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    heapDesc.NumDescriptors = 5;
-    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-    ComPtr<ID3D12DescriptorHeap> descriptorHeap;
-    hr = g_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&descriptorHeap));
-    if (FAILED(hr)) { if (error) *error = "Create fluvial smoke descriptor heap failed"; return false; }
-
-    D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
-    uavDesc.Format = DXGI_FORMAT_UNKNOWN;
-    uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
-    uavDesc.Buffer.NumElements = cellCount;
-    uavDesc.Buffer.StructureByteStride = sizeof(float);
-    D3D12_CPU_DESCRIPTOR_HANDLE descriptor = descriptorHeap->GetCPUDescriptorHandleForHeapStart();
-    g_device->CreateUnorderedAccessView(heightIn.Get(), nullptr, &uavDesc, descriptor);
-    descriptor.ptr += g_srvDescriptorSize;
-    g_device->CreateUnorderedAccessView(heightOut.Get(), nullptr, &uavDesc, descriptor);
-    descriptor.ptr += g_srvDescriptorSize;
-    g_device->CreateUnorderedAccessView(maskOut.Get(), nullptr, &uavDesc, descriptor);
-    descriptor.ptr += g_srvDescriptorSize;
-    g_device->CreateUnorderedAccessView(flowIn.Get(), nullptr, &uavDesc, descriptor);
-    descriptor.ptr += g_srvDescriptorSize;
-    g_device->CreateUnorderedAccessView(flowOut.Get(), nullptr, &uavDesc, descriptor);
-
-    ComPtr<ID3D12CommandAllocator> allocator;
-    ComPtr<ID3D12GraphicsCommandList> commandList;
-    ThrowIfFailed(g_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)), "Create fluvial smoke command allocator failed");
-    ThrowIfFailed(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&commandList)), "Create fluvial smoke command list failed");
-
-    commandList->CopyBufferRegion(heightIn.Get(), 0, uploadHeights.Get(), 0, bufferSize);
-    commandList->CopyBufferRegion(heightOut.Get(), 0, uploadZero.Get(), 0, bufferSize);
-    commandList->CopyBufferRegion(maskOut.Get(), 0, uploadZero.Get(), 0, bufferSize);
-    commandList->CopyBufferRegion(flowIn.Get(), 0, uploadOne.Get(), 0, bufferSize);
-    commandList->CopyBufferRegion(flowOut.Get(), 0, uploadOne.Get(), 0, bufferSize);
-
-    D3D12_RESOURCE_BARRIER toUav[5]{};
-    ID3D12Resource* uavResources[5] = {heightIn.Get(), heightOut.Get(), maskOut.Get(), flowIn.Get(), flowOut.Get()};
-    for (int i = 0; i < 5; ++i)
-    {
-        toUav[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        toUav[i].Transition.pResource = uavResources[i];
-        toUav[i].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-        toUav[i].Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-        toUav[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    }
-    commandList->ResourceBarrier(5, toUav);
-
-    struct FluvialGridConstants
-    {
-        UINT resolution;
-        float terrainSizeMeters;
-        float erosionStrength;
-        float sedimentCapacity;
-        float depositionRate;
-        float channeling;
-        float cellSizeMeters;
-        float wearSlope;
-        float maxSlope;
-        float strengthScale;
-    } constants{resolution, 8.0f, 1.0f, 0.8f, 0.35f, 0.25f, 8.0f / static_cast<float>(resolution - 1), 0.05f, 10.0f, 0.68f};
-
-    ID3D12DescriptorHeap* heaps[] = {descriptorHeap.Get()};
-    commandList->SetDescriptorHeaps(1, heaps);
-    commandList->SetComputeRootSignature(g_fluvialComputeRootSignature.Get());
-    commandList->SetPipelineState(g_fluvialGridErosionPso.Get());
-    commandList->SetComputeRoot32BitConstants(0, 10, &constants, 0);
-    commandList->SetComputeRootDescriptorTable(1, descriptorHeap->GetGPUDescriptorHandleForHeapStart());
-    commandList->Dispatch(1, 1, 1);
-
-    D3D12_RESOURCE_BARRIER uavBarrier{};
-    uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-    uavBarrier.UAV.pResource = nullptr;
-    commandList->ResourceBarrier(1, &uavBarrier);
-
-    D3D12_RESOURCE_BARRIER toCopy[2]{};
-    ID3D12Resource* copyResources[2] = {heightOut.Get(), maskOut.Get()};
-    for (int i = 0; i < 2; ++i)
-    {
-        toCopy[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        toCopy[i].Transition.pResource = copyResources[i];
-        toCopy[i].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-        toCopy[i].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
-        toCopy[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    }
-    commandList->ResourceBarrier(2, toCopy);
-    commandList->CopyBufferRegion(readbackHeights.Get(), 0, heightOut.Get(), 0, bufferSize);
-    commandList->CopyBufferRegion(readbackMask.Get(), 0, maskOut.Get(), 0, bufferSize);
-    ThrowIfFailed(commandList->Close(), "Close fluvial smoke command list failed");
-
-    ID3D12CommandList* lists[] = {commandList.Get()};
-    g_commandQueue->ExecuteCommandLists(1, lists);
-    const UINT64 fenceValue = ++g_fenceLastSignaledValue;
-    ThrowIfFailed(g_commandQueue->Signal(g_fence.Get(), fenceValue), "Signal fluvial smoke fence failed");
-    WaitForFenceValue(fenceValue);
-
-    void* mappedHeights = nullptr;
-    void* mappedMask = nullptr;
-    D3D12_RANGE outputReadRange{0, static_cast<SIZE_T>(bufferSize)};
-    ThrowIfFailed(readbackHeights->Map(0, &outputReadRange, &mappedHeights), "Map fluvial smoke height readback failed");
-    ThrowIfFailed(readbackMask->Map(0, &outputReadRange, &mappedMask), "Map fluvial smoke mask readback failed");
-    const float* outputHeights = static_cast<const float*>(mappedHeights);
-    const float* outputMask = static_cast<const float*>(mappedMask);
-
-    bool changed = false;
-    bool maskWritten = false;
-    for (UINT i = 0; i < cellCount; ++i)
-    {
-        changed = changed || std::abs(outputHeights[i] - inputHeights[i]) > 0.000001f;
-        maskWritten = maskWritten || outputMask[i] > 0.000001f;
-    }
-
-    D3D12_RANGE emptyWriteRange{0, 0};
-    readbackHeights->Unmap(0, &emptyWriteRange);
-    readbackMask->Unmap(0, &emptyWriteRange);
-
-    if (!changed || !maskWritten)
-    {
-        if (error) *error = "GPU Compute smoke dispatch produced no erosion output";
-        return false;
-    }
-
-    g_fluvialComputeSmokeTested = true;
-    return true;
-}
-
-bool EnsureFluvialComputePipeline(std::string* error)
-{
-    if (g_fluvialGridErosionPso && g_fluvialFlowAccumulationPso)
-    {
-        if (g_fluvialComputeSmokeTested)
-        {
-            return true;
-        }
-        if (!RunFluvialComputeSmokeTest(error))
-        {
-            g_fluvialComputeStatus = "GPU Compute dispatch failed";
-            return false;
-        }
-        g_fluvialComputeStatus = "GPU Compute dispatch ready";
-        return true;
-    }
-    if (!g_device)
-    {
-        if (error) *error = "D3D12 device not initialized";
-        g_fluvialComputeStatus = "GPU Compute unavailable";
-        return false;
-    }
-
-    D3D12_DESCRIPTOR_RANGE uavRange{};
-    uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-    uavRange.NumDescriptors = 5;
-    uavRange.BaseShaderRegister = 0;
-    uavRange.RegisterSpace = 0;
-    uavRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-
-    D3D12_ROOT_PARAMETER rootParams[2]{};
-    rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    rootParams[0].Constants.ShaderRegister = 0;
-    rootParams[0].Constants.RegisterSpace = 0;
-    rootParams[0].Constants.Num32BitValues = 10;
-    rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
-    rootParams[1].DescriptorTable.pDescriptorRanges = &uavRange;
-    rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-
-    D3D12_ROOT_SIGNATURE_DESC rsDesc{};
-    rsDesc.NumParameters = 2;
-    rsDesc.pParameters = rootParams;
-    rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
-
-    ComPtr<ID3DBlob> sigBlob, errBlob;
-    HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
-    if (FAILED(hr))
-    {
-        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Serialize fluvial compute root sig failed";
-        g_fluvialComputeStatus = "GPU Compute root signature failed";
-        return false;
-    }
-    hr = g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_fluvialComputeRootSignature));
-    if (FAILED(hr))
-    {
-        if (error) *error = "Create fluvial compute root sig failed";
-        g_fluvialComputeStatus = "GPU Compute root signature failed";
-        return false;
-    }
-
-    const std::filesystem::path shaderPath = FluvialComputeShaderPath();
-    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
-#if defined(_DEBUG)
-    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-#endif
-    ComPtr<ID3DBlob> flowBlob, erosionBlob;
-    hr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "CSFlowAccumulation", "cs_5_0", compileFlags, 0, &flowBlob, &errBlob);
-    if (FAILED(hr))
-    {
-        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile fluvial flow CS failed";
-        g_fluvialComputeStatus = "GPU Compute flow shader compile failed";
-        return false;
-    }
-    errBlob.Reset();
-    hr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "CSGridErosion", "cs_5_0", compileFlags, 0, &erosionBlob, &errBlob);
-    if (FAILED(hr))
-    {
-        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile fluvial erosion CS failed";
-        g_fluvialComputeStatus = "GPU Compute shader compile failed";
-        return false;
-    }
-
-    D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{};
-    psoDesc.pRootSignature = g_fluvialComputeRootSignature.Get();
-    psoDesc.CS = {flowBlob->GetBufferPointer(), flowBlob->GetBufferSize()};
-    hr = g_device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&g_fluvialFlowAccumulationPso));
-    if (FAILED(hr))
-    {
-        if (error) *error = "Create fluvial flow PSO failed";
-        g_fluvialComputeStatus = "GPU Compute flow PSO failed";
-        return false;
-    }
-    psoDesc.CS = {erosionBlob->GetBufferPointer(), erosionBlob->GetBufferSize()};
-    hr = g_device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&g_fluvialGridErosionPso));
-    if (FAILED(hr))
-    {
-        if (error) *error = "Create fluvial compute PSO failed";
-        g_fluvialComputeStatus = "GPU Compute PSO failed";
-        return false;
-    }
-
-    if (!RunFluvialComputeSmokeTest(error))
-    {
-        g_fluvialComputeStatus = "GPU Compute dispatch failed";
-        return false;
-    }
-
-    g_fluvialComputeStatus = "GPU Compute dispatch ready";
-    return true;
-}
-
-bool RunFluvialComputeGridImmediate(rock::HeightfieldGrid& grid, const rock::FluvialErosionSettings& settings, std::string* error)
-{
-    std::lock_guard<std::mutex> lock(g_fluvialComputeMutex);
-    if (!EnsureFluvialComputePipeline(error))
-    {
-        return false;
-    }
-
-    const UINT resolution = static_cast<UINT>(std::clamp(grid.resolution, 0, 4096));
-    const UINT64 cellCount = static_cast<UINT64>(resolution) * static_cast<UINT64>(resolution);
-    if (resolution < 3 || grid.heights.size() < cellCount)
-    {
-        if (error) *error = "Invalid heightfield for GPU Compute";
-        return false;
-    }
-
-    const UINT64 bufferSize = cellCount * sizeof(float);
-    std::vector<float> zeroData(static_cast<size_t>(cellCount), 0.0f);
-
-    const D3D12_HEAP_PROPERTIES defaultHeap = HeapProperties(D3D12_HEAP_TYPE_DEFAULT);
-    const D3D12_HEAP_PROPERTIES uploadHeap = HeapProperties(D3D12_HEAP_TYPE_UPLOAD);
-    const D3D12_HEAP_PROPERTIES readbackHeap = HeapProperties(D3D12_HEAP_TYPE_READBACK);
-    const D3D12_RESOURCE_DESC gpuDesc = BufferResourceDesc(bufferSize, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-    const D3D12_RESOURCE_DESC cpuDesc = BufferResourceDesc(bufferSize);
-
-    ComPtr<ID3D12Resource> heightA;
-    ComPtr<ID3D12Resource> heightB;
-    ComPtr<ID3D12Resource> maskOut;
-    ComPtr<ID3D12Resource> flowA;
-    ComPtr<ID3D12Resource> flowB;
-    ComPtr<ID3D12Resource> uploadHeights;
-    ComPtr<ID3D12Resource> uploadZero;
-    ComPtr<ID3D12Resource> uploadOne;
-    ComPtr<ID3D12Resource> readbackHeights;
-    ComPtr<ID3D12Resource> readbackMask;
-
-    HRESULT hr = g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &gpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&heightA));
-    if (FAILED(hr)) { if (error) *error = "Create GPU height A failed"; return false; }
-    hr = g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &gpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&heightB));
-    if (FAILED(hr)) { if (error) *error = "Create GPU height B failed"; return false; }
-    hr = g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &gpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&maskOut));
-    if (FAILED(hr)) { if (error) *error = "Create GPU mask failed"; return false; }
-    hr = g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &gpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&flowA));
-    if (FAILED(hr)) { if (error) *error = "Create GPU flow A failed"; return false; }
-    hr = g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &gpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&flowB));
-    if (FAILED(hr)) { if (error) *error = "Create GPU flow B failed"; return false; }
-    hr = g_device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &cpuDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&uploadHeights));
-    if (FAILED(hr)) { if (error) *error = "Create GPU height upload failed"; return false; }
-    hr = g_device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &cpuDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&uploadZero));
-    if (FAILED(hr)) { if (error) *error = "Create GPU zero upload failed"; return false; }
-    hr = g_device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &cpuDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&uploadOne));
-    if (FAILED(hr)) { if (error) *error = "Create GPU one upload failed"; return false; }
-    hr = g_device->CreateCommittedResource(&readbackHeap, D3D12_HEAP_FLAG_NONE, &cpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readbackHeights));
-    if (FAILED(hr)) { if (error) *error = "Create GPU height readback failed"; return false; }
-    hr = g_device->CreateCommittedResource(&readbackHeap, D3D12_HEAP_FLAG_NONE, &cpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readbackMask));
-    if (FAILED(hr)) { if (error) *error = "Create GPU mask readback failed"; return false; }
-
-    void* mapped = nullptr;
-    D3D12_RANGE emptyReadRange{0, 0};
-    ThrowIfFailed(uploadHeights->Map(0, &emptyReadRange, &mapped), "Map GPU height upload failed");
-    std::memcpy(mapped, grid.heights.data(), bufferSize);
-    uploadHeights->Unmap(0, nullptr);
-    ThrowIfFailed(uploadZero->Map(0, &emptyReadRange, &mapped), "Map GPU zero upload failed");
-    std::memcpy(mapped, zeroData.data(), bufferSize);
-    uploadZero->Unmap(0, nullptr);
-    std::vector<float> oneData(static_cast<size_t>(cellCount), 1.0f);
-    ThrowIfFailed(uploadOne->Map(0, &emptyReadRange, &mapped), "Map GPU one upload failed");
-    std::memcpy(mapped, oneData.data(), bufferSize);
-    uploadOne->Unmap(0, nullptr);
-
-    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    heapDesc.NumDescriptors = 15;
-    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-    ComPtr<ID3D12DescriptorHeap> descriptorHeap;
-    hr = g_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&descriptorHeap));
-    if (FAILED(hr)) { if (error) *error = "Create GPU descriptor heap failed"; return false; }
-
-    D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
-    uavDesc.Format = DXGI_FORMAT_UNKNOWN;
-    uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
-    uavDesc.Buffer.NumElements = static_cast<UINT>(cellCount);
-    uavDesc.Buffer.StructureByteStride = sizeof(float);
-
-    D3D12_CPU_DESCRIPTOR_HANDLE descriptor = descriptorHeap->GetCPUDescriptorHandleForHeapStart();
-    g_device->CreateUnorderedAccessView(heightA.Get(), nullptr, &uavDesc, descriptor);
-    descriptor.ptr += g_srvDescriptorSize;
-    g_device->CreateUnorderedAccessView(heightB.Get(), nullptr, &uavDesc, descriptor);
-    descriptor.ptr += g_srvDescriptorSize;
-    g_device->CreateUnorderedAccessView(maskOut.Get(), nullptr, &uavDesc, descriptor);
-    descriptor.ptr += g_srvDescriptorSize;
-    g_device->CreateUnorderedAccessView(flowA.Get(), nullptr, &uavDesc, descriptor);
-    descriptor.ptr += g_srvDescriptorSize;
-    g_device->CreateUnorderedAccessView(flowB.Get(), nullptr, &uavDesc, descriptor);
-    descriptor.ptr += g_srvDescriptorSize;
-    g_device->CreateUnorderedAccessView(heightA.Get(), nullptr, &uavDesc, descriptor);
-    descriptor.ptr += g_srvDescriptorSize;
-    g_device->CreateUnorderedAccessView(heightB.Get(), nullptr, &uavDesc, descriptor);
-    descriptor.ptr += g_srvDescriptorSize;
-    g_device->CreateUnorderedAccessView(maskOut.Get(), nullptr, &uavDesc, descriptor);
-    descriptor.ptr += g_srvDescriptorSize;
-    g_device->CreateUnorderedAccessView(flowB.Get(), nullptr, &uavDesc, descriptor);
-    descriptor.ptr += g_srvDescriptorSize;
-    g_device->CreateUnorderedAccessView(flowA.Get(), nullptr, &uavDesc, descriptor);
-    descriptor.ptr += g_srvDescriptorSize;
-    g_device->CreateUnorderedAccessView(heightB.Get(), nullptr, &uavDesc, descriptor);
-    descriptor.ptr += g_srvDescriptorSize;
-    g_device->CreateUnorderedAccessView(heightA.Get(), nullptr, &uavDesc, descriptor);
-    descriptor.ptr += g_srvDescriptorSize;
-    g_device->CreateUnorderedAccessView(maskOut.Get(), nullptr, &uavDesc, descriptor);
-    descriptor.ptr += g_srvDescriptorSize;
-    g_device->CreateUnorderedAccessView(flowA.Get(), nullptr, &uavDesc, descriptor);
-    descriptor.ptr += g_srvDescriptorSize;
-    g_device->CreateUnorderedAccessView(flowB.Get(), nullptr, &uavDesc, descriptor);
-
-    ComPtr<ID3D12CommandAllocator> allocator;
-    ComPtr<ID3D12GraphicsCommandList> commandList;
-    ThrowIfFailed(g_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)), "Create GPU fluvial command allocator failed");
-    ThrowIfFailed(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&commandList)), "Create GPU fluvial command list failed");
-
-    commandList->CopyBufferRegion(heightA.Get(), 0, uploadHeights.Get(), 0, bufferSize);
-    commandList->CopyBufferRegion(heightB.Get(), 0, uploadHeights.Get(), 0, bufferSize);
-    commandList->CopyBufferRegion(maskOut.Get(), 0, uploadZero.Get(), 0, bufferSize);
-    commandList->CopyBufferRegion(flowA.Get(), 0, uploadOne.Get(), 0, bufferSize);
-    commandList->CopyBufferRegion(flowB.Get(), 0, uploadOne.Get(), 0, bufferSize);
-
-    D3D12_RESOURCE_BARRIER toUav[5]{};
-    ID3D12Resource* uavResources[5] = {heightA.Get(), heightB.Get(), maskOut.Get(), flowA.Get(), flowB.Get()};
-    for (int i = 0; i < 5; ++i)
-    {
-        toUav[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        toUav[i].Transition.pResource = uavResources[i];
-        toUav[i].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-        toUav[i].Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-        toUav[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    }
-    commandList->ResourceBarrier(5, toUav);
-
-    struct FluvialGridConstants
-    {
-        UINT resolution;
-        float terrainSizeMeters;
-        float erosionStrength;
-        float sedimentCapacity;
-        float depositionRate;
-        float channeling;
-        float cellSizeMeters;
-        float wearSlope;
-        float maxSlope;
-        float strengthScale;
-    } constants{
-        resolution,
-        grid.terrainSizeMeters,
-        std::clamp(settings.erosionStrength, 0.0f, 2.0f),
-        0.4f,
-        0.42f,
-        std::clamp(settings.channeling, 0.0f, 1.0f),
-        grid.terrainSizeMeters / static_cast<float>(std::max<UINT>(1, resolution - 1)),
-        std::tan(std::clamp(settings.wearAngleDegrees, 0.0f, 89.0f) * 3.14159265f / 180.0f),
-        std::tan(std::clamp(settings.maxErosionAngleDegrees, 0.0f, 89.0f) * 3.14159265f / 180.0f),
-        0.68f
-    };
-
-    ID3D12DescriptorHeap* heaps[] = {descriptorHeap.Get()};
-    commandList->SetDescriptorHeaps(1, heaps);
-    commandList->SetComputeRootSignature(g_fluvialComputeRootSignature.Get());
-
-    const UINT groupCount = (resolution + 7u) / 8u;
-    int flowPassCount = std::clamp(static_cast<int>(resolution / 16u), 4, 48);
-    if ((flowPassCount % 2) != 0)
-    {
-        ++flowPassCount;
-    }
-    commandList->SetPipelineState(g_fluvialFlowAccumulationPso.Get());
-    for (int pass = 0; pass < flowPassCount; ++pass)
-    {
-        commandList->SetComputeRoot32BitConstants(0, 10, &constants, 0);
-        D3D12_GPU_DESCRIPTOR_HANDLE table = descriptorHeap->GetGPUDescriptorHandleForHeapStart();
-        if ((pass % 2) != 0)
-        {
-            table.ptr += static_cast<UINT64>(5) * g_srvDescriptorSize;
-        }
-        commandList->SetComputeRootDescriptorTable(1, table);
-        commandList->Dispatch(groupCount, groupCount, 1);
-
-        D3D12_RESOURCE_BARRIER uavBarrier{};
-        uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-        uavBarrier.UAV.pResource = nullptr;
-        commandList->ResourceBarrier(1, &uavBarrier);
-    }
-
-    commandList->SetPipelineState(g_fluvialGridErosionPso.Get());
-    const int iterationCount = std::clamp(settings.iterations, 1, 200);
-    for (int iteration = 0; iteration < iterationCount; ++iteration)
-    {
-        commandList->SetComputeRoot32BitConstants(0, 10, &constants, 0);
-        D3D12_GPU_DESCRIPTOR_HANDLE table = descriptorHeap->GetGPUDescriptorHandleForHeapStart();
-        if ((iteration % 2) != 0)
-        {
-            table.ptr += static_cast<UINT64>(10) * g_srvDescriptorSize;
-        }
-        commandList->SetComputeRootDescriptorTable(1, table);
-        commandList->Dispatch(groupCount, groupCount, 1);
-
-        D3D12_RESOURCE_BARRIER uavBarrier{};
-        uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-        uavBarrier.UAV.pResource = nullptr;
-        commandList->ResourceBarrier(1, &uavBarrier);
-    }
-
-    ID3D12Resource* finalHeight = (iterationCount % 2) == 0 ? heightA.Get() : heightB.Get();
-    D3D12_RESOURCE_BARRIER toCopy[2]{};
-    ID3D12Resource* copyResources[2] = {finalHeight, maskOut.Get()};
-    for (int i = 0; i < 2; ++i)
-    {
-        toCopy[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        toCopy[i].Transition.pResource = copyResources[i];
-        toCopy[i].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-        toCopy[i].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
-        toCopy[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    }
-    commandList->ResourceBarrier(2, toCopy);
-    commandList->CopyBufferRegion(readbackHeights.Get(), 0, finalHeight, 0, bufferSize);
-    commandList->CopyBufferRegion(readbackMask.Get(), 0, maskOut.Get(), 0, bufferSize);
-    ThrowIfFailed(commandList->Close(), "Close GPU fluvial command list failed");
-
-    ID3D12CommandList* lists[] = {commandList.Get()};
-    g_commandQueue->ExecuteCommandLists(1, lists);
-    const UINT64 fenceValue = ++g_fenceLastSignaledValue;
-    ThrowIfFailed(g_commandQueue->Signal(g_fence.Get(), fenceValue), "Signal GPU fluvial fence failed");
-    WaitForFenceValue(fenceValue);
-
-    void* mappedHeights = nullptr;
-    void* mappedMask = nullptr;
-    D3D12_RANGE readRange{0, static_cast<SIZE_T>(bufferSize)};
-    ThrowIfFailed(readbackHeights->Map(0, &readRange, &mappedHeights), "Map GPU height readback failed");
-    ThrowIfFailed(readbackMask->Map(0, &readRange, &mappedMask), "Map GPU mask readback failed");
-    const float* heightValues = static_cast<const float*>(mappedHeights);
-    const float* maskValues = static_cast<const float*>(mappedMask);
-    grid.heights.assign(heightValues, heightValues + cellCount);
-    grid.mask.assign(maskValues, maskValues + cellCount);
-    D3D12_RANGE emptyWriteRange{0, 0};
-    readbackHeights->Unmap(0, &emptyWriteRange);
-    readbackMask->Unmap(0, &emptyWriteRange);
-
-    g_fluvialComputeStatus = "GPU Compute evaluated heightfield";
-    return true;
-}
-
-bool RunFluvialComputeGrid(rock::HeightfieldGrid& grid, const rock::FluvialErosionSettings& settings, std::string* error)
-{
-    if (std::this_thread::get_id() == g_mainThreadId)
-    {
-        return RunFluvialComputeGridImmediate(grid, settings, error);
-    }
-
-    auto request = std::make_shared<FluvialGpuRequest>();
-    request->grid = grid;
-    request->settings = settings;
-    std::future<FluvialGpuRequestResult> future = request->promise.get_future();
-    {
-        std::lock_guard<std::mutex> lock(g_fluvialGpuRequestMutex);
-        g_pendingFluvialGpuRequests.push_back(request);
-    }
-    g_fluvialComputeStatus = "GPU Compute queued on main thread";
-
-    FluvialGpuRequestResult result = future.get();
-    if (!result.success)
-    {
-        if (error) *error = result.error;
-        return false;
-    }
-
-    grid = std::move(result.grid);
-    return true;
-}
-
-void ProcessPendingFluvialGpuRequests()
-{
-    if (std::this_thread::get_id() != g_mainThreadId)
-    {
-        return;
-    }
-
-    std::vector<std::shared_ptr<FluvialGpuRequest>> requests;
-    {
-        std::lock_guard<std::mutex> lock(g_fluvialGpuRequestMutex);
-        requests.swap(g_pendingFluvialGpuRequests);
-    }
-
-    for (const std::shared_ptr<FluvialGpuRequest>& request : requests)
-    {
-        FluvialGpuRequestResult result;
-        result.grid = std::move(request->grid);
-        result.success = RunFluvialComputeGridImmediate(result.grid, request->settings, &result.error);
-        request->promise.set_value(std::move(result));
-    }
-}
 
 // =============================================================================
 // Multi-Scale Erosion GPU compute path
@@ -3189,7 +2474,6 @@ bool IsTerrainNodeKind(rock::NodeKind kind)
 {
     return kind == rock::NodeKind::HeightmapLoad ||
         kind == rock::NodeKind::Shape ||
-        kind == rock::NodeKind::FluvialErosion ||
         kind == rock::NodeKind::HeightmapBlur ||
         kind == rock::NodeKind::ErosionNoise ||
         kind == rock::NodeKind::MultiScaleErosion;
@@ -3304,7 +2588,6 @@ void WaitForAsyncEvaluationForShutdown()
 
     while (g_evaluationFuture.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
     {
-        ProcessPendingFluvialGpuRequests();
         ProcessPendingMseGpuRequests();
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
@@ -4421,8 +3704,6 @@ ImVec4 NodeAccentColor(rock::NodeKind kind)
         return ImVec4(0.38f, 0.62f, 0.53f, 1.0f);
     case rock::NodeKind::Shape:
         return ImVec4(0.50f, 0.68f, 0.48f, 1.0f);
-    case rock::NodeKind::FluvialErosion:
-        return ImVec4(0.36f, 0.58f, 0.78f, 1.0f);
     case rock::NodeKind::HeightmapBlur:
         return ImVec4(0.58f, 0.61f, 0.44f, 1.0f);
     case rock::NodeKind::ErosionNoise:
@@ -4450,8 +3731,6 @@ ImVec2 InitialNodePosition(rock::NodeKind kind)
         return ImVec2(40.0f, 240.0f);
     case rock::NodeKind::Shape:
         return ImVec2(40.0f, 360.0f);
-    case rock::NodeKind::FluvialErosion:
-        return ImVec2(320.0f, 240.0f);
     case rock::NodeKind::HeightmapBlur:
         return ImVec2(600.0f, 240.0f);
     case rock::NodeKind::ErosionNoise:
@@ -4906,7 +4185,6 @@ void PasteNodesFromClipboard(const ImVec2& pasteCenter)
             newMutableNode->outputMesh = clipboardNode.node.outputMesh;
             newMutableNode->heightmap = clipboardNode.node.heightmap;
             newMutableNode->shape = clipboardNode.node.shape;
-            newMutableNode->fluvialErosion = clipboardNode.node.fluvialErosion;
             newMutableNode->heightmapBlur = clipboardNode.node.heightmapBlur;
             newMutableNode->erosionNoise = clipboardNode.node.erosionNoise;
             newMutableNode->multiScaleErosion = clipboardNode.node.multiScaleErosion;
@@ -5145,7 +4423,6 @@ void DrawNodeGraph()
         };
         addNodeMenuItem(rock::NodeKind::HeightmapLoad);
         addNodeMenuItem(rock::NodeKind::Shape);
-        addNodeMenuItem(rock::NodeKind::FluvialErosion);
         addNodeMenuItem(rock::NodeKind::HeightmapBlur);
         addNodeMenuItem(rock::NodeKind::ErosionNoise);
         addNodeMenuItem(rock::NodeKind::MultiScaleErosion);
@@ -5745,14 +5022,6 @@ void DrawPropertiesPanel()
         mse.depositionStrength = std::clamp(mse.depositionStrength, 0.0f, 8.0f);
         mse.rain = std::clamp(mse.rain, 0.0f, 10.0f);
 
-        if (DrawPropertyIntRow("Iterations", "MseIterations", &mse.iterations, 0, 500, rock::MultiScaleErosionSettings{}.iterations, "Multi-scale erosion iterations changed", true, "SPE → Thermal → Deposition の 3 パスを繰り返す回数です。Multigrid 有効時は各レベルで個別に反復します (粗→細の各段で同じ回数)。多いほど浸食が進みますが計算時間も増えます。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyBoolRow("Use Multigrid", "MseUseMultigrid", &mse.useMultigrid, "Multi-scale erosion multigrid toggled", "粗い解像度から目標解像度へ x2 アップサンプルしながら段階的に浸食を適用するピラミッド処理を有効にします。解像度を変えても結果が安定しやすくなります (Schott et al. 論文の本来の構成)。OFF にすると入力解像度で 1 段階のみの単純処理になります。", rock::MultiScaleErosionSettings{}.useMultigrid))
-        {
-            EvaluateGraph();
-        }
         {
             int backendInt = static_cast<int>(mse.backend);
             if (DrawPropertyComboRow("Backend", "MseBackend", &backendInt, "CPU Reference\0GPU Compute\0\0", "CPU 並列実装と GPU compute (D3D12 + HLSL) を切り替えます。GPU は反復回数が多いほど速くなりますが、結果が CPU と微小にずれることがあります (浮動小数の累積順序)。\nGPU が初期化に失敗したり実行時エラーになると自動的に CPU 版にフォールバックします。", static_cast<int>(rock::MultiScaleErosionSettings{}.backend)))
@@ -5762,6 +5031,14 @@ void DrawPropertiesPanel()
                     static_cast<int>(rock::MultiScaleErosionBackend::GpuCompute)));
                 EvaluateGraph();
             }
+        }
+        if (DrawPropertyIntRow("Iterations", "MseIterations", &mse.iterations, 0, 500, rock::MultiScaleErosionSettings{}.iterations, "Multi-scale erosion iterations changed", true, "SPE → Thermal → Deposition の 3 パスを繰り返す回数です。Multigrid 有効時は各レベルで個別に反復します (粗→細の各段で同じ回数)。多いほど浸食が進みますが計算時間も増えます。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyBoolRow("Use Multigrid", "MseUseMultigrid", &mse.useMultigrid, "Multi-scale erosion multigrid toggled", "粗い解像度から目標解像度へ x2 アップサンプルしながら段階的に浸食を適用するピラミッド処理を有効にします。解像度を変えても結果が安定しやすくなります (Schott et al. 論文の本来の構成)。OFF にすると入力解像度で 1 段階のみの単純処理になります。", rock::MultiScaleErosionSettings{}.useMultigrid))
+        {
+            EvaluateGraph();
         }
         if (DrawPropertyBoolRow("Enable Stream Power", "MseEnableSpe", &mse.enableStreamPower, "Multi-scale erosion SPE toggled", "河川浸食 (Stream Power Erosion) パスの ON/OFF。", rock::MultiScaleErosionSettings{}.enableStreamPower))
         {
@@ -5775,6 +5052,11 @@ void DrawPropertiesPanel()
         {
             EvaluateGraph();
         }
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextDisabled("Stream Power");
+        ImGui::TableSetColumnIndex(1);
+        ImGui::SeparatorText("Stream Power");
         if (DrawPropertyFloatRow("SPE Strength", "MseSpeStrength", &mse.speStrength, 0.0f, 0.01f, rock::MultiScaleErosionSettings{}.speStrength, "Multi-scale erosion SPE strength changed", true, "SPE シェーダーの k 係数。1 反復あたりの削り量倍率です。", "%.5f", ImGuiSliderFlags_Logarithmic))
         {
             EvaluateGraph();
@@ -5799,6 +5081,11 @@ void DrawPropertiesPanel()
         {
             EvaluateGraph();
         }
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextDisabled("Thermal");
+        ImGui::TableSetColumnIndex(1);
+        ImGui::SeparatorText("Thermal");
         if (DrawPropertyFloatRow("Threshold Angle (deg)", "MseThermalAngle", &mse.thermalAngleDegrees, 0.0f, 60.0f, rock::MultiScaleErosionSettings{}.thermalAngleDegrees, "Multi-scale erosion thermal angle changed", true, "タラス崩壊の安息角。これを超える勾配は崩落します。"))
         {
             EvaluateGraph();
@@ -5823,148 +5110,16 @@ void DrawPropertiesPanel()
         {
             EvaluateGraph();
         }
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextDisabled("Deposition");
+        ImGui::TableSetColumnIndex(1);
+        ImGui::SeparatorText("Deposition");
         if (DrawPropertyFloatRow("Deposition Strength", "MseDepositionStrength", &mse.depositionStrength, 0.0f, 8.0f, rock::MultiScaleErosionSettings{}.depositionStrength, "Multi-scale erosion deposition strength changed", true, "搬送能を超えた分の堆積率。大きいほど土砂が早く落ちます。"))
         {
             EvaluateGraph();
         }
         if (DrawPropertyFloatRow("Rain", "MseRain", &mse.rain, 0.0f, 10.0f, rock::MultiScaleErosionSettings{}.rain, "Multi-scale erosion rain changed", true, "セルあたりに降る水量。大きいほど流量が増え、堆積も活発になります。"))
-        {
-            EvaluateGraph();
-        }
-
-        ImGui::EndTable();
-        return;
-    }
-
-    if (selectedNode->kind == rock::NodeKind::FluvialErosion && ImGui::BeginTable("FluvialErosionRows", 2, ImGuiTableFlags_SizingStretchProp))
-    {
-        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 210.0f);
-        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-        rock::FluvialErosionSettings& erosion = editableNode->fluvialErosion;
-        erosion.featureSize = std::clamp(erosion.featureSize, 0.0f, 32.0f);
-        erosion.geologicalAge = std::clamp(erosion.geologicalAge, 0.0f, 20.0f);
-        erosion.iterations = std::clamp(erosion.iterations, 0, 100);
-        erosion.channelLength = std::clamp(erosion.channelLength, 0.0f, 512.0f);
-        erosion.erosionStrength = std::clamp(erosion.erosionStrength, 0.0f, 1.0f);
-        erosion.channeling = std::clamp(erosion.channeling, 0.0f, 1.0f);
-        erosion.friction = std::clamp(erosion.friction, 0.0f, 1.0f);
-        erosion.wearAngleDegrees = std::clamp(erosion.wearAngleDegrees, 0.0f, 90.0f);
-        erosion.depositAngleDegrees = std::clamp(erosion.depositAngleDegrees, 0.0f, 90.0f);
-        erosion.maxErosionAngleDegrees = std::clamp(erosion.maxErosionAngleDegrees, 0.0f, 90.0f);
-        erosion.erosionGranularity = std::clamp(erosion.erosionGranularity, 0.0f, 100.0f);
-        erosion.flowVolume = std::clamp(erosion.flowVolume, 0.0f, 1.0f);
-        erosion.smallChannelInfluence = std::clamp(erosion.smallChannelInfluence, 0.0f, 1.0f);
-        erosion.sedimentVelocity = std::clamp(erosion.sedimentVelocity, 0.0f, 2.0f);
-        erosion.forceVectorX = std::clamp(erosion.forceVectorX, -1.0f, 1.0f);
-        erosion.forceVectorY = std::clamp(erosion.forceVectorY, -1.0f, 1.0f);
-        erosion.forceVectorZ = std::clamp(erosion.forceVectorZ, -1.0f, 1.0f);
-        erosion.forceStrength = std::clamp(erosion.forceStrength, 0.0f, 1.0f);
-        erosion.shearX = std::clamp(erosion.shearX, -0.1f, 0.1f);
-        erosion.shearY = std::clamp(erosion.shearY, -0.1f, 0.1f);
-        erosion.referenceDetailSize = std::clamp(erosion.referenceDetailSize, 0.01f, 2.0f);
-        erosion.sourceTerrainDetailSmoothing = std::clamp(erosion.sourceTerrainDetailSmoothing, 0.0f, 10.0f);
-
-        if (DrawPropertyFloatRow("Feature Size", "FluvialFeatureSize", &erosion.featureSize, 0.0f, 32.0f, rock::FluvialErosionSettings{}.featureSize, "Fluvial feature size changed", true, "侵食で扱う地形特徴の大きさです。小さいほど細かい地形特徴に反応します。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Geological Age", "FluvialGeologicalAge", &erosion.geologicalAge, 0.0f, 20.0f, rock::FluvialErosionSettings{}.geologicalAge, "Fluvial geological age changed", true, "地形が水で削られてきた時間の目安です。高いほど侵食が成熟します。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyIntRow("Simulation Iterations", "FluvialIterations", &erosion.iterations, 0, 100, rock::FluvialErosionSettings{}.iterations, "Fluvial iterations changed", true, "侵食シミュレーションの反復回数です。増やすほど効果が強くなりますが計算時間も増えます。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Channel Length", "FluvialChannelLength", &erosion.channelLength, 0.0f, 512.0f, rock::FluvialErosionSettings{}.channelLength, "Fluvial channel length changed", true, "水の流れが影響する距離です。大きいほど長い流路が形成されやすくなります。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyPercentRow("Erosion Strength (%)", "FluvialErosionStrength", &erosion.erosionStrength, 0.0f, 1.0f, rock::FluvialErosionSettings{}.erosionStrength, "Fluvial erosion strength changed", "地形を削る強さです。値を上げると谷や溝が深くなります。"))
-        {
-            EvaluateGraph();
-        }
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        ImGui::TextDisabled("Sediment Transport");
-        ImGui::TableSetColumnIndex(1);
-        ImGui::SeparatorText("Sediment Transport");
-        if (DrawPropertyPercentRow("Friction", "FluvialFriction", &erosion.friction, 0.0f, 1.0f, rock::FluvialErosionSettings{}.friction, "Fluvial friction changed", "水流の勢いを抑える度合いです。高いほど侵食が落ち着き、短い流れになります。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Wear Angle", "FluvialWearAngle", &erosion.wearAngleDegrees, 0.0f, 90.0f, rock::FluvialErosionSettings{}.wearAngleDegrees, "Fluvial wear angle changed", true, "削れ始める斜面角度の目安です。低いほど緩い斜面にも侵食が入りやすくなります。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Deposit Angle", "FluvialDepositAngle", &erosion.depositAngleDegrees, 0.0f, 90.0f, rock::FluvialErosionSettings{}.depositAngleDegrees, "Fluvial deposit angle changed", true, "土砂が堆積しやすくなる斜面角度の目安です。低いほど平坦部に土砂が残りやすくなります。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Max Erosion Angle", "FluvialMaxErosionAngle", &erosion.maxErosionAngleDegrees, 0.0f, 90.0f, rock::FluvialErosionSettings{}.maxErosionAngleDegrees, "Fluvial max erosion angle changed", true, "侵食を許可する最大斜面角度です。急すぎる斜面への影響を抑えるときに使います。"))
-        {
-            EvaluateGraph();
-        }
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        ImGui::TextDisabled("Sediment Shaping");
-        ImGui::TableSetColumnIndex(1);
-        ImGui::SeparatorText("Sediment Shaping");
-        if (DrawPropertyFloatRow("Erosion Granularity", "FluvialGranularity", &erosion.erosionGranularity, 0.0f, 100.0f, rock::FluvialErosionSettings{}.erosionGranularity, "Fluvial granularity changed", true, "侵食パターンの細かさです。高いほど細かい溝やノイズ感が出やすくなります。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Flow Volume", "FluvialFlowVolume", &erosion.flowVolume, 0.0f, 1.0f, rock::FluvialErosionSettings{}.flowVolume, "Fluvial flow volume changed", true, "水量の追加係数です。高いほど流量と土砂輸送力が増えます。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyPercentRow("Small Channel Influence", "FluvialSmallChannelInfluence", &erosion.smallChannelInfluence, 0.0f, 1.0f, rock::FluvialErosionSettings{}.smallChannelInfluence, "Fluvial small channel influence changed", "浅い細リルを出しやすくする度合いです。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Sediment Velocity", "FluvialSedimentVelocity", &erosion.sedimentVelocity, 0.0f, 2.0f, rock::FluvialErosionSettings{}.sedimentVelocity, "Fluvial sediment velocity changed", true, "削られた土砂が下流へ運ばれる強さです。高いほど堆積位置が流れ方向へ伸びます。"))
-        {
-            EvaluateGraph();
-        }
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        ImGui::TextDisabled("Directionality");
-        ImGui::TableSetColumnIndex(1);
-        ImGui::SeparatorText("Directionality");
-        if (DrawPropertyFloatRow("Force Vector X", "FluvialForceX", &erosion.forceVectorX, -1.0f, 1.0f, rock::FluvialErosionSettings{}.forceVectorX, "Fluvial force vector X changed", true, "力場に加算する外力ベクトルの X 成分。流れの方向にバイアスをかけます。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Force Vector Z", "FluvialForceZ", &erosion.forceVectorZ, -1.0f, 1.0f, rock::FluvialErosionSettings{}.forceVectorZ, "Fluvial force vector Z changed", true, "力場に加算する外力ベクトルの Z 成分。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyPercentRow("Force Strength", "FluvialForceStrength", &erosion.forceStrength, 0.0f, 1.0f, rock::FluvialErosionSettings{}.forceStrength, "Fluvial force strength changed", "外力の倍率です。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Shear X", "FluvialShearX", &erosion.shearX, -0.1f, 0.1f, rock::FluvialErosionSettings{}.shearX, "Fluvial shear X changed", true, "粒子の前後サンプル位置に加える X 方向ずらしです。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Shear Y", "FluvialShearY", &erosion.shearY, -0.1f, 0.1f, rock::FluvialErosionSettings{}.shearY, "Fluvial shear Y changed", true, "粒子の前後サンプル位置に加える Z 方向ずらしです。"))
-        {
-            EvaluateGraph();
-        }
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        ImGui::TextDisabled("Advanced");
-        ImGui::TableSetColumnIndex(1);
-        ImGui::SeparatorText("Advanced");
-        if (DrawPropertyFloatRow("Reference Detail Size", "FluvialReferenceDetailSize", &erosion.referenceDetailSize, 0.01f, 2.0f, rock::FluvialErosionSettings{}.referenceDetailSize, "Fluvial reference detail size changed", true, "カーネルの Detail_Scale。粒子ステップ数や粒子密度の解像度依存スケール基準。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Source Terrain Detail Smoothing", "FluvialSourceSmoothing", &erosion.sourceTerrainDetailSmoothing, 0.0f, 10.0f, rock::FluvialErosionSettings{}.sourceTerrainDetailSmoothing, "Fluvial source smoothing changed", true, "侵食前に入力地形をぼかす度合い。値が大きいほどクリーンな流路が形成されますが細部が失われます。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyBoolRow("Use Multigrid Acceleration", "FluvialUseMultigrid", &erosion.useMultigrid, "Fluvial multigrid toggle changed", "複数解像度で侵食を計算して大きな谷筋を作ります。オフにすると最終解像度のみで処理されます。", rock::FluvialErosionSettings{}.useMultigrid))
         {
             EvaluateGraph();
         }
@@ -6921,7 +6076,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
             throw std::runtime_error("CreateWindow failed");
         }
         InitD3D(g_hwnd);
-        rock::SetFluvialGpuEvaluator(RunFluvialComputeGrid);
         rock::SetMultiScaleErosionGpuEvaluator(RunMseComputeGrid);
 
         ShowWindow(g_hwnd, showCommand);
@@ -6980,7 +6134,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
             ImGui_ImplDX12_NewFrame();
             ImGui_ImplWin32_NewFrame();
             ImGui::NewFrame();
-            ProcessPendingFluvialGpuRequests();
             ProcessPendingMseGpuRequests();
             PollAsyncEvaluation();
             DrawUi();
@@ -6996,7 +6149,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         ImGui_ImplDX12_Shutdown();
         ImGui_ImplWin32_Shutdown();
         ImGui::DestroyContext();
-        rock::SetFluvialGpuEvaluator(nullptr);
         rock::SetMultiScaleErosionGpuEvaluator(nullptr);
         CleanupD3D();
         DestroyWindow(g_hwnd);

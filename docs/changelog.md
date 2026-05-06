@@ -2,6 +2,10 @@
 
 ## 未リリース
 
+- `Heightmap Blur` の水平・垂直 Gaussian パスの z ループを `std::execution::par` で並列化しました。Multi-Scale Erosion と同じ `ParallelForRows` ヘルパーを共有します。マルチコア環境で大半径やマルチイテレーション時の評価時間が短縮されます。
+- 実験的な `Fluvial Erosion` (KTT) ノードを削除しました。`Multi-Scale Erosion` ノードが本命の浸食ノードとして定着したため、KTT 系の粒子輸送実装、GPU compute 経路、シェーダー (`shaders/fluvial_erosion_compute.hlsl`)、UI、シリアライズ、関連ヘルパー (`KttRandom2`、`ResampleHeightfieldGrid`、`SmoothHeightfieldHeights`、`AddResampledHeightDelta`) をまとめて除去しました。`docs/fluvial_erosion/` のアルゴリズムガイドは履歴として残しています。
+- `Multi-Scale Erosion` のプロパティパネルに `Stream Power` / `Thermal` / `Deposition` のセクション区切りを追加しました。3 パスのパラメータ群が視覚的に区別できなかった問題を解消します。
+- `Multi-Scale Erosion` のプロパティパネルで `Backend` を一番上に移動し、CPU/GPU の切り替えを最初に確認できるようにしました。
 - `Multi-Scale Erosion` に GPU Compute バックエンドを追加しました。`shaders/multi_scale_erosion_compute.hlsl` (Schott et al. の `erosion.glsl` / `thermal.glsl` / `deposition.glsl` を HLSL 移植) を D3D12 compute pipeline で実行します。プロパティの `Backend` で `CPU Reference` / `GPU Compute` を切り替えます。GPU 経路はバックグラウンド評価スレッドからメインスレッドへジョブを積んで D3D12 上で実行する KTT と同じスケジューラを使い、初期化や実行時に失敗すると CPU 版へフォールバックします。
 - `Multi-Scale Erosion` のアルゴリズム入門ガイド `docs/multi_scale_erosion/multi_scale_erosion_algorithm_guide.md` を追加しました。KTT のガイドと同じ形式で、SPE / Thermal / Deposition の各パスの直感的な役割、マルチグリッド処理の意味、解像度不変性の仕組み、見た目が崩れたときの調整順を解説しています。
 - `Multi-Scale Erosion` にマルチグリッドピラミッド処理を追加し、`Use Multigrid` トグルで切り替え可能にしました (既定 ON)。粗い解像度 (`64`) から目標解像度へ `x2` でアップサンプルしながら段階的に浸食を適用する Schott et al. 論文本来の構成です。粗い段階で大局の谷ネットワークが決まり、細かい段階は細部の追加だけになるので、解像度を変えても大局構造がほぼ変わらなくなります。OFF にすると従来通り入力解像度のみで実行する単一段階モードになります。`Iterations` は Multigrid 有効時は各レベルでの反復数を意味します。
