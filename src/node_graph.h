@@ -42,6 +42,12 @@ enum class MultiScaleErosionBackend
     GpuCompute,
 };
 
+enum class MaskNoiseBackend
+{
+    CpuParallel,
+    GpuCompute,
+};
+
 enum class ShapeKind
 {
     Hemisphere,
@@ -128,6 +134,7 @@ struct MaskNoiseSettings
     float lacunarity = 2.0f;
     float persistence = 0.5f;
     int simulationResolution = 512;
+    MaskNoiseBackend backend = MaskNoiseBackend::GpuCompute;
 };
 
 struct MaskBlendSettings
@@ -264,7 +271,14 @@ struct HeightfieldGrid
     std::vector<float> age;
 };
 
+struct MaskGrid
+{
+    int resolution = 0;
+    std::vector<float> values;
+};
+
 using MultiScaleErosionGpuEvaluator = bool (*)(HeightfieldGrid& grid, const MultiScaleErosionSettings& settings, std::string* error);
+using MaskNoiseGpuEvaluator = bool (*)(MaskGrid& grid, const MaskNoiseSettings& settings, std::string* error);
 
 struct HeightfieldPipeline
 {
@@ -356,7 +370,8 @@ private:
     const Node* FindUpstreamNode(const Node& node) const;
     HeightfieldPipeline PipelineTo(NodeKind targetKind) const;
     HeightfieldPipeline PipelineToNode(const Node& targetNode) const;
-    HeightfieldGrid EvaluateMaskAsHeightfield(const Node& node, std::string* message) const;
+    HeightfieldGrid EvaluateMaskAsHeightfield(const Node& node, std::string* message);
+    MaskGrid EvaluateMaskGridForNodeCached(const Node& node, int depth, uint64_t* outputHash);
     MeshData BuildMeshFromHeightPipelineCached(const HeightfieldPipeline& pipeline, int resolution, std::string* message, HeightfieldPreviewField previewField = HeightfieldPreviewField::Heightmap, HeightfieldGrid* previewGrid = nullptr);
 
     struct HeightfieldNodeCache
@@ -370,10 +385,20 @@ private:
         std::string message;
     };
 
+    struct MaskNodeCache
+    {
+        bool valid = false;
+        uint64_t inputHash = 0;
+        uint64_t parameterHash = 0;
+        uint64_t outputHash = 0;
+        MaskGrid grid;
+    };
+
     std::vector<Node> nodes_;
     std::vector<Link> links_;
     GraphSettings settings_;
     std::unordered_map<GraphId, HeightfieldNodeCache> heightfieldCache_;
+    std::unordered_map<GraphId, MaskNodeCache> maskCache_;
     EvaluationSummary evaluation_;
     GraphId nextGraphId_ = 1;
 };
@@ -386,5 +411,6 @@ std::string_view ToString(ValueType type);
 PreviewStage PreviewStageFor(NodeKind kind);
 bool IsMaskOnlyNodeKind(NodeKind kind);
 void SetMultiScaleErosionGpuEvaluator(MultiScaleErosionGpuEvaluator evaluator);
+void SetMaskNoiseGpuEvaluator(MaskNoiseGpuEvaluator evaluator);
 
 } // namespace rock

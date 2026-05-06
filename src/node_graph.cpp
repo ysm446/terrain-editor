@@ -25,6 +25,7 @@ namespace
 using Microsoft::WRL::ComPtr;
 
 MultiScaleErosionGpuEvaluator g_mseGpuEvaluator = nullptr;
+MaskNoiseGpuEvaluator g_maskNoiseGpuEvaluator = nullptr;
 
 struct HeightmapImage
 {
@@ -103,6 +104,7 @@ uint64_t HashMaskNoiseSettings(const MaskNoiseSettings& settings)
     HashCombine(hash, HashFloat(settings.lacunarity));
     HashCombine(hash, HashFloat(settings.persistence));
     HashCombine(hash, static_cast<uint64_t>(settings.simulationResolution));
+    HashCombine(hash, static_cast<uint64_t>(settings.backend));
     return hash;
 }
 
@@ -880,18 +882,25 @@ inline float Fbm2D(float x, float y, int octaves, float lacunarity, float persis
 }
 } // namespace mask_noise
 
-struct MaskGrid
-{
-    int resolution = 0;
-    std::vector<float> values;
-};
-
 MaskGrid GenerateMaskNoise(const MaskNoiseSettings& settings)
 {
     MaskGrid grid;
     grid.resolution = std::clamp(settings.simulationResolution, 2, 2048);
     const size_t cellCount = static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution);
     grid.values.assign(cellCount, 0.0f);
+
+    // GPU compute path. Falls back to the CPU branch below if the evaluator
+    // hasn't been registered (no D3D12 device) or returns failure.
+    if (settings.backend == MaskNoiseBackend::GpuCompute && g_maskNoiseGpuEvaluator != nullptr)
+    {
+        std::string ignoredError;
+        if (g_maskNoiseGpuEvaluator(grid, settings, &ignoredError))
+        {
+            return grid;
+        }
+        // Fall through on GPU failure; clear any partial writes first.
+        grid.values.assign(cellCount, 0.0f);
+    }
 
     const int octaves = std::clamp(settings.octaves, 1, 12);
     const float lacunarity = std::max(settings.lacunarity, 0.0f);
@@ -900,19 +909,19 @@ MaskGrid GenerateMaskNoise(const MaskNoiseSettings& settings)
     const int32_t seed = settings.seed;
     const float invDenom = grid.resolution > 1 ? 1.0f / static_cast<float>(grid.resolution - 1) : 0.0f;
 
-    for (int z = 0; z < grid.resolution; ++z)
-    {
+    const int n = grid.resolution;
+    ParallelForRows(n, [&](int z) {
         const float v = static_cast<float>(z) * invDenom;
-        for (int x = 0; x < grid.resolution; ++x)
+        for (int x = 0; x < n; ++x)
         {
             const float u = static_cast<float>(x) * invDenom;
             // Perlin / fBM output is roughly in [-1, 1] after normalisation, so
             // remap to [0, 1] for use as a Mask channel.
-            const float n = mask_noise::Fbm2D(u * frequency, v * frequency, octaves, lacunarity, persistence, seed);
-            grid.values[static_cast<size_t>(z) * static_cast<size_t>(grid.resolution) + static_cast<size_t>(x)] =
-                std::clamp(n * 0.5f + 0.5f, 0.0f, 1.0f);
+            const float ns = mask_noise::Fbm2D(u * frequency, v * frequency, octaves, lacunarity, persistence, seed);
+            grid.values[static_cast<size_t>(z) * static_cast<size_t>(n) + static_cast<size_t>(x)] =
+                std::clamp(ns * 0.5f + 0.5f, 0.0f, 1.0f);
         }
-    }
+    });
     return grid;
 }
 
@@ -1612,6 +1621,108 @@ void AccumulateNormal(MeshVertex& vertex, float nx, float ny, float nz)
     vertex.nz += nz;
 }
 
+// Lightweight mesh builder for Mask Noise / Mask Blend previews. The
+// heightfield is flat (y = 0), so we skip the wall, bottom, normal-accumulation
+// and edge-dedup work that BuildMeshFromHeightfield needs for terrain. All
+// surface normals are (0, 1, 0) and the grid topology is regular, so triangles
+// and edges can be written by index in parallel rows without hash sets.
+MeshData BuildFlatMaskMesh(const HeightfieldGrid& grid, int meshResolution)
+{
+    MeshData mesh;
+    if (grid.resolution < 2 || grid.mask.empty())
+    {
+        return mesh;
+    }
+    meshResolution = std::clamp(meshResolution, 2, 2048);
+
+    const int M = meshResolution;
+    const int gridResolution = grid.resolution;
+    const float halfSize = grid.terrainSizeMeters * 0.5f;
+    const size_t vertexCount = static_cast<size_t>(M) * static_cast<size_t>(M);
+    const size_t triangleCount = static_cast<size_t>(M - 1) * static_cast<size_t>(M - 1) * 2u;
+    const size_t horizEdges = static_cast<size_t>(M) * static_cast<size_t>(M - 1);
+    const size_t vertEdges = static_cast<size_t>(M - 1) * static_cast<size_t>(M);
+    const size_t diagEdges = static_cast<size_t>(M - 1) * static_cast<size_t>(M - 1);
+
+    mesh.vertices.resize(vertexCount);
+    mesh.triangles.resize(triangleCount);
+    mesh.edges.resize(horizEdges + vertEdges + diagEdges);
+
+    const float invDenom = 1.0f / static_cast<float>(M - 1);
+
+    ParallelForRows(M, [&](int z) {
+        const float v = static_cast<float>(z) * invDenom;
+        const float zPos = std::lerp(halfSize, -halfSize, v);
+        const size_t rowStart = static_cast<size_t>(z) * static_cast<size_t>(M);
+        for (int x = 0; x < M; ++x)
+        {
+            const float u = static_cast<float>(x) * invDenom;
+            mesh.vertices[rowStart + static_cast<size_t>(x)] = MeshVertex{
+                std::lerp(-halfSize, halfSize, u),
+                0.0f,
+                zPos,
+                0.0f,
+                1.0f,
+                0.0f,
+                SampleHeightfieldValue(grid.mask, gridResolution, u, v),
+            };
+        }
+    });
+
+    ParallelForRows(M - 1, [&](int z) {
+        const size_t rowStart = static_cast<size_t>(z) * static_cast<size_t>(M - 1) * 2u;
+        const uint32_t rowOffset = static_cast<uint32_t>(z) * static_cast<uint32_t>(M);
+        const uint32_t nextRowOffset = rowOffset + static_cast<uint32_t>(M);
+        for (int x = 0; x < M - 1; ++x)
+        {
+            const uint32_t a = rowOffset + static_cast<uint32_t>(x);
+            const uint32_t b = a + 1u;
+            const uint32_t c = nextRowOffset + static_cast<uint32_t>(x) + 1u;
+            const uint32_t d = nextRowOffset + static_cast<uint32_t>(x);
+            mesh.triangles[rowStart + static_cast<size_t>(x) * 2u + 0u] = {a, b, c};
+            mesh.triangles[rowStart + static_cast<size_t>(x) * 2u + 1u] = {a, c, d};
+        }
+    });
+
+    // Horizontal edges: M rows × (M-1) edges per row.
+    ParallelForRows(M, [&](int z) {
+        const size_t rowStart = static_cast<size_t>(z) * static_cast<size_t>(M - 1);
+        const uint32_t rowOffset = static_cast<uint32_t>(z) * static_cast<uint32_t>(M);
+        for (int x = 0; x < M - 1; ++x)
+        {
+            const uint32_t a = rowOffset + static_cast<uint32_t>(x);
+            mesh.edges[rowStart + static_cast<size_t>(x)] = {a, a + 1u};
+        }
+    });
+
+    // Vertical edges: (M-1) rows × M edges per row.
+    const size_t vertOffset = horizEdges;
+    ParallelForRows(M - 1, [&](int z) {
+        const size_t rowStart = vertOffset + static_cast<size_t>(z) * static_cast<size_t>(M);
+        const uint32_t rowOffset = static_cast<uint32_t>(z) * static_cast<uint32_t>(M);
+        for (int x = 0; x < M; ++x)
+        {
+            const uint32_t a = rowOffset + static_cast<uint32_t>(x);
+            mesh.edges[rowStart + static_cast<size_t>(x)] = {a, a + static_cast<uint32_t>(M)};
+        }
+    });
+
+    // Diagonal edges (one per quad): (M-1) × (M-1).
+    const size_t diagOffset = horizEdges + vertEdges;
+    ParallelForRows(M - 1, [&](int z) {
+        const size_t rowStart = diagOffset + static_cast<size_t>(z) * static_cast<size_t>(M - 1);
+        const uint32_t rowOffset = static_cast<uint32_t>(z) * static_cast<uint32_t>(M);
+        for (int x = 0; x < M - 1; ++x)
+        {
+            const uint32_t a = rowOffset + static_cast<uint32_t>(x);
+            const uint32_t b = a + static_cast<uint32_t>(M) + 1u;
+            mesh.edges[rowStart + static_cast<size_t>(x)] = {a, b};
+        }
+    });
+
+    return mesh;
+}
+
 MeshData BuildMeshFromHeightPipeline(const HeightfieldPipeline& pipeline, int resolution, std::string* message, HeightfieldPreviewField previewField = HeightfieldPreviewField::Heightmap, HeightfieldGrid* previewGrid = nullptr)
 {
     HeightfieldGrid grid = pipeline.useShape
@@ -2133,6 +2244,7 @@ void NodeGraph::SetEvaluationPending(std::string_view status)
 void NodeGraph::ApplyEvaluationResultFrom(const NodeGraph& evaluatedGraph)
 {
     heightfieldCache_ = evaluatedGraph.heightfieldCache_;
+    maskCache_ = evaluatedGraph.maskCache_;
     evaluation_ = evaluatedGraph.evaluation_;
 }
 
@@ -2195,54 +2307,85 @@ const Node* NodeGraph::FindUpstreamForPin(GraphId pinId) const
     return FindNodeByOutputPin(linkIt->startPin);
 }
 
-namespace
-{
 // Recursive descent through Mask Noise / Mask Blend nodes. Mask Blend follows
 // both inputs (FindUpstreamNode only walks the first input), so we use
-// FindUpstreamForPin per pin and merge with BlendMaskGrids.
-MaskGrid EvaluateMaskGridForNode(const NodeGraph& graph, const Node& node, int depth)
+// FindUpstreamForPin per pin and merge with BlendMaskGrids. Each node's output
+// is cached by (input hash, parameter hash) so unrelated edits do not re-run
+// upstream noise generation.
+MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, uint64_t* outputHash)
 {
     if (depth > 16)
     {
+        if (outputHash != nullptr) { *outputHash = 0; }
         return {};
     }
     if (node.kind == NodeKind::MaskNoise)
     {
-        return GenerateMaskNoise(node.maskNoise);
+        const uint64_t parameterHash = HashMaskNoiseSettings(node.maskNoise);
+        MaskNodeCache& cache = maskCache_[node.id];
+        if (!cache.valid || cache.inputHash != 0 || cache.parameterHash != parameterHash)
+        {
+            cache.grid = GenerateMaskNoise(node.maskNoise);
+            cache.valid = true;
+            cache.inputHash = 0;
+            cache.parameterHash = parameterHash;
+            cache.outputHash = parameterHash;
+            HashCombine(cache.outputHash, static_cast<uint64_t>(node.id));
+        }
+        if (outputHash != nullptr) { *outputHash = cache.outputHash; }
+        return cache.grid;
     }
     if (node.kind == NodeKind::MaskBlend)
     {
+        uint64_t aHash = 0;
+        uint64_t bHash = 0;
         MaskGrid a;
         MaskGrid b;
         if (node.inputs.size() >= 1)
         {
-            if (const Node* upstream = graph.FindUpstreamForPin(node.inputs[0].id))
+            if (const Node* upstream = FindUpstreamForPin(node.inputs[0].id))
             {
                 if (IsMaskOnlyNodeKind(upstream->kind))
                 {
-                    a = EvaluateMaskGridForNode(graph, *upstream, depth + 1);
+                    a = EvaluateMaskGridForNodeCached(*upstream, depth + 1, &aHash);
                 }
             }
         }
         if (node.inputs.size() >= 2)
         {
-            if (const Node* upstream = graph.FindUpstreamForPin(node.inputs[1].id))
+            if (const Node* upstream = FindUpstreamForPin(node.inputs[1].id))
             {
                 if (IsMaskOnlyNodeKind(upstream->kind))
                 {
-                    b = EvaluateMaskGridForNode(graph, *upstream, depth + 1);
+                    b = EvaluateMaskGridForNodeCached(*upstream, depth + 1, &bHash);
                 }
             }
         }
-        return BlendMaskGrids(a, b, node.maskBlend.mode, node.maskBlend.intensity);
+        uint64_t inputHash = 0;
+        HashCombine(inputHash, aHash);
+        HashCombine(inputHash, bHash);
+        const uint64_t parameterHash = HashMaskBlendSettings(node.maskBlend);
+        MaskNodeCache& cache = maskCache_[node.id];
+        if (!cache.valid || cache.inputHash != inputHash || cache.parameterHash != parameterHash)
+        {
+            cache.grid = BlendMaskGrids(a, b, node.maskBlend.mode, node.maskBlend.intensity);
+            cache.valid = true;
+            cache.inputHash = inputHash;
+            cache.parameterHash = parameterHash;
+            cache.outputHash = inputHash;
+            HashCombine(cache.outputHash, parameterHash);
+            HashCombine(cache.outputHash, static_cast<uint64_t>(node.id));
+        }
+        if (outputHash != nullptr) { *outputHash = cache.outputHash; }
+        return cache.grid;
     }
+    if (outputHash != nullptr) { *outputHash = 0; }
     return {};
 }
-} // namespace
 
-HeightfieldGrid NodeGraph::EvaluateMaskAsHeightfield(const Node& node, std::string* message) const
+HeightfieldGrid NodeGraph::EvaluateMaskAsHeightfield(const Node& node, std::string* message)
 {
-    const MaskGrid mask = EvaluateMaskGridForNode(*this, node, 0);
+    const MaskGrid mask = EvaluateMaskGridForNodeCached(node, 0, nullptr);
     HeightfieldGrid grid;
     if (mask.resolution <= 0)
     {
@@ -2353,7 +2496,7 @@ void NodeGraph::Evaluate(int previewMeshResolution)
         evaluation_.previewShowsMask = true;
         evaluation_.previewField = HeightfieldPreviewField::Mask;
         evaluation_.previewMesh = evaluation_.previewHeightfield.resolution > 0
-            ? BuildMeshFromHeightfield(evaluation_.previewHeightfield, previewMeshResolution)
+            ? BuildFlatMaskMesh(evaluation_.previewHeightfield, previewMeshResolution)
             : MeshData{};
         ++evaluation_.version;
         evaluation_.dirty = false;
@@ -2590,6 +2733,11 @@ bool IsMaskOnlyNodeKind(NodeKind kind)
 void SetMultiScaleErosionGpuEvaluator(MultiScaleErosionGpuEvaluator evaluator)
 {
     g_mseGpuEvaluator = evaluator;
+}
+
+void SetMaskNoiseGpuEvaluator(MaskNoiseGpuEvaluator evaluator)
+{
+    g_maskNoiseGpuEvaluator = evaluator;
 }
 
 } // namespace rock

@@ -2,6 +2,15 @@
 
 ## 未リリース
 
+- Mask プレビュー専用の軽量メッシュ生成パス `BuildFlatMaskMesh` を追加しました。Mask Noise / Mask Blend のプレビューはハイトフィールドが平面 (y=0) なので、`BuildMeshFromHeightfield` の壁・底面・三角形毎の法線累積・`std::unordered_set` によるエッジ重複除去を全て省略します。頂点・三角形・エッジは規則格子の構造が決まっているのでインデックスで直接書き込み、`ParallelForRows` で並列化します。Preview Resolution = 2048 でメッシュ生成 (Release) が秒オーダーから 100ms 級まで短縮される見込みです。
+- マスクノード (`Mask Noise` / `Mask Blend`) の評価結果をノード単位でキャッシュするようにしました。`NodeGraph` に `maskCache_` を追加し、各ノードの (入力ハッシュ, パラメータハッシュ) が変わらない限り再生成しません。これまでマスクプレビューは毎回ゼロから走り直していたため、無関係なパラメータを触っただけでも上流の Perlin / fBM が再計算されていました。`HashMaskNoiseSettings` / `HashMaskBlendSettings` を実際にキャッシュキーとして使い、`ApplyEvaluationResultFrom` でも非同期評価結果と一緒に伝播させます。
+- `GenerateMaskNoise` の二重ループを `ParallelForRows` で並列化しました。512² × 4 オクターブで約 100 万回走る Perlin/fBM 評価をスレッド並列で消化します。
+- `Mask Noise` ノードに GPU compute バックエンドを追加しました (`MaskNoiseBackend::GpuCompute` を既定値)。`shaders/mask_noise_compute.hlsl` の `CSGenerate` カーネルが CPU 側 `mask_noise::Hash3` / `Gradient2` / `Fade` / `Perlin2D` / `Fbm2D` をそのまま HLSL 移植したもので、出力は CPU 版とほぼ一致します。プロパティパネルの `Backend` ドロップダウンで CPU / GPU を切り替え可能で、`.terrainproj` にも保存します。GPU 経路は MSE と同じく `RunMaskNoiseCompute` をワーカースレッドからメインスレッドへ promise/future で往復させて D3D12 呼び出しをメインスレッドに集約します。シェーダーのコンパイルや実行に失敗した場合は自動で CPU 版にフォールバックします。`HashMaskNoiseSettings` にバックエンド種別も含め、切り替え時にキャッシュが無効化されます。
+
+## 2.0.3 - 2026-05-07 04:24
+
+- ノード描画が入力ピンを1つしか表示していなかったため、`Mask Blend` の2番目の入力 `B` が見えない問題を修正しました。複数入力ピンを持つノードはすべての入力行を表示します。
+
 ## 2.0.2 - 2026-05-07 04:14
 
 - 既存プロジェクトを読み込んだあとに新しいノードを追加すると、ノード ID とピン ID が衝突して Dear ImGui の ID conflict 警告が出ることがある問題を修正しました。ノード・ピン・リンクの新規 ID は、読み込み済みグラフ内の最大 ID より後ろから共通採番します。
