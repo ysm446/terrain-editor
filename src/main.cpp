@@ -1,5 +1,6 @@
 #include <windows.h>
 #include <commdlg.h>
+#include <shellapi.h>
 
 #include <algorithm>
 #include <array>
@@ -759,6 +760,17 @@ std::filesystem::path ScreenshotDirectory()
         }
     }
     return std::filesystem::current_path() / "screenshots";
+}
+
+void RevealFileInExplorer(const std::filesystem::path& path)
+{
+    if (path.empty())
+    {
+        return;
+    }
+
+    const std::wstring args = L"/select,\"" + std::filesystem::absolute(path).wstring() + L"\"";
+    ShellExecuteW(nullptr, L"open", L"explorer.exe", args.c_str(), nullptr, SW_SHOWNORMAL);
 }
 
 std::filesystem::path NormalizedProjectPath(const std::filesystem::path& path)
@@ -5989,6 +6001,7 @@ void DrawUi()
         if (terrain::CaptureWindowScreenshot(g_hwnd, ScreenshotDirectory(), &screenshotPath, &error))
         {
             g_projectStatus = "Screenshot saved " + PathToUtf8(screenshotPath);
+            RevealFileInExplorer(screenshotPath);
         }
         else
         {
