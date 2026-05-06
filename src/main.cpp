@@ -286,8 +286,11 @@ struct GpuMeshPreview
     D3D12_GPU_DESCRIPTOR_HANDLE srvGpu{};
     D3D12_CPU_DESCRIPTOR_HANDLE shadowSrvCpu{};
     D3D12_GPU_DESCRIPTOR_HANDLE shadowSrvGpu{};
+    D3D12_CPU_DESCRIPTOR_HANDLE depthSrvCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE depthSrvGpu{};
     bool srvAllocated = false;
     bool shadowSrvAllocated = false;
+    bool depthSrvAllocated = false;
     UINT vertexCount = 0;
     UINT triIndexCount = 0;
     UINT edgeIndexCount = 0;
@@ -315,6 +318,7 @@ struct GpuMeshPreview
     int cloudQualitySamples = 0;
     D3D12_RESOURCE_STATES colorState = D3D12_RESOURCE_STATE_COMMON;
     D3D12_RESOURCE_STATES shadowState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    D3D12_RESOURCE_STATES depthState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
 };
 
 ComPtr<ID3D12RootSignature> g_meshPreviewRootSignature;
@@ -3039,9 +3043,9 @@ struct CloudRenderShaderConstants
     float windOffsetX;
     float windOffsetZ;
     INT   qualitySamples;
+    float nearPlane;
+    float farPlane;
     float pad0;
-    float pad1;
-    float pad2;
 };
 static_assert(sizeof(CloudRenderShaderConstants) == 40 * sizeof(UINT), "CloudRenderShaderConstants must be 40 DWORDs");
 
@@ -3107,21 +3111,36 @@ bool EnsureCloudPipelines(std::string* error)
 
     // -------- Cloud render graphics pipeline --------
     {
-        D3D12_DESCRIPTOR_RANGE srvRange{};
-        srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-        srvRange.NumDescriptors = 1;
-        srvRange.BaseShaderRegister = 0;
-        srvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+        // Two SRVs in the same descriptor range: t0 = cloud volume,
+        // t1 = depth buffer. They live in the shared g_srvHeap but the
+        // table only specifies a base GPU handle, so the caller must point
+        // it at a heap region with both descriptors contiguous. We work
+        // around the contiguous requirement by using two separate tables.
+        D3D12_DESCRIPTOR_RANGE volumeRange{};
+        volumeRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        volumeRange.NumDescriptors = 1;
+        volumeRange.BaseShaderRegister = 0;
+        volumeRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-        D3D12_ROOT_PARAMETER rootParams[2]{};
+        D3D12_DESCRIPTOR_RANGE depthRange{};
+        depthRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        depthRange.NumDescriptors = 1;
+        depthRange.BaseShaderRegister = 1;
+        depthRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+        D3D12_ROOT_PARAMETER rootParams[3]{};
         rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
         rootParams[0].Constants.ShaderRegister = 0;
         rootParams[0].Constants.Num32BitValues = 40;
         rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
         rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
-        rootParams[1].DescriptorTable.pDescriptorRanges = &srvRange;
+        rootParams[1].DescriptorTable.pDescriptorRanges = &volumeRange;
         rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+        rootParams[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        rootParams[2].DescriptorTable.NumDescriptorRanges = 1;
+        rootParams[2].DescriptorTable.pDescriptorRanges = &depthRange;
+        rootParams[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_STATIC_SAMPLER_DESC sampler{};
         sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -3134,7 +3153,7 @@ bool EnsureCloudPipelines(std::string* error)
         sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_ROOT_SIGNATURE_DESC rsDesc{};
-        rsDesc.NumParameters = 2;
+        rsDesc.NumParameters = 3;
         rsDesc.pParameters = rootParams;
         rsDesc.NumStaticSamplers = 1;
         rsDesc.pStaticSamplers = &sampler;
@@ -3310,7 +3329,8 @@ void RenderCloudPass(ID3D12GraphicsCommandList* commandList,
                     const rock::CloudSettings& clouds,
                     const CloudRenderShaderConstants& base,
                     float windOffsetX,
-                    float windOffsetZ)
+                    float windOffsetZ,
+                    D3D12_GPU_DESCRIPTOR_HANDLE depthSrvGpu)
 {
     if (!clouds.enabled) return;
     if (!g_gpuClouds.volumeReady || !g_gpuClouds.volumeTexture) return;
@@ -3330,15 +3350,13 @@ void RenderCloudPass(ID3D12GraphicsCommandList* commandList,
     c.windOffsetX = windOffsetX;
     c.windOffsetZ = windOffsetZ;
     c.qualitySamples = std::clamp(clouds.qualitySamples, 8, 128);
-    c.pad0 = c.pad1 = c.pad2 = 0.0f;
+    c.pad0 = 0.0f;
 
-    // Cloud root sig has its own descriptor table for the volume SRV. We rely
-    // on the SRV heap (g_srvHeap) being bound by the caller; the cloud volume
-    // SRV was allocated from the same heap during EnsureCloudVolume.
     commandList->SetGraphicsRootSignature(g_cloudRenderRootSignature.Get());
     commandList->SetPipelineState(g_cloudRenderPso.Get());
     commandList->SetGraphicsRoot32BitConstants(0, sizeof(c) / 4, &c, 0);
     commandList->SetGraphicsRootDescriptorTable(1, g_gpuClouds.volumeSrvGpu);
+    commandList->SetGraphicsRootDescriptorTable(2, depthSrvGpu);
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     commandList->DrawInstanced(3, 1, 0, 0);
 }
@@ -3728,16 +3746,31 @@ bool EnsureMeshPreviewRenderTarget(int width, int height, std::string* error)
             D3D12_CLEAR_VALUE clearVal{};
             clearVal.Format = DXGI_FORMAT_D32_FLOAT;
             clearVal.DepthStencil.Depth = 1.0f;
+            // Typeless format so we can bind both as DSV (D32_FLOAT) for the
+            // mesh pass and as SRV (R32_FLOAT) for the cloud ray-march pass.
             const D3D12_RESOURCE_DESC desc = Texture2DResourceDesc(
                 static_cast<UINT>(width), static_cast<UINT>(height),
-                DXGI_FORMAT_D32_FLOAT, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
+                DXGI_FORMAT_R32_TYPELESS, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
             ThrowIfFailed(g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &desc,
                 D3D12_RESOURCE_STATE_DEPTH_WRITE, &clearVal, IID_PPV_ARGS(&g_gpuMeshPreview.depthTarget)),
                 "Create mesh depth buffer failed");
+            g_gpuMeshPreview.depthState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
             D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
             dsvDesc.Format = DXGI_FORMAT_D32_FLOAT;
             dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
             g_device->CreateDepthStencilView(g_gpuMeshPreview.depthTarget.Get(), &dsvDesc, g_gpuMeshPreview.dsvCpu);
+
+            if (!g_gpuMeshPreview.depthSrvAllocated)
+            {
+                AllocateSrvDescriptor(nullptr, &g_gpuMeshPreview.depthSrvCpu, &g_gpuMeshPreview.depthSrvGpu);
+                g_gpuMeshPreview.depthSrvAllocated = true;
+            }
+            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+            srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
+            srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            srvDesc.Texture2D.MipLevels = 1;
+            g_device->CreateShaderResourceView(g_gpuMeshPreview.depthTarget.Get(), &srvDesc, g_gpuMeshPreview.depthSrvCpu);
         }
         {
             D3D12_CLEAR_VALUE clearVal{};
@@ -4103,6 +4136,19 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
             commandList->ResourceBarrier(1, &b);
         }
+        if (g_gpuMeshPreview.depthState != D3D12_RESOURCE_STATE_DEPTH_WRITE)
+        {
+            // Cloud pass at the end of last frame left depth as SRV; flip it
+            // back to DEPTH_WRITE before clearing.
+            D3D12_RESOURCE_BARRIER b{};
+            b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            b.Transition.pResource = g_gpuMeshPreview.depthTarget.Get();
+            b.Transition.StateBefore = g_gpuMeshPreview.depthState;
+            b.Transition.StateAfter = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+            b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            commandList->ResourceBarrier(1, &b);
+            g_gpuMeshPreview.depthState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+        }
 
         const float clearColor[] = {0.0f, 0.0f, 0.0f, 0.0f};
         commandList->ClearRenderTargetView(g_gpuMeshPreview.rtvCpu, clearColor, 0, nullptr);
@@ -4285,49 +4331,10 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         skyBase.sunDirection[2] = constants.sunDirection[2];
         RenderSkyPass(commandList.Get(), g_graph.Settings().sky, skyBase);
 
-        // Cloud pass: alpha-blends volumetric clouds onto the sky color
-        // before terrain draws. The terrain mesh draws with depth test below
-        // and overwrites cloud pixels where it's closer to the camera, giving
-        // the "mountain breaks through clouds" look.
+        // Restore mesh state for the surface draws below. Cloud pass moves to
+        // after the mesh draws so it can sample depth and limit ray-march.
         ID3D12DescriptorHeap* descriptorHeaps[] = {g_srvHeap.Get()};
         commandList->SetDescriptorHeaps(1, descriptorHeaps);
-
-        const rock::CloudSettings& cloudSettings = g_graph.Settings().clouds;
-        if (cloudSettings.enabled)
-        {
-            CloudRenderShaderConstants cloudBase{};
-            cloudBase.cameraPosition[0] = constants.cameraPosition[0];
-            cloudBase.cameraPosition[1] = constants.cameraPosition[1];
-            cloudBase.cameraPosition[2] = constants.cameraPosition[2];
-            cloudBase.cameraRight[0] = constants.cameraRight[0];
-            cloudBase.cameraRight[1] = constants.cameraRight[1];
-            cloudBase.cameraRight[2] = constants.cameraRight[2];
-            cloudBase.cameraUp[0] = constants.cameraUp[0];
-            cloudBase.cameraUp[1] = constants.cameraUp[1];
-            cloudBase.cameraUp[2] = constants.cameraUp[2];
-            cloudBase.cameraForward[0] = constants.cameraForward[0];
-            cloudBase.cameraForward[1] = constants.cameraForward[1];
-            cloudBase.cameraForward[2] = constants.cameraForward[2];
-            cloudBase.projScaleX = constants.projScaleX;
-            cloudBase.projScaleY = constants.projScaleY;
-            cloudBase.panNdcX = constants.panNdcX;
-            cloudBase.panNdcY = constants.panNdcY;
-            cloudBase.sunDirection[0] = constants.sunDirection[0];
-            cloudBase.sunDirection[1] = constants.sunDirection[1];
-            cloudBase.sunDirection[2] = constants.sunDirection[2];
-
-            const float windRad = cloudSettings.windDirectionDegrees * 3.14159265358979323846f / 180.0f;
-            const float seconds = static_cast<float>(std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count());
-            const float windOffsetX = std::cos(windRad) * cloudSettings.windSpeedMetersPerSec * seconds;
-            const float windOffsetZ = std::sin(windRad) * cloudSettings.windSpeedMetersPerSec * seconds;
-
-            std::string cloudVolumeError;
-            if (EnsureCloudVolume(cloudSettings.seed, &cloudVolumeError))
-            {
-                RenderCloudPass(commandList.Get(), cloudSettings, cloudBase, windOffsetX, windOffsetZ);
-            }
-        }
-
         commandList->SetGraphicsRootSignature(g_meshPreviewRootSignature.Get());
         commandList->SetGraphicsRoot32BitConstants(0, sizeof(constants) / 4, &constants, 0);
         commandList->SetGraphicsRootDescriptorTable(1, g_gpuMeshPreview.shadowSrvGpu);
@@ -4372,6 +4379,58 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             commandList->SetPipelineState(g_meshPreviewWirePso.Get());
             commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
             commandList->DrawIndexedInstanced(g_gpuMeshPreview.edgeIndexCount, 1, 0, 0, 0);
+        }
+
+        // Cloud pass: now that terrain has written depth, transition depth to
+        // SRV and ray-march cloud over the existing color. Each pixel reads
+        // depth to clamp tExit so cloud renders correctly in front of distant
+        // terrain and is occluded by closer terrain. Alpha-blended over the
+        // already-rendered scene with SRC_ALPHA / INV_SRC_ALPHA.
+        const rock::CloudSettings& cloudSettings = g_graph.Settings().clouds;
+        if (cloudSettings.enabled)
+        {
+            D3D12_RESOURCE_BARRIER depthToSrv{};
+            depthToSrv.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            depthToSrv.Transition.pResource = g_gpuMeshPreview.depthTarget.Get();
+            depthToSrv.Transition.StateBefore = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+            depthToSrv.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            depthToSrv.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            commandList->ResourceBarrier(1, &depthToSrv);
+            g_gpuMeshPreview.depthState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+
+            CloudRenderShaderConstants cloudBase{};
+            cloudBase.cameraPosition[0] = constants.cameraPosition[0];
+            cloudBase.cameraPosition[1] = constants.cameraPosition[1];
+            cloudBase.cameraPosition[2] = constants.cameraPosition[2];
+            cloudBase.cameraRight[0] = constants.cameraRight[0];
+            cloudBase.cameraRight[1] = constants.cameraRight[1];
+            cloudBase.cameraRight[2] = constants.cameraRight[2];
+            cloudBase.cameraUp[0] = constants.cameraUp[0];
+            cloudBase.cameraUp[1] = constants.cameraUp[1];
+            cloudBase.cameraUp[2] = constants.cameraUp[2];
+            cloudBase.cameraForward[0] = constants.cameraForward[0];
+            cloudBase.cameraForward[1] = constants.cameraForward[1];
+            cloudBase.cameraForward[2] = constants.cameraForward[2];
+            cloudBase.projScaleX = constants.projScaleX;
+            cloudBase.projScaleY = constants.projScaleY;
+            cloudBase.panNdcX = constants.panNdcX;
+            cloudBase.panNdcY = constants.panNdcY;
+            cloudBase.sunDirection[0] = constants.sunDirection[0];
+            cloudBase.sunDirection[1] = constants.sunDirection[1];
+            cloudBase.sunDirection[2] = constants.sunDirection[2];
+            cloudBase.nearPlane = constants.nearPlane;
+            cloudBase.farPlane = constants.farPlane;
+
+            const float windRad = cloudSettings.windDirectionDegrees * 3.14159265358979323846f / 180.0f;
+            const float seconds = static_cast<float>(std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count());
+            const float windOffsetX = std::cos(windRad) * cloudSettings.windSpeedMetersPerSec * seconds;
+            const float windOffsetZ = std::sin(windRad) * cloudSettings.windSpeedMetersPerSec * seconds;
+
+            std::string cloudVolumeError;
+            if (EnsureCloudVolume(cloudSettings.seed, &cloudVolumeError))
+            {
+                RenderCloudPass(commandList.Get(), cloudSettings, cloudBase, windOffsetX, windOffsetZ, g_gpuMeshPreview.depthSrvGpu);
+            }
         }
 
         D3D12_RESOURCE_BARRIER toSrv{};

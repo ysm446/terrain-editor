@@ -37,12 +37,13 @@ cbuffer CloudConstants : register(b0)
     float  windOffsetX;
     float  windOffsetZ;
     int    qualitySamples;
+    float  nearPlane;
+    float  farPlane;
     float  pad0;
-    float  pad1;
-    float  pad2;
 };
 
 Texture3D<float> CloudVolume : register(t0);
+Texture2D<float> DepthBuffer : register(t1);
 SamplerState LinearSampler : register(s0);
 
 struct VsOut
@@ -87,6 +88,15 @@ float4 CloudPS(VsOut input) : SV_Target
     float screenY = (input.ndc.y - panNdcY) / projScaleY;
     float3 ray = normalize(cameraForward.xyz + cameraRight.xyz * screenX + cameraUp.xyz * screenY);
 
+    // Read terrain depth to limit the ray march. Mesh shader writes
+    // ndc.z = (d - nearPlane) / (farPlane - nearPlane) where d is
+    // dot(view, cameraForward). Reverse it back to a world-space ray
+    // distance and clamp tExit so cloud doesn't bleed past terrain.
+    float ndcZ = DepthBuffer.Load(int3(input.pos.xy, 0));
+    float forwardDist = ndcZ * (farPlane - nearPlane) + nearPlane;
+    float rayForward = max(dot(ray, cameraForward.xyz), 1e-4);
+    float tTerrain = (ndcZ < 1.0) ? (forwardDist / rayForward) : 1e30;
+
     // Find ray entry/exit with the slab altitudeMin <= y <= altitudeMax.
     if (abs(ray.y) < 1e-4)
     {
@@ -102,6 +112,8 @@ float4 CloudPS(VsOut input) : SV_Target
     // obvious, and there's nothing of interest at that distance for an editor
     // preview anyway.
     tExit = min(tExit, 50000.0);
+    tExit = min(tExit, tTerrain);
+    if (tExit <= tEnter) return float4(0, 0, 0, 0);
 
     int numSteps = qualitySamples;
     float stepLen = (tExit - tEnter) / numSteps;
