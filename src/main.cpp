@@ -1727,7 +1727,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 node.multiScaleErosion.flowExponent = std::clamp(nodeMultiScaleErosionJson.value("flowExponent", node.multiScaleErosion.flowExponent), 0.5f, 4.0f);
                 node.multiScaleErosion.speTimeStep = std::clamp(nodeMultiScaleErosionJson.value("speTimeStep", node.multiScaleErosion.speTimeStep), 0.0f, 4.0f);
                 node.multiScaleErosion.thermalAngleDegrees = std::clamp(nodeMultiScaleErosionJson.value("thermalAngleDegrees", node.multiScaleErosion.thermalAngleDegrees), 0.0f, 60.0f);
-                node.multiScaleErosion.thermalStrength = std::clamp(nodeMultiScaleErosionJson.value("thermalStrength", node.multiScaleErosion.thermalStrength), 0.0f, 0.001f);
+                node.multiScaleErosion.thermalStrength = std::clamp(nodeMultiScaleErosionJson.value("thermalStrength", node.multiScaleErosion.thermalStrength), 0.0f, 0.01f);
                 node.multiScaleErosion.thermalNoisifyAngle = nodeMultiScaleErosionJson.value("thermalNoisifyAngle", node.multiScaleErosion.thermalNoisifyAngle);
                 node.multiScaleErosion.thermalNoiseMin = std::clamp(nodeMultiScaleErosionJson.value("thermalNoiseMin", node.multiScaleErosion.thermalNoiseMin), 0.0f, 4.0f);
                 node.multiScaleErosion.thermalNoiseMax = std::clamp(nodeMultiScaleErosionJson.value("thermalNoiseMax", node.multiScaleErosion.thermalNoiseMax), 0.0f, 4.0f);
@@ -4770,7 +4770,7 @@ bool DrawResetToDefaultButton(const char* id, bool isDefaultValue)
     return pressed;
 }
 
-bool DrawPropertyFloatRow(const char* label, const char* id, float* value, float minValue, float maxValue, float defaultValue, const char* dirtyReason, bool recordUndo = true, const char* tooltip = nullptr)
+bool DrawPropertyFloatRow(const char* label, const char* id, float* value, float minValue, float maxValue, float defaultValue, const char* dirtyReason, bool recordUndo = true, const char* tooltip = nullptr, const char* format = "%.3f", ImGuiSliderFlags sliderFlags = 0)
 {
     bool editEnded = false;
     ImGui::TableNextRow();
@@ -4788,7 +4788,7 @@ bool DrawPropertyFloatRow(const char* label, const char* id, float* value, float
         80.0f,
         180.0f);
     ImGui::SetNextItemWidth(sliderWidth);
-    if (ImGui::SliderFloat("##slider", value, minValue, maxValue, "%.3f"))
+    if (ImGui::SliderFloat("##slider", value, minValue, maxValue, format, sliderFlags))
     {
         g_graph.MarkDirty(dirtyReason);
     }
@@ -4800,7 +4800,7 @@ bool DrawPropertyFloatRow(const char* label, const char* id, float* value, float
 
     ImGui::SameLine();
     ImGui::SetNextItemWidth(inputWidth);
-    if (ImGui::InputFloat("##number", value, 0.0f, 0.0f, "%.3f"))
+    if (ImGui::InputFloat("##number", value, 0.0f, 0.0f, format))
     {
         *value = std::clamp(*value, minValue, maxValue);
         g_graph.MarkDirty(dirtyReason);
@@ -5204,7 +5204,7 @@ void DrawPropertiesPanel()
         mse.flowExponent = std::clamp(mse.flowExponent, 0.5f, 4.0f);
         mse.speTimeStep = std::clamp(mse.speTimeStep, 0.0f, 4.0f);
         mse.thermalAngleDegrees = std::clamp(mse.thermalAngleDegrees, 0.0f, 60.0f);
-        mse.thermalStrength = std::clamp(mse.thermalStrength, 0.0f, 0.001f);
+        mse.thermalStrength = std::clamp(mse.thermalStrength, 0.0f, 0.01f);
         mse.thermalNoiseMin = std::clamp(mse.thermalNoiseMin, 0.0f, 4.0f);
         mse.thermalNoiseMax = std::clamp(mse.thermalNoiseMax, 0.0f, 4.0f);
         mse.thermalNoiseWavelength = std::clamp(mse.thermalNoiseWavelength, 0.0f, 0.05f);
@@ -5227,7 +5227,7 @@ void DrawPropertiesPanel()
         {
             EvaluateGraph();
         }
-        if (DrawPropertyFloatRow("SPE Strength", "MseSpeStrength", &mse.speStrength, 0.0f, 0.01f, rock::MultiScaleErosionSettings{}.speStrength, "Multi-scale erosion SPE strength changed", true, "SPE シェーダーの k 係数。1 反復あたりの削り量倍率です。"))
+        if (DrawPropertyFloatRow("SPE Strength", "MseSpeStrength", &mse.speStrength, 0.0f, 0.01f, rock::MultiScaleErosionSettings{}.speStrength, "Multi-scale erosion SPE strength changed", true, "SPE シェーダーの k 係数。1 反復あたりの削り量倍率です。", "%.5f", ImGuiSliderFlags_Logarithmic))
         {
             EvaluateGraph();
         }
@@ -5239,7 +5239,7 @@ void DrawPropertiesPanel()
         {
             EvaluateGraph();
         }
-        if (DrawPropertyFloatRow("Max Stream Power", "MseMaxSpe", &mse.maxStreamPower, 1.0f, 1000000.0f, rock::MultiScaleErosionSettings{}.maxStreamPower, "Multi-scale erosion max SPE changed", true, "SPE シェーダーの max_spe 上限。極端な削れの暴走を防ぎます。"))
+        if (DrawPropertyFloatRow("Max Stream Power", "MseMaxSpe", &mse.maxStreamPower, 1.0f, 1000000.0f, rock::MultiScaleErosionSettings{}.maxStreamPower, "Multi-scale erosion max SPE changed", true, "SPE シェーダーの max_spe 上限。極端な削れの暴走を防ぎます。", "%.0f", ImGuiSliderFlags_Logarithmic))
         {
             EvaluateGraph();
         }
@@ -5255,7 +5255,7 @@ void DrawPropertiesPanel()
         {
             EvaluateGraph();
         }
-        if (DrawPropertyFloatRow("Thermal Strength", "MseThermalStrength", &mse.thermalStrength, 0.0f, 0.001f, rock::MultiScaleErosionSettings{}.thermalStrength, "Multi-scale erosion thermal strength changed", true, "タラスシェーダーの ε。1 反復あたりに移動する土砂量です。"))
+        if (DrawPropertyFloatRow("Thermal Strength", "MseThermalStrength", &mse.thermalStrength, 0.0f, 0.01f, rock::MultiScaleErosionSettings{}.thermalStrength, "Multi-scale erosion thermal strength changed", true, "タラスシェーダーの ε。1 反復あたりに移動する土砂量です。", "%.6f", ImGuiSliderFlags_Logarithmic))
         {
             EvaluateGraph();
         }
@@ -5271,7 +5271,7 @@ void DrawPropertiesPanel()
         {
             EvaluateGraph();
         }
-        if (DrawPropertyFloatRow("Noise Wavelength", "MseThermalNoiseWavelength", &mse.thermalNoiseWavelength, 0.0f, 0.05f, rock::MultiScaleErosionSettings{}.thermalNoiseWavelength, "Multi-scale erosion thermal noise wavelength changed", true, "角度ノイズの空間周波数。小さいほど広い範囲で同じ角度になります。"))
+        if (DrawPropertyFloatRow("Noise Wavelength", "MseThermalNoiseWavelength", &mse.thermalNoiseWavelength, 0.0f, 0.05f, rock::MultiScaleErosionSettings{}.thermalNoiseWavelength, "Multi-scale erosion thermal noise wavelength changed", true, "角度ノイズの空間周波数。小さいほど広い範囲で同じ角度になります。", "%.4f"))
         {
             EvaluateGraph();
         }

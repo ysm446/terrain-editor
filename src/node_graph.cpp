@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <execution>
 #include <filesystem>
 #include <format>
 #include <limits>
@@ -1339,6 +1340,18 @@ inline float ValueNoise2D(float x, float y)
     return std::lerp(std::lerp(a, b, u), std::lerp(c, d, v), v) * 2.0f - 1.0f;
 }
 
+// Each row of the (x, z) grid is independent in the SPE / Thermal / Deposition
+// passes (outputs are written only to the row's own indices), so we parallelize
+// across rows with the parallel STL. par (not par_unseq) — the body has heavy
+// branching that wouldn't vectorize cleanly.
+template <typename Fn>
+inline void ParallelForRows(int n, Fn&& fn)
+{
+    std::vector<int> rows(static_cast<size_t>(n));
+    std::iota(rows.begin(), rows.end(), 0);
+    std::for_each(std::execution::par, rows.begin(), rows.end(), std::forward<Fn>(fn));
+}
+
 struct WeightedFlow
 {
     std::array<float, 8> w{};
@@ -1412,8 +1425,7 @@ void StepStreamPower(std::vector<float>& heightsIn, std::vector<float>& heightsO
 {
     const float cellDiag = cellSize * std::sqrt(2.0f);
     const float baseStream = cellDiag;
-    for (int z = 0; z < n; ++z)
-    {
+    ParallelForRows(n, [&](int z) {
         for (int x = 0; x < n; ++x)
         {
             const int id = Index1D(x, z, n);
@@ -1450,7 +1462,7 @@ void StepStreamPower(std::vector<float>& heightsIn, std::vector<float>& heightsO
             heightsOut[static_cast<size_t>(id)] = newHeight;
             streamOut[static_cast<size_t>(id)] = stream;
         }
-    }
+    });
 }
 
 void StepThermal(std::vector<float>& heightsIn, std::vector<float>& heightsOut,
@@ -1459,8 +1471,7 @@ void StepThermal(std::vector<float>& heightsIn, std::vector<float>& heightsOut,
     const float cellArea = cellSize * cellSize;
     const float baseTan = std::tan(s.thermalAngleDegrees * 3.14159265358979323846f / 180.0f);
     const float matter = s.thermalStrength * cellArea;
-    for (int z = 0; z < n; ++z)
-    {
+    ParallelForRows(n, [&](int z) {
         for (int x = 0; x < n; ++x)
         {
             const int id = Index1D(x, z, n);
@@ -1494,7 +1505,7 @@ void StepThermal(std::vector<float>& heightsIn, std::vector<float>& heightsOut,
             }
             heightsOut[static_cast<size_t>(id)] = h + matter * (receiveMul - distributeMul);
         }
-    }
+    });
 }
 
 void StepDeposition(std::vector<float>& heightsIn, std::vector<float>& heightsOut,
@@ -1504,8 +1515,7 @@ void StepDeposition(std::vector<float>& heightsIn, std::vector<float>& heightsOu
 {
     // Match deposition.glsl: cellArea is the world-space area scaled by 1e-5.
     const float cellArea = cellSize * cellSize * 0.00001f;
-    for (int z = 0; z < n; ++z)
-    {
+    ParallelForRows(n, [&](int z) {
         for (int x = 0; x < n; ++x)
         {
             const int id = Index1D(x, z, n);
@@ -1556,7 +1566,7 @@ void StepDeposition(std::vector<float>& heightsIn, std::vector<float>& heightsOu
             streamOut[static_cast<size_t>(id)] = stream;
             sedOut[static_cast<size_t>(id)] = sed;
         }
-    }
+    });
 }
 } // namespace mse
 
