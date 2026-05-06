@@ -56,11 +56,16 @@ endif()
 add_custom_command(TARGET terrain_editor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E rm -rf
         $<TARGET_FILE_DIR:terrain_editor>/data/ui_themes
+    COMMAND ${CMAKE_COMMAND} -E rm -rf
+        $<TARGET_FILE_DIR:terrain_editor>/assets
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_SOURCE_DIR}/data
         $<TARGET_FILE_DIR:terrain_editor>/data
     COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/assets
+        $<TARGET_FILE_DIR:terrain_editor>/assets
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_SOURCE_DIR}/shaders
         $<TARGET_FILE_DIR:terrain_editor>/shaders
-    COMMENT "Copying data files..."
+    COMMENT "Copying runtime files..."
 )

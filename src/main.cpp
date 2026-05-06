@@ -838,6 +838,23 @@ std::filesystem::path DataDirectory()
     return cwdData;
 }
 
+std::filesystem::path AssetDirectory()
+{
+    const std::filesystem::path cwdAssets = std::filesystem::path("assets");
+    if (std::filesystem::exists(cwdAssets))
+    {
+        return cwdAssets;
+    }
+
+    const std::filesystem::path moduleAssets = std::filesystem::path(ModuleDirectory()) / "assets";
+    if (std::filesystem::exists(moduleAssets))
+    {
+        return moduleAssets;
+    }
+
+    return cwdAssets;
+}
+
 std::filesystem::path AppSettingsPath()
 {
     return DataDirectory() / "app_settings.json";
@@ -6106,7 +6123,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         ImGuiIO& io = ImGui::GetIO();
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
         LoadJapaneseFont(io);
-        g_themeManager.LoadThemes(DataDirectory() / "ui_themes");
+        g_themeManager.LoadThemes(AssetDirectory() / "ui_themes");
         g_themeManager.ApplyTheme("road_editor_dark");
         std::string appSettingsError;
         if (!LoadAppSettings(&appSettingsError) && !appSettingsError.empty())
