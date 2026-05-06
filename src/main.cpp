@@ -294,6 +294,13 @@ struct GpuMeshPreview
     UINT gridVertexCount = 0;
     int gridCellCount = 0;
     float gridCellSizeMeters = 0.0f;
+    int skyMode = -1;
+    std::array<float, 3> skyZenithColor = {};
+    std::array<float, 3> skyHorizonColor = {};
+    std::array<float, 3> skySunColor = {};
+    float skySunSizeDegrees = 0.0f;
+    float skyHorizonSoftness = 0.0f;
+    float skySunGlowStrength = 0.0f;
     D3D12_RESOURCE_STATES colorState = D3D12_RESOURCE_STATE_COMMON;
     D3D12_RESOURCE_STATES shadowState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 };
@@ -309,6 +316,10 @@ ComPtr<ID3D12PipelineState> g_mseThermalPso;
 ComPtr<ID3D12PipelineState> g_mseDepositionPso;
 ComPtr<ID3D12RootSignature> g_maskNoiseComputeRootSignature;
 ComPtr<ID3D12PipelineState> g_maskNoisePso;
+ComPtr<ID3D12RootSignature> g_skyRootSignature;
+ComPtr<ID3D12PipelineState> g_skyPso;
+bool g_skyPipelineReady = false;
+std::string g_skyPipelineStatus = "Sky pipeline not initialized";
 ComPtr<ID3D12DescriptorHeap> g_meshPreviewRtvHeap;
 ComPtr<ID3D12DescriptorHeap> g_meshPreviewDsvHeap;
 GpuMeshPreview g_gpuMeshPreview;
@@ -658,6 +669,9 @@ void CleanupD3D()
     g_maskNoisePso.Reset();
     g_maskNoiseComputeRootSignature.Reset();
     g_maskNoiseComputeReady = false;
+    g_skyPso.Reset();
+    g_skyRootSignature.Reset();
+    g_skyPipelineReady = false;
     g_meshPreviewRtvHeap.Reset();
     g_meshPreviewDsvHeap.Reset();
     if (g_fenceEvent)
@@ -697,6 +711,11 @@ std::filesystem::path MseComputeShaderPath()
 std::filesystem::path MaskNoiseShaderPath()
 {
     return ShaderPath("mask_noise_compute.hlsl");
+}
+
+std::filesystem::path SkyShaderPath()
+{
+    return ShaderPath("sky.hlsl");
 }
 
 void EvaluateGraph();
@@ -1440,7 +1459,18 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
         root["previewStage"] = static_cast<int>(g_graph.Preview());
         root["previewPinId"] = g_graph.Evaluation().previewPinId;
 
-        root["settings"] = nlohmann::json::object();
+        const rock::SkySettings& sky = g_graph.Settings().sky;
+        root["settings"] = {
+            {"sky", {
+                {"mode", static_cast<int>(sky.mode)},
+                {"zenithColor", {sky.zenithColor[0], sky.zenithColor[1], sky.zenithColor[2]}},
+                {"horizonColor", {sky.horizonColor[0], sky.horizonColor[1], sky.horizonColor[2]}},
+                {"sunColor", {sky.sunColor[0], sky.sunColor[1], sky.sunColor[2]}},
+                {"sunSizeDegrees", sky.sunSizeDegrees},
+                {"horizonSoftness", sky.horizonSoftness},
+                {"sunGlowStrength", sky.sunGlowStrength},
+            }},
+        };
 
         root["nodeSettings"] = nlohmann::json::object();
 
@@ -1646,6 +1676,32 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
         {
             if (error) *error = "Unsupported project format";
             return false;
+        }
+
+        const nlohmann::json settingsJson = root.value("settings", nlohmann::json::object());
+        const nlohmann::json skyJson = settingsJson.value("sky", nlohmann::json::object());
+        rock::SkySettings& sky = g_graph.Settings().sky;
+        sky = rock::SkySettings{};
+        if (!skyJson.empty())
+        {
+            const int skyModeInt = std::clamp(skyJson.value("mode", static_cast<int>(sky.mode)),
+                                              static_cast<int>(rock::SkyMode::SolidColor),
+                                              static_cast<int>(rock::SkyMode::Procedural));
+            sky.mode = static_cast<rock::SkyMode>(skyModeInt);
+            const auto readColor = [&](const char* key, std::array<float, 3>& target) {
+                if (skyJson.contains(key) && skyJson[key].is_array() && skyJson[key].size() == 3)
+                {
+                    target[0] = std::clamp(skyJson[key][0].get<float>(), 0.0f, 8.0f);
+                    target[1] = std::clamp(skyJson[key][1].get<float>(), 0.0f, 8.0f);
+                    target[2] = std::clamp(skyJson[key][2].get<float>(), 0.0f, 8.0f);
+                }
+            };
+            readColor("zenithColor", sky.zenithColor);
+            readColor("horizonColor", sky.horizonColor);
+            readColor("sunColor", sky.sunColor);
+            sky.sunSizeDegrees = std::clamp(skyJson.value("sunSizeDegrees", sky.sunSizeDegrees), 0.1f, 30.0f);
+            sky.horizonSoftness = std::clamp(skyJson.value("horizonSoftness", sky.horizonSoftness), 0.05f, 8.0f);
+            sky.sunGlowStrength = std::clamp(skyJson.value("sunGlowStrength", sky.sunGlowStrength), 0.0f, 4.0f);
         }
 
         const nlohmann::json nodesJson = root.value("nodes", nlohmann::json::array());
@@ -2700,6 +2756,166 @@ void ProcessPendingMaskNoiseGpuRequests()
     }
 }
 
+// Mirrors the cbuffer in shaders/sky.hlsl. Packed manually to match HLSL's
+// 16-byte alignment rules so we can splat it as 32-bit root constants.
+struct SkyShaderConstants
+{
+    float cameraRight[4];
+    float cameraUp[4];
+    float cameraForward[4];
+    float projScaleX;
+    float projScaleY;
+    float panNdcX;
+    float panNdcY;
+    float sunDirection[4];
+    float zenithColor[4];
+    float horizonColor[4];
+    float sunColor[3];
+    float sunSize;
+    float horizonSoftness;
+    float sunGlowStrength;
+    float pad0;
+    float pad1;
+};
+static_assert(sizeof(SkyShaderConstants) == 36 * sizeof(UINT), "SkyShaderConstants must be 36 DWORDs");
+
+bool EnsureSkyPipeline(std::string* error)
+{
+    if (g_skyPipelineReady && g_skyRootSignature && g_skyPso)
+    {
+        return true;
+    }
+    if (!g_device)
+    {
+        if (error) *error = "D3D12 device is not available";
+        g_skyPipelineStatus = "Sky pipeline unavailable";
+        return false;
+    }
+
+    D3D12_ROOT_PARAMETER rootParam{};
+    rootParam.ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    rootParam.Constants.ShaderRegister = 0;
+    rootParam.Constants.RegisterSpace = 0;
+    rootParam.Constants.Num32BitValues = 36;
+    rootParam.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    D3D12_ROOT_SIGNATURE_DESC rsDesc{};
+    rsDesc.NumParameters = 1;
+    rsDesc.pParameters = &rootParam;
+    rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+
+    ComPtr<ID3DBlob> sigBlob, errBlob;
+    HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
+    if (FAILED(hr))
+    {
+        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Serialize sky root sig failed";
+        g_skyPipelineStatus = "Sky root signature failed";
+        return false;
+    }
+    hr = g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_skyRootSignature));
+    if (FAILED(hr))
+    {
+        if (error) *error = "Create sky root signature failed";
+        g_skyPipelineStatus = "Sky root signature failed";
+        return false;
+    }
+
+    const std::filesystem::path shaderPath = SkyShaderPath();
+    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
+#if defined(_DEBUG)
+    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+#endif
+
+    auto compileEntry = [&](const char* entryPoint, const char* target, ComPtr<ID3DBlob>& outBlob) -> bool {
+        errBlob.Reset();
+        const HRESULT compileHr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE,
+                                                     entryPoint, target, compileFlags, 0, &outBlob, &errBlob);
+        if (FAILED(compileHr))
+        {
+            if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile sky shader failed";
+            return false;
+        }
+        return true;
+    };
+
+    ComPtr<ID3DBlob> vsBlob, psBlob;
+    if (!compileEntry("SkyVS", "vs_5_0", vsBlob)) { g_skyPipelineStatus = "Sky VS compile failed"; return false; }
+    if (!compileEntry("SkyPS", "ps_5_0", psBlob)) { g_skyPipelineStatus = "Sky PS compile failed"; return false; }
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
+    psoDesc.pRootSignature = g_skyRootSignature.Get();
+    psoDesc.VS = {vsBlob->GetBufferPointer(), vsBlob->GetBufferSize()};
+    psoDesc.PS = {psBlob->GetBufferPointer(), psBlob->GetBufferSize()};
+    psoDesc.SampleMask = UINT_MAX;
+    psoDesc.SampleDesc.Count = 1;
+    psoDesc.NumRenderTargets = 1;
+    psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+    psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+    psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    psoDesc.RasterizerState.FrontCounterClockwise = FALSE;
+    psoDesc.DepthStencilState.DepthEnable = FALSE;
+    psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    psoDesc.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+
+    HRESULT psoHr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_skyPso));
+    if (FAILED(psoHr))
+    {
+        if (error) *error = "Create sky PSO failed";
+        g_skyPipelineStatus = "Sky PSO failed";
+        return false;
+    }
+
+    g_skyPipelineReady = true;
+    g_skyPipelineStatus = "Sky pipeline ready";
+    return true;
+}
+
+// Records a fullscreen sky pass into the supplied command list. Caller is
+// responsible for: render target / viewport / scissor already bound, and
+// re-binding any other root signatures it needs after the call returns.
+void RenderSkyPass(ID3D12GraphicsCommandList* commandList, const rock::SkySettings& sky, const SkyShaderConstants& base)
+{
+    if (sky.mode != rock::SkyMode::Procedural)
+    {
+        return;
+    }
+    std::string ignoredError;
+    if (!EnsureSkyPipeline(&ignoredError))
+    {
+        return;
+    }
+
+    SkyShaderConstants constants = base;
+    constants.zenithColor[0] = sky.zenithColor[0];
+    constants.zenithColor[1] = sky.zenithColor[1];
+    constants.zenithColor[2] = sky.zenithColor[2];
+    constants.zenithColor[3] = 1.0f;
+    constants.horizonColor[0] = sky.horizonColor[0];
+    constants.horizonColor[1] = sky.horizonColor[1];
+    constants.horizonColor[2] = sky.horizonColor[2];
+    constants.horizonColor[3] = 1.0f;
+    constants.sunColor[0] = sky.sunColor[0];
+    constants.sunColor[1] = sky.sunColor[1];
+    constants.sunColor[2] = sky.sunColor[2];
+    const float sunHalfAngleRad = std::clamp(sky.sunSizeDegrees, 0.05f, 30.0f) * 0.5f * 3.14159265358979323846f / 180.0f;
+    constants.sunSize = std::cos(sunHalfAngleRad);
+    constants.horizonSoftness = std::clamp(sky.horizonSoftness, 0.05f, 8.0f);
+    constants.sunGlowStrength = std::clamp(sky.sunGlowStrength, 0.0f, 4.0f);
+    constants.pad0 = 0.0f;
+    constants.pad1 = 0.0f;
+
+    commandList->SetGraphicsRootSignature(g_skyRootSignature.Get());
+    commandList->SetPipelineState(g_skyPso.Get());
+    commandList->SetGraphicsRoot32BitConstants(0, sizeof(constants) / 4, &constants, 0);
+    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    // Sky PSO has no input layout, so the IA stage ignores any VB/IB still
+    // bound from the prior shadow pass. We leave them alone so the surface
+    // draw below doesn't need to rebind the main mesh VB.
+    commandList->DrawInstanced(3, 1, 0, 0);
+}
+
 int EffectiveMeshResolution(int resolution, int lod)
 {
     return std::clamp(resolution / (1 << std::clamp(lod, 0, 4)), 16, 2048);
@@ -3404,6 +3620,13 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.gridColor != g_graph.Settings().preview.gridColor ||
         g_gpuMeshPreview.gridCellCount != std::clamp(g_graph.Settings().preview.gridCellCount, 1, 200) ||
         g_gpuMeshPreview.gridCellSizeMeters != std::clamp(g_graph.Settings().preview.gridCellSizeMeters, 1.0f, 10000.0f) ||
+        g_gpuMeshPreview.skyMode != static_cast<int>(g_graph.Settings().sky.mode) ||
+        g_gpuMeshPreview.skyZenithColor != g_graph.Settings().sky.zenithColor ||
+        g_gpuMeshPreview.skyHorizonColor != g_graph.Settings().sky.horizonColor ||
+        g_gpuMeshPreview.skySunColor != g_graph.Settings().sky.sunColor ||
+        g_gpuMeshPreview.skySunSizeDegrees != g_graph.Settings().sky.sunSizeDegrees ||
+        g_gpuMeshPreview.skyHorizonSoftness != g_graph.Settings().sky.horizonSoftness ||
+        g_gpuMeshPreview.skySunGlowStrength != g_graph.Settings().sky.sunGlowStrength ||
         (showGrid && !g_gpuMeshPreview.gridVertexBuffer) ||
         g_gpuMeshPreview.colorState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     if (!meshDirty && !viewportDirty) return true;
@@ -3599,8 +3822,33 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         commandList->OMSetRenderTargets(1, &g_gpuMeshPreview.rtvCpu, FALSE, &g_gpuMeshPreview.dsvCpu);
         commandList->RSSetViewports(1, &vp);
         commandList->RSSetScissorRects(1, &scissor);
+
+        // Sky pass (drawn before terrain so the mesh's depth-test wins). Sets
+        // its own root signature and PSO; we restore the mesh root sig +
+        // constants below so the descriptor table binding works.
+        SkyShaderConstants skyBase{};
+        skyBase.cameraRight[0]   = constants.cameraRight[0];
+        skyBase.cameraRight[1]   = constants.cameraRight[1];
+        skyBase.cameraRight[2]   = constants.cameraRight[2];
+        skyBase.cameraUp[0]      = constants.cameraUp[0];
+        skyBase.cameraUp[1]      = constants.cameraUp[1];
+        skyBase.cameraUp[2]      = constants.cameraUp[2];
+        skyBase.cameraForward[0] = constants.cameraForward[0];
+        skyBase.cameraForward[1] = constants.cameraForward[1];
+        skyBase.cameraForward[2] = constants.cameraForward[2];
+        skyBase.projScaleX = constants.projScaleX;
+        skyBase.projScaleY = constants.projScaleY;
+        skyBase.panNdcX = constants.panNdcX;
+        skyBase.panNdcY = constants.panNdcY;
+        skyBase.sunDirection[0] = constants.sunDirection[0];
+        skyBase.sunDirection[1] = constants.sunDirection[1];
+        skyBase.sunDirection[2] = constants.sunDirection[2];
+        RenderSkyPass(commandList.Get(), g_graph.Settings().sky, skyBase);
+
         ID3D12DescriptorHeap* descriptorHeaps[] = {g_srvHeap.Get()};
         commandList->SetDescriptorHeaps(1, descriptorHeaps);
+        commandList->SetGraphicsRootSignature(g_meshPreviewRootSignature.Get());
+        commandList->SetGraphicsRoot32BitConstants(0, sizeof(constants) / 4, &constants, 0);
         commandList->SetGraphicsRootDescriptorTable(1, g_gpuMeshPreview.shadowSrvGpu);
 
         if (showSurface && g_gpuMeshPreview.triIndexCount > 0)
@@ -3679,6 +3927,13 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.shadowBias = g_graph.Settings().preview.shadowBias;
         g_gpuMeshPreview.pbrAlbedo = g_graph.Settings().preview.pbrAlbedo;
         g_gpuMeshPreview.gridColor = g_graph.Settings().preview.gridColor;
+        g_gpuMeshPreview.skyMode = static_cast<int>(g_graph.Settings().sky.mode);
+        g_gpuMeshPreview.skyZenithColor = g_graph.Settings().sky.zenithColor;
+        g_gpuMeshPreview.skyHorizonColor = g_graph.Settings().sky.horizonColor;
+        g_gpuMeshPreview.skySunColor = g_graph.Settings().sky.sunColor;
+        g_gpuMeshPreview.skySunSizeDegrees = g_graph.Settings().sky.sunSizeDegrees;
+        g_gpuMeshPreview.skyHorizonSoftness = g_graph.Settings().sky.horizonSoftness;
+        g_gpuMeshPreview.skySunGlowStrength = g_graph.Settings().sky.sunGlowStrength;
         g_gpuMeshPreview.colorState    = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         return true;
     }
@@ -5548,6 +5803,26 @@ void DrawDisplaySettingsPanel()
         if (DrawColorRgbRow("ビューポート背景色", "ViewportBackgroundColor", settings.preview.viewportBackground, rock::PreviewSettings{}.viewportBackground))
         {
             SaveAppSettingsSilently();
+        }
+
+        rock::SkySettings& sky = settings.sky;
+        {
+            int skyModeInt = static_cast<int>(sky.mode);
+            if (DrawPropertyComboRow("Sky Mode", "DisplaySkyMode", &skyModeInt, "Solid Color\0Procedural\0\0", "Solid Color: ビューポート背景色をそのまま使う従来モード。Procedural: 天頂↔地平のグラデーションと太陽ディスクをシェーダーで生成します。", static_cast<int>(rock::SkySettings{}.mode)))
+            {
+                sky.mode = static_cast<rock::SkyMode>(std::clamp(skyModeInt,
+                    static_cast<int>(rock::SkyMode::SolidColor),
+                    static_cast<int>(rock::SkyMode::Procedural)));
+            }
+        }
+        if (sky.mode == rock::SkyMode::Procedural)
+        {
+            DrawColorRgbRow("天頂色", "SkyZenithColor", sky.zenithColor, rock::SkySettings{}.zenithColor);
+            DrawColorRgbRow("地平色", "SkyHorizonColor", sky.horizonColor, rock::SkySettings{}.horizonColor);
+            DrawColorRgbRow("太陽色", "SkySunColor", sky.sunColor, rock::SkySettings{}.sunColor);
+            DrawPropertyFloatRow("太陽サイズ (deg)", "SkySunSize", &sky.sunSizeDegrees, 0.1f, 20.0f, rock::SkySettings{}.sunSizeDegrees, "Sky sun size changed", false, "太陽ディスクの直径(度)。実際の太陽は約 0.5 度ですが、視認性のためデフォルトはやや大きめです。");
+            DrawPropertyFloatRow("地平ソフトネス", "SkyHorizonSoftness", &sky.horizonSoftness, 0.1f, 6.0f, rock::SkySettings{}.horizonSoftness, "Sky horizon softness changed", false, "天頂↔地平のグラデーション形状。大きいほど地平色が空高くまで広がります(=もやっとした地平)。1.0 で線形補間。");
+            DrawPropertyFloatRow("太陽グロー", "SkySunGlow", &sky.sunGlowStrength, 0.0f, 2.0f, rock::SkySettings{}.sunGlowStrength, "Sky sun glow changed", false, "太陽周辺の柔らかい光の強さ。0 でグロー無し。");
         }
 
         ImGui::EndTable();

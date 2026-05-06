@@ -2,6 +2,7 @@
 
 ## 未リリース
 
+- 生成天球 (Procedural Sky) モードを追加しました。`SkyMode { SolidColor, Procedural }` を `GraphSettings::sky` に持たせ、Procedural モードでは [shaders/sky.hlsl](shaders/sky.hlsl) のフルスクリーンパスで天頂↔地平のグラデーション + 太陽ディスク + グローを描画します。表示設定パネルに「Sky Mode / 天頂色 / 地平色 / 太陽色 / 太陽サイズ / 地平ソフトネス / 太陽グロー」を追加しました。雲システム (Phase 2/3) の前準備として独立して動く形に分離しています。設定は `.terrainproj` の `settings.sky` に保存されます。SolidColor モードでは従来どおりビューポート背景色が使われます。
 - Mask プレビュー専用の軽量メッシュ生成パス `BuildFlatMaskMesh` を追加しました。Mask Noise / Mask Blend のプレビューはハイトフィールドが平面 (y=0) なので、`BuildMeshFromHeightfield` の壁・底面・三角形毎の法線累積・`std::unordered_set` によるエッジ重複除去を全て省略します。頂点・三角形・エッジは規則格子の構造が決まっているのでインデックスで直接書き込み、`ParallelForRows` で並列化します。Preview Resolution = 2048 でメッシュ生成 (Release) が秒オーダーから 100ms 級まで短縮される見込みです。
 - マスクノード (`Mask Noise` / `Mask Blend`) の評価結果をノード単位でキャッシュするようにしました。`NodeGraph` に `maskCache_` を追加し、各ノードの (入力ハッシュ, パラメータハッシュ) が変わらない限り再生成しません。これまでマスクプレビューは毎回ゼロから走り直していたため、無関係なパラメータを触っただけでも上流の Perlin / fBM が再計算されていました。`HashMaskNoiseSettings` / `HashMaskBlendSettings` を実際にキャッシュキーとして使い、`ApplyEvaluationResultFrom` でも非同期評価結果と一緒に伝播させます。
 - `GenerateMaskNoise` の二重ループを `ParallelForRows` で並列化しました。512² × 4 オクターブで約 100 万回走る Perlin/fBM 評価をスレッド並列で消化します。
