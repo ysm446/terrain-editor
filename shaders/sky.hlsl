@@ -23,6 +23,7 @@ cbuffer SkyConstants : register(b0)
     float4 sunDirection;
     float4 zenithColor;
     float4 horizonColor;
+    float4 groundColor;      // colour for ray.y < 0 (below the horizon)
     float3 sunColor;
     float  sunSize;          // cos(angularRadius) — closer to 1.0 = smaller disc
     float  horizonSoftness;  // pow exponent for the gradient (>=1 = softer)
@@ -56,9 +57,21 @@ float4 SkyPS(VsOut input) : SV_Target
     float screenY = (input.ndc.y - panNdcY) / projScaleY;
     float3 ray = normalize(cameraForward.xyz + cameraRight.xyz * screenX + cameraUp.xyz * screenY);
 
-    float t = saturate(ray.y);
-    float gradient = pow(t, max(horizonSoftness, 0.001));
-    float3 sky = lerp(horizonColor.xyz, zenithColor.xyz, gradient);
+    // Two-sided gradient: above horizon goes horizon -> zenith, below horizon
+    // goes horizon -> ground. Both use the same softness exponent so the
+    // transition at ray.y = 0 stays continuous.
+    float softness = max(horizonSoftness, 0.001);
+    float3 sky;
+    if (ray.y >= 0.0)
+    {
+        float gradient = pow(saturate(ray.y), softness);
+        sky = lerp(horizonColor.xyz, zenithColor.xyz, gradient);
+    }
+    else
+    {
+        float gradient = pow(saturate(-ray.y), softness);
+        sky = lerp(horizonColor.xyz, groundColor.xyz, gradient);
+    }
 
     float cosTheta = saturate(dot(ray, sunDirection.xyz));
     float disc = smoothstep(sunSize - 0.0008, sunSize + 0.001, cosTheta);

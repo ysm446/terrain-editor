@@ -323,6 +323,7 @@ struct GpuMeshPreview
     int skyMode = -1;
     std::array<float, 3> skyZenithColor = {};
     std::array<float, 3> skyHorizonColor = {};
+    std::array<float, 3> skyGroundColor = {};
     std::array<float, 3> skySunColor = {};
     float skySunSizeDegrees = 0.0f;
     float skyHorizonSoftness = 0.0f;
@@ -1595,6 +1596,7 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
                 {"mode", static_cast<int>(sky.mode)},
                 {"zenithColor", {sky.zenithColor[0], sky.zenithColor[1], sky.zenithColor[2]}},
                 {"horizonColor", {sky.horizonColor[0], sky.horizonColor[1], sky.horizonColor[2]}},
+                {"groundColor", {sky.groundColor[0], sky.groundColor[1], sky.groundColor[2]}},
                 {"sunColor", {sky.sunColor[0], sky.sunColor[1], sky.sunColor[2]}},
                 {"sunSizeDegrees", sky.sunSizeDegrees},
                 {"horizonSoftness", sky.horizonSoftness},
@@ -1849,6 +1851,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
             };
             readColor("zenithColor", sky.zenithColor);
             readColor("horizonColor", sky.horizonColor);
+            readColor("groundColor", sky.groundColor);
             readColor("sunColor", sky.sunColor);
             sky.sunSizeDegrees = std::clamp(skyJson.value("sunSizeDegrees", sky.sunSizeDegrees), 0.1f, 30.0f);
             sky.horizonSoftness = std::clamp(skyJson.value("horizonSoftness", sky.horizonSoftness), 0.05f, 8.0f);
@@ -3007,6 +3010,7 @@ struct SkyShaderConstants
     float sunDirection[4];
     float zenithColor[4];
     float horizonColor[4];
+    float groundColor[4];
     float sunColor[3];
     float sunSize;
     float horizonSoftness;
@@ -3014,7 +3018,7 @@ struct SkyShaderConstants
     float pad0;
     float pad1;
 };
-static_assert(sizeof(SkyShaderConstants) == 36 * sizeof(UINT), "SkyShaderConstants must be 36 DWORDs");
+static_assert(sizeof(SkyShaderConstants) == 40 * sizeof(UINT), "SkyShaderConstants must be 40 DWORDs");
 
 bool EnsureSkyPipeline(std::string* error)
 {
@@ -3033,7 +3037,7 @@ bool EnsureSkyPipeline(std::string* error)
     rootParam.ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     rootParam.Constants.ShaderRegister = 0;
     rootParam.Constants.RegisterSpace = 0;
-    rootParam.Constants.Num32BitValues = 36;
+    rootParam.Constants.Num32BitValues = 40;
     rootParam.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_ROOT_SIGNATURE_DESC rsDesc{};
@@ -3133,6 +3137,10 @@ void RenderSkyPass(ID3D12GraphicsCommandList* commandList, const rock::SkySettin
     constants.horizonColor[1] = sky.horizonColor[1];
     constants.horizonColor[2] = sky.horizonColor[2];
     constants.horizonColor[3] = 1.0f;
+    constants.groundColor[0] = sky.groundColor[0];
+    constants.groundColor[1] = sky.groundColor[1];
+    constants.groundColor[2] = sky.groundColor[2];
+    constants.groundColor[3] = 1.0f;
     constants.sunColor[0] = sky.sunColor[0];
     constants.sunColor[1] = sky.sunColor[1];
     constants.sunColor[2] = sky.sunColor[2];
@@ -4568,6 +4576,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.skyMode != static_cast<int>(g_graph.Settings().sky.mode) ||
         g_gpuMeshPreview.skyZenithColor != g_graph.Settings().sky.zenithColor ||
         g_gpuMeshPreview.skyHorizonColor != g_graph.Settings().sky.horizonColor ||
+        g_gpuMeshPreview.skyGroundColor != g_graph.Settings().sky.groundColor ||
         g_gpuMeshPreview.skySunColor != g_graph.Settings().sky.sunColor ||
         g_gpuMeshPreview.skySunSizeDegrees != g_graph.Settings().sky.sunSizeDegrees ||
         g_gpuMeshPreview.skyHorizonSoftness != g_graph.Settings().sky.horizonSoftness ||
@@ -5018,6 +5027,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.skyMode = static_cast<int>(g_graph.Settings().sky.mode);
         g_gpuMeshPreview.skyZenithColor = g_graph.Settings().sky.zenithColor;
         g_gpuMeshPreview.skyHorizonColor = g_graph.Settings().sky.horizonColor;
+        g_gpuMeshPreview.skyGroundColor = g_graph.Settings().sky.groundColor;
         g_gpuMeshPreview.skySunColor = g_graph.Settings().sky.sunColor;
         g_gpuMeshPreview.skySunSizeDegrees = g_graph.Settings().sky.sunSizeDegrees;
         g_gpuMeshPreview.skyHorizonSoftness = g_graph.Settings().sky.horizonSoftness;
@@ -7058,6 +7068,7 @@ void DrawDisplaySettingsPanel()
             ImGui::SeparatorText("天球");
             DrawColorRgbRow("天頂色", "SkyZenithColor", sky.zenithColor, rock::SkySettings{}.zenithColor);
             DrawColorRgbRow("地平色", "SkyHorizonColor", sky.horizonColor, rock::SkySettings{}.horizonColor);
+            DrawColorRgbRow("地面色", "SkyGroundColor", sky.groundColor, rock::SkySettings{}.groundColor);
             DrawColorRgbRow("太陽色", "SkySunColor", sky.sunColor, rock::SkySettings{}.sunColor);
             DrawPropertyFloatRow("太陽サイズ (deg)", "SkySunSize", &sky.sunSizeDegrees, 0.1f, 20.0f, rock::SkySettings{}.sunSizeDegrees, "Sky sun size changed", false, "太陽ディスクの直径(度)。実際の太陽は約 0.5 度ですが、視認性のためデフォルトはやや大きめです。");
             DrawPropertyFloatRow("地平ソフトネス", "SkyHorizonSoftness", &sky.horizonSoftness, 0.1f, 6.0f, rock::SkySettings{}.horizonSoftness, "Sky horizon softness changed", false, "天頂↔地平のグラデーション形状。大きいほど地平色が空高くまで広がります(=もやっとした地平)。1.0 で線形補間。");

@@ -235,6 +235,7 @@ struct SkySettings
     SkyMode mode = SkyMode::SolidColor;
     std::array<float, 3> zenithColor = {0.18f, 0.34f, 0.62f};
     std::array<float, 3> horizonColor = {0.78f, 0.84f, 0.92f};
+    std::array<float, 3> groundColor = {0.18f, 0.22f, 0.28f};
     std::array<float, 3> sunColor = {1.0f, 0.94f, 0.82f};
     float sunSizeDegrees = 2.5f;
     float horizonSoftness = 1.4f;
