@@ -139,8 +139,22 @@ float4 CloudPS(VsOut input) : SV_Target
     tExit = min(tExit, tTerrain);
     if (tExit <= tEnter) return float4(0, 0, 0, 0);
 
-    int numSteps = qualitySamples;
-    float stepLen = (tExit - tEnter) / numSteps;
+    // Adaptive step length: base the *minimum* sample density on the
+    // cloud-band thickness so vertical rays use roughly qualitySamples
+    // steps, but ramp up step count for grazing rays whose slab traversal
+    // is much longer (otherwise samples are hundreds of metres apart and
+    // the noise tile shows up as horizontal bands). Hard cap at 4× quality
+    // to bound pixel cost.
+    float bandThickness = max(altitudeMax - altitudeMin, 1.0);
+    float idealStep = bandThickness / max((float)qualitySamples, 1.0);
+    int numSteps = (int)ceil((tExit - tEnter) / idealStep);
+    numSteps = clamp(numSteps, qualitySamples, qualitySamples * 4);
+    float stepLen = (tExit - tEnter) / (float)numSteps;
+
+    // Per-pixel jitter to break sample-aligned banding into noise that's
+    // averaged out by the eye. Cheap hashed jitter from screen-space
+    // pixel coords.
+    float jitter = frac(sin(dot(input.pos.xy, float2(12.9898, 78.233))) * 43758.5453);
 
     float transmittance = 1.0;
     float3 accumulated = float3(0, 0, 0);
@@ -148,7 +162,7 @@ float4 CloudPS(VsOut input) : SV_Target
     [loop]
     for (int i = 0; i < numSteps; ++i)
     {
-        float t = tEnter + (i + 0.5) * stepLen;
+        float t = tEnter + (i + jitter) * stepLen;
         float3 p = cameraPosition.xyz + ray * t;
         float density = SampleCloudDensity(p);
         if (density > 0.0)

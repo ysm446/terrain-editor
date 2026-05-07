@@ -2,6 +2,7 @@
 
 ## 未リリース
 
+- カメラを水平に近い角度に振ったときの雲に横縞が出ていた問題を修正しました。これまでレイマーチは `(tExit - tEnter) / qualitySamples` で等分していて、水平に近いレイは雲帯を横切る距離が数十 km に伸び、1 サンプル数百 m〜1km とノイズの解像度を大きく下回ってバンディングが発生していました。雲帯厚みを基準にした `idealStep` を計算してステップ数を `qualitySamples`〜`qualitySamples × 4` の範囲で自動調整 (= 水平レイでは自動的に多くサンプリング、cap 4× で性能保護)。さらに per-pixel ハッシュベースのジッターをサンプル位置に加えて、残ったバンディングをノイズに変えます。
 - 薄い雲が背景の空より暗く見えていた問題を修正しました。雲シェーダーは `accumulated += lit * dA` でレイマーチを積分していて、これは既に alpha 乗算済み (premultiplied) の色を出します。にもかかわらずブレンド状態が `SRC_ALPHA / INV_SRC_ALPHA` で 2 度目の alpha 乗算をしていたため、たとえば alpha = 0.2 の薄い雲では `0.2 × 0.2 + 0.8 × sky = 0.04 + 0.8 × sky` となって空より暗くなっていました。`ONE / INV_SRC_ALPHA` (premultiplied) に変更して `accumulated + (1 - alpha) × sky` で正しく合成するようにしました。
 - 雲のテクスチャに縦/横の継ぎ目が見えていた問題を修正しました (特にフィールド中央 = 地形中心で目立っていました)。`cloud_density.hlsl` の Perlin 生成を周期版 `Perlin3DPeriodic` / `Fbm3DPeriodic` に置き換え、整数座標を `mod period` してから勾配ハッシュを引くようにしました。`Fbm3D` の各オクターブでも周波数倍と同じく period も倍にすることで、`uvw = 0` と `uvw = 1` で勾配配置が一致してテクスチャがシームレスにタイリングします。`SamplerState` の WRAP モードと組み合わさってフィールド内のどこでも継ぎ目が出なくなります。
 - 雲が地平線まで無限に続いてしまう問題を修正しました。`CloudSettings` に `fieldRadius` と `fieldFalloff` を追加し、地形の中心 (mesh bounds の中心) を原点に円形のフィールド境界を設けて、その外側では雲の密度を 0 にフェードアウトします。シェーダー (cloud_render / cloud_shadow) の `SampleCloudDensity` で `ComputeFieldFade` を乗算する形。デフォルトは半径 6000m / フェード 2000m なので、典型的な 4-8km 地形だと地形の周りだけに雲が出る形になります。表示設定パネルに「Field Radius」「Field Falloff」を追加し、`.terrainproj` にも保存します。
