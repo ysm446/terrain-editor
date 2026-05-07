@@ -274,7 +274,7 @@ struct CloudShadowMeshConstants
     float skyGroundColor[4];
     float skySunColor[4];
     float atmosphereDensity;
-    float aerialPerspectiveStrength;
+    float atmosphereMieStrength;
     float pad0;
     float pad1;
 };
@@ -331,6 +331,7 @@ struct GpuMeshPreview
     int gridCellCount = 0;
     float gridCellSizeMeters = 0.0f;
     int skyMode = -1;
+    float skyAtmosphereDensity = 0.0f;
     float skyMieStrength = 0.0f;
     float skyMieEccentricity = 0.0f;
     std::array<float, 3> skyGroundAlbedo = {};
@@ -1630,7 +1631,6 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
                 {"atmosphereDensity", sky.atmosphereDensity},
                 {"mieStrength", sky.mieStrength},
                 {"mieEccentricity", sky.mieEccentricity},
-                {"aerialPerspectiveStrength", sky.aerialPerspectiveStrength},
                 {"groundAlbedo", {sky.groundAlbedo[0], sky.groundAlbedo[1], sky.groundAlbedo[2]}},
                 {"sunSizeDegrees", sky.sunSizeDegrees},
                 {"sunGlowStrength", sky.sunGlowStrength},
@@ -1885,7 +1885,6 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
             sky.atmosphereDensity = std::clamp(skyJson.value("atmosphereDensity", sky.atmosphereDensity), 0.05f, 8.0f);
             sky.mieStrength = std::clamp(skyJson.value("mieStrength", sky.mieStrength), 0.0f, 8.0f);
             sky.mieEccentricity = std::clamp(skyJson.value("mieEccentricity", sky.mieEccentricity), -0.99f, 0.99f);
-            sky.aerialPerspectiveStrength = std::clamp(skyJson.value("aerialPerspectiveStrength", sky.aerialPerspectiveStrength), 0.0f, 8.0f);
             readColor("groundAlbedo", sky.groundAlbedo);
             sky.sunSizeDegrees = std::clamp(skyJson.value("sunSizeDegrees", sky.sunSizeDegrees), 0.1f, 30.0f);
             sky.sunGlowStrength = std::clamp(skyJson.value("sunGlowStrength", sky.sunGlowStrength), 0.0f, 4.0f);
@@ -5009,6 +5008,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.gridCellCount != std::clamp(g_graph.Settings().preview.gridCellCount, 1, 200) ||
         g_gpuMeshPreview.gridCellSizeMeters != std::clamp(g_graph.Settings().preview.gridCellSizeMeters, 1.0f, 10000.0f) ||
         g_gpuMeshPreview.skyMode != static_cast<int>(g_graph.Settings().sky.mode) ||
+        g_gpuMeshPreview.skyAtmosphereDensity != g_graph.Settings().sky.atmosphereDensity ||
         g_gpuMeshPreview.skyMieStrength != g_graph.Settings().sky.mieStrength ||
         g_gpuMeshPreview.skyMieEccentricity != g_graph.Settings().sky.mieEccentricity ||
         g_gpuMeshPreview.skyGroundAlbedo != g_graph.Settings().sky.groundAlbedo ||
@@ -5337,9 +5337,10 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             const std::array<float, 3> white{1.0f, 1.0f, 1.0f};
             fillColor4(cloudShadowCb.skySunColor, white);
         }
-        cloudShadowCb.atmosphereDensity = std::clamp(sky.atmosphereDensity, 0.05f, 8.0f);
-        cloudShadowCb.aerialPerspectiveStrength =
-            (sky.mode == rock::SkyMode::Atmospheric) ? std::clamp(sky.aerialPerspectiveStrength, 0.0f, 8.0f) : 0.0f;
+        cloudShadowCb.atmosphereDensity =
+            (sky.mode == rock::SkyMode::Atmospheric) ? std::clamp(sky.atmosphereDensity, 0.05f, 8.0f) : 0.0f;
+        cloudShadowCb.atmosphereMieStrength =
+            (sky.mode == rock::SkyMode::Atmospheric) ? std::clamp(sky.mieStrength, 0.0f, 8.0f) : 0.0f;
         cloudShadowCb.pad0 = 0.0f;
         cloudShadowCb.pad1 = 0.0f;
 
@@ -5517,6 +5518,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.pbrAlbedo = g_graph.Settings().preview.pbrAlbedo;
         g_gpuMeshPreview.gridColor = g_graph.Settings().preview.gridColor;
         g_gpuMeshPreview.skyMode = static_cast<int>(g_graph.Settings().sky.mode);
+        g_gpuMeshPreview.skyAtmosphereDensity = g_graph.Settings().sky.atmosphereDensity;
         g_gpuMeshPreview.skyMieStrength = g_graph.Settings().sky.mieStrength;
         g_gpuMeshPreview.skyMieEccentricity = g_graph.Settings().sky.mieEccentricity;
         g_gpuMeshPreview.skyGroundAlbedo = g_graph.Settings().sky.groundAlbedo;
@@ -5653,6 +5655,48 @@ void DrawViewportDisplayMenu(const ImVec2& min)
     if (ImGui::BeginPopup("ViewportDisplayMenu"))
     {
         ViewportDisplayMode displayMode = CurrentViewportDisplayMode(settings);
+        const auto drawSmallToggle = [](const char* id, const char* label, bool* value) -> bool {
+            ImGui::PushID(id);
+            const float rowHeight = std::max(ImGui::GetTextLineHeight() + 4.0f, 20.0f);
+            const float rowWidth = ImGui::GetContentRegionAvail().x;
+            const bool pressed = ImGui::Selectable("##toggle_row", false, 0, ImVec2(rowWidth, rowHeight));
+            if (pressed)
+            {
+                *value = !*value;
+            }
+
+            const ImVec2 rowMin = ImGui::GetItemRectMin();
+            const ImVec2 rowMax = ImGui::GetItemRectMax();
+            const float boxSize = 13.0f;
+            const ImVec2 boxMin(rowMin.x + 2.0f, rowMin.y + (rowHeight - boxSize) * 0.5f);
+            const ImVec2 boxMax(boxMin.x + boxSize, boxMin.y + boxSize);
+            ImDrawList* drawList = ImGui::GetWindowDrawList();
+            const bool hovered = ImGui::IsItemHovered();
+            const ImU32 boxFill = hovered ? IM_COL32(44, 50, 50, 230) : IM_COL32(28, 31, 31, 230);
+            const ImU32 boxBorder = *value ? IM_COL32(92, 168, 218, 255) : IM_COL32(76, 80, 80, 230);
+            drawList->AddRectFilled(boxMin, boxMax, boxFill, 3.0f);
+            drawList->AddRect(boxMin, boxMax, boxBorder, 3.0f);
+            if (*value)
+            {
+                const ImU32 checkColor = IM_COL32(91, 177, 232, 255);
+                drawList->AddLine(ImVec2(boxMin.x + 3.0f, boxMin.y + 6.5f), ImVec2(boxMin.x + 5.6f, boxMin.y + 9.2f), checkColor, 2.2f);
+                drawList->AddLine(ImVec2(boxMin.x + 5.6f, boxMin.y + 9.2f), ImVec2(boxMin.x + 10.4f, boxMin.y + 3.8f), checkColor, 2.2f);
+            }
+            drawList->AddText(ImVec2(boxMax.x + 9.0f, rowMin.y + (rowHeight - ImGui::GetTextLineHeight()) * 0.5f),
+                              ImGui::GetColorU32(ImGuiCol_Text), label);
+            ImGui::PopID();
+            return pressed;
+        };
+
+        if (drawSmallToggle("ViewportFpsToggle", "FPSを表示", &g_ui.showFps))
+        {
+            SaveAppSettingsSilently();
+        }
+        if (drawSmallToggle("ViewportGridToggle", "グリッドを表示", &settings.preview.showGrid))
+        {
+            SaveAppSettingsSilently();
+        }
+        ImGui::Separator();
         ImGui::TextUnformatted("表示モード");
         ImGui::Separator();
         const auto drawModeItem = [&](const char* label, ViewportDisplayMode mode) {
@@ -5667,18 +5711,14 @@ void DrawViewportDisplayMenu(const ImVec2& min)
         drawModeItem("シンプル", ViewportDisplayMode::Simple);
         drawModeItem("PBR", ViewportDisplayMode::Pbr);
         drawModeItem("天球", ViewportDisplayMode::Sky);
+
         if (displayMode == ViewportDisplayMode::Sky)
         {
             ImGui::Spacing();
-            if (ImGui::Checkbox("雲を描画", &settings.clouds.enabled))
+            if (drawSmallToggle("ViewportCloudToggle", "雲を描画", &settings.clouds.enabled))
             {
                 SaveAppSettingsSilently();
             }
-        }
-        ImGui::Separator();
-        if (ImGui::Checkbox("FPSを表示", &g_ui.showFps))
-        {
-            SaveAppSettingsSilently();
         }
         ImGui::EndPopup();
     }
@@ -7556,10 +7596,9 @@ void DrawDisplaySettingsPanel()
         if (displayMode == ViewportDisplayMode::Sky)
         {
             ImGui::SeparatorText("天球 (大気散乱)");
-            DrawPropertyFloatRow("大気厚み (密度)", "SkyAtmosphereDensity", &sky.atmosphereDensity, 0.05f, 5.0f, rock::SkySettings{}.atmosphereDensity, "Sky atmosphere density changed", false, "Rayleigh 散乱係数 β_R の倍率。1.0 が地球標準、0.5 で薄い大気 (火星っぽい)、2-3 で濃い大気 (空が深く青く、夕焼けが赤く)。遠景フォグの強度も比例して上がります。");
-            DrawPropertyFloatRow("ヘイズ (Mie 強度)", "SkyMieStrength", &sky.mieStrength, 0.0f, 8.0f, rock::SkySettings{}.mieStrength, "Sky mie strength changed", false, "Mie 散乱の強さ。大きいほど大気が霞んで見え、太陽周辺のグローも強くなります。0 で純 Rayleigh (透明な青空)、1 で標準的な大気。");
+            DrawPropertyFloatRow("大気厚み (密度)", "SkyAtmosphereDensity", &sky.atmosphereDensity, 0.05f, 5.0f, rock::SkySettings{}.atmosphereDensity, "Sky atmosphere density changed", false, "Rayleigh 散乱係数 β_R と地平ヘイズの倍率。1.0 が地球標準、0.5 で薄い大気、2-3 で濃い大気。地形の遠景フォグもこの値から自動で決まります。");
+            DrawPropertyFloatRow("ヘイズ (Mie 強度)", "SkyMieStrength", &sky.mieStrength, 0.0f, 8.0f, rock::SkySettings{}.mieStrength, "Sky mie strength changed", false, "Mie 散乱の強さ。0.2 前後が編集ビュー向けの標準です。大きいほど太陽方向の霞とグローが強くなりますが、地平の暖色帯も出やすくなります。0 で純 Rayleigh。");
             DrawPropertyFloatRow("Mie 偏向 (g)", "SkyMieG", &sky.mieEccentricity, -0.95f, 0.95f, rock::SkySettings{}.mieEccentricity, "Sky mie g changed", false, "Henyey-Greenstein g 値。0 で等方散乱、正で前方 (太陽方向) 散乱が強くなりグローが太陽周りに集中。0.7-0.85 が現実的。");
-            DrawPropertyFloatRow("遠景フォグ強度", "SkyAerialPerspective", &sky.aerialPerspectiveStrength, 0.0f, 4.0f, rock::SkySettings{}.aerialPerspectiveStrength, "Sky aerial perspective changed", false, "地形の遠景に大気の霞をかぶせる強さ。0 で霧無し (くっきり遠景)、1 で物理どおり、2 以上で強めの霧。大気密度を上げると物理的にも自動で霧が強くなりますが、これは見た目だけ独立に強める/弱めるためのスケール。");
             DrawColorRgbRow("地面アルベド", "SkyGroundAlbedo", sky.groundAlbedo, rock::SkySettings{}.groundAlbedo);
             DrawPropertyFloatRow("太陽サイズ (deg)", "SkySunSize", &sky.sunSizeDegrees, 0.1f, 20.0f, rock::SkySettings{}.sunSizeDegrees, "Sky sun size changed", false, "太陽ディスクの直径(度)。実際の太陽は約 0.5 度ですが、視認性のためデフォルトはやや大きめです。");
             DrawPropertyFloatRow("太陽グロー", "SkySunGlow", &sky.sunGlowStrength, 0.0f, 2.0f, rock::SkySettings{}.sunGlowStrength, "Sky sun glow changed", false, "太陽周辺の柔らかい光の強さ。0 でグロー無し。");
