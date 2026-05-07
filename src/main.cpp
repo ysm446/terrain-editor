@@ -273,8 +273,12 @@ struct CloudShadowMeshConstants
     float skyHorizonColor[4];
     float skyGroundColor[4];
     float skySunColor[4];
+    float atmosphereDensity;
+    float aerialPerspectiveStrength;
+    float pad0;
+    float pad1;
 };
-static_assert(sizeof(CloudShadowMeshConstants) == 96);
+static_assert(sizeof(CloudShadowMeshConstants) == 112);
 
 struct GpuMeshPreview
 {
@@ -377,6 +381,7 @@ D3D12_CPU_DESCRIPTOR_HANDLE g_atmosphereMultiScatterSrvCpu{};
 D3D12_GPU_DESCRIPTOR_HANDLE g_atmosphereMultiScatterSrvGpu{};
 bool g_atmosphereMultiScatterSrvAllocated = false;
 bool g_atmosphereMultiScatterReady = false;
+float g_atmosphereCachedDensity = std::numeric_limits<float>::quiet_NaN();
 float g_atmosphereCachedMie = std::numeric_limits<float>::quiet_NaN();
 float g_atmosphereCachedMieG = std::numeric_limits<float>::quiet_NaN();
 ComPtr<ID3D12RootSignature> g_cloudVolumeRootSignature;
@@ -769,6 +774,7 @@ void CleanupD3D()
     g_atmosphereMultiScatterState = D3D12_RESOURCE_STATE_COMMON;
     g_atmosphereMultiScatterSrvAllocated = false;
     g_atmosphereMultiScatterReady = false;
+    g_atmosphereCachedDensity = std::numeric_limits<float>::quiet_NaN();
     g_atmosphereCachedMie = std::numeric_limits<float>::quiet_NaN();
     g_atmosphereCachedMieG = std::numeric_limits<float>::quiet_NaN();
     g_cloudVolumePso.Reset();
@@ -1621,8 +1627,10 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
             }},
             {"sky", {
                 {"mode", static_cast<int>(sky.mode)},
+                {"atmosphereDensity", sky.atmosphereDensity},
                 {"mieStrength", sky.mieStrength},
                 {"mieEccentricity", sky.mieEccentricity},
+                {"aerialPerspectiveStrength", sky.aerialPerspectiveStrength},
                 {"groundAlbedo", {sky.groundAlbedo[0], sky.groundAlbedo[1], sky.groundAlbedo[2]}},
                 {"sunSizeDegrees", sky.sunSizeDegrees},
                 {"sunGlowStrength", sky.sunGlowStrength},
@@ -1874,8 +1882,10 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                     target[2] = std::clamp(skyJson[key][2].get<float>(), 0.0f, 8.0f);
                 }
             };
+            sky.atmosphereDensity = std::clamp(skyJson.value("atmosphereDensity", sky.atmosphereDensity), 0.05f, 8.0f);
             sky.mieStrength = std::clamp(skyJson.value("mieStrength", sky.mieStrength), 0.0f, 8.0f);
             sky.mieEccentricity = std::clamp(skyJson.value("mieEccentricity", sky.mieEccentricity), -0.99f, 0.99f);
+            sky.aerialPerspectiveStrength = std::clamp(skyJson.value("aerialPerspectiveStrength", sky.aerialPerspectiveStrength), 0.0f, 8.0f);
             readColor("groundAlbedo", sky.groundAlbedo);
             sky.sunSizeDegrees = std::clamp(skyJson.value("sunSizeDegrees", sky.sunSizeDegrees), 0.1f, 30.0f);
             sky.sunGlowStrength = std::clamp(skyJson.value("sunGlowStrength", sky.sunGlowStrength), 0.0f, 4.0f);
@@ -3031,13 +3041,17 @@ struct SkyShaderConstants
     float panNdcX;
     float panNdcY;
     float sunDirection[4];
+    float atmosphereDensity;
     float mieStrength;
     float mieEccentricity;
     float sunSize;
     float sunGlowStrength;
+    float pad0;
+    float pad1;
+    float pad2;
     float groundAlbedo[4];
 };
-static_assert(sizeof(SkyShaderConstants) == 28 * sizeof(UINT), "SkyShaderConstants must be 28 DWORDs");
+static_assert(sizeof(SkyShaderConstants) == 32 * sizeof(UINT), "SkyShaderConstants must be 32 DWORDs");
 
 bool EnsureSkyPipeline(std::string* error)
 {
@@ -3063,7 +3077,7 @@ bool EnsureSkyPipeline(std::string* error)
     rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     rootParams[0].Constants.ShaderRegister = 0;
     rootParams[0].Constants.RegisterSpace = 0;
-    rootParams[0].Constants.Num32BitValues = 28;
+    rootParams[0].Constants.Num32BitValues = 32;
     rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
@@ -3217,7 +3231,7 @@ bool EnsureAtmosphereMultiScatterPipeline(std::string* error)
     return true;
 }
 
-bool EnsureAtmosphereMultiScatterLut(float mieStrength, float mieEccentricity, std::string* error)
+bool EnsureAtmosphereMultiScatterLut(float density, float mieStrength, float mieEccentricity, std::string* error)
 {
     if (!EnsureAtmosphereMultiScatterPipeline(error)) return false;
 
@@ -3248,6 +3262,7 @@ bool EnsureAtmosphereMultiScatterLut(float mieStrength, float mieEccentricity, s
     }
 
     if (g_atmosphereMultiScatterReady &&
+        g_atmosphereCachedDensity == density &&
         g_atmosphereCachedMie == mieStrength &&
         g_atmosphereCachedMieG == mieEccentricity)
     {
@@ -3285,12 +3300,13 @@ bool EnsureAtmosphereMultiScatterLut(float mieStrength, float mieEccentricity, s
 
     struct MultiScatterConstants
     {
+        float atmosphereDensity;
         float mieStrength;
         float mieEccentricity;
         float pad0;
-        float pad1;
     };
     MultiScatterConstants mc{};
+    mc.atmosphereDensity = density;
     mc.mieStrength = mieStrength;
     mc.mieEccentricity = mieEccentricity;
 
@@ -3319,6 +3335,7 @@ bool EnsureAtmosphereMultiScatterLut(float mieStrength, float mieEccentricity, s
     ThrowIfFailed(g_commandQueue->Signal(g_fence.Get(), fenceValue), "Signal multi-scatter fence failed");
     WaitForFenceValue(fenceValue);
 
+    g_atmosphereCachedDensity = density;
     g_atmosphereCachedMie = mieStrength;
     g_atmosphereCachedMieG = mieEccentricity;
     g_atmosphereMultiScatterReady = true;
@@ -3360,7 +3377,7 @@ inline Hit RaySphere(const Vec3& origin, const Vec3& dir, float radius)
 }
 
 inline std::array<float, 3> ComputeScattering(const Vec3& viewDir, const Vec3& sunDir,
-                                              float mieStrength, float mieG)
+                                              float density, float mieStrength, float mieG)
 {
     Vec3 origin = {0.0f, kEarthRadius + kCameraHeight, 0.0f};
 
@@ -3406,10 +3423,14 @@ inline std::array<float, 3> ComputeScattering(const Vec3& viewDir, const Vec3& s
         }
         if (sunBlocked) continue;
 
+        const float bR0 = kBetaR[0] * density;
+        const float bR1 = kBetaR[1] * density;
+        const float bR2 = kBetaR[2] * density;
+        const float bM  = kBetaM * mieStrength;
         float tau[3];
-        tau[0] = kBetaR[0] * (opticalR + sunR) + kBetaM * mieStrength * 1.1f * (opticalM + sunM);
-        tau[1] = kBetaR[1] * (opticalR + sunR) + kBetaM * mieStrength * 1.1f * (opticalM + sunM);
-        tau[2] = kBetaR[2] * (opticalR + sunR) + kBetaM * mieStrength * 1.1f * (opticalM + sunM);
+        tau[0] = bR0 * (opticalR + sunR) + bM * 1.1f * (opticalM + sunM);
+        tau[1] = bR1 * (opticalR + sunR) + bM * 1.1f * (opticalM + sunM);
+        tau[2] = bR2 * (opticalR + sunR) + bM * 1.1f * (opticalM + sunM);
         float atten[3] = {std::exp(-tau[0]), std::exp(-tau[1]), std::exp(-tau[2])};
         sumR[0] += atten[0] * dR; sumR[1] += atten[1] * dR; sumR[2] += atten[2] * dR;
         sumM[0] += atten[0] * dM; sumM[1] += atten[1] * dM; sumM[2] += atten[2] * dM;
@@ -3421,14 +3442,15 @@ inline std::array<float, 3> ComputeScattering(const Vec3& viewDir, const Vec3& s
     float phaseM = 0.0795775f * (1.0f - gg) /
                    std::pow(std::max(1.0f + gg - 2.0f * mieG * cosTheta, 1e-6f), 1.5f);
 
+    const float bM = kBetaM * mieStrength;
     return {
-        kSunIntensity * (sumR[0] * kBetaR[0] * phaseR + sumM[0] * kBetaM * mieStrength * phaseM),
-        kSunIntensity * (sumR[1] * kBetaR[1] * phaseR + sumM[1] * kBetaM * mieStrength * phaseM),
-        kSunIntensity * (sumR[2] * kBetaR[2] * phaseR + sumM[2] * kBetaM * mieStrength * phaseM),
+        kSunIntensity * (sumR[0] * kBetaR[0] * density * phaseR + sumM[0] * bM * phaseM),
+        kSunIntensity * (sumR[1] * kBetaR[1] * density * phaseR + sumM[1] * bM * phaseM),
+        kSunIntensity * (sumR[2] * kBetaR[2] * density * phaseR + sumM[2] * bM * phaseM),
     };
 }
 
-inline std::array<float, 3> ComputeSunTransmittance(const Vec3& sunDir, float mieStrength)
+inline std::array<float, 3> ComputeSunTransmittance(const Vec3& sunDir, float density, float mieStrength)
 {
     Vec3 origin = {0.0f, kEarthRadius + kCameraHeight, 0.0f};
     Hit hit = RaySphere(origin, sunDir, kAtmosphereRadius);
@@ -3446,9 +3468,9 @@ inline std::array<float, 3> ComputeSunTransmittance(const Vec3& sunDir, float mi
         opticalM += std::exp(-sh / kHeightM) * stepLen;
     }
     return {
-        std::exp(-(kBetaR[0] * opticalR + kBetaM * mieStrength * 1.1f * opticalM)),
-        std::exp(-(kBetaR[1] * opticalR + kBetaM * mieStrength * 1.1f * opticalM)),
-        std::exp(-(kBetaR[2] * opticalR + kBetaM * mieStrength * 1.1f * opticalM)),
+        std::exp(-(kBetaR[0] * density * opticalR + kBetaM * mieStrength * 1.1f * opticalM)),
+        std::exp(-(kBetaR[1] * density * opticalR + kBetaM * mieStrength * 1.1f * opticalM)),
+        std::exp(-(kBetaR[2] * density * opticalR + kBetaM * mieStrength * 1.1f * opticalM)),
     };
 }
 } // namespace atmosphere_cpu
@@ -3470,6 +3492,7 @@ AtmosphereSamples SampleAtmosphericEnvironment(const rock::SkySettings& sky,
     using atmosphere_cpu::Vec3;
     Vec3 sun{sunDirX, sunDirY, sunDirZ};
 
+    const float density = std::clamp(sky.atmosphereDensity, 0.05f, 8.0f);
     const float mie = std::clamp(sky.mieStrength, 0.0f, 8.0f);
     const float mieG = std::clamp(sky.mieEccentricity, -0.99f, 0.99f);
 
@@ -3494,8 +3517,8 @@ AtmosphereSamples SampleAtmosphericEnvironment(const rock::SkySettings& sky,
     }
 
     AtmosphereSamples out{};
-    out.zenith  = atmosphere_cpu::ComputeScattering(up, sun, mie, mieG);
-    out.horizon = atmosphere_cpu::ComputeScattering(horizonDir, sun, mie, mieG);
+    out.zenith  = atmosphere_cpu::ComputeScattering(up, sun, density, mie, mieG);
+    out.horizon = atmosphere_cpu::ComputeScattering(horizonDir, sun, density, mie, mieG);
 
     // Ground = albedo × upward-hemisphere irradiance approximation.
     // Simple heuristic: 0.6 × zenith + 0.4 × horizon, multiplied by the
@@ -3513,7 +3536,7 @@ AtmosphereSamples SampleAtmosphericEnvironment(const rock::SkySettings& sky,
     };
 
     // Sun colour as seen from the ground: white × atmospheric transmittance.
-    out.sun = atmosphere_cpu::ComputeSunTransmittance(sun, mie);
+    out.sun = atmosphere_cpu::ComputeSunTransmittance(sun, density, mie);
     return out;
 }
 
@@ -3532,21 +3555,24 @@ void RenderSkyPass(ID3D12GraphicsCommandList* commandList, const rock::SkySettin
         return;
     }
 
+    const float density = std::clamp(sky.atmosphereDensity, 0.05f, 8.0f);
     const float mieS = std::clamp(sky.mieStrength, 0.0f, 8.0f);
     const float mieG = std::clamp(sky.mieEccentricity, -0.99f, 0.99f);
     std::string lutError;
-    const bool lutReady = EnsureAtmosphereMultiScatterLut(mieS, mieG, &lutError);
+    const bool lutReady = EnsureAtmosphereMultiScatterLut(density, mieS, mieG, &lutError);
     if (!lutReady || !g_atmosphereMultiScatterSrvAllocated)
     {
         return;
     }
 
     SkyShaderConstants constants = base;
+    constants.atmosphereDensity = density;
     constants.mieStrength = mieS;
     constants.mieEccentricity = mieG;
     const float sunHalfAngleRad = std::clamp(sky.sunSizeDegrees, 0.05f, 30.0f) * 0.5f * 3.14159265358979323846f / 180.0f;
     constants.sunSize = std::cos(sunHalfAngleRad);
     constants.sunGlowStrength = std::clamp(sky.sunGlowStrength, 0.0f, 4.0f);
+    constants.pad0 = constants.pad1 = constants.pad2 = 0.0f;
     constants.groundAlbedo[0] = sky.groundAlbedo[0];
     constants.groundAlbedo[1] = sky.groundAlbedo[1];
     constants.groundAlbedo[2] = sky.groundAlbedo[2];
@@ -5311,6 +5337,11 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             const std::array<float, 3> white{1.0f, 1.0f, 1.0f};
             fillColor4(cloudShadowCb.skySunColor, white);
         }
+        cloudShadowCb.atmosphereDensity = std::clamp(sky.atmosphereDensity, 0.05f, 8.0f);
+        cloudShadowCb.aerialPerspectiveStrength =
+            (sky.mode == rock::SkyMode::Atmospheric) ? std::clamp(sky.aerialPerspectiveStrength, 0.0f, 8.0f) : 0.0f;
+        cloudShadowCb.pad0 = 0.0f;
+        cloudShadowCb.pad1 = 0.0f;
 
         if (g_gpuClouds.meshCbMapped)
         {
@@ -7525,8 +7556,10 @@ void DrawDisplaySettingsPanel()
         if (displayMode == ViewportDisplayMode::Sky)
         {
             ImGui::SeparatorText("天球 (大気散乱)");
+            DrawPropertyFloatRow("大気厚み (密度)", "SkyAtmosphereDensity", &sky.atmosphereDensity, 0.05f, 5.0f, rock::SkySettings{}.atmosphereDensity, "Sky atmosphere density changed", false, "Rayleigh 散乱係数 β_R の倍率。1.0 が地球標準、0.5 で薄い大気 (火星っぽい)、2-3 で濃い大気 (空が深く青く、夕焼けが赤く)。遠景フォグの強度も比例して上がります。");
             DrawPropertyFloatRow("ヘイズ (Mie 強度)", "SkyMieStrength", &sky.mieStrength, 0.0f, 8.0f, rock::SkySettings{}.mieStrength, "Sky mie strength changed", false, "Mie 散乱の強さ。大きいほど大気が霞んで見え、太陽周辺のグローも強くなります。0 で純 Rayleigh (透明な青空)、1 で標準的な大気。");
             DrawPropertyFloatRow("Mie 偏向 (g)", "SkyMieG", &sky.mieEccentricity, -0.95f, 0.95f, rock::SkySettings{}.mieEccentricity, "Sky mie g changed", false, "Henyey-Greenstein g 値。0 で等方散乱、正で前方 (太陽方向) 散乱が強くなりグローが太陽周りに集中。0.7-0.85 が現実的。");
+            DrawPropertyFloatRow("遠景フォグ強度", "SkyAerialPerspective", &sky.aerialPerspectiveStrength, 0.0f, 4.0f, rock::SkySettings{}.aerialPerspectiveStrength, "Sky aerial perspective changed", false, "地形の遠景に大気の霞をかぶせる強さ。0 で霧無し (くっきり遠景)、1 で物理どおり、2 以上で強めの霧。大気密度を上げると物理的にも自動で霧が強くなりますが、これは見た目だけ独立に強める/弱めるためのスケール。");
             DrawColorRgbRow("地面アルベド", "SkyGroundAlbedo", sky.groundAlbedo, rock::SkySettings{}.groundAlbedo);
             DrawPropertyFloatRow("太陽サイズ (deg)", "SkySunSize", &sky.sunSizeDegrees, 0.1f, 20.0f, rock::SkySettings{}.sunSizeDegrees, "Sky sun size changed", false, "太陽ディスクの直径(度)。実際の太陽は約 0.5 度ですが、視認性のためデフォルトはやや大きめです。");
             DrawPropertyFloatRow("太陽グロー", "SkySunGlow", &sky.sunGlowStrength, 0.0f, 2.0f, rock::SkySettings{}.sunGlowStrength, "Sky sun glow changed", false, "太陽周辺の柔らかい光の強さ。0 でグロー無し。");

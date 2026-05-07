@@ -237,8 +237,10 @@ enum class SkyMode
 struct SkySettings
 {
     SkyMode mode = SkyMode::SolidColor;
-    float mieStrength = 1.0f;        // turbidity / haze (multiplies Mie scattering coefficient)
-    float mieEccentricity = 0.76f;   // Henyey-Greenstein g — sun-glow tightness, 0 = isotropic, 0.9 = sharp
+    float atmosphereDensity = 1.0f;            // multiplies the Rayleigh β coefficients — overall atmosphere "thickness"
+    float mieStrength = 1.0f;                  // turbidity / haze (multiplies Mie scattering coefficient)
+    float mieEccentricity = 0.76f;             // Henyey-Greenstein g — sun-glow tightness, 0 = isotropic, 0.9 = sharp
+    float aerialPerspectiveStrength = 1.0f;    // 0 = crisp distant terrain, 1+ = atmospheric haze fades distance
     std::array<float, 3> groundAlbedo = {0.30f, 0.30f, 0.30f};
     float sunSizeDegrees = 2.5f;
     float sunGlowStrength = 0.3f;

@@ -2,6 +2,8 @@
 
 ## 未リリース
 
+- 大気の厚みと遠景フォグを調整できるパラメータを追加しました。`SkySettings` に `atmosphereDensity` (Rayleigh 散乱係数 β_R の倍率、地球標準 1.0) と `aerialPerspectiveStrength` (地形に対する大気フォグの強度倍率) を追加。`atmosphereDensity` は sky shader / multi-scatter LUT / CPU port すべてで β_R を倍率乗算する形で連動し、薄い大気 (火星っぽい透明感) から濃い大気 (深い青空・強い夕焼け) までシームレスに変化します。`aerialPerspectiveStrength` は `mesh_preview.hlsl` の最後で適用される距離ベースのフォグで、視線方向の skyHorizonColor をベースに、太陽方向に向かうほど skySunColor 寄りに blend する Mie 風の暖色 haze を付加します。1.0 で約 26km で 63%、50km で 86% フォグになる物理寄りの調整。多重散乱 LUT のキャッシュキーに密度を含めるよう拡張。
+- 大気密度の追加に伴い `sky.hlsl` 内の二箇所目の `AtmComputeScattering` 呼び出し (地平より下のレイ用) で新しい `density` 引数が抜けていたため、HLSL コンパイルがランタイムで失敗して天球パスが表示されなくなる回帰がありました。引数を追加。
 - 雲底が青白く氷のように見えていた問題を修正しました。`atmosphereSkyColor × 2.5` をそのまま底面 ambient に使うと Rayleigh の青を保ったまま増幅されてしまうため、輝度 (NTSC 重み) を計算して 65% グレーに寄せる lerp を入れました。実際の積雲は内部で Mie 散乱を多重に繰り返して色を脱飽和させるので、その効果の近似です。あわせて地面 bounce 寄与を `atmosphereSunColor × 0.5` に上げて、底面が中性〜やや暖色寄りに落ち着くようにしています。夕焼け時はサン透過色が暖色に転ぶので雲底にも橙の bounce が乗ります。
 - 天球に Hillaire 2020 の multi-scatter LUT を追加して UE5 寄りの絵に近づけました。32×32 R16G16B16A16_FLOAT の 2D LUT を `shaders/atmosphere_multiscatter.hlsl` の compute shader で生成し、各テクセル (cos sun zenith × altitude) で 64 方向 × 20 ステップを積分して `L_avg / (1 - F_avg)` の等比級数で無限次散乱を外挿します。`AtmComputeScattering` のシグネチャを `(LUT, sampler, useMultiScatter)` を取るよう拡張し、各レイマーチステップで isotropic な多重散乱項を加算。これで日中の地平が単散乱の暖色寄りから青白寄りに大きく改善 (Hillaire 近似で完全には消えませんが UE5 でも残るのと同程度)。LUT は `mieStrength` / `mieEccentricity` 変更時のみ再生成。
 - 雲のライティングを輝度スケール混合に修正しました。`atmosphereSunColor` は大気透過率 (0-1 dimensionless)、`atmosphereSkyColor` は天頂散乱輝度 (radiance) で単位が異なるため、底面 ambient の `× 0.4` だけだと極端に青暗くなっていました。`atmosphereSkyColor × 2.5` で天頂値から半球輝度を近似 + `atmosphereSunColor × 0.35` で地面 bounce を加える形にし、雲底が明るく自然な見た目に。夕焼け時も bounce 経由で暖色が雲底に届きます。

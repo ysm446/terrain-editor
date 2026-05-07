@@ -45,6 +45,10 @@ cbuffer CloudShadowMeshConstants : register(b1)
     float4 skyHorizonColor;
     float4 skyGroundColor;
     float4 skySunColor;
+    float atmosphereDensity;
+    float aerialPerspectiveStrength;
+    float atmospherePad0;
+    float atmospherePad1;
 };
 
 Texture2D shadowMap : register(t0);
@@ -278,6 +282,27 @@ float4 PSSurface(VSOut i) : SV_TARGET
         col += pow(mask, 2.2) * float3(0.42, 0.20, 0.05);
     }
     col += rim * float3(0.16, 0.18, 0.20);
+
+    // Aerial perspective — fog distant terrain toward an atmospheric tint.
+    // Skipped for mask preview so masks stay readable.
+    if (aerialPerspectiveStrength > 0.001 && maskPreview < 0.5)
+    {
+        float viewDist = length(cameraPosition.xyz - i.worldPos);
+        // Approximate extinction = density × (β_R_avg + β_M). Tuned so that
+        // density=1 gives ≈63% fog at ~26km and ≈86% at ~50km — comfortable
+        // for typical terrain viewport ranges.
+        float fogExtinction = atmosphereDensity * 38e-6;
+        float fogFactor = 1.0 - exp(-viewDist * fogExtinction);
+        fogFactor = saturate(fogFactor * aerialPerspectiveStrength);
+
+        // Direction-dependent fog colour. Horizon-tinted by default, with a
+        // shift toward sun colour when looking toward the sun (Mie haze).
+        float3 viewDir = normalize(i.worldPos - cameraPosition.xyz);
+        float cosSun = saturate(dot(viewDir, sunDirection.xyz));
+        float3 fogColor = lerp(skyHorizonColor.rgb, skySunColor.rgb, cosSun * 0.3);
+        col = lerp(col, fogColor, fogFactor);
+    }
+
     col = pow(saturate(col), 1.0 / 1.18);
     return float4(col, 1.0);
 }

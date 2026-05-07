@@ -22,10 +22,10 @@
 
 cbuffer MultiScatterConstants : register(b0)
 {
+    float atmosphereDensity;
     float mieStrength;
     float mieEccentricity;
     float pad0;
-    float pad1;
 };
 
 RWTexture2D<float4> Output : register(u0);
@@ -60,7 +60,7 @@ float3 SphereSample(uint i)
 //           the integrated transmittance × scattering × density along
 //           the ray.
 void SingleScatterAlongRay(float3 origin, float3 viewDir, float3 sunDir,
-                           float mieS, out float3 Lscat, out float3 Fscat)
+                           float density, float mieS, out float3 Lscat, out float3 Fscat)
 {
     Lscat = float3(0.0, 0.0, 0.0);
     Fscat = float3(0.0, 0.0, 0.0);
@@ -72,6 +72,9 @@ void SingleScatterAlongRay(float3 origin, float3 viewDir, float3 sunDir,
     float2 earthHit = AtmRaySphere(origin, viewDir, kAtmEarthRadius);
     if (earthHit.x > 0.0) marchEnd = min(marchEnd, earthHit.x);
     if (marchEnd <= 0.0) return;
+
+    float3 betaR = kAtmBetaR * density;
+    float  betaM = kAtmBetaM * mieS;
 
     float stepLen = marchEnd / (float)kRayMarchSteps;
     float opticalR = 0.0;
@@ -94,13 +97,13 @@ void SingleScatterAlongRay(float3 origin, float3 viewDir, float3 sunDir,
         opticalR += dR;
         opticalM += dM;
 
-        float3 tauView = kAtmBetaR * opticalR + kAtmBetaM * mieS * 1.1 * opticalM;
+        float3 tauView = betaR * opticalR + betaM * 1.1 * opticalM;
         float3 transmittanceView = exp(-tauView);
 
         // Feedback factor accumulates regardless of sun visibility — this
         // is the "if every point were a unit isotropic emitter, how much
         // would reach the ray origin" term.
-        Fscat += transmittanceView * (kAtmBetaR * dR + kAtmBetaM * mieS * dM);
+        Fscat += transmittanceView * (betaR * dR + betaM * dM);
 
         // Sun light reaching this sample (proper Rayleigh phase, isotropic Mie).
         float2 sunHit = AtmRaySphere(p, sunDir, kAtmAtmosphereRadius);
@@ -121,10 +124,10 @@ void SingleScatterAlongRay(float3 origin, float3 viewDir, float3 sunDir,
         }
         if (sunBlocked) continue;
 
-        float3 tauSun = kAtmBetaR * sunR + kAtmBetaM * mieS * 1.1 * sunM;
+        float3 tauSun = betaR * sunR + betaM * 1.1 * sunM;
         float3 transmittanceSun = exp(-tauSun);
-        float3 rayleighInScat = kAtmBetaR * dR * phaseR;
-        float3 mieInScat      = kAtmBetaM * mieS * dM * phaseM;
+        float3 rayleighInScat = betaR * dR * phaseR;
+        float3 mieInScat      = betaM * dM * phaseM;
         Lscat += transmittanceView * transmittanceSun *
                  (rayleighInScat + mieInScat) * kAtmSunIntensity;
     }
@@ -157,7 +160,7 @@ void CSGenerate(uint3 dtid : SV_DispatchThreadID)
     {
         float3 viewDir = SphereSample(i);
         float3 Lscat, Fscat;
-        SingleScatterAlongRay(origin, viewDir, sunDir, mieStrength, Lscat, Fscat);
+        SingleScatterAlongRay(origin, viewDir, sunDir, atmosphereDensity, mieStrength, Lscat, Fscat);
         sumL += Lscat;
         sumF += Fscat;
     }

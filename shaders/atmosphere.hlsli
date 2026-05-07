@@ -62,6 +62,8 @@ float3 AtmSampleMultiScatter(Texture2D<float4> lut, SamplerState samp, float alt
 }
 
 // Atmospheric in-scattering integrated along the ray (origin, viewDir).
+// `density` multiplies the Rayleigh β coefficients — overall atmospheric
+//           thickness (1.0 = Earth-like).
 // `mieStrength` multiplies the Mie scattering coefficient (haze).
 // `mieG` is the Henyey-Greenstein eccentricity (sun glow tightness).
 // Output is RGB radiance in the same arbitrary linear units as the rest
@@ -70,7 +72,7 @@ float3 AtmSampleMultiScatter(Texture2D<float4> lut, SamplerState samp, float alt
 // The multi-scatter LUT, when valid, adds a Hillaire-style isotropic
 // second-order term at each ray-march step so the noon horizon comes out
 // closer to a UE5-like blue/white instead of single-scatter's warm cast.
-float3 AtmComputeScattering(float3 viewDir, float3 sunDir, float mieStrength, float mieG,
+float3 AtmComputeScattering(float3 viewDir, float3 sunDir, float density, float mieStrength, float mieG,
                             Texture2D<float4> multiScatterLut, SamplerState multiScatterSampler,
                             bool useMultiScatter)
 {
@@ -91,6 +93,9 @@ float3 AtmComputeScattering(float3 viewDir, float3 sunDir, float mieStrength, fl
     {
         marchEnd = min(marchEnd, earthHit.x);
     }
+
+    float3 betaR = kAtmBetaR * density;
+    float  betaM = kAtmBetaM * mieStrength;
 
     float stepLen = marchEnd / (float)kAtmNumViewSteps;
     float opticalR = 0.0;
@@ -119,9 +124,9 @@ float3 AtmComputeScattering(float3 viewDir, float3 sunDir, float mieStrength, fl
         {
             float cosSunZenith = dot(normalize(p), sunDir);
             float3 multi = AtmSampleMultiScatter(multiScatterLut, multiScatterSampler, h, cosSunZenith);
-            float3 viewTau = kAtmBetaR * opticalR + kAtmBetaM * mieStrength * 1.1 * opticalM;
+            float3 viewTau = betaR * opticalR + betaM * 1.1 * opticalM;
             float3 viewTransmit = exp(-viewTau);
-            sumMS += viewTransmit * multi * (kAtmBetaR * dR + kAtmBetaM * mieStrength * dM);
+            sumMS += viewTransmit * multi * (betaR * dR + betaM * dM);
         }
 
         float2 sunHit = AtmRaySphere(p, sunDir, kAtmAtmosphereRadius);
@@ -142,8 +147,8 @@ float3 AtmComputeScattering(float3 viewDir, float3 sunDir, float mieStrength, fl
         }
         if (sunBlocked) continue;
 
-        float3 tau = kAtmBetaR * (opticalR + sunR) +
-                     kAtmBetaM * mieStrength * 1.1 * (opticalM + sunM);
+        float3 tau = betaR * (opticalR + sunR) +
+                     betaM * 1.1 * (opticalM + sunM);
         float3 atten = exp(-tau);
         sumR += atten * dR;
         sumM += atten * dM;
@@ -157,14 +162,15 @@ float3 AtmComputeScattering(float3 viewDir, float3 sunDir, float mieStrength, fl
                    pow(max(1.0 + gg - 2.0 * g * cosTheta, 1e-6), 1.5);  // 1 / (4π)
 
     return kAtmSunIntensity *
-           (sumR * kAtmBetaR * phaseR + sumM * kAtmBetaM * mieStrength * phaseM) + sumMS;
+           (sumR * betaR * phaseR + sumM * betaM * phaseM) + sumMS;
 }
 
 // Atmospheric transmittance from sea-level along the sun direction —
 // gives the sun colour as seen from the ground. Multiply by the desired
 // sun base spectrum (typically white) to get a sun colour that warms up
-// at sunset and dims at horizon.
-float3 AtmComputeSunTransmittance(float3 sunDir, float mieStrength)
+// at sunset and dims at horizon. `density` scales the Rayleigh β and
+// `mieStrength` scales the Mie β.
+float3 AtmComputeSunTransmittance(float3 sunDir, float density, float mieStrength)
 {
     float3 origin = float3(0.0, kAtmEarthRadius + kAtmCameraHeight, 0.0);
     float2 hit = AtmRaySphere(origin, sunDir, kAtmAtmosphereRadius);
@@ -185,7 +191,7 @@ float3 AtmComputeSunTransmittance(float3 sunDir, float mieStrength)
         opticalR += exp(-sh / kAtmHeightR) * stepLen;
         opticalM += exp(-sh / kAtmHeightM) * stepLen;
     }
-    float3 tau = kAtmBetaR * opticalR + kAtmBetaM * mieStrength * 1.1 * opticalM;
+    float3 tau = kAtmBetaR * density * opticalR + kAtmBetaM * mieStrength * 1.1 * opticalM;
     return exp(-tau);
 }
 
