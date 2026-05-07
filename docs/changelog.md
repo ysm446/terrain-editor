@@ -2,6 +2,7 @@
 
 ## 未リリース
 
+- 天球とボリューム雲システムの解説ドキュメント [docs/sky_and_clouds/sky_and_clouds.md](sky_and_clouds/sky_and_clouds.md) を追加しました。Nishita 単散乱 + Hillaire 多重散乱 LUT の物理モデル、太陽自動色、半球 ambient ライティング、雲のレイマーチ、雲影、aerial perspective、各 D3D12 リソースとシェーダーの対応関係、`SkySettings` / `CloudSettings` のパラメータ表、よくあるトラブルシューティングをまとめています。
 - 大気の厚みと遠景フォグを調整できるパラメータを追加しました。`SkySettings` に `atmosphereDensity` (Rayleigh 散乱係数 β_R の倍率、地球標準 1.0) と `aerialPerspectiveStrength` (地形に対する大気フォグの強度倍率) を追加。`atmosphereDensity` は sky shader / multi-scatter LUT / CPU port すべてで β_R を倍率乗算する形で連動し、薄い大気 (火星っぽい透明感) から濃い大気 (深い青空・強い夕焼け) までシームレスに変化します。`aerialPerspectiveStrength` は `mesh_preview.hlsl` の最後で適用される距離ベースのフォグで、視線方向の skyHorizonColor をベースに、太陽方向に向かうほど skySunColor 寄りに blend する Mie 風の暖色 haze を付加します。1.0 で約 26km で 63%、50km で 86% フォグになる物理寄りの調整。多重散乱 LUT のキャッシュキーに密度を含めるよう拡張。
 - 大気密度の追加に伴い `sky.hlsl` 内の二箇所目の `AtmComputeScattering` 呼び出し (地平より下のレイ用) で新しい `density` 引数が抜けていたため、HLSL コンパイルがランタイムで失敗して天球パスが表示されなくなる回帰がありました。引数を追加。
 - 雲底が青白く氷のように見えていた問題を修正しました。`atmosphereSkyColor × 2.5` をそのまま底面 ambient に使うと Rayleigh の青を保ったまま増幅されてしまうため、輝度 (NTSC 重み) を計算して 65% グレーに寄せる lerp を入れました。実際の積雲は内部で Mie 散乱を多重に繰り返して色を脱飽和させるので、その効果の近似です。あわせて地面 bounce 寄与を `atmosphereSunColor × 0.5` に上げて、底面が中性〜やや暖色寄りに落ち着くようにしています。夕焼け時はサン透過色が暖色に転ぶので雲底にも橙の bounce が乗ります。
