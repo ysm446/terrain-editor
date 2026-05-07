@@ -1995,12 +1995,14 @@ MeshData BuildMeshFromHeightPipeline(const HeightfieldPipeline& pipeline, int re
 }
 } // namespace
 
-MeshData NodeGraph::BuildMeshFromHeightPipelineCached(const HeightfieldPipeline& pipeline, int resolution, std::string* message, HeightfieldPreviewField previewField, HeightfieldGrid* previewGrid)
+HeightfieldGrid NodeGraph::EvaluateHeightPipelineCached(const HeightfieldPipeline& pipeline, std::string* message, HeightfieldPreviewField previewField, uint64_t* outputHash)
 {
+    if (outputHash != nullptr) { *outputHash = 0; }
+
     const GraphId sourceNodeId = pipeline.useShape ? pipeline.shapeNodeId : pipeline.heightmapNodeId;
     if (sourceNodeId == 0)
     {
-        return BuildMeshFromHeightPipeline(pipeline, resolution, message, previewField, previewGrid);
+        return {};
     }
 
     const int simulationResolution = pipeline.useShape
@@ -2123,6 +2125,23 @@ MeshData NodeGraph::BuildMeshFromHeightPipelineCached(const HeightfieldPipeline&
         *message += std::format(" + {} heightfield op{}", pipeline.heightfieldOperations.size(), pipeline.heightfieldOperations.size() == 1 ? "" : "s");
     }
     SelectHeightfieldPreviewField(grid, previewField);
+    if (outputHash != nullptr) { *outputHash = inputHash; }
+    return grid;
+}
+
+MeshData NodeGraph::BuildMeshFromHeightPipelineCached(const HeightfieldPipeline& pipeline, int resolution, std::string* message, HeightfieldPreviewField previewField, HeightfieldGrid* previewGrid)
+{
+    const GraphId sourceNodeId = pipeline.useShape ? pipeline.shapeNodeId : pipeline.heightmapNodeId;
+    if (sourceNodeId == 0)
+    {
+        return BuildMeshFromHeightPipeline(pipeline, resolution, message, previewField, previewGrid);
+    }
+
+    HeightfieldGrid grid = EvaluateHeightPipelineCached(pipeline, message, previewField, nullptr);
+    if (grid.resolution <= 0)
+    {
+        return {};
+    }
     if (previewGrid != nullptr)
     {
         *previewGrid = grid;
@@ -2604,8 +2623,31 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
         if (outputHash != nullptr) { *outputHash = cache.outputHash; }
         return cache.grid;
     }
+    if (node.kind == NodeKind::MaskFluvial)
+    {
+        // Mask Fluvial reads a heightfield, so it can't be evaluated through
+        // the mask-graph path on its own. Build the heightfield pipeline up
+        // to this node, run it through the heightfield cache, and lift the
+        // resulting grid.mask out as a MaskGrid. Caching is fully delegated
+        // to the heightfield cache — we just thread its outputHash back so
+        // downstream MaskBlend can detect changes correctly.
+        HeightfieldPipeline pipeline = PipelineToNode(node);
+        uint64_t hash = 0;
+        HeightfieldGrid grid = EvaluateHeightPipelineCached(pipeline, nullptr, HeightfieldPreviewField::Mask, &hash);
+        MaskGrid mask;
+        mask.resolution = grid.resolution;
+        mask.values = std::move(grid.mask);
+        if (outputHash != nullptr) { *outputHash = hash; }
+        return mask;
+    }
     if (node.kind == NodeKind::MaskBlend)
     {
+        // Accept any node that produces a Mask: the two pure mask-graph
+        // kinds (Mask Noise / Mask Blend) plus Mask Fluvial, which evaluates
+        // through the heightfield cache but is presented here as a MaskGrid.
+        const auto isMaskProducer = [](NodeKind kind) {
+            return IsMaskOnlyNodeKind(kind) || kind == NodeKind::MaskFluvial;
+        };
         uint64_t aHash = 0;
         uint64_t bHash = 0;
         MaskGrid a;
@@ -2614,7 +2656,7 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
         {
             if (const Node* upstream = FindUpstreamForPin(node.inputs[0].id))
             {
-                if (IsMaskOnlyNodeKind(upstream->kind))
+                if (isMaskProducer(upstream->kind))
                 {
                     a = EvaluateMaskGridForNodeCached(*upstream, depth + 1, &aHash);
                 }
@@ -2624,7 +2666,7 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
         {
             if (const Node* upstream = FindUpstreamForPin(node.inputs[1].id))
             {
-                if (IsMaskOnlyNodeKind(upstream->kind))
+                if (isMaskProducer(upstream->kind))
                 {
                     b = EvaluateMaskGridForNodeCached(*upstream, depth + 1, &bHash);
                 }

@@ -42,5 +42,5 @@ result = clamp(lerp(a, blended, intensity), 0, 1)
 
 - `Multiply` は片方のマスクで「領域を切り抜く」発想で使うのが直感的です(例: 川筋マスク × 標高マスク → 標高一定以下の川だけ残す)。
 - `Add` は値が `1` を超えてからの clamp で平坦化しがちなので、強めのマスクを足すときは `Blend Intensity` を 0.5 前後に下げると階調が残ります。
-- 上流に置けるのは現状 `Mask Noise` / `Mask Blend` の 2 種(マスク専用ノード)です。`Mask Fluvial` はハイトフィールドを入力に取るためマスクグラフの再帰評価から外れており、`Mask Blend` の入力に繋いでも空マスク扱いになります(将来の拡張余地)。
+- 上流に置けるのは `Mask Noise` / `Mask Blend` / `Mask Fluvial` の 3 種です。`Mask Fluvial` はハイトフィールドを内部で評価し、結果の `grid.mask` を `MaskGrid` として持ち上げてくるので透過的に合成できます(例: `Mask Fluvial` の川筋 × `Mask Noise` の領域マスク)。
 - キャッシュキーは「両入力の出力ハッシュ + 自分のパラメータハッシュ」。片方の入力やパラメータを変えるとそのノード以降だけ再評価されます。

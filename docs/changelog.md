@@ -2,6 +2,7 @@
 
 ## 未リリース
 
+- `Mask Fluvial` を `Mask Blend` の入力として直接接続できるようにしました。これまではマスクグラフ評価器が「マスク専用ノード(Mask Noise / Mask Blend)」しか辿らず、ハイトフィールド入力を持つ `Mask Fluvial` は途中で空マスクになっていました。`EvaluateMaskGridForNodeCached` に `MaskFluvial` の分岐を追加し、内部でハイトフィールドパイプラインを評価して `grid.mask` を `MaskGrid` として持ち上げる経路を実装。これに合わせて `BuildMeshFromHeightPipelineCached` のパイプライン評価部分を `EvaluateHeightPipelineCached` ヘルパに切り出してメッシュ生成と独立させました。`Mask Blend` の上流ノードフィルタも `Mask Fluvial` を含むよう拡張。キャッシュは既存のハイトフィールドキャッシュをそのまま再利用するので、合成のために再評価が走ることはありません。
 - `Mask Fluvial` ノードを含むプロジェクトを保存・再読み込みすると、ノード種別が `Mask Blend` として復元されてしまう不具合を修正しました。原因は `kMaxSerializedNodeKind` が `MaskBlend (=10)` のまま固定で、新規追加した `MaskFluvial (=11)` が読み込み時に `std::clamp` でひとつ手前のノード種別へ詰められていたためです。`IsTerrainNodeKind` の許可リストにも `MaskFluvial` を追加。
 - 評価中の「計算中」バッジが、preview 対象のノードだけでなく **その時点で実際にカーネルが走っているノード** を追って表示されるようになりました。ハイトフィールドソースから始まり、上流から下流の各 op、最後に preview 対象、という順でバッジが移動するので、長い評価中にどのノードで時間がかかっているかが視覚的にわかります。実装は `node_graph` に `std::atomic<GraphId>& CurrentlyEvaluatingNodeId()` を追加し、各ノードのキャッシュミスパスでカーネル実行直前に `store()`、`Evaluate()` 終了で 0 にクリア。UI は atomic を読んで一致するノードに badge を出します。すべてキャッシュヒットだった場合は従来どおり preview 対象のみに表示。
 - 上部メニューバーから `エクスポート` メニューを削除しました。

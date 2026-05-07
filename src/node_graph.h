@@ -465,6 +465,7 @@ private:
     HeightfieldPipeline PipelineToNode(const Node& targetNode) const;
     HeightfieldGrid EvaluateMaskAsHeightfield(const Node& node, std::string* message);
     MaskGrid EvaluateMaskGridForNodeCached(const Node& node, int depth, uint64_t* outputHash);
+    HeightfieldGrid EvaluateHeightPipelineCached(const HeightfieldPipeline& pipeline, std::string* message, HeightfieldPreviewField previewField, uint64_t* outputHash);
     MeshData BuildMeshFromHeightPipelineCached(const HeightfieldPipeline& pipeline, int resolution, std::string* message, HeightfieldPreviewField previewField = HeightfieldPreviewField::Heightmap, HeightfieldGrid* previewGrid = nullptr);
 
     struct HeightfieldNodeCache
