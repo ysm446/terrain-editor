@@ -121,21 +121,68 @@ float4 CloudPS(VsOut input) : SV_Target
     float rayForward = max(dot(ray, cameraForward.xyz), 1e-4);
     float tTerrain = (ndcZ < 1.0) ? (forwardDist / rayForward) : 1e30;
 
-    // Find ray entry/exit with the slab altitudeMin <= y <= altitudeMax.
-    if (abs(ray.y) < 1e-4)
+    // The cloud is bounded by both a vertical slab [altitudeMin, altitudeMax]
+    // and a horizontal disc of radius fieldRadius centered on (fieldCenterX,
+    // fieldCenterZ). Find the t-range where the ray is inside both. Using
+    // the disc bound (instead of a fixed 50km cap) eliminates the horizontal
+    // line that would otherwise appear on grazing-angle rays where the
+    // simple "march to 50km" cutoff toggled cloud on/off abruptly.
+
+    // Slab (vertical) range.
+    float tSlabEnter;
+    float tSlabExit;
+    if (abs(ray.y) > 1e-5)
     {
-        return float4(0, 0, 0, 0);
+        float t1 = (altitudeMin - cameraPosition.y) / ray.y;
+        float t2 = (altitudeMax - cameraPosition.y) / ray.y;
+        tSlabEnter = min(t1, t2);
+        tSlabExit  = max(t1, t2);
     }
-    float t1 = (altitudeMin - cameraPosition.y) / ray.y;
-    float t2 = (altitudeMax - cameraPosition.y) / ray.y;
-    float tEnter = min(t1, t2);
-    float tExit  = max(t1, t2);
-    tEnter = max(tEnter, 0.0);
-    if (tExit <= tEnter) return float4(0, 0, 0, 0);
-    // Cap how far we march. Beyond ~50km the noise tiling pattern gets
-    // obvious, and there's nothing of interest at that distance for an editor
-    // preview anyway.
-    tExit = min(tExit, 50000.0);
+    else
+    {
+        // Purely horizontal ray: only contributes if the camera is already
+        // inside the cloud band.
+        if (cameraPosition.y < altitudeMin || cameraPosition.y > altitudeMax)
+        {
+            return float4(0, 0, 0, 0);
+        }
+        tSlabEnter = -1e30;
+        tSlabExit  =  1e30;
+    }
+
+    // Disc (horizontal) range — ray vs vertical cylinder.
+    float tDiscEnter;
+    float tDiscExit;
+    float2 rayXZ = float2(ray.x, ray.z);
+    float2 originXZ = float2(cameraPosition.x - fieldCenterX, cameraPosition.z - fieldCenterZ);
+    float aXZ = dot(rayXZ, rayXZ);
+    float cXZ = dot(originXZ, originXZ) - fieldRadius * fieldRadius;
+    if (aXZ > 1e-6)
+    {
+        float bXZ = 2.0 * dot(originXZ, rayXZ);
+        float discXZ = bXZ * bXZ - 4.0 * aXZ * cXZ;
+        if (discXZ < 0.0)
+        {
+            return float4(0, 0, 0, 0);
+        }
+        float sq = sqrt(discXZ);
+        tDiscEnter = (-bXZ - sq) / (2.0 * aXZ);
+        tDiscExit  = (-bXZ + sq) / (2.0 * aXZ);
+    }
+    else
+    {
+        // Purely vertical ray: only contributes if the camera is already
+        // inside the field disc.
+        if (cXZ > 0.0)
+        {
+            return float4(0, 0, 0, 0);
+        }
+        tDiscEnter = -1e30;
+        tDiscExit  =  1e30;
+    }
+
+    float tEnter = max(max(tSlabEnter, tDiscEnter), 0.0);
+    float tExit  = min(tSlabExit, tDiscExit);
     tExit = min(tExit, tTerrain);
     if (tExit <= tEnter) return float4(0, 0, 0, 0);
 
