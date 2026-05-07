@@ -334,6 +334,8 @@ struct GpuMeshPreview
     float cloudShadowStrength = 0.0f;
     int cloudShadowResolution = 0;
     int cloudShadowSamples = 0;
+    float cloudFieldRadius = 0.0f;
+    float cloudFieldFalloff = 0.0f;
     D3D12_RESOURCE_STATES colorState = D3D12_RESOURCE_STATE_COMMON;
     D3D12_RESOURCE_STATES shadowState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     D3D12_RESOURCE_STATES depthState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
@@ -1592,6 +1594,8 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
                 {"shadowStrength", clouds.shadowStrength},
                 {"shadowResolution", clouds.shadowResolution},
                 {"shadowSamples", clouds.shadowSamples},
+                {"fieldRadius", clouds.fieldRadius},
+                {"fieldFalloff", clouds.fieldFalloff},
             }},
         };
 
@@ -1852,6 +1856,8 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
             clouds.shadowStrength = std::clamp(cloudsJson.value("shadowStrength", clouds.shadowStrength), 0.0f, 1.0f);
             clouds.shadowResolution = std::clamp(cloudsJson.value("shadowResolution", clouds.shadowResolution), 256, 4096);
             clouds.shadowSamples = std::clamp(cloudsJson.value("shadowSamples", clouds.shadowSamples), 4, 64);
+            clouds.fieldRadius = std::clamp(cloudsJson.value("fieldRadius", clouds.fieldRadius), 100.0f, 200000.0f);
+            clouds.fieldFalloff = std::clamp(cloudsJson.value("fieldFalloff", clouds.fieldFalloff), 1.0f, 50000.0f);
         }
 
         const nlohmann::json nodesJson = root.value("nodes", nlohmann::json::array());
@@ -3128,8 +3134,12 @@ struct CloudRenderShaderConstants
     float nearPlane;
     float farPlane;
     float pad0;
+    float fieldCenterX;
+    float fieldCenterZ;
+    float fieldRadius;
+    float fieldFalloff;
 };
-static_assert(sizeof(CloudRenderShaderConstants) == 40 * sizeof(UINT), "CloudRenderShaderConstants must be 40 DWORDs");
+static_assert(sizeof(CloudRenderShaderConstants) == 44 * sizeof(UINT), "CloudRenderShaderConstants must be 44 DWORDs");
 
 bool EnsureCloudPipelines(std::string* error)
 {
@@ -3213,7 +3223,7 @@ bool EnsureCloudPipelines(std::string* error)
         D3D12_ROOT_PARAMETER rootParams[3]{};
         rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
         rootParams[0].Constants.ShaderRegister = 0;
-        rootParams[0].Constants.Num32BitValues = 40;
+        rootParams[0].Constants.Num32BitValues = 44;
         rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
         rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
@@ -3305,7 +3315,7 @@ bool EnsureCloudPipelines(std::string* error)
         D3D12_ROOT_PARAMETER rootParams[3]{};
         rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
         rootParams[0].Constants.ShaderRegister = 0;
-        rootParams[0].Constants.Num32BitValues = 20;
+        rootParams[0].Constants.Num32BitValues = 24;
         rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
         rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
@@ -3475,6 +3485,8 @@ void RenderCloudPass(ID3D12GraphicsCommandList* commandList,
                     const CloudRenderShaderConstants& base,
                     float windOffsetX,
                     float windOffsetZ,
+                    float fieldCenterX,
+                    float fieldCenterZ,
                     D3D12_GPU_DESCRIPTOR_HANDLE depthSrvGpu)
 {
     if (!clouds.enabled) return;
@@ -3496,6 +3508,10 @@ void RenderCloudPass(ID3D12GraphicsCommandList* commandList,
     c.windOffsetZ = windOffsetZ;
     c.qualitySamples = std::clamp(clouds.qualitySamples, 8, 128);
     c.pad0 = 0.0f;
+    c.fieldCenterX = fieldCenterX;
+    c.fieldCenterZ = fieldCenterZ;
+    c.fieldRadius = std::max(clouds.fieldRadius, 1.0f);
+    c.fieldFalloff = std::max(clouds.fieldFalloff, 1.0f);
 
     commandList->SetGraphicsRootSignature(g_cloudRenderRootSignature.Get());
     commandList->SetPipelineState(g_cloudRenderPso.Get());
@@ -3526,8 +3542,12 @@ struct CloudShadowShaderConstants
     UINT  numSamples;
     float pad0;
     float pad1;
+    float fieldCenterX;
+    float fieldCenterZ;
+    float fieldRadius;
+    float fieldFalloff;
 };
-static_assert(sizeof(CloudShadowShaderConstants) == 20 * sizeof(UINT), "CloudShadowShaderConstants must be 20 DWORDs");
+static_assert(sizeof(CloudShadowShaderConstants) == 24 * sizeof(UINT), "CloudShadowShaderConstants must be 24 DWORDs");
 
 bool EnsureDummyCloudShadowTexture(std::string* error)
 {
@@ -3661,6 +3681,7 @@ bool RunCloudShadowGeneration(const rock::CloudSettings& clouds,
                               float boundsSizeX, float boundsSizeZ,
                               const float sunDirection[3],
                               float windOffsetX, float windOffsetZ,
+                              float fieldCenterX, float fieldCenterZ,
                               std::string* error)
 {
     if (!g_cloudPipelinesReady || !g_gpuClouds.volumeReady) return false;
@@ -3728,6 +3749,10 @@ bool RunCloudShadowGeneration(const rock::CloudSettings& clouds,
     c.resolution = static_cast<UINT>(resolution);
     c.numSamples = static_cast<UINT>(std::clamp(clouds.shadowSamples, 4, 64));
     c.pad0 = c.pad1 = 0.0f;
+    c.fieldCenterX = fieldCenterX;
+    c.fieldCenterZ = fieldCenterZ;
+    c.fieldRadius = std::max(clouds.fieldRadius, 1.0f);
+    c.fieldFalloff = std::max(clouds.fieldFalloff, 1.0f);
 
     ID3D12DescriptorHeap* heaps[] = {tableHeap.Get()};
     commandList->SetDescriptorHeaps(1, heaps);
@@ -4503,6 +4528,8 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.cloudShadowStrength != g_graph.Settings().clouds.shadowStrength ||
         g_gpuMeshPreview.cloudShadowResolution != g_graph.Settings().clouds.shadowResolution ||
         g_gpuMeshPreview.cloudShadowSamples != g_graph.Settings().clouds.shadowSamples ||
+        g_gpuMeshPreview.cloudFieldRadius != g_graph.Settings().clouds.fieldRadius ||
+        g_gpuMeshPreview.cloudFieldFalloff != g_graph.Settings().clouds.fieldFalloff ||
         (g_graph.Settings().clouds.enabled && g_graph.Settings().clouds.windSpeedMetersPerSec > 0.0f) ||
         (showGrid && !g_gpuMeshPreview.gridVertexBuffer) ||
         g_gpuMeshPreview.colorState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
@@ -4762,7 +4789,8 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
                 cloudShadowReady = RunCloudShadowGeneration(
                     cloudSettingsForShadow,
                     shadowMinX, shadowMinZ, shadowSizeX, shadowSizeZ,
-                    constants.sunDirection, windOffsetX, windOffsetZ, &ignored);
+                    constants.sunDirection, windOffsetX, windOffsetZ,
+                    boundsCenter.x, boundsCenter.z, &ignored);
             }
         }
 
@@ -4887,7 +4915,10 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             std::string cloudVolumeError;
             if (EnsureCloudVolume(cloudSettings.seed, &cloudVolumeError))
             {
-                RenderCloudPass(commandList.Get(), cloudSettings, cloudBase, windOffsetX, windOffsetZ, g_gpuMeshPreview.depthSrvGpu);
+                RenderCloudPass(commandList.Get(), cloudSettings, cloudBase,
+                                windOffsetX, windOffsetZ,
+                                boundsCenter.x, boundsCenter.z,
+                                g_gpuMeshPreview.depthSrvGpu);
             }
         }
 
@@ -4947,6 +4978,8 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.cloudShadowStrength = g_graph.Settings().clouds.shadowStrength;
         g_gpuMeshPreview.cloudShadowResolution = g_graph.Settings().clouds.shadowResolution;
         g_gpuMeshPreview.cloudShadowSamples = g_graph.Settings().clouds.shadowSamples;
+        g_gpuMeshPreview.cloudFieldRadius = g_graph.Settings().clouds.fieldRadius;
+        g_gpuMeshPreview.cloudFieldFalloff = g_graph.Settings().clouds.fieldFalloff;
         g_gpuMeshPreview.colorState    = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         return true;
     }
@@ -6850,6 +6883,8 @@ void DrawDisplaySettingsPanel()
             DrawPropertyFloatRow("Altitude Min (m)", "CloudAltMin", &clouds.altitudeMin, 0.0f, 8000.0f, rock::CloudSettings{}.altitudeMin, "Cloud altitude min changed", false, "雲帯の下限高度 (m)。地形をすっぽり包むには地形最高点より低い値、上に浮かべるなら高い値を指定。", "%.0f");
             DrawPropertyFloatRow("Altitude Max (m)", "CloudAltMax", &clouds.altitudeMax, 0.0f, 12000.0f, rock::CloudSettings{}.altitudeMax, "Cloud altitude max changed", false, "雲帯の上限高度 (m)。Max - Min が雲層の厚さです。", "%.0f");
             DrawPropertyFloatRow("Horizontal Scale (m)", "CloudHorizScale", &clouds.horizontalScale, 200.0f, 30000.0f, rock::CloudSettings{}.horizontalScale, "Cloud scale changed", false, "雲の水平スケール。大きいほど雲塊が大きく、小さいほど細かい雲になります。", "%.0f");
+            DrawPropertyFloatRow("Field Radius (m)", "CloudFieldRadius", &clouds.fieldRadius, 200.0f, 50000.0f, rock::CloudSettings{}.fieldRadius, "Cloud field radius changed", false, "地形の中心を原点にした、雲が存在する円形フィールドの半径。大きくするとより遠くまで雲が広がります。地形と同程度にすると地形の周りだけに雲が出ます。", "%.0f");
+            DrawPropertyFloatRow("Field Falloff (m)", "CloudFieldFalloff", &clouds.fieldFalloff, 50.0f, 20000.0f, rock::CloudSettings{}.fieldFalloff, "Cloud field falloff changed", false, "フィールド端のフェードアウト幅。大きいほど雲がじわっと消え、小さいと境界がくっきりします。", "%.0f");
             DrawPropertyFloatRow("Absorption", "CloudAbsorption", &clouds.absorption, 0.0f, 0.5f, rock::CloudSettings{}.absorption, "Cloud absorption changed", false, "Beer-Lambert の吸収係数。大きいほど雲がはっきり不透明になります。", "%.4f");
             DrawColorRgbRow("Cloud Color", "CloudColor", clouds.color, rock::CloudSettings{}.color);
             DrawPropertyFloatRow("Wind Direction (deg)", "CloudWindDir", &clouds.windDirectionDegrees, 0.0f, 360.0f, rock::CloudSettings{}.windDirectionDegrees, "Cloud wind direction changed", false, "風の向き(度、北=0、東=90)。Wind Speed > 0 のときに雲が流れる方向。", "%.0f");

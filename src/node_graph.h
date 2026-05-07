@@ -258,6 +258,8 @@ struct CloudSettings
     float shadowStrength = 0.7f;
     int shadowResolution = 1024;
     int shadowSamples = 16;
+    float fieldRadius = 6000.0f;
+    float fieldFalloff = 2000.0f;
 };
 
 struct GraphSettings

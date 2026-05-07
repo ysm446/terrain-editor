@@ -40,6 +40,10 @@ cbuffer CloudConstants : register(b0)
     float  nearPlane;
     float  farPlane;
     float  pad0;
+    float  fieldCenterX;
+    float  fieldCenterZ;
+    float  fieldRadius;
+    float  fieldFalloff;
 };
 
 Texture3D<float> CloudVolume : register(t0);
@@ -61,8 +65,28 @@ VsOut CloudVS(uint vid : SV_VertexID)
     return o;
 }
 
+float ComputeFieldFade(float worldX, float worldZ)
+{
+    // Distance from the field center, with a soft circular falloff. Inside
+    // (radius - falloff) returns 1; between (radius - falloff) and radius
+    // it ramps to 0; outside is 0. Keeps clouds confined to a finite disc
+    // around the terrain instead of tiling out to the horizon.
+    float dx = worldX - fieldCenterX;
+    float dz = worldZ - fieldCenterZ;
+    float dist = sqrt(dx * dx + dz * dz);
+    float inner = max(fieldRadius - fieldFalloff, 0.0);
+    float falloff = max(fieldFalloff, 1.0);
+    return saturate(1.0 - (dist - inner) / falloff);
+}
+
 float SampleCloudDensity(float3 worldPos)
 {
+    float fieldFade = ComputeFieldFade(worldPos.x, worldPos.z);
+    if (fieldFade <= 0.0)
+    {
+        return 0.0;
+    }
+
     float bandThickness = max(altitudeMax - altitudeMin, 1.0);
     float yNorm = saturate((worldPos.y - altitudeMin) / bandThickness);
 
@@ -79,7 +103,7 @@ float SampleCloudDensity(float3 worldPos)
 
     float density = baseDensity * vp;
     density = max(0.0, density - (1.0 - coverage));
-    return density * densityMultiplier;
+    return density * densityMultiplier * fieldFade;
 }
 
 float4 CloudPS(VsOut input) : SV_Target

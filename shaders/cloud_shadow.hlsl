@@ -28,14 +28,34 @@ cbuffer CloudShadowConstants : register(b0)
     uint  numSamples;
     float pad0;
     float pad1;
+    float fieldCenterX;
+    float fieldCenterZ;
+    float fieldRadius;
+    float fieldFalloff;
 };
 
 Texture3D<float> CloudVolume : register(t0);
 SamplerState LinearSampler : register(s0);
 RWTexture2D<float> Output : register(u0);
 
+float ComputeFieldFade(float worldX, float worldZ)
+{
+    float dx = worldX - fieldCenterX;
+    float dz = worldZ - fieldCenterZ;
+    float dist = sqrt(dx * dx + dz * dz);
+    float inner = max(fieldRadius - fieldFalloff, 0.0);
+    float falloff = max(fieldFalloff, 1.0);
+    return saturate(1.0 - (dist - inner) / falloff);
+}
+
 float SampleCloudDensity(float3 worldPos)
 {
+    float fieldFade = ComputeFieldFade(worldPos.x, worldPos.z);
+    if (fieldFade <= 0.0)
+    {
+        return 0.0;
+    }
+
     float bandThickness = max(altitudeMax - altitudeMin, 1.0);
     float yNorm = saturate((worldPos.y - altitudeMin) / bandThickness);
     float vp = saturate(yNorm * 5.0) * saturate(1.0 - yNorm) * 1.6;
@@ -48,7 +68,7 @@ float SampleCloudDensity(float3 worldPos)
 
     float density = baseDensity * vp;
     density = max(0.0, density - (1.0 - coverage));
-    return density * densityMultiplier;
+    return density * densityMultiplier * fieldFade;
 }
 
 [numthreads(8, 8, 1)]
