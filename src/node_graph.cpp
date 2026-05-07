@@ -120,7 +120,9 @@ uint64_t HashMaskFluvialSettings(const MaskFluvialSettings& settings, int resolu
 {
     uint64_t hash = 8589869056ull;
     HashCombine(hash, static_cast<uint64_t>(settings.algorithm));
+    HashCombine(hash, static_cast<uint64_t>(settings.outputCurve));
     HashCombine(hash, HashFloat(settings.accumulationThreshold));
+    HashCombine(hash, HashFloat(settings.gamma));
     HashCombine(hash, HashFloat(settings.softness));
     HashCombine(hash, HashFloat(settings.power));
     HashCombine(hash, static_cast<uint64_t>(settings.pitFillIterations));
@@ -1462,40 +1464,44 @@ void ApplyMaskFluvial(HeightfieldGrid& grid, const MaskFluvialSettings& settings
         return;
     }
 
-    // 1. Iterative pit fill (optional). Any interior cell whose 8 neighbours
-    // are all >= itself gets raised to (min_neighbour + epsilon). Boundary
-    // cells act as outlets and are left alone. Repeat until either no
-    // changes happen or pitFillIterations is reached.
+    // 1. Iterative pit fill (Jacobi, double-buffered). Any interior cell
+    // whose 8 neighbours are all >= itself gets raised to (min_neighbour +
+    // epsilon). Boundary cells act as outlets. We use Jacobi (read from
+    // `filled`, write to `next`, swap) instead of Gauss-Seidel so the
+    // sweep parallelises cleanly across rows. Jacobi propagates fills one
+    // cell per iteration just like GS, so iteration count is the practical
+    // tunable for "how deep a pit can be filled".
     std::vector<float> filled = grid.heights;
+    std::vector<float> next = filled;
     const int pitIters = std::clamp(settings.pitFillIterations, 0, 64);
     constexpr float kPitEpsilon = 1e-4f;
     for (int iter = 0; iter < pitIters; ++iter)
     {
-        bool anyChange = false;
-        for (int z = 1; z < n - 1; ++z)
-        {
+        ParallelForRows(n, [&](int z) {
+            if (z == 0 || z >= n - 1)
+            {
+                return;
+            }
+            const size_t rowBase = static_cast<size_t>(z) * static_cast<size_t>(n);
+            const size_t rowAbove = static_cast<size_t>(z - 1) * static_cast<size_t>(n);
+            const size_t rowBelow = static_cast<size_t>(z + 1) * static_cast<size_t>(n);
             for (int x = 1; x < n - 1; ++x)
             {
-                const size_t idx = static_cast<size_t>(z) * static_cast<size_t>(n) + static_cast<size_t>(x);
+                const size_t idx = rowBase + static_cast<size_t>(x);
                 const float h = filled[idx];
-                float minNeighbor = std::numeric_limits<float>::infinity();
-                for (int dz = -1; dz <= 1; ++dz)
-                {
-                    for (int dx = -1; dx <= 1; ++dx)
-                    {
-                        if (dx == 0 && dz == 0) continue;
-                        const size_t nidx = static_cast<size_t>(z + dz) * static_cast<size_t>(n) + static_cast<size_t>(x + dx);
-                        if (filled[nidx] < minNeighbor) minNeighbor = filled[nidx];
-                    }
-                }
-                if (h <= minNeighbor)
-                {
-                    filled[idx] = minNeighbor + kPitEpsilon;
-                    anyChange = true;
-                }
+                const float n00 = filled[rowAbove + static_cast<size_t>(x - 1)];
+                const float n01 = filled[rowAbove + static_cast<size_t>(x)];
+                const float n02 = filled[rowAbove + static_cast<size_t>(x + 1)];
+                const float n10 = filled[rowBase + static_cast<size_t>(x - 1)];
+                const float n12 = filled[rowBase + static_cast<size_t>(x + 1)];
+                const float n20 = filled[rowBelow + static_cast<size_t>(x - 1)];
+                const float n21 = filled[rowBelow + static_cast<size_t>(x)];
+                const float n22 = filled[rowBelow + static_cast<size_t>(x + 1)];
+                const float minNeighbor = std::min({n00, n01, n02, n10, n12, n20, n21, n22});
+                next[idx] = (h <= minNeighbor) ? (minNeighbor + kPitEpsilon) : h;
             }
-        }
-        if (!anyChange) break;
+        });
+        std::swap(filled, next);
     }
 
     // 2. Sort cell indices by height descending. Accumulation must process
@@ -1583,23 +1589,81 @@ void ApplyMaskFluvial(HeightfieldGrid& grid, const MaskFluvialSettings& settings
         }
     }
 
-    // 4. Convert accumulation to mask via smoothstep around the threshold,
-    // then pow() to taper river edges. Threshold is given as a fraction of
-    // total grid cells so it stays meaningful across resolutions.
-    const float thresholdLow = std::max(1.0f,
-        std::clamp(settings.accumulationThreshold, 0.0f, 1.0f) * static_cast<float>(cellCount));
-    const float softness = std::clamp(settings.softness, 0.001f, 4.0f);
-    const float thresholdHigh = thresholdLow * (1.0f + 4.0f * softness);
-    const float power = std::clamp(settings.power, 0.1f, 8.0f);
-    const float invRange = 1.0f / std::max(thresholdHigh - thresholdLow, 1e-3f);
-
+    // 4. Convert accumulation to mask. Threshold is interpreted as a
+    // fraction of grid cells so it stays meaningful across resolutions.
+    // The per-cell math is heavy (std::log / std::pow), so the row sweep
+    // here parallelises cleanly and is a big win at higher resolutions.
+    const float thresholdCells = std::clamp(settings.accumulationThreshold, 0.0f, 1.0f) * static_cast<float>(cellCount);
     grid.mask.assign(cellCount, 0.0f);
-    for (size_t i = 0; i < cellCount; ++i)
+
+    if (settings.outputCurve == MaskFluvialOutputCurve::Threshold)
     {
-        float t = (accum[i] - thresholdLow) * invRange;
-        t = std::clamp(t, 0.0f, 1.0f);
-        const float smooth = t * t * (3.0f - 2.0f * t);
-        grid.mask[i] = std::pow(smooth, power);
+        const float thresholdLow = std::max(1.0f, thresholdCells);
+        const float softness = std::clamp(settings.softness, 0.001f, 4.0f);
+        const float thresholdHigh = thresholdLow * (1.0f + 4.0f * softness);
+        const float power = std::clamp(settings.power, 0.1f, 8.0f);
+        const float invRange = 1.0f / std::max(thresholdHigh - thresholdLow, 1e-3f);
+        ParallelForRows(n, [&](int z) {
+            const size_t rowBase = static_cast<size_t>(z) * static_cast<size_t>(n);
+            for (int x = 0; x < n; ++x)
+            {
+                const size_t idx = rowBase + static_cast<size_t>(x);
+                float t = (accum[idx] - thresholdLow) * invRange;
+                t = std::clamp(t, 0.0f, 1.0f);
+                const float smooth = t * t * (3.0f - 2.0f * t);
+                grid.mask[idx] = std::pow(smooth, power);
+            }
+        });
+        return;
+    }
+
+    // Log / Linear: parallel max reduction (each row computes its local
+    // adjusted-max, then a quick serial fold across rows), followed by a
+    // parallel mask-conversion sweep. We don't materialise the adjusted
+    // vector — recomputing accum[i] - threshold inline is cheaper than the
+    // extra allocation + pass.
+    std::vector<float> rowMax(static_cast<size_t>(n), 0.0f);
+    ParallelForRows(n, [&](int z) {
+        const size_t rowBase = static_cast<size_t>(z) * static_cast<size_t>(n);
+        float local = 0.0f;
+        for (int x = 0; x < n; ++x)
+        {
+            const float v = accum[rowBase + static_cast<size_t>(x)] - thresholdCells;
+            if (v > local) local = v;
+        }
+        rowMax[static_cast<size_t>(z)] = local;
+    });
+    float maxAdjusted = 0.0f;
+    for (float v : rowMax) if (v > maxAdjusted) maxAdjusted = v;
+
+    const float gamma = std::clamp(settings.gamma, 0.05f, 8.0f);
+    if (settings.outputCurve == MaskFluvialOutputCurve::Log)
+    {
+        const float invLogMax = 1.0f / std::max(std::log(1.0f + maxAdjusted), 1e-3f);
+        ParallelForRows(n, [&](int z) {
+            const size_t rowBase = static_cast<size_t>(z) * static_cast<size_t>(n);
+            for (int x = 0; x < n; ++x)
+            {
+                const size_t idx = rowBase + static_cast<size_t>(x);
+                const float a = std::max(0.0f, accum[idx] - thresholdCells);
+                const float t = std::log(1.0f + a) * invLogMax;
+                grid.mask[idx] = std::pow(std::clamp(t, 0.0f, 1.0f), gamma);
+            }
+        });
+    }
+    else  // Linear
+    {
+        const float invMax = 1.0f / std::max(maxAdjusted, 1e-3f);
+        ParallelForRows(n, [&](int z) {
+            const size_t rowBase = static_cast<size_t>(z) * static_cast<size_t>(n);
+            for (int x = 0; x < n; ++x)
+            {
+                const size_t idx = rowBase + static_cast<size_t>(x);
+                const float a = std::max(0.0f, accum[idx] - thresholdCells);
+                const float t = a * invMax;
+                grid.mask[idx] = std::pow(std::clamp(t, 0.0f, 1.0f), gamma);
+            }
+        });
     }
 }
 

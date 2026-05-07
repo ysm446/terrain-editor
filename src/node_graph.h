@@ -69,6 +69,21 @@ enum class FlowAccumulationAlgorithm
     MFD,
 };
 
+enum class MaskFluvialOutputCurve
+{
+    // log(1 + accum) / log(1 + maxAdjusted), then pow(gamma). Continuous
+    // dendritic visualization — the standard GIS "log flow accumulation"
+    // look. Threshold acts as a noise floor (subtracted before normalize).
+    Log,
+    // smoothstep around accumulationThreshold, then pow(power). Sharp
+    // binary river / non-river output for layering masks downstream.
+    Threshold,
+    // (accum - threshold) / max, then pow(gamma). Linear continuous,
+    // preserves the long tail without log compression. Tends to overweight
+    // the main trunks at the cost of fine branches.
+    Linear,
+};
+
 enum class PreviewStage
 {
     Graph = 3,
@@ -152,18 +167,23 @@ struct MaskBlendSettings
 };
 
 // Heightfield -> mask. Performs D8 (or MFD) flow accumulation on the
-// input heights and emits a mask highlighting the most-accumulated
-// channels — i.e. river streams. Defaults are tuned for narrow channel
-// extraction; lower the threshold or switch to MFD for a softer wetness
-// map. Heights pass through unchanged.
+// input heights and emits a mask. The default Log curve produces the
+// classic continuous dendritic drainage tree (every cell visible, fine
+// branches dim, main trunks bright). Switch to Threshold for sharp
+// binary river extraction or Linear for a non-log continuous map.
 struct MaskFluvialSettings
 {
     FlowAccumulationAlgorithm algorithm = FlowAccumulationAlgorithm::D8;
-    // Minimum upstream cells required to start showing as river. Stored
-    // as a fraction of total grid cells (e.g. 0.005 = 0.5%).
-    float accumulationThreshold = 0.005f;
-    float softness = 0.15f;       // smoothstep transition width relative to threshold
-    float power = 1.6f;           // pow(mask, power) — > 1 narrows river edges
+    MaskFluvialOutputCurve outputCurve = MaskFluvialOutputCurve::Log;
+    // In Log/Linear modes: noise floor — cells with fewer upstream cells
+    // than this fraction of the grid get clipped to 0. Default 0 shows
+    // the full tree.
+    // In Threshold mode: the actual river threshold (0.005 ≈ 0.5%
+    // gives a clean main-channel mask).
+    float accumulationThreshold = 0.0f;
+    float gamma = 0.5f;           // Log/Linear curve exponent (lower = brighter leaves)
+    float softness = 0.15f;       // Threshold mode: smoothstep transition width
+    float power = 1.6f;           // Threshold mode: pow(mask, power) for edge taper
     int pitFillIterations = 8;    // 0 keeps lakes, ~8 removes most local pits
     float mfdExponent = 4.0f;     // MFD slope exponent (only when MFD selected)
 };

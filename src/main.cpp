@@ -1736,7 +1736,9 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
                 }},
                 {"maskFluvial", {
                     {"algorithm", static_cast<int>(node.maskFluvial.algorithm)},
+                    {"outputCurve", static_cast<int>(node.maskFluvial.outputCurve)},
                     {"accumulationThreshold", node.maskFluvial.accumulationThreshold},
+                    {"gamma", node.maskFluvial.gamma},
                     {"softness", node.maskFluvial.softness},
                     {"power", node.maskFluvial.power},
                     {"pitFillIterations", node.maskFluvial.pitFillIterations},
@@ -2054,7 +2056,14 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                                                     static_cast<int>(rock::FlowAccumulationAlgorithm::MFD));
                     node.maskFluvial.algorithm = static_cast<rock::FlowAccumulationAlgorithm>(algoInt);
                 }
+                {
+                    const int curveInt = std::clamp(nodeMaskFluvialJson.value("outputCurve", static_cast<int>(node.maskFluvial.outputCurve)),
+                                                     static_cast<int>(rock::MaskFluvialOutputCurve::Log),
+                                                     static_cast<int>(rock::MaskFluvialOutputCurve::Linear));
+                    node.maskFluvial.outputCurve = static_cast<rock::MaskFluvialOutputCurve>(curveInt);
+                }
                 node.maskFluvial.accumulationThreshold = std::clamp(nodeMaskFluvialJson.value("accumulationThreshold", node.maskFluvial.accumulationThreshold), 0.0f, 1.0f);
+                node.maskFluvial.gamma = std::clamp(nodeMaskFluvialJson.value("gamma", node.maskFluvial.gamma), 0.05f, 8.0f);
                 node.maskFluvial.softness = std::clamp(nodeMaskFluvialJson.value("softness", node.maskFluvial.softness), 0.001f, 4.0f);
                 node.maskFluvial.power = std::clamp(nodeMaskFluvialJson.value("power", node.maskFluvial.power), 0.1f, 8.0f);
                 node.maskFluvial.pitFillIterations = std::clamp(nodeMaskFluvialJson.value("pitFillIterations", node.maskFluvial.pitFillIterations), 0, 64);
@@ -7498,6 +7507,7 @@ void DrawPropertiesPanel()
         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
         rock::MaskFluvialSettings& mf = editableNode->maskFluvial;
         mf.accumulationThreshold = std::clamp(mf.accumulationThreshold, 0.0f, 1.0f);
+        mf.gamma = std::clamp(mf.gamma, 0.05f, 8.0f);
         mf.softness = std::clamp(mf.softness, 0.001f, 4.0f);
         mf.power = std::clamp(mf.power, 0.1f, 8.0f);
         mf.pitFillIterations = std::clamp(mf.pitFillIterations, 0, 64);
@@ -7511,17 +7521,38 @@ void DrawPropertiesPanel()
                 static_cast<int>(rock::FlowAccumulationAlgorithm::MFD)));
             EvaluateGraph();
         }
-        if (DrawPropertyPercentRow("Accumulation Threshold (%)", "MaskFluvialThreshold", &mf.accumulationThreshold, 0.0f, 1.0f, rock::MaskFluvialSettings{}.accumulationThreshold, "Mask fluvial threshold changed", "全セル数に対する割合で、これ以上の上流寄与があるセルが川として現れます。下げるほど支流が増え、上げるほど太い本流のみ残ります。"))
+        int curveInt = static_cast<int>(mf.outputCurve);
+        if (DrawPropertyComboRow("Output Curve", "MaskFluvialCurve", &curveInt, "Log\0Threshold\0Linear\0\0", "累積値をマスクへ写すカーブです。Log は連続的な樹枝状ドレナージマップ(既定、参考画像の見た目)、Threshold は閾値ベースの二値川筋抽出、Linear は非対数の連続マップ(主流偏重)。", static_cast<int>(rock::MaskFluvialSettings{}.outputCurve)))
+        {
+            mf.outputCurve = static_cast<rock::MaskFluvialOutputCurve>(std::clamp(curveInt,
+                static_cast<int>(rock::MaskFluvialOutputCurve::Log),
+                static_cast<int>(rock::MaskFluvialOutputCurve::Linear)));
+            EvaluateGraph();
+        }
+        const char* thresholdTooltip = (mf.outputCurve == rock::MaskFluvialOutputCurve::Threshold)
+            ? "全セル数に対する割合で、これ以上の上流寄与があるセルが川として現れます。下げるほど支流が増え、上げるほど太い本流のみ残ります。Threshold モード時の主要パラメータです。"
+            : "ノイズフロアです。これ未満の上流寄与しか持たないセルはマスク 0 にクリップされます。0 で全セルを描画(参考画像の見た目)。";
+        if (DrawPropertyPercentRow("Threshold (%)", "MaskFluvialThreshold", &mf.accumulationThreshold, 0.0f, 1.0f, rock::MaskFluvialSettings{}.accumulationThreshold, "Mask fluvial threshold changed", thresholdTooltip))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyFloatRow("Softness", "MaskFluvialSoftness", &mf.softness, 0.001f, 4.0f, rock::MaskFluvialSettings{}.softness, "Mask fluvial softness changed", true, "閾値前後の smoothstep 幅です。小さいほどシャープな川筋、大きいほど湿地帯のような広がり。"))
+        if (mf.outputCurve != rock::MaskFluvialOutputCurve::Threshold)
         {
-            EvaluateGraph();
+            if (DrawPropertyFloatRow("Gamma", "MaskFluvialGamma", &mf.gamma, 0.05f, 8.0f, rock::MaskFluvialSettings{}.gamma, "Mask fluvial gamma changed", true, "Log/Linear カーブの最後にかける pow 指数です。小さいほど細い支流が明るくなり、大きいほど主流のみが残ってコントラストが上がります。"))
+            {
+                EvaluateGraph();
+            }
         }
-        if (DrawPropertyFloatRow("Edge Power", "MaskFluvialPower", &mf.power, 0.1f, 8.0f, rock::MaskFluvialSettings{}.power, "Mask fluvial power changed", true, "pow(mask, power) で川縁をテーパーします。1 を超えると細く、1 未満で太く見えます。"))
+        if (mf.outputCurve == rock::MaskFluvialOutputCurve::Threshold)
         {
-            EvaluateGraph();
+            if (DrawPropertyFloatRow("Softness", "MaskFluvialSoftness", &mf.softness, 0.001f, 4.0f, rock::MaskFluvialSettings{}.softness, "Mask fluvial softness changed", true, "閾値前後の smoothstep 幅です。小さいほどシャープな川筋、大きいほど湿地帯のような広がり。"))
+            {
+                EvaluateGraph();
+            }
+            if (DrawPropertyFloatRow("Edge Power", "MaskFluvialPower", &mf.power, 0.1f, 8.0f, rock::MaskFluvialSettings{}.power, "Mask fluvial power changed", true, "pow(mask, power) で川縁をテーパーします。1 を超えると細く、1 未満で太く見えます。"))
+            {
+                EvaluateGraph();
+            }
         }
         if (DrawPropertyIntRow("Pit Fill Iterations", "MaskFluvialPitFill", &mf.pitFillIterations, 0, 64, rock::MaskFluvialSettings{}.pitFillIterations, "Mask fluvial pit fill changed", true, "局所窪みを埋める反復回数です。0 で湖を残し、増やすほど排水経路が確実につながります。"))
         {
@@ -8155,26 +8186,6 @@ void DrawUi()
             ImGui::Separator();
             ImGui::MenuItem("環境設定", nullptr, false, false);
             ImGui::MenuItem("ショートカット設定", nullptr, false, false);
-            ImGui::EndMenu();
-        }
-        if (ImGui::BeginMenu("エクスポート"))
-        {
-            if (ImGui::MenuItem("OBJ"))
-            {
-                EnsurePreviewMesh();
-
-                std::string error;
-                const std::filesystem::path exportPath = std::filesystem::path("exports") / "terrain_mesh.obj";
-                if (rock::ExportMeshObj(g_graph.Evaluation().previewMesh, exportPath, &error))
-                {
-                    g_exportStatus = "Exported " + exportPath.string();
-                }
-                else
-                {
-                    g_exportStatus = "Export failed: " + error;
-                }
-            }
-            ImGui::MenuItem("glTF", nullptr, false, false);
             ImGui::EndMenu();
         }
         ImGui::EndMenuBar();
