@@ -158,11 +158,19 @@ std::optional<GraphEditSnapshot> g_pendingNodeMoveUndo;
 struct UiState
 {
     bool meshPreview = true;
+    bool showFps = true;
     float rightPaneWidth = 0.0f;
     float nodePaneHeight = 0.0f;
 };
 
 UiState g_ui;
+
+enum class ViewportDisplayMode
+{
+    Simple,
+    Pbr,
+    Sky,
+};
 
 struct ViewportState
 {
@@ -1057,6 +1065,7 @@ bool SaveAppSettings(std::string* error = nullptr)
         root["uiTheme"] = g_themeManager.CurrentThemeId();
         root["previewVisibility"] = {
             {"mesh", g_ui.meshPreview},
+            {"fps", g_ui.showFps},
             {"meshSurface", settings.preview.showSurface},
             {"meshWireframe", settings.preview.showWireframe},
             {"grid", settings.preview.showGrid},
@@ -1201,6 +1210,7 @@ bool LoadAppSettings(std::string* error = nullptr)
 
         const nlohmann::json visibilityJson = root.value("previewVisibility", nlohmann::json::object());
         g_ui.meshPreview = visibilityJson.value("mesh", g_ui.meshPreview);
+        g_ui.showFps = visibilityJson.value("fps", g_ui.showFps);
         settings.preview.showSurface = visibilityJson.value("meshSurface", settings.preview.showSurface);
         settings.preview.showWireframe = visibilityJson.value("meshWireframe", settings.preview.showWireframe);
         settings.preview.showGrid = visibilityJson.value("grid", settings.preview.showGrid);
@@ -1566,9 +1576,21 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
         root["previewStage"] = static_cast<int>(g_graph.Preview());
         root["previewPinId"] = g_graph.Evaluation().previewPinId;
 
-        const rock::SkySettings& sky = g_graph.Settings().sky;
-        const rock::CloudSettings& clouds = g_graph.Settings().clouds;
+        const rock::GraphSettings& graphSettings = g_graph.Settings();
+        const rock::PreviewSettings& preview = graphSettings.preview;
+        const rock::SkySettings& sky = graphSettings.sky;
+        const rock::CloudSettings& clouds = graphSettings.clouds;
+        const int displayMode = sky.mode == rock::SkyMode::Procedural
+            ? 2
+            : (preview.lightingMode >= 1 ? 1 : 0);
         root["settings"] = {
+            {"display", {
+                {"mode", displayMode},
+                {"showFps", g_ui.showFps},
+            }},
+            {"preview", {
+                {"lightingMode", preview.lightingMode},
+            }},
             {"sky", {
                 {"mode", static_cast<int>(sky.mode)},
                 {"zenithColor", {sky.zenithColor[0], sky.zenithColor[1], sky.zenithColor[2]}},
@@ -1806,8 +1828,10 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
         }
 
         const nlohmann::json settingsJson = root.value("settings", nlohmann::json::object());
+        rock::GraphSettings& graphSettings = g_graph.Settings();
+        rock::PreviewSettings& preview = graphSettings.preview;
         const nlohmann::json skyJson = settingsJson.value("sky", nlohmann::json::object());
-        rock::SkySettings& sky = g_graph.Settings().sky;
+        rock::SkySettings& sky = graphSettings.sky;
         sky = rock::SkySettings{};
         if (!skyJson.empty())
         {
@@ -1832,7 +1856,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
         }
 
         const nlohmann::json cloudsJson = settingsJson.value("clouds", nlohmann::json::object());
-        rock::CloudSettings& clouds = g_graph.Settings().clouds;
+        rock::CloudSettings& clouds = graphSettings.clouds;
         clouds = rock::CloudSettings{};
         if (!cloudsJson.empty())
         {
@@ -1858,6 +1882,38 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
             clouds.shadowSamples = std::clamp(cloudsJson.value("shadowSamples", clouds.shadowSamples), 4, 64);
             clouds.fieldRadius = std::clamp(cloudsJson.value("fieldRadius", clouds.fieldRadius), 100.0f, 200000.0f);
             clouds.fieldFalloff = std::clamp(cloudsJson.value("fieldFalloff", clouds.fieldFalloff), 1.0f, 50000.0f);
+        }
+        const nlohmann::json previewJson = settingsJson.value("preview", nlohmann::json::object());
+        if (!previewJson.empty())
+        {
+            preview.lightingMode = std::clamp(previewJson.value("lightingMode", preview.lightingMode), 0, 1);
+        }
+        else if (sky.mode == rock::SkyMode::Procedural)
+        {
+            preview.lightingMode = 1;
+        }
+        const nlohmann::json displayJson = settingsJson.value("display", nlohmann::json::object());
+        if (!displayJson.empty())
+        {
+            g_ui.showFps = displayJson.value("showFps", g_ui.showFps);
+            const int displayMode = std::clamp(displayJson.value("mode", -1), -1, 2);
+            if (displayMode == 0)
+            {
+                preview.lightingMode = 0;
+                sky.mode = rock::SkyMode::SolidColor;
+                clouds.enabled = false;
+            }
+            else if (displayMode == 1)
+            {
+                preview.lightingMode = 1;
+                sky.mode = rock::SkyMode::SolidColor;
+                clouds.enabled = false;
+            }
+            else if (displayMode == 2)
+            {
+                preview.lightingMode = 1;
+                sky.mode = rock::SkyMode::Procedural;
+            }
         }
 
         const nlohmann::json nodesJson = root.value("nodes", nlohmann::json::array());
@@ -5010,6 +5066,125 @@ void DrawGpuMeshPreview(ImDrawList* drawList, const ImVec2& min, const ImVec2& m
     }
 }
 
+ViewportDisplayMode CurrentViewportDisplayMode(const rock::GraphSettings& settings)
+{
+    if (settings.sky.mode == rock::SkyMode::Procedural)
+    {
+        return ViewportDisplayMode::Sky;
+    }
+    if (settings.preview.lightingMode >= 1)
+    {
+        return ViewportDisplayMode::Pbr;
+    }
+    return ViewportDisplayMode::Simple;
+}
+
+int ToDisplayModeIndex(ViewportDisplayMode mode)
+{
+    switch (mode)
+    {
+    case ViewportDisplayMode::Pbr:
+        return 1;
+    case ViewportDisplayMode::Sky:
+        return 2;
+    case ViewportDisplayMode::Simple:
+    default:
+        return 0;
+    }
+}
+
+ViewportDisplayMode DisplayModeFromIndex(int index)
+{
+    switch (index)
+    {
+    case 1:
+        return ViewportDisplayMode::Pbr;
+    case 2:
+        return ViewportDisplayMode::Sky;
+    case 0:
+    default:
+        return ViewportDisplayMode::Simple;
+    }
+}
+
+void ApplyViewportDisplayMode(rock::GraphSettings& settings, ViewportDisplayMode mode)
+{
+    switch (mode)
+    {
+    case ViewportDisplayMode::Simple:
+        settings.preview.lightingMode = 0;
+        settings.sky.mode = rock::SkyMode::SolidColor;
+        settings.clouds.enabled = false;
+        break;
+    case ViewportDisplayMode::Pbr:
+        settings.preview.lightingMode = 1;
+        settings.sky.mode = rock::SkyMode::SolidColor;
+        settings.clouds.enabled = false;
+        break;
+    case ViewportDisplayMode::Sky:
+        settings.preview.lightingMode = 1;
+        settings.sky.mode = rock::SkyMode::Procedural;
+        break;
+    }
+}
+
+void DrawViewportDisplayMenu(const ImVec2& min)
+{
+    rock::GraphSettings& settings = g_graph.Settings();
+    const ImVec2 buttonPos(min.x + 14.0f, min.y + 12.0f);
+    const ImVec2 buttonSize(54.0f, 28.0f);
+
+    ImGui::SetCursorScreenPos(buttonPos);
+    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(8, 10, 10, 176));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(32, 38, 36, 220));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(54, 70, 62, 235));
+    ImGui::PushStyleColor(ImGuiCol_Text, ThemeColor("accentText", ImVec4(0.86f, 0.88f, 0.85f, 1.0f)));
+    if (ImGui::Button("表示", buttonSize))
+    {
+        ImGui::OpenPopup("ViewportDisplayMenu");
+    }
+    ImGui::PopStyleColor(4);
+
+    ImGui::SetNextWindowPos(ImVec2(buttonPos.x, buttonPos.y + buttonSize.y + 6.0f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(172.0f, 0.0f), ImGuiCond_Appearing);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 10.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(7.0f, 8.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f, 6.0f));
+    if (ImGui::BeginPopup("ViewportDisplayMenu"))
+    {
+        ViewportDisplayMode displayMode = CurrentViewportDisplayMode(settings);
+        ImGui::TextUnformatted("表示モード");
+        ImGui::Separator();
+        const auto drawModeItem = [&](const char* label, ViewportDisplayMode mode) {
+            const bool selected = displayMode == mode;
+            if (ImGui::Selectable(label, selected))
+            {
+                displayMode = mode;
+                ApplyViewportDisplayMode(settings, mode);
+                SaveAppSettingsSilently();
+            }
+        };
+        drawModeItem("シンプル", ViewportDisplayMode::Simple);
+        drawModeItem("PBR", ViewportDisplayMode::Pbr);
+        drawModeItem("天球", ViewportDisplayMode::Sky);
+        if (displayMode == ViewportDisplayMode::Sky)
+        {
+            ImGui::Spacing();
+            if (ImGui::Checkbox("雲を描画", &settings.clouds.enabled))
+            {
+                SaveAppSettingsSilently();
+            }
+        }
+        ImGui::Separator();
+        if (ImGui::Checkbox("FPSを表示", &g_ui.showFps))
+        {
+            SaveAppSettingsSilently();
+        }
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleVar(3);
+}
+
 void DrawViewportCube(const ImVec2& min, const ImVec2& max, float timeSeconds)
 {
     (void)timeSeconds;
@@ -5047,22 +5222,26 @@ void DrawViewportCube(const ImVec2& min, const ImVec2& max, float timeSeconds)
     const std::string title = g_graph.Evaluation().previewShowsMask
         ? std::string(heightfieldFieldName(g_graph.Evaluation().previewField)) + " Preview"
         : "Heightmap Preview";
-    drawList->AddText(ImVec2(min.x + 16.0f, min.y + 14.0f), ThemeColor("accentText", ImVec4(0.86f, 0.88f, 0.85f, 1.0f)), title.c_str());
+    drawList->AddText(ImVec2(min.x + 82.0f, min.y + 14.0f), ThemeColor("accentText", ImVec4(0.86f, 0.88f, 0.85f, 1.0f)), title.c_str());
     const std::string gridInfo = std::format(
         "Right-handed, Y-up, {} x {}, {:.0f} m cells",
         preview.gridCellCount,
         preview.gridCellCount,
         preview.gridCellSizeMeters);
-    drawList->AddText(ImVec2(min.x + 16.0f, min.y + 36.0f), ThemeColor("mutedText", ImVec4(0.54f, 0.59f, 0.56f, 1.0f)), gridInfo.c_str());
-    char fpsText[32]{};
-    std::snprintf(fpsText, sizeof(fpsText), "FPS %.1f", ImGui::GetIO().Framerate);
-    const ImVec2 fpsSize = ImGui::CalcTextSize(fpsText);
-    const ImVec2 fpsPadding(9.0f, 5.0f);
-    const ImVec2 fpsMax(max.x - 14.0f, min.y + 14.0f + fpsSize.y + fpsPadding.y * 2.0f);
-    const ImVec2 fpsMin(fpsMax.x - fpsSize.x - fpsPadding.x * 2.0f, min.y + 14.0f);
-    drawList->AddRectFilled(fpsMin, fpsMax, IM_COL32(8, 10, 10, 168), 4.0f);
-    drawList->AddRect(fpsMin, fpsMax, ThemeColor("border", ImVec4(0.20f, 0.23f, 0.22f, 0.70f)), 4.0f);
-    drawList->AddText(ImVec2(fpsMin.x + fpsPadding.x, fpsMin.y + fpsPadding.y), ThemeColor("accentText", ImVec4(0.86f, 0.88f, 0.85f, 1.0f)), fpsText);
+    drawList->AddText(ImVec2(min.x + 82.0f, min.y + 36.0f), ThemeColor("mutedText", ImVec4(0.54f, 0.59f, 0.56f, 1.0f)), gridInfo.c_str());
+    DrawViewportDisplayMenu(min);
+    if (g_ui.showFps)
+    {
+        char fpsText[32]{};
+        std::snprintf(fpsText, sizeof(fpsText), "FPS %.1f", ImGui::GetIO().Framerate);
+        const ImVec2 fpsSize = ImGui::CalcTextSize(fpsText);
+        const ImVec2 fpsPadding(9.0f, 5.0f);
+        const ImVec2 fpsMax(max.x - 14.0f, min.y + 14.0f + fpsSize.y + fpsPadding.y * 2.0f);
+        const ImVec2 fpsMin(fpsMax.x - fpsSize.x - fpsPadding.x * 2.0f, min.y + 14.0f);
+        drawList->AddRectFilled(fpsMin, fpsMax, IM_COL32(8, 10, 10, 168), 4.0f);
+        drawList->AddRect(fpsMin, fpsMax, ThemeColor("border", ImVec4(0.20f, 0.23f, 0.22f, 0.70f)), 4.0f);
+        drawList->AddText(ImVec2(fpsMin.x + fpsPadding.x, fpsMin.y + fpsPadding.y), ThemeColor("accentText", ImVec4(0.86f, 0.88f, 0.85f, 1.0f)), fpsText);
+    }
     DrawViewportAxisGizmo(drawList, min, max);
 }
 
@@ -6254,7 +6433,7 @@ bool DrawResolutionPresetRow(const char* label, const char* id, int* value, int 
     return changed;
 }
 
-bool DrawPropertyBoolRow(const char* label, const char* id, bool* value, const char* dirtyReason, const char* tooltip = nullptr, bool defaultValue = false)
+bool DrawPropertyBoolRow(const char* label, const char* id, bool* value, const char* dirtyReason, const char* tooltip = nullptr, bool defaultValue = false, bool compact = false)
 {
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
@@ -6262,7 +6441,15 @@ bool DrawPropertyBoolRow(const char* label, const char* id, bool* value, const c
     ImGui::TableSetColumnIndex(1);
 
     ImGui::PushID(id);
+    if (compact)
+    {
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4.0f, 2.0f));
+    }
     const bool changed = ImGui::Checkbox("##value", value);
+    if (compact)
+    {
+        ImGui::PopStyleVar();
+    }
     if (changed)
     {
         g_graph.MarkDirty(dirtyReason);
@@ -6763,7 +6950,11 @@ void DrawDisplaySettingsPanel()
         ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 112.0f);
         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
 
-        if (DrawPropertyBoolRow("Mesh Preview", "DisplayMeshPreview", &g_ui.meshPreview, "Mesh preview visibility changed", nullptr, UiState{}.meshPreview))
+        if (DrawPropertyBoolRow("Mesh Preview", "DisplayMeshPreview", &g_ui.meshPreview, "Mesh preview visibility changed", nullptr, UiState{}.meshPreview, true))
+        {
+            SaveAppSettingsSilently();
+        }
+        if (DrawPropertyBoolRow("FPS", "DisplayFps", &g_ui.showFps, "FPS visibility changed", nullptr, UiState{}.showFps, true))
         {
             SaveAppSettingsSilently();
         }
@@ -6778,15 +6969,15 @@ void DrawDisplaySettingsPanel()
             SaveAppSettingsSilently();
         }
 
-        if (DrawPropertyBoolRow("Surface", "DisplaySurface", &settings.preview.showSurface, "Surface visibility changed", nullptr, rock::PreviewSettings{}.showSurface))
+        if (DrawPropertyBoolRow("Surface", "DisplaySurface", &settings.preview.showSurface, "Surface visibility changed", nullptr, rock::PreviewSettings{}.showSurface, true))
         {
             SaveAppSettingsSilently();
         }
-        if (DrawPropertyBoolRow("Wireframe", "DisplayWireframe", &settings.preview.showWireframe, "Wireframe visibility changed", nullptr, rock::PreviewSettings{}.showWireframe))
+        if (DrawPropertyBoolRow("Wireframe", "DisplayWireframe", &settings.preview.showWireframe, "Wireframe visibility changed", nullptr, rock::PreviewSettings{}.showWireframe, true))
         {
             SaveAppSettingsSilently();
         }
-        if (DrawPropertyBoolRow("Grid", "DisplayGrid", &settings.preview.showGrid, "Grid visibility changed", nullptr, rock::PreviewSettings{}.showGrid))
+        if (DrawPropertyBoolRow("Grid", "DisplayGrid", &settings.preview.showGrid, "Grid visibility changed", nullptr, rock::PreviewSettings{}.showGrid, true))
         {
             SaveAppSettingsSilently();
         }
@@ -6807,14 +6998,28 @@ void DrawDisplaySettingsPanel()
                 SaveAppSettingsSilently();
             }
         }
-        if (DrawPropertyComboRow("Lighting Mode", "DisplayLightingMode", &settings.preview.lightingMode, "Simple\0PBR Preview\0", "3Dビューのライティングモードです。Simple はマスク確認向け、PBR Preview は地形の陰影確認向けです。", rock::PreviewSettings{}.lightingMode))
+        int displayModeInt = ToDisplayModeIndex(CurrentViewportDisplayMode(settings));
+        if (DrawPropertyComboRow("表示モード", "ViewportDisplayMode", &displayModeInt, "シンプル\0PBR\0天球\0\0", "シンプル: フラットで軽い表示。PBR: 単色背景でリアル寄りのライティング。天球: 天球背景とリアル寄りのライティングです。", ToDisplayModeIndex(ViewportDisplayMode::Simple)))
         {
-            settings.preview.lightingMode = std::clamp(settings.preview.lightingMode, 0, 1);
+            ApplyViewportDisplayMode(settings, DisplayModeFromIndex(std::clamp(displayModeInt, 0, 2)));
             SaveAppSettingsSilently();
         }
-        if (settings.preview.lightingMode >= 1)
+        const ViewportDisplayMode displayMode = CurrentViewportDisplayMode(settings);
+        ImGui::SeparatorText("地表");
+        if (displayMode != ViewportDisplayMode::Sky)
         {
-            ImGui::SeparatorText("PBR Preview");
+            if (DrawColorRgbRow("ビューポート背景色", "ViewportBackgroundColor", settings.preview.viewportBackground, rock::PreviewSettings{}.viewportBackground))
+            {
+                SaveAppSettingsSilently();
+            }
+        }
+        if (displayMode != ViewportDisplayMode::Simple)
+        {
+            if (DrawColorRgbRow("Albedo", "DisplayPbrAlbedo", settings.preview.pbrAlbedo, rock::PreviewSettings{}.pbrAlbedo))
+            {
+                SaveAppSettingsSilently();
+            }
+            ImGui::SeparatorText("太陽");
             if (DrawPropertyFloatRow("Sun Azimuth (deg)", "DisplaySunAzimuth", &settings.preview.sunAzimuthDegrees, 0.0f, 360.0f, rock::PreviewSettings{}.sunAzimuthDegrees, "Sun azimuth changed", false, "太陽の水平角度です。地形の溝が読みやすい方向へ回せます。"))
             {
                 SaveAppSettingsSilently();
@@ -6831,6 +7036,7 @@ void DrawDisplaySettingsPanel()
             {
                 SaveAppSettingsSilently();
             }
+            ImGui::SeparatorText("影");
             if (DrawPropertyFloatRow("Shadow Strength", "DisplayShadowStrength", &settings.preview.shadowStrength, 0.0f, 1.0f, rock::PreviewSettings{}.shadowStrength, "Shadow strength changed", false, "シャドウマップで落ちる影の濃さです。"))
             {
                 SaveAppSettingsSilently();
@@ -6844,58 +7050,41 @@ void DrawDisplaySettingsPanel()
             {
                 SaveAppSettingsSilently();
             }
-            if (DrawColorRgbRow("Albedo", "DisplayPbrAlbedo", settings.preview.pbrAlbedo, rock::PreviewSettings{}.pbrAlbedo))
-            {
-                SaveAppSettingsSilently();
-            }
-        }
-        if (DrawColorRgbRow("ビューポート背景色", "ViewportBackgroundColor", settings.preview.viewportBackground, rock::PreviewSettings{}.viewportBackground))
-        {
-            SaveAppSettingsSilently();
         }
 
-        ImGui::SeparatorText("天球");
         rock::SkySettings& sky = settings.sky;
+        if (displayMode == ViewportDisplayMode::Sky)
         {
-            int skyModeInt = static_cast<int>(sky.mode);
-            if (DrawPropertyComboRow("Sky Mode", "DisplaySkyMode", &skyModeInt, "Solid Color\0Procedural\0\0", "Solid Color: ビューポート背景色をそのまま使う従来モード。Procedural: 天頂↔地平のグラデーションと太陽ディスクをシェーダーで生成します。", static_cast<int>(rock::SkySettings{}.mode)))
-            {
-                sky.mode = static_cast<rock::SkyMode>(std::clamp(skyModeInt,
-                    static_cast<int>(rock::SkyMode::SolidColor),
-                    static_cast<int>(rock::SkyMode::Procedural)));
-            }
-        }
-        if (sky.mode == rock::SkyMode::Procedural)
-        {
+            ImGui::SeparatorText("天球");
             DrawColorRgbRow("天頂色", "SkyZenithColor", sky.zenithColor, rock::SkySettings{}.zenithColor);
             DrawColorRgbRow("地平色", "SkyHorizonColor", sky.horizonColor, rock::SkySettings{}.horizonColor);
             DrawColorRgbRow("太陽色", "SkySunColor", sky.sunColor, rock::SkySettings{}.sunColor);
             DrawPropertyFloatRow("太陽サイズ (deg)", "SkySunSize", &sky.sunSizeDegrees, 0.1f, 20.0f, rock::SkySettings{}.sunSizeDegrees, "Sky sun size changed", false, "太陽ディスクの直径(度)。実際の太陽は約 0.5 度ですが、視認性のためデフォルトはやや大きめです。");
             DrawPropertyFloatRow("地平ソフトネス", "SkyHorizonSoftness", &sky.horizonSoftness, 0.1f, 6.0f, rock::SkySettings{}.horizonSoftness, "Sky horizon softness changed", false, "天頂↔地平のグラデーション形状。大きいほど地平色が空高くまで広がります(=もやっとした地平)。1.0 で線形補間。");
             DrawPropertyFloatRow("太陽グロー", "SkySunGlow", &sky.sunGlowStrength, 0.0f, 2.0f, rock::SkySettings{}.sunGlowStrength, "Sky sun glow changed", false, "太陽周辺の柔らかい光の強さ。0 でグロー無し。");
-        }
 
-        ImGui::SeparatorText("ボリューム雲");
-        rock::CloudSettings& clouds = settings.clouds;
-        DrawPropertyBoolRow("有効", "CloudEnabled", &clouds.enabled, "Clouds enabled toggled", "ボリューム雲のレイマーチ描画を有効化します。3D 密度テクスチャ (128³ R8 = 2MB) を生成し、雲帯 [Altitude Min, Max] とのレイ交差をフルスクリーンパスで毎フレーム積分します。", rock::CloudSettings{}.enabled);
-        if (clouds.enabled)
-        {
-            DrawPropertyIntRow("Cloud Seed", "CloudSeed", &clouds.seed, 0, 999999, rock::CloudSettings{}.seed, "Cloud seed changed", false, "3D 密度ノイズのシード。変更すると雲のパターンが変わります(テクスチャを再生成)。");
-            DrawPropertyFloatRow("Coverage", "CloudCoverage", &clouds.coverage, 0.0f, 1.0f, rock::CloudSettings{}.coverage, "Cloud coverage changed", false, "空に占める雲の割合。0 で雲無し、1 で空一面が雲。");
-            DrawPropertyFloatRow("Density", "CloudDensity", &clouds.densityMultiplier, 0.0f, 4.0f, rock::CloudSettings{}.densityMultiplier, "Cloud density changed", false, "雲の濃さ倍率。大きいほど雲が不透明になります。");
-            DrawPropertyFloatRow("Altitude Min (m)", "CloudAltMin", &clouds.altitudeMin, 0.0f, 8000.0f, rock::CloudSettings{}.altitudeMin, "Cloud altitude min changed", false, "雲帯の下限高度 (m)。地形をすっぽり包むには地形最高点より低い値、上に浮かべるなら高い値を指定。", "%.0f");
-            DrawPropertyFloatRow("Altitude Max (m)", "CloudAltMax", &clouds.altitudeMax, 0.0f, 12000.0f, rock::CloudSettings{}.altitudeMax, "Cloud altitude max changed", false, "雲帯の上限高度 (m)。Max - Min が雲層の厚さです。", "%.0f");
-            DrawPropertyFloatRow("Horizontal Scale (m)", "CloudHorizScale", &clouds.horizontalScale, 200.0f, 30000.0f, rock::CloudSettings{}.horizontalScale, "Cloud scale changed", false, "雲の水平スケール。大きいほど雲塊が大きく、小さいほど細かい雲になります。", "%.0f");
-            DrawPropertyFloatRow("Field Radius (m)", "CloudFieldRadius", &clouds.fieldRadius, 200.0f, 50000.0f, rock::CloudSettings{}.fieldRadius, "Cloud field radius changed", false, "地形の中心を原点にした、雲が存在する円形フィールドの半径。大きくするとより遠くまで雲が広がります。地形と同程度にすると地形の周りだけに雲が出ます。", "%.0f");
-            DrawPropertyFloatRow("Field Falloff (m)", "CloudFieldFalloff", &clouds.fieldFalloff, 50.0f, 20000.0f, rock::CloudSettings{}.fieldFalloff, "Cloud field falloff changed", false, "フィールド端のフェードアウト幅。大きいほど雲がじわっと消え、小さいと境界がくっきりします。", "%.0f");
-            DrawPropertyFloatRow("Absorption", "CloudAbsorption", &clouds.absorption, 0.0f, 0.5f, rock::CloudSettings{}.absorption, "Cloud absorption changed", false, "Beer-Lambert の吸収係数。大きいほど雲がはっきり不透明になります。", "%.4f");
-            DrawColorRgbRow("Cloud Color", "CloudColor", clouds.color, rock::CloudSettings{}.color);
-            DrawPropertyFloatRow("Wind Direction (deg)", "CloudWindDir", &clouds.windDirectionDegrees, 0.0f, 360.0f, rock::CloudSettings{}.windDirectionDegrees, "Cloud wind direction changed", false, "風の向き(度、北=0、東=90)。Wind Speed > 0 のときに雲が流れる方向。", "%.0f");
-            DrawPropertyFloatRow("Wind Speed (m/s)", "CloudWindSpeed", &clouds.windSpeedMetersPerSec, 0.0f, 200.0f, rock::CloudSettings{}.windSpeedMetersPerSec, "Cloud wind speed changed", false, "雲が流れる速度 (m/s)。0 で静止。動かすとフレーム毎にビューポートが再描画され負荷が増えます。");
-            DrawPropertyIntRow("Quality (samples)", "CloudQuality", &clouds.qualitySamples, 8, 96, rock::CloudSettings{}.qualitySamples, "Cloud quality changed", false, "1 ピクセルあたりのレイマーチサンプル数。大きいほど雲のディテールが上がりますが負荷も増えます。32 が標準、低スペックなら 16、高品質なら 64。");
-            DrawPropertyFloatRow("Shadow Strength", "CloudShadowStrength", &clouds.shadowStrength, 0.0f, 1.0f, rock::CloudSettings{}.shadowStrength, "Cloud shadow strength changed", false, "雲が地形に落とす影の強さ。0 で影無し、1 で完全に暗くなります。太陽方向に projection した雲の透過率を地形シェーダーで乗算します。");
-            DrawPropertyIntRow("Shadow Resolution", "CloudShadowResolution", &clouds.shadowResolution, 256, 4096, rock::CloudSettings{}.shadowResolution, "Cloud shadow resolution changed", false, "雲影テクスチャの解像度 (片辺ピクセル数)。1024 で約 1MB。大きいほど影の輪郭が細かくなりますが生成負荷が増えます。");
-            DrawPropertyIntRow("Shadow Samples", "CloudShadowSamples", &clouds.shadowSamples, 4, 64, rock::CloudSettings{}.shadowSamples, "Cloud shadow samples changed", false, "雲影テクスチャ生成時に太陽方向へ撃つレイのサンプル数。大きいほど厚い雲の影が正確になりますが生成時間も増えます。16 が標準。");
+            ImGui::SeparatorText("ボリューム雲");
+            rock::CloudSettings& clouds = settings.clouds;
+            DrawPropertyBoolRow("有効", "CloudEnabled", &clouds.enabled, "Clouds enabled toggled", "ボリューム雲のレイマーチ描画を有効化します。3D 密度テクスチャ (128³ R8 = 2MB) を生成し、雲帯 [Altitude Min, Max] とのレイ交差をフルスクリーンパスで毎フレーム積分します。", rock::CloudSettings{}.enabled, true);
+            if (clouds.enabled)
+            {
+                DrawPropertyIntRow("Cloud Seed", "CloudSeed", &clouds.seed, 0, 999999, rock::CloudSettings{}.seed, "Cloud seed changed", false, "3D 密度ノイズのシード。変更すると雲のパターンが変わります(テクスチャを再生成)。");
+                DrawPropertyFloatRow("Coverage", "CloudCoverage", &clouds.coverage, 0.0f, 1.0f, rock::CloudSettings{}.coverage, "Cloud coverage changed", false, "空に占める雲の割合。0 で雲無し、1 で空一面が雲。");
+                DrawPropertyFloatRow("Density", "CloudDensity", &clouds.densityMultiplier, 0.0f, 4.0f, rock::CloudSettings{}.densityMultiplier, "Cloud density changed", false, "雲の濃さ倍率。大きいほど雲が不透明になります。");
+                DrawPropertyFloatRow("Altitude Min (m)", "CloudAltMin", &clouds.altitudeMin, 0.0f, 8000.0f, rock::CloudSettings{}.altitudeMin, "Cloud altitude min changed", false, "雲帯の下限高度 (m)。地形をすっぽり包むには地形最高点より低い値、上に浮かべるなら高い値を指定。", "%.0f");
+                DrawPropertyFloatRow("Altitude Max (m)", "CloudAltMax", &clouds.altitudeMax, 0.0f, 12000.0f, rock::CloudSettings{}.altitudeMax, "Cloud altitude max changed", false, "雲帯の上限高度 (m)。Max - Min が雲層の厚さです。", "%.0f");
+                DrawPropertyFloatRow("Horizontal Scale (m)", "CloudHorizScale", &clouds.horizontalScale, 200.0f, 30000.0f, rock::CloudSettings{}.horizontalScale, "Cloud scale changed", false, "雲の水平スケール。大きいほど雲塊が大きく、小さいほど細かい雲になります。", "%.0f");
+                DrawPropertyFloatRow("Field Radius (m)", "CloudFieldRadius", &clouds.fieldRadius, 200.0f, 50000.0f, rock::CloudSettings{}.fieldRadius, "Cloud field radius changed", false, "地形の中心を原点にした、雲が存在する円形フィールドの半径。大きくするとより遠くまで雲が広がります。地形と同程度にすると地形の周りだけに雲が出ます。", "%.0f");
+                DrawPropertyFloatRow("Field Falloff (m)", "CloudFieldFalloff", &clouds.fieldFalloff, 50.0f, 20000.0f, rock::CloudSettings{}.fieldFalloff, "Cloud field falloff changed", false, "フィールド端のフェードアウト幅。大きいほど雲がじわっと消え、小さいと境界がくっきりします。", "%.0f");
+                DrawPropertyFloatRow("Absorption", "CloudAbsorption", &clouds.absorption, 0.0f, 0.5f, rock::CloudSettings{}.absorption, "Cloud absorption changed", false, "Beer-Lambert の吸収係数。大きいほど雲がはっきり不透明になります。", "%.4f");
+                DrawColorRgbRow("Cloud Color", "CloudColor", clouds.color, rock::CloudSettings{}.color);
+                DrawPropertyFloatRow("Wind Direction (deg)", "CloudWindDir", &clouds.windDirectionDegrees, 0.0f, 360.0f, rock::CloudSettings{}.windDirectionDegrees, "Cloud wind direction changed", false, "風の向き(度、北=0、東=90)。Wind Speed > 0 のときに雲が流れる方向。", "%.0f");
+                DrawPropertyFloatRow("Wind Speed (m/s)", "CloudWindSpeed", &clouds.windSpeedMetersPerSec, 0.0f, 200.0f, rock::CloudSettings{}.windSpeedMetersPerSec, "Cloud wind speed changed", false, "雲が流れる速度 (m/s)。0 で静止。動かすとフレーム毎にビューポートが再描画され負荷が増えます。");
+                DrawPropertyIntRow("Quality (samples)", "CloudQuality", &clouds.qualitySamples, 8, 96, rock::CloudSettings{}.qualitySamples, "Cloud quality changed", false, "1 ピクセルあたりのレイマーチサンプル数。大きいほど雲のディテールが上がりますが負荷も増えます。32 が標準、低スペックなら 16、高品質なら 64。");
+                DrawPropertyFloatRow("Shadow Strength", "CloudShadowStrength", &clouds.shadowStrength, 0.0f, 1.0f, rock::CloudSettings{}.shadowStrength, "Cloud shadow strength changed", false, "雲が地形に落とす影の強さ。0 で影無し、1 で完全に暗くなります。太陽方向に projection した雲の透過率を地形シェーダーで乗算します。");
+                DrawPropertyIntRow("Shadow Resolution", "CloudShadowResolution", &clouds.shadowResolution, 256, 4096, rock::CloudSettings{}.shadowResolution, "Cloud shadow resolution changed", false, "雲影テクスチャの解像度 (片辺ピクセル数)。1024 で約 1MB。大きいほど影の輪郭が細かくなりますが生成負荷が増えます。");
+                DrawPropertyIntRow("Shadow Samples", "CloudShadowSamples", &clouds.shadowSamples, 4, 64, rock::CloudSettings{}.shadowSamples, "Cloud shadow samples changed", false, "雲影テクスチャ生成時に太陽方向へ撃つレイのサンプル数。大きいほど厚い雲の影が正確になりますが生成時間も増えます。16 が標準。");
+            }
         }
 
         ImGui::EndTable();

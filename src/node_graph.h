@@ -232,7 +232,7 @@ enum class SkyMode
 
 struct SkySettings
 {
-    SkyMode mode = SkyMode::Procedural;
+    SkyMode mode = SkyMode::SolidColor;
     std::array<float, 3> zenithColor = {0.18f, 0.34f, 0.62f};
     std::array<float, 3> horizonColor = {0.78f, 0.84f, 0.92f};
     std::array<float, 3> sunColor = {1.0f, 0.94f, 0.82f};
@@ -243,7 +243,7 @@ struct SkySettings
 
 struct CloudSettings
 {
-    bool enabled = true;
+    bool enabled = false;
     int seed = 1;
     float coverage = 0.55f;
     float densityMultiplier = 1.0f;
