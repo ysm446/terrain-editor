@@ -41,6 +41,10 @@ cbuffer CloudShadowMeshConstants : register(b1)
     float cloudShadowMinZ;
     float cloudShadowSizeX;
     float cloudShadowSizeZ;
+    float4 skyZenithColor;
+    float4 skyHorizonColor;
+    float4 skyGroundColor;
+    float4 skySunColor;
 };
 
 Texture2D shadowMap : register(t0);
@@ -229,16 +233,38 @@ float4 PSSurface(VSOut i) : SV_TARGET
         float viewFacing = pow(saturate(dot(n, V) * 0.5 + 0.5), 0.35);
         float shadowAmount = (1.0 - visibility) * shadowStrength;
         float shadowMix = lerp(1.0 - shadowStrength * 0.75, 1.0, visibility);
-        float upFacing = saturate(n.y * 0.55 + 0.45);
-        float3 skyTint = lerp(float3(0.42, 0.45, 0.45), float3(0.58, 0.61, 0.62), upFacing) * ambientStrength;
+
+        // Hemisphere ambient driven by sky settings: surfaces facing up
+        // sample the zenith colour, surfaces facing the horizon sample the
+        // horizon colour, surfaces facing down sample the ground colour
+        // (= bounce light from the world below the horizon).
+        float3 skyAmbient;
+        if (n.y >= 0.0)
+        {
+            skyAmbient = lerp(skyHorizonColor.rgb, skyZenithColor.rgb, n.y);
+        }
+        else
+        {
+            skyAmbient = lerp(skyHorizonColor.rgb, skyGroundColor.rgb, -n.y);
+        }
+        skyAmbient *= ambientStrength;
+
         // Cloud shadow attenuates the sun (direct light) fully but only
         // partially attenuates ambient sky light, since clouds scatter light
         // back down and the sky term is dominated by skylight not sun.
-        float3 sunTint = float3(1.00, 0.96, 0.88) * ndl * sunIntensity * shadowMix * cloudShadowFactor;
-        float3 bounceTint = float3(0.28, 0.30, 0.28) * ambientStrength * shadowAmount;
         float ambientCloudMix = lerp(1.0, cloudVisibility, cloudShadowStrength * 0.4);
+
+        // Direct sun: uses the sky's sun colour so a warm sky tints the
+        // direct light too.
+        float3 sunTint = skySunColor.rgb * ndl * sunIntensity * shadowMix * cloudShadowFactor;
+
+        // Bounce / fill: light reflected off the ground reaching the
+        // shadowed side of surfaces. Tinted by groundColor for consistency
+        // with the lower hemisphere.
+        float3 bounceTint = skyGroundColor.rgb * ambientStrength * shadowAmount * 0.55;
+
         float3 slopeMicroShade = lerp(float3(0.78, 0.80, 0.82), float3(1.06, 1.05, 1.02), viewFacing);
-        col = albedoColor.rgb * (skyTint * ambientCloudMix + sunTint + bounceTint) * slopeMicroShade;
+        col = albedoColor.rgb * (skyAmbient * ambientCloudMix + sunTint + bounceTint) * slopeMicroShade;
         col = lerp(col, dot(col, float3(0.299, 0.587, 0.114)).xxx, shadowAmount * 0.18);
         col += pow(saturate(ndl), 24.0) * sunIntensity * visibility * cloudShadowFactor * 0.045;
     }

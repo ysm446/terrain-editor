@@ -2,6 +2,7 @@
 
 ## 未リリース
 
+- 地形の PBR ライティングが天球の色から駆動されるようにしました。これまで mesh shader の ambient (`skyTint`) と sun tint は HLSL ソース内のハードコード値 (`(0.42, 0.45, 0.45)` 等) でしたが、`CloudShadowMeshConstants` cbuffer (b1) に sky の zenith / horizon / ground / sun の 4 色を追加し、地形の半球ライティングを天球設定に連動させました: 法線が上向きの面は zenith 色、地平方向の面は horizon 色、下向きの面は ground 色 (= 地面からの bounce 光) を ambient としてサンプル、direct sun は `skySunColor` を使用、bounce/fill 項も groundColor をベースに。`SkyMode::SolidColor` モードのときは ambient を viewportBackground 色に統一して、太陽色は引き続き編集可能なままにします。これで「夕焼けの空にしたら地形も暖色寄りになる」「青い空の下では地形に青みが乗る」等、天球を変えると一貫してシーン全体が連動します。`CloudShadowMeshConstants` は 32 バイト → 96 バイトに拡張 (CBV は 256 バイト確保なので余裕あり)。
 - 天球の地平ソフトネスのデフォルト値を 1.4 → 0.5 に下げました。`pow(ray.y, softness)` で gradient を計算しているため、softness が 1 より大きいと地平色が空高くまで広がり、`ray.y = 0.5` (= 30° 上空) で 60%以上が地平色という不自然な見え方になっていました。0.5 だと同じ位置で約 29% 地平色に落ち、実際の空に近いタイトな地平帯になります。値の意味は変わっていないので、既存プロジェクトのスライダー値はそのまま (新規プロジェクトのみデフォルトが 0.5)。
 - 天球の地面方向 (`ray.y < 0`) の色を独立した `groundColor` として設定できるようにしました (GeoGen 風の参考画像に合わせて、地平より下の色を別パラメータに分離)。`SkySettings` に `groundColor` (デフォルト 暗めの青グレー) を追加し、`sky.hlsl` のグラデーションを「ray.y >= 0 で horizon → zenith」「ray.y < 0 で horizon → ground」の二面構成に。`horizonSoftness` は両側で共有するので地平の連続性は保たれます。`SkyShaderConstants` に float4 を 1 つ追加して 36 → 40 DWORDs に拡張、ルートシグネチャの `Num32BitValues` も 40 に。表示設定パネルに「地面色」を追加、`.terrainproj` の `settings.sky.groundColor` に保存します。
 - 3D ビューポート左上に `表示` メニューを追加しました。メニュー内でライティングモードを `シンプル` / `天球` から選択でき、`天球` 選択時は `雲を描画` チェックボックスでボリューム雲の表示を切り替えられます。

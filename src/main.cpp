@@ -255,8 +255,10 @@ static_assert(offsetof(MeshPreviewConstants, lightWorldRadius) == 224);
 static_assert(offsetof(MeshPreviewConstants, padding2) == 236);
 static_assert(sizeof(MeshPreviewConstants) == 240);
 
-// Cloud shadow data lives in its own cbuffer (b1) bound via a root CBV so
-// the mesh root signature stays under the 64-DWORD limit.
+// Cloud shadow + sky environment data lives in its own cbuffer (b1) bound
+// via a root CBV so the mesh root signature stays under the 64-DWORD limit.
+// The sky colours drive the terrain's hemisphere ambient term so the scene
+// stays visually coherent with the procedural sky.
 struct CloudShadowMeshConstants
 {
     float cloudShadowEnabled;
@@ -267,8 +269,12 @@ struct CloudShadowMeshConstants
     float cloudShadowMinZ;
     float cloudShadowSizeX;
     float cloudShadowSizeZ;
+    float skyZenithColor[4];
+    float skyHorizonColor[4];
+    float skyGroundColor[4];
+    float skySunColor[4];
 };
-static_assert(sizeof(CloudShadowMeshConstants) == 32);
+static_assert(sizeof(CloudShadowMeshConstants) == 96);
 
 struct GpuMeshPreview
 {
@@ -4875,6 +4881,33 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         cloudShadowCb.cloudShadowMinZ = shadowMinZ;
         cloudShadowCb.cloudShadowSizeX = shadowSizeX;
         cloudShadowCb.cloudShadowSizeZ = shadowSizeZ;
+
+        // Sky-driven hemisphere ambient. When the sky is in SolidColor mode
+        // the entire dome is the viewport background, so feed that for all
+        // four sky colour slots; otherwise pull the user-tuned procedural
+        // sky colours so the ground lighting tracks the visible sky.
+        const rock::SkySettings& sky = g_graph.Settings().sky;
+        const auto& bg = g_graph.Settings().preview.viewportBackground;
+        const auto fillColor4 = [](float dst[4], const std::array<float, 3>& src) {
+            dst[0] = src[0]; dst[1] = src[1]; dst[2] = src[2]; dst[3] = 1.0f;
+        };
+        if (sky.mode == rock::SkyMode::Procedural)
+        {
+            fillColor4(cloudShadowCb.skyZenithColor, sky.zenithColor);
+            fillColor4(cloudShadowCb.skyHorizonColor, sky.horizonColor);
+            fillColor4(cloudShadowCb.skyGroundColor, sky.groundColor);
+            fillColor4(cloudShadowCb.skySunColor, sky.sunColor);
+        }
+        else
+        {
+            fillColor4(cloudShadowCb.skyZenithColor, bg);
+            fillColor4(cloudShadowCb.skyHorizonColor, bg);
+            fillColor4(cloudShadowCb.skyGroundColor, bg);
+            // Keep the user-tuned sun colour even in solid sky mode so
+            // changing the sky to a flat grey doesn't kill warm sun light.
+            fillColor4(cloudShadowCb.skySunColor, sky.sunColor);
+        }
+
         if (g_gpuClouds.meshCbMapped)
         {
             std::memcpy(g_gpuClouds.meshCbMapped, &cloudShadowCb, sizeof(cloudShadowCb));
