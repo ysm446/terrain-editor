@@ -46,6 +46,10 @@ cbuffer CloudConstants : register(b0)
     float  fieldFalloff;
     float4 atmosphereSunColor;    // sun colour after atmospheric transmittance; white when atmospheric mode is off
     float4 atmosphereSkyColor;    // mid-zenith sky colour for cloud bottom shading
+    int    lightSamples;          // 0 disables self-shadowing, falls back to vertical ramp only
+    float  lightStepMeters;       // step length toward the sun (m)
+    float  phaseEccentricity;     // Henyey-Greenstein g; 0 isotropic, 0.4 gentle silver lining
+    float  pad1;
 };
 
 Texture3D<float> CloudVolume : register(t0);
@@ -208,6 +212,14 @@ float4 CloudPS(VsOut input) : SV_Target
     float transmittance = 1.0;
     float3 accumulated = float3(0, 0, 0);
 
+    // HG phase factor (4π normalised so isotropic g=0 evaluates to 1.0).
+    // Computed once per pixel — depends only on view-ray vs sun angle.
+    const float kPi = 3.14159265;
+    float cosTheta = dot(ray, sunDirection.xyz);
+    float gg = phaseEccentricity * phaseEccentricity;
+    float hgDenom = pow(max(1.0 + gg - 2.0 * phaseEccentricity * cosTheta, 1e-4), 1.5);
+    float phase = ((1.0 - gg) / hgDenom);  // already 4π-normalised: forward peaks, backward dim
+
     [loop]
     for (int i = 0; i < numSteps; ++i)
     {
@@ -216,23 +228,44 @@ float4 CloudPS(VsOut input) : SV_Target
         float density = SampleCloudDensity(p);
         if (density > 0.0)
         {
-            // Top of the cloud receives almost direct sunlight; the bottom
-            // is lit by the hemispherical sky + a small amount of sun
-            // bounced off the ground. Multi-scatter inside a thick cloud
-            // washes out saturation a little, so we desaturate the sky term
-            // mildly — strong desaturation (0.65) flattened sunset reds, so
-            // 0.35 keeps the colour while still reading as a cumulus belly.
-            // The vertical brightness gradient comes from the
-            // lerp(ambient, sunlit, yNorm) below, so no separate topLight
-            // multiplier is needed.
-            float yNorm = saturate((p.y - altitudeMin) / max(altitudeMax - altitudeMin, 1.0));
+            // Ambient term — bottom-of-cloud feel: hemispherical sky +
+            // a small ground bounce, lightly desaturated to mimic the
+            // multi-scatter wash inside a thick cloud.
             float3 skyTerm = atmosphereSkyColor.rgb * 1.5;
             float skyLum = dot(skyTerm, float3(0.299, 0.587, 0.114));
             skyTerm = lerp(skyTerm, float3(skyLum, skyLum, skyLum), 0.35);
             float3 sunBounce = atmosphereSunColor.rgb * 0.5;
-            float3 sunlitColor = cloudColor.rgb * atmosphereSunColor.rgb;
             float3 ambientColor = cloudColor.rgb * (skyTerm + sunBounce);
-            float3 lit = lerp(ambientColor, sunlitColor, yNorm);
+            float3 sunlitColor = cloudColor.rgb * atmosphereSunColor.rgb;
+
+            float3 lit;
+            if (lightSamples > 0)
+            {
+                // Self-shadowing: march toward the sun and accumulate density,
+                // then Beer-Lambert. A few cheap samples are enough — the
+                // density texture has bilinear filtering and we don't need
+                // sub-cell precision for a transmittance estimate.
+                float lightDensity = 0.0;
+                [loop]
+                for (int j = 0; j < lightSamples; ++j)
+                {
+                    float3 lp = p + sunDirection.xyz * (lightStepMeters * ((float)j + 0.5));
+                    lightDensity += SampleCloudDensity(lp);
+                }
+                float lightTransmittance = exp(-lightDensity * absorption * lightStepMeters);
+                // Direct sun = sunlit colour × (transmittance through cloud
+                // toward the sun) × (HG phase). The phase brightens cells
+                // near the sun direction (silver lining) and dims the
+                // shadow-side without changing total cloud brightness.
+                float3 directLight = sunlitColor * lightTransmittance * phase;
+                lit = ambientColor + directLight;
+            }
+            else
+            {
+                // Fallback: original vertical ramp (no self-shadowing).
+                float yNorm = saturate((p.y - altitudeMin) / max(altitudeMax - altitudeMin, 1.0));
+                lit = lerp(ambientColor, sunlitColor, yNorm);
+            }
 
             float dT = exp(-density * absorption * stepLen);
             float dA = (1.0 - dT) * transmittance;

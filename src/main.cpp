@@ -1653,6 +1653,9 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
                 {"shadowSamples", clouds.shadowSamples},
                 {"fieldRadius", clouds.fieldRadius},
                 {"fieldFalloff", clouds.fieldFalloff},
+                {"lightSamples", clouds.lightSamples},
+                {"lightStepMeters", clouds.lightStepMeters},
+                {"phaseEccentricity", clouds.phaseEccentricity},
             }},
         };
 
@@ -1927,6 +1930,9 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
             clouds.shadowSamples = std::clamp(cloudsJson.value("shadowSamples", clouds.shadowSamples), 4, 64);
             clouds.fieldRadius = std::clamp(cloudsJson.value("fieldRadius", clouds.fieldRadius), 100.0f, 200000.0f);
             clouds.fieldFalloff = std::clamp(cloudsJson.value("fieldFalloff", clouds.fieldFalloff), 1.0f, 50000.0f);
+            clouds.lightSamples = std::clamp(cloudsJson.value("lightSamples", clouds.lightSamples), 0, 16);
+            clouds.lightStepMeters = std::clamp(cloudsJson.value("lightStepMeters", clouds.lightStepMeters), 1.0f, 2000.0f);
+            clouds.phaseEccentricity = std::clamp(cloudsJson.value("phaseEccentricity", clouds.phaseEccentricity), -0.99f, 0.99f);
         }
         const nlohmann::json previewJson = settingsJson.value("preview", nlohmann::json::object());
         if (!previewJson.empty())
@@ -3665,8 +3671,12 @@ struct CloudRenderShaderConstants
     float fieldFalloff;
     float atmosphereSunColor[4];
     float atmosphereSkyColor[4];
+    INT   lightSamples;
+    float lightStepMeters;
+    float phaseEccentricity;
+    float pad1;
 };
-static_assert(sizeof(CloudRenderShaderConstants) == 52 * sizeof(UINT), "CloudRenderShaderConstants must be 52 DWORDs");
+static_assert(sizeof(CloudRenderShaderConstants) == 56 * sizeof(UINT), "CloudRenderShaderConstants must be 56 DWORDs");
 
 bool EnsureCloudPipelines(std::string* error)
 {
@@ -3750,7 +3760,7 @@ bool EnsureCloudPipelines(std::string* error)
         D3D12_ROOT_PARAMETER rootParams[3]{};
         rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
         rootParams[0].Constants.ShaderRegister = 0;
-        rootParams[0].Constants.Num32BitValues = 52;
+        rootParams[0].Constants.Num32BitValues = 56;
         rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
         rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
@@ -4042,6 +4052,10 @@ void RenderCloudPass(ID3D12GraphicsCommandList* commandList,
     c.fieldCenterZ = fieldCenterZ;
     c.fieldRadius = std::max(clouds.fieldRadius, 1.0f);
     c.fieldFalloff = std::max(clouds.fieldFalloff, 1.0f);
+    c.lightSamples = std::clamp(clouds.lightSamples, 0, 16);
+    c.lightStepMeters = std::clamp(clouds.lightStepMeters, 1.0f, 2000.0f);
+    c.phaseEccentricity = std::clamp(clouds.phaseEccentricity, -0.99f, 0.99f);
+    c.pad1 = 0.0f;
 
     commandList->SetGraphicsRootSignature(g_cloudRenderRootSignature.Get());
     commandList->SetPipelineState(g_cloudRenderPso.Get());
@@ -7737,6 +7751,9 @@ void DrawDisplaySettingsPanel()
                 DrawPropertyFloatRow("Shadow Strength", "CloudShadowStrength", &clouds.shadowStrength, 0.0f, 1.0f, rock::CloudSettings{}.shadowStrength, "Cloud shadow strength changed", false, "雲が地形に落とす影の強さ。0 で影無し、1 で完全に暗くなります。太陽方向に projection した雲の透過率を地形シェーダーで乗算します。");
                 DrawPropertyIntRow("Shadow Resolution", "CloudShadowResolution", &clouds.shadowResolution, 256, 4096, rock::CloudSettings{}.shadowResolution, "Cloud shadow resolution changed", false, "雲影テクスチャの解像度 (片辺ピクセル数)。1024 で約 1MB。大きいほど影の輪郭が細かくなりますが生成負荷が増えます。");
                 DrawPropertyIntRow("Shadow Samples", "CloudShadowSamples", &clouds.shadowSamples, 4, 64, rock::CloudSettings{}.shadowSamples, "Cloud shadow samples changed", false, "雲影テクスチャ生成時に太陽方向へ撃つレイのサンプル数。大きいほど厚い雲の影が正確になりますが生成時間も増えます。16 が標準。");
+                DrawPropertyIntRow("Light Samples", "CloudLightSamples", &clouds.lightSamples, 0, 16, rock::CloudSettings{}.lightSamples, "Cloud light samples changed", false, "雲内自己遮蔽の太陽方向レイマーチ段数。0 で無効化(従来の上下ランプのみ)、6 が標準。大きいほど雲塊の陰影がはっきりしますが負荷も増えます。");
+                DrawPropertyFloatRow("Light Step (m)", "CloudLightStep", &clouds.lightStepMeters, 1.0f, 1000.0f, rock::CloudSettings{}.lightStepMeters, "Cloud light step changed", false, "自己遮蔽レイマーチの 1 ステップあたりの距離 (m)。Light Samples × Light Step が太陽方向への投光距離になります。雲スケールに対して短すぎると深い雲の中まで届かず、長すぎるとサンプルが粗くなります。", "%.0f");
+                DrawPropertyFloatRow("Phase Eccentricity", "CloudPhaseG", &clouds.phaseEccentricity, -0.99f, 0.99f, rock::CloudSettings{}.phaseEccentricity, "Cloud phase eccentricity changed", false, "Henyey-Greenstein 位相関数の g 値。0 で等方散乱、正値で前方散乱(逆光時に太陽周りが明るくなるシルバーライニング)、負値で後方散乱。0.4 前後が雲らしい見た目。");
             }
         }
 

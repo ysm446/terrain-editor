@@ -311,6 +311,14 @@ struct CloudSettings
     int shadowSamples = 16;
     float fieldRadius = 6000.0f;
     float fieldFalloff = 2000.0f;
+    // Volumetric self-shadowing: each view sample marches a few steps
+    // toward the sun and accumulates density to compute a Beer-Lambert
+    // light transmittance. 0 disables (back to pure top-down ramp).
+    int lightSamples = 6;
+    float lightStepMeters = 80.0f;
+    // Henyey-Greenstein eccentricity for the cloud phase function. 0.4 gives
+    // a gentle silver lining around the sun direction; 0.0 is isotropic.
+    float phaseEccentricity = 0.4f;
 };
 
 struct GraphSettings

@@ -195,18 +195,29 @@ numSteps = clamp(ceil((tExit - tEnter) / idealStep), q, 4q)
 stepLen = (tExit - tEnter) / numSteps
 jitter = hash(input.pos.xy)  # ピクセル毎に 0-1 のジッターでバンディング解消
 
+phase = HG(g = phaseEccentricity, cosθ = dot(ray, sunDir))  # ピクセル毎に 1 回
+
 for each step:
     p = camera + ray × (tEnter + (i + jitter) × stepLen)
     density = SampleCloudDensity(p)  # field fade × vertical profile × 3D noise × coverage
     if density > 0:
-        # 雲頂は太陽光、雲底は半球光 + 地面 bounce
-        sunlit = cloudColor × atmosphereSunColor
+        # 雲底寄りの ambient 項(半球光 + 地面 bounce、軽く脱飽和)
         skyTerm = atmosphereSkyColor × 1.5
-        skyTerm = lerp(skyTerm, luminance(skyTerm), 0.35)  # Mie 内部散乱の脱飽和近似 (弱め)
+        skyTerm = lerp(skyTerm, luminance(skyTerm), 0.35)
         ambient = cloudColor × (skyTerm + atmosphereSunColor × 0.5)
-        lit = lerp(ambient, sunlit, yNorm)
-        
-        dT = exp(-density × absorption × stepLen)  # Beer-Lambert
+        sunlit = cloudColor × atmosphereSunColor
+
+        if lightSamples > 0:
+            # 太陽方向に lightSamples ステップ進めて密度を Beer-Lambert 積分
+            # (= サンプル点から太陽までの自己遮蔽)
+            lightDensity = Σ SampleCloudDensity(p + sunDir × lightStepMeters × (j + 0.5))
+            lightTransmittance = exp(-lightDensity × absorption × lightStepMeters)
+            lit = ambient + sunlit × lightTransmittance × phase
+        else:
+            # フォールバック: yNorm ベースの上下ランプ (旧挙動)
+            lit = lerp(ambient, sunlit, yNorm)
+
+        dT = exp(-density × absorption × stepLen)  # Beer-Lambert (視線方向)
         dA = (1 - dT) × transmittance
         accumulated += lit × dA
         transmittance *= dT
@@ -227,10 +238,15 @@ return float4(accumulated, 1 - transmittance)  # premultiplied alpha
 
 #### 雲頂・雲底の色 (大気連動)
 
-- **雲頂 (yNorm = 1)**: `cloudColor × atmosphereSunColor` — 太陽の自動色 (夕焼けで暖色) がそのまま乗る
-- **雲底 (yNorm = 0)**: `cloudColor × (atmosphereSkyColor × 1.5 + atmosphereSunColor × 0.5)`
+雲のシェーディングは「ambient(半球光 + 地面 bounce)」と「direct sun(太陽光 × 自己遮蔽 × 位相)」の足し合わせです。
+
+- **ambient 項**: `cloudColor × (atmosphereSkyColor × 1.5 + atmosphereSunColor × 0.5)`
   - `× 1.5`: 天頂色を半球輝度に近似スケール (zenith 1 点だと過小評価のため)。multi-scatter LUT 導入で天頂値自体が以前より明るいので、過去の `× 2.5` から下げています。
   - `lerp(skyTerm, luminance, 0.35)`: 雲内部 Mie 多重散乱で色が脱飽和する効果の近似 (= 雲底が氷のような青ではなく、自然な灰色寄りになる)。強すぎると夕焼けの暖色が消えるので 0.35 程度に抑えています。
+- **direct 項** (`lightSamples > 0` 時): `cloudColor × atmosphereSunColor × lightTransmittance × phase`
+  - `lightTransmittance`: サンプル点から太陽方向に `lightSamples` ステップ進んで Beer-Lambert で積分した透過率。雲塊の奥に行くほど暗くなり、これが「ボリューム感のある陰影」を生みます。
+  - `phase`: Henyey-Greenstein 位相関数 `(1 - g²) / (1 + g² - 2g cosθ)^1.5` (4π 正規化)。`g = phaseEccentricity = 0.4` で太陽方向側がピーク ~3.9× / 影側 ~0.3× の差が付き、シルバーライニングと逆光時の縁の暗化が出ます。
+- **`lightSamples = 0`** ではこの直接光 + 自己遮蔽が無効化され、旧バージョンと同じ `lerp(ambient, sunlit, yNorm)` の上下ランプにフォールバックします (比較用)。
 
 ### 3. 雲影 (`shaders/cloud_shadow.hlsl`)
 
@@ -257,6 +273,9 @@ mesh shader 側の `ComputeCloudShadowVisibility` が地形頂点 (x, z, y) を�
 | `shadowStrength` | 雲影の強さ | 0.7 |
 | `shadowResolution` / `shadowSamples` | 雲影テクスチャ解像度 / 太陽方向サンプル | 1024 / 16 |
 | `fieldRadius` / `fieldFalloff` | フィールド境界 | 6000 / 2000 |
+| `lightSamples` | 自己遮蔽の太陽方向ライトマーチ段数 (0 で無効化) | 6 |
+| `lightStepMeters` | ライトマーチ 1 ステップの距離 (m)。総投光距離 = `lightSamples × lightStepMeters` | 80 |
+| `phaseEccentricity` | HG 位相関数の g 値。0 等方、正値で前方散乱(シルバーライニング) | 0.4 |
 
 ## 自動遠景フォグ / 地平ヘイズ (Aerial Perspective)
 
@@ -324,7 +343,11 @@ Nishita 単散乱の既知のアーティファクトです。`atmosphere_multis
 
 ### 雲が暗すぎる/明るすぎる
 
-雲底のシェーディングは `atmosphereSkyColor × 1.5 + atmosphereSunColor × 0.5` で計算 (雲底の脱飽和 lerp は 0.35)。**夜になっても雲がうっすら明るい場合**は `atmosphereSunColor` の最低値を見直す (現状は太陽が地平下なら 0)。**夕焼け時に雲が灰色のまま**な場合は脱飽和 lerp を 0.2 程度まで下げると暖色が乗りやすくなります (もっと bounce が欲しいなら `atmosphereSunColor × 0.5` の係数を上げる)。
+ambient 項は `atmosphereSkyColor × 1.5 + atmosphereSunColor × 0.5` (脱飽和 lerp 0.35)、direct 項は `atmosphereSunColor × lightTransmittance × phase`(`lightSamples > 0` 時)。**夜になっても雲がうっすら明るい場合**は `atmosphereSunColor` の最低値を見直す (現状は太陽が地平下なら 0)。**夕焼け時に雲が灰色のまま**な場合は脱飽和 lerp を 0.2 程度まで下げる、または `phaseEccentricity` を 0.5〜0.7 に上げて太陽方向のシルバーライニングを強める。**雲全体が真っ白でのっぺり**な場合は `lightSamples` を 6 以上に上げ、`absorption` も 0.06 前後に上げると自己遮蔽がはっきりします。
+
+### 雲がのっぺりして立体感が無い
+
+`lightSamples = 0` になっていないか確認してください(0 だと旧バージョンの上下ランプのみ = 自己遮蔽無し)。標準は 6、薄い雲が多い場合は 4 でも十分、厚い雲塊に陰影を強く出したい場合は 8〜12。`lightStepMeters` は雲スケール(`horizontalScale`)に対して短すぎると雲塊の中まで届かず、長すぎるとサンプリングが粗くなります。`horizontalScale = 4000` なら `lightStepMeters = 60〜120` あたりが扱いやすい範囲です。
 
 ### 雲が地平に薄く伸びて見える / 横線がある
 
