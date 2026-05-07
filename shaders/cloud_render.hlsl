@@ -219,16 +219,18 @@ float4 CloudPS(VsOut input) : SV_Target
             // Top of the cloud receives almost direct sunlight (transmittance
             // along the sun ray is ~1 at noon); the bottom is lit by the
             // hemispherical sky + a small amount of sun bounced off the
-            // ground. atmosphereSkyColor is the zenith *radiance* in the same
-            // units as the sky shader output, so we boost it to roughly
-            // approximate a full-hemisphere irradiance instead of a single
-            // zenith point sample. atmosphereSunColor is the dimensionless
-            // [0,1] atmospheric transmittance along the sun direction.
+            // ground. Inside a thick cloud, Mie scattering bounces light many
+            // times and washes out colour saturation, so although the sky is
+            // blue we desaturate the sky term toward its luminance to match
+            // the typical near-neutral grey of cumulus undersides.
             float yNorm = saturate((p.y - altitudeMin) / max(altitudeMax - altitudeMin, 1.0));
             float topLight = lerp(0.85, 1.05, yNorm);
+            float3 skyTerm = atmosphereSkyColor.rgb * 2.5;
+            float skyLum = dot(skyTerm, float3(0.299, 0.587, 0.114));
+            skyTerm = lerp(skyTerm, float3(skyLum, skyLum, skyLum), 0.65);
+            float3 sunBounce = atmosphereSunColor.rgb * 0.5;
             float3 sunlitColor = cloudColor.rgb * atmosphereSunColor.rgb;
-            float3 ambientColor = cloudColor.rgb *
-                (atmosphereSkyColor.rgb * 2.5 + atmosphereSunColor.rgb * 0.35);
+            float3 ambientColor = cloudColor.rgb * (skyTerm + sunBounce);
             float3 lit = lerp(ambientColor, sunlitColor, yNorm) * topLight;
 
             float dT = exp(-density * absorption * stepLen);
