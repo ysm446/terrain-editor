@@ -26,6 +26,7 @@ using Microsoft::WRL::ComPtr;
 
 MultiScaleErosionGpuEvaluator g_mseGpuEvaluator = nullptr;
 MaskNoiseGpuEvaluator g_maskNoiseGpuEvaluator = nullptr;
+std::atomic<GraphId> g_currentlyEvaluatingNodeId{0};
 
 struct HeightmapImage
 {
@@ -2015,6 +2016,7 @@ MeshData NodeGraph::BuildMeshFromHeightPipelineCached(const HeightfieldPipeline&
         sourceCache.inputHash != inputHash ||
         sourceCache.parameterHash != sourceHash)
     {
+        g_currentlyEvaluatingNodeId.store(sourceNodeId, std::memory_order_relaxed);
         std::string sourceMessage;
         sourceCache.grid = pipeline.useShape
             ? BuildHeightfieldFromShape(pipeline.shape, simulationResolution, &sourceMessage)
@@ -2083,6 +2085,7 @@ MeshData NodeGraph::BuildMeshFromHeightPipelineCached(const HeightfieldPipeline&
             operationCache.inputHash != inputHash ||
             operationCache.parameterHash != parameterHash)
         {
+            g_currentlyEvaluatingNodeId.store(operation.nodeId, std::memory_order_relaxed);
             HeightfieldGrid operationGrid = grid;
             if (operation.kind == HeightfieldPipeline::HeightfieldOperation::Kind::HeightmapBlur)
             {
@@ -2590,6 +2593,7 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
         MaskNodeCache& cache = maskCache_[node.id];
         if (!cache.valid || cache.inputHash != 0 || cache.parameterHash != parameterHash)
         {
+            g_currentlyEvaluatingNodeId.store(node.id, std::memory_order_relaxed);
             cache.grid = GenerateMaskNoise(node.maskNoise);
             cache.valid = true;
             cache.inputHash = 0;
@@ -2633,6 +2637,7 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
         MaskNodeCache& cache = maskCache_[node.id];
         if (!cache.valid || cache.inputHash != inputHash || cache.parameterHash != parameterHash)
         {
+            g_currentlyEvaluatingNodeId.store(node.id, std::memory_order_relaxed);
             cache.grid = BlendMaskGrids(a, b, node.maskBlend.mode, node.maskBlend.intensity);
             cache.valid = true;
             cache.inputHash = inputHash;
@@ -2763,6 +2768,16 @@ void NodeGraph::Evaluate(int previewMeshResolution)
     {
         previewMeshResolution = EffectiveMeshResolution(settings_.preview, 2048);
     }
+
+    // Track which node's kernel is running so the UI can paint a "計算中"
+    // badge that walks the upstream chain. Cleared on exit so the badge
+    // disappears when no kernel is active. Cache hits don't store —
+    // they're instantaneous and the flicker would just be noise.
+    struct ProgressGuard
+    {
+        ~ProgressGuard() { g_currentlyEvaluatingNodeId.store(0, std::memory_order_relaxed); }
+    } progressGuard;
+    g_currentlyEvaluatingNodeId.store(0, std::memory_order_relaxed);
 
     // Mask-only preview: Mask Noise / Mask Blend live in their own pipeline
     // (no upstream heightfield), so render them on a flat plane with the mask
@@ -3023,6 +3038,11 @@ void SetMultiScaleErosionGpuEvaluator(MultiScaleErosionGpuEvaluator evaluator)
 void SetMaskNoiseGpuEvaluator(MaskNoiseGpuEvaluator evaluator)
 {
     g_maskNoiseGpuEvaluator = evaluator;
+}
+
+std::atomic<GraphId>& CurrentlyEvaluatingNodeId()
+{
+    return g_currentlyEvaluatingNodeId;
 }
 
 } // namespace rock

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -504,5 +505,13 @@ PreviewStage PreviewStageFor(NodeKind kind);
 bool IsMaskOnlyNodeKind(NodeKind kind);
 void SetMultiScaleErosionGpuEvaluator(MultiScaleErosionGpuEvaluator evaluator);
 void SetMaskNoiseGpuEvaluator(MaskNoiseGpuEvaluator evaluator);
+
+// Thread-safe progress signal: holds the GraphId of the node whose
+// evaluation kernel is currently running on a worker thread, or 0 when
+// no kernel is active. Updated only on cache misses (cache hits are
+// instantaneous so the badge wouldn't be visible anyway). The UI thread
+// reads this to draw a "計算中" badge that walks the upstream chain in
+// real time as the pipeline progresses.
+std::atomic<GraphId>& CurrentlyEvaluatingNodeId();
 
 } // namespace rock

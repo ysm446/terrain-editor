@@ -6180,13 +6180,26 @@ void DrawRoundPin(const rock::Pin& pin)
 void DrawNodeEvaluationBadge(const rock::Node& node, float nodeWidth, const ImVec2& headerCursor)
 {
     const rock::EvaluationSummary& evaluation = g_graph.Evaluation();
-    if (!g_evaluationInFlight || evaluation.previewNodeId != node.id)
+    const rock::GraphId currentlyEvaluating =
+        rock::CurrentlyEvaluatingNodeId().load(std::memory_order_relaxed);
+
+    // "計算中" follows the worker thread — it walks the upstream chain in
+    // real time. Until the first kernel stores its id (or if every step
+    // is a cache hit), fall back to the preview target so the user sees
+    // *something* during in-flight evaluation. "計算待ち" only shows on
+    // the preview target when an evaluation is queued behind another.
+    const bool isCurrent = g_evaluationInFlight && currentlyEvaluating == node.id;
+    const bool isPreviewFallback = g_evaluationInFlight
+        && currentlyEvaluating == 0
+        && evaluation.previewNodeId == node.id;
+    const bool isQueued = g_evaluationPending && evaluation.previewNodeId == node.id;
+    if (!isCurrent && !isPreviewFallback && !isQueued)
     {
         return;
     }
 
-    const char* label = g_evaluationPending ? "計算待ち" : "計算中";
-    const int dotCount = g_evaluationPending ? 0 : (static_cast<int>(ImGui::GetTime() * 3.0) % 4);
+    const char* label = isQueued ? "計算待ち" : "計算中";
+    const int dotCount = isQueued ? 0 : (static_cast<int>(ImGui::GetTime() * 3.0) % 4);
     char text[32]{};
     std::snprintf(text, sizeof(text), "%s%.*s", label, dotCount, "...");
 
