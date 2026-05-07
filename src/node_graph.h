@@ -227,18 +227,20 @@ struct PreviewSettings
 enum class SkyMode
 {
     SolidColor,
-    Procedural,
+    Atmospheric,
 };
 
+// Atmospheric (Nishita single-scatter Rayleigh + Mie). The sky / sun /
+// terrain ambient / cloud lighting are all derived from the same model
+// driven only by sun direction so the whole scene transitions through
+// day -> sunset -> night coherently when sun elevation is animated.
 struct SkySettings
 {
     SkyMode mode = SkyMode::SolidColor;
-    std::array<float, 3> zenithColor = {0.18f, 0.34f, 0.62f};
-    std::array<float, 3> horizonColor = {0.78f, 0.84f, 0.92f};
-    std::array<float, 3> groundColor = {0.18f, 0.22f, 0.28f};
-    std::array<float, 3> sunColor = {1.0f, 0.94f, 0.82f};
+    float mieStrength = 1.0f;        // turbidity / haze (multiplies Mie scattering coefficient)
+    float mieEccentricity = 0.76f;   // Henyey-Greenstein g — sun-glow tightness, 0 = isotropic, 0.9 = sharp
+    std::array<float, 3> groundAlbedo = {0.30f, 0.30f, 0.30f};
     float sunSizeDegrees = 2.5f;
-    float horizonSoftness = 0.5f;
     float sunGlowStrength = 0.3f;
 };
 

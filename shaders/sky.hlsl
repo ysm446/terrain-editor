@@ -1,15 +1,17 @@
-// Procedural sky pass.
+// Atmospheric sky pass.
 //
 // Drawn as a fullscreen triangle behind the terrain mesh. Each pixel
-// reconstructs its world-space view ray from the camera basis (matching the
-// projection in shaders/mesh_preview.hlsl) and shades:
-//   * Vertical gradient from horizonColor (ray.y == 0) to zenithColor (ray.y == 1).
-//     `horizonSoftness` controls the exponent — higher values keep the
-//     horizon color visible further up the dome.
-//   * Sun disc + glow oriented along sunDirection (already normalized).
+// reconstructs its world-space view ray from the camera basis (matching
+// the projection in shaders/mesh_preview.hlsl) and shades using the
+// shared Nishita single-scatter atmospheric model in atmosphere.hlsli.
 //
-// Depth state: depth test/write disabled. The fullscreen triangle writes z=1
-// in clip space, but mesh draws after with depth test LESS so terrain wins.
+// Sun colour is derived analytically from atmospheric transmittance along
+// the sun direction so the sun naturally warms / reddens at low elevation
+// and dims when below the horizon. The same C++ port of the model feeds
+// the terrain ambient and cloud lighting via b1 cbuffer / cloud constants
+// so the whole scene stays internally consistent.
+
+#include "atmosphere.hlsli"
 
 cbuffer SkyConstants : register(b0)
 {
@@ -21,15 +23,11 @@ cbuffer SkyConstants : register(b0)
     float  panNdcX;
     float  panNdcY;
     float4 sunDirection;
-    float4 zenithColor;
-    float4 horizonColor;
-    float4 groundColor;      // colour for ray.y < 0 (below the horizon)
-    float3 sunColor;
+    float  mieStrength;
+    float  mieEccentricity;
     float  sunSize;          // cos(angularRadius) — closer to 1.0 = smaller disc
-    float  horizonSoftness;  // pow exponent for the gradient (>=1 = softer)
     float  sunGlowStrength;
-    float  pad0;
-    float  pad1;
+    float4 groundAlbedo;     // .a unused
 };
 
 struct VsOut
@@ -40,45 +38,50 @@ struct VsOut
 
 VsOut SkyVS(uint vid : SV_VertexID)
 {
-    // Fullscreen triangle covering NDC (-1,-1) to (3,3).
     VsOut o;
-    float2 p = float2((vid << 1) & 2, vid & 2);   // (0,0), (2,0), (0,2)
-    o.pos = float4(p * 2.0 - 1.0, 1.0, 1.0);      // z=1 (far plane)
+    float2 p = float2((vid << 1) & 2, vid & 2);
+    o.pos = float4(p * 2.0 - 1.0, 1.0, 1.0);
     o.ndc = p * 2.0 - 1.0;
     return o;
 }
 
 float4 SkyPS(VsOut input) : SV_Target
 {
-    // Invert the mesh shader projection: ndc.x = cx*projScaleX/d + panNdcX.
-    // ray = forward + right * (cx/d) + up * (cy/d) is what the mesh shader
-    // implicitly walks down for each vertex.
     float screenX = (input.ndc.x - panNdcX) / projScaleX;
     float screenY = (input.ndc.y - panNdcY) / projScaleY;
     float3 ray = normalize(cameraForward.xyz + cameraRight.xyz * screenX + cameraUp.xyz * screenY);
 
-    // Two-sided gradient: above horizon goes horizon -> zenith, below horizon
-    // goes horizon -> ground. Both use the same softness exponent so the
-    // transition at ray.y = 0 stays continuous.
-    float softness = max(horizonSoftness, 0.001);
+    // Below the horizon: blend the (nearly-black) atmospheric ground term
+    // with the user-tunable groundAlbedo tinted by the upward-facing sky
+    // colour. Looks far better than the model's clipped-near-zero output
+    // on rays that immediately hit the planet.
     float3 sky;
     if (ray.y >= 0.0)
     {
-        float gradient = pow(saturate(ray.y), softness);
-        sky = lerp(horizonColor.xyz, zenithColor.xyz, gradient);
+        sky = AtmComputeScattering(ray, sunDirection.xyz, mieStrength, mieEccentricity);
     }
     else
     {
-        float gradient = pow(saturate(-ray.y), softness);
-        sky = lerp(horizonColor.xyz, groundColor.xyz, gradient);
+        // Sample the upper hemisphere at the matching angle for an ambient
+        // reference, multiply by ground albedo. Soft fade with depth below
+        // the horizon so we don't get a hard line.
+        float3 upRay = float3(ray.x, max(-ray.y, 0.05), ray.z);
+        upRay = normalize(upRay);
+        float3 ambient = AtmComputeScattering(upRay, sunDirection.xyz, mieStrength, mieEccentricity);
+        float fade = saturate(-ray.y * 4.0);
+        sky = lerp(ambient, ambient * groundAlbedo.rgb * 0.7, fade);
     }
 
+    // Sun disc + glow. The sun's colour as seen from the ground is just
+    // the white solar spectrum × atmospheric transmittance along sunDir,
+    // which already encodes the sunset reddening.
+    float3 sunBase = AtmComputeSunTransmittance(sunDirection.xyz, mieStrength);
     float cosTheta = saturate(dot(ray, sunDirection.xyz));
     float disc = smoothstep(sunSize - 0.0008, sunSize + 0.001, cosTheta);
-    sky = lerp(sky, sunColor.xyz, disc);
+    sky = lerp(sky, sunBase * 6.0, disc);
 
     float glow = pow(saturate(cosTheta), 256.0);
-    sky += sunColor.xyz * glow * sunGlowStrength;
+    sky += sunBase * glow * sunGlowStrength;
 
     return float4(sky, 1.0);
 }

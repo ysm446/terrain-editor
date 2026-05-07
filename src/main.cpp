@@ -327,12 +327,10 @@ struct GpuMeshPreview
     int gridCellCount = 0;
     float gridCellSizeMeters = 0.0f;
     int skyMode = -1;
-    std::array<float, 3> skyZenithColor = {};
-    std::array<float, 3> skyHorizonColor = {};
-    std::array<float, 3> skyGroundColor = {};
-    std::array<float, 3> skySunColor = {};
+    float skyMieStrength = 0.0f;
+    float skyMieEccentricity = 0.0f;
+    std::array<float, 3> skyGroundAlbedo = {};
     float skySunSizeDegrees = 0.0f;
-    float skyHorizonSoftness = 0.0f;
     float skySunGlowStrength = 0.0f;
     int cloudsEnabled = -1;
     int cloudSeed = INT_MIN;
@@ -1587,7 +1585,7 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
         const rock::PreviewSettings& preview = graphSettings.preview;
         const rock::SkySettings& sky = graphSettings.sky;
         const rock::CloudSettings& clouds = graphSettings.clouds;
-        const int displayMode = sky.mode == rock::SkyMode::Procedural
+        const int displayMode = sky.mode == rock::SkyMode::Atmospheric
             ? 2
             : (preview.lightingMode >= 1 ? 1 : 0);
         root["settings"] = {
@@ -1600,12 +1598,10 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
             }},
             {"sky", {
                 {"mode", static_cast<int>(sky.mode)},
-                {"zenithColor", {sky.zenithColor[0], sky.zenithColor[1], sky.zenithColor[2]}},
-                {"horizonColor", {sky.horizonColor[0], sky.horizonColor[1], sky.horizonColor[2]}},
-                {"groundColor", {sky.groundColor[0], sky.groundColor[1], sky.groundColor[2]}},
-                {"sunColor", {sky.sunColor[0], sky.sunColor[1], sky.sunColor[2]}},
+                {"mieStrength", sky.mieStrength},
+                {"mieEccentricity", sky.mieEccentricity},
+                {"groundAlbedo", {sky.groundAlbedo[0], sky.groundAlbedo[1], sky.groundAlbedo[2]}},
                 {"sunSizeDegrees", sky.sunSizeDegrees},
-                {"horizonSoftness", sky.horizonSoftness},
                 {"sunGlowStrength", sky.sunGlowStrength},
             }},
             {"clouds", {
@@ -1845,7 +1841,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
         {
             const int skyModeInt = std::clamp(skyJson.value("mode", static_cast<int>(sky.mode)),
                                               static_cast<int>(rock::SkyMode::SolidColor),
-                                              static_cast<int>(rock::SkyMode::Procedural));
+                                              static_cast<int>(rock::SkyMode::Atmospheric));
             sky.mode = static_cast<rock::SkyMode>(skyModeInt);
             const auto readColor = [&](const char* key, std::array<float, 3>& target) {
                 if (skyJson.contains(key) && skyJson[key].is_array() && skyJson[key].size() == 3)
@@ -1855,12 +1851,10 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                     target[2] = std::clamp(skyJson[key][2].get<float>(), 0.0f, 8.0f);
                 }
             };
-            readColor("zenithColor", sky.zenithColor);
-            readColor("horizonColor", sky.horizonColor);
-            readColor("groundColor", sky.groundColor);
-            readColor("sunColor", sky.sunColor);
+            sky.mieStrength = std::clamp(skyJson.value("mieStrength", sky.mieStrength), 0.0f, 8.0f);
+            sky.mieEccentricity = std::clamp(skyJson.value("mieEccentricity", sky.mieEccentricity), -0.99f, 0.99f);
+            readColor("groundAlbedo", sky.groundAlbedo);
             sky.sunSizeDegrees = std::clamp(skyJson.value("sunSizeDegrees", sky.sunSizeDegrees), 0.1f, 30.0f);
-            sky.horizonSoftness = std::clamp(skyJson.value("horizonSoftness", sky.horizonSoftness), 0.05f, 8.0f);
             sky.sunGlowStrength = std::clamp(skyJson.value("sunGlowStrength", sky.sunGlowStrength), 0.0f, 4.0f);
         }
 
@@ -1897,7 +1891,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
         {
             preview.lightingMode = std::clamp(previewJson.value("lightingMode", preview.lightingMode), 0, 1);
         }
-        else if (sky.mode == rock::SkyMode::Procedural)
+        else if (sky.mode == rock::SkyMode::Atmospheric)
         {
             preview.lightingMode = 1;
         }
@@ -1921,7 +1915,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
             else if (displayMode == 2)
             {
                 preview.lightingMode = 1;
-                sky.mode = rock::SkyMode::Procedural;
+                sky.mode = rock::SkyMode::Atmospheric;
             }
         }
 
@@ -3014,17 +3008,13 @@ struct SkyShaderConstants
     float panNdcX;
     float panNdcY;
     float sunDirection[4];
-    float zenithColor[4];
-    float horizonColor[4];
-    float groundColor[4];
-    float sunColor[3];
+    float mieStrength;
+    float mieEccentricity;
     float sunSize;
-    float horizonSoftness;
     float sunGlowStrength;
-    float pad0;
-    float pad1;
+    float groundAlbedo[4];
 };
-static_assert(sizeof(SkyShaderConstants) == 40 * sizeof(UINT), "SkyShaderConstants must be 40 DWORDs");
+static_assert(sizeof(SkyShaderConstants) == 28 * sizeof(UINT), "SkyShaderConstants must be 28 DWORDs");
 
 bool EnsureSkyPipeline(std::string* error)
 {
@@ -3043,7 +3033,7 @@ bool EnsureSkyPipeline(std::string* error)
     rootParam.ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     rootParam.Constants.ShaderRegister = 0;
     rootParam.Constants.RegisterSpace = 0;
-    rootParam.Constants.Num32BitValues = 40;
+    rootParam.Constants.Num32BitValues = 28;
     rootParam.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_ROOT_SIGNATURE_DESC rsDesc{};
@@ -3119,12 +3109,204 @@ bool EnsureSkyPipeline(std::string* error)
     return true;
 }
 
+// CPU port of the atmospheric scattering model in shaders/atmosphere.hlsli.
+// Used to sample 4 representative directions per frame and feed those to
+// the mesh / cloud shaders so terrain ambient and cloud lighting stay in
+// lockstep with the rendered sky. Constants must match the HLSL file.
+namespace atmosphere_cpu
+{
+constexpr float kEarthRadius      = 6360e3f;
+constexpr float kAtmosphereRadius = 6420e3f;
+constexpr float kHeightR          = 7994.0f;
+constexpr float kHeightM          = 1200.0f;
+constexpr float kBetaR[3]         = {5.802e-6f, 13.558e-6f, 33.1e-6f};
+constexpr float kBetaM            = 21e-6f;
+constexpr float kSunIntensity     = 22.0f;
+constexpr float kCameraHeight     = 500.0f;
+constexpr int   kNumViewSteps     = 32;
+constexpr int   kNumSunSteps      = 8;
+
+struct Vec3 { float x, y, z; };
+inline float Dot(const Vec3& a, const Vec3& b) { return a.x*b.x + a.y*b.y + a.z*b.z; }
+inline float Length(const Vec3& v) { return std::sqrt(Dot(v, v)); }
+inline Vec3 Add(const Vec3& a, const Vec3& b) { return {a.x+b.x, a.y+b.y, a.z+b.z}; }
+inline Vec3 Scale(const Vec3& v, float s) { return {v.x*s, v.y*s, v.z*s}; }
+
+struct Hit { float tNear, tFar; bool hit; };
+inline Hit RaySphere(const Vec3& origin, const Vec3& dir, float radius)
+{
+    float b = Dot(origin, dir);
+    float c = Dot(origin, origin) - radius * radius;
+    float d = b * b - c;
+    if (d < 0.0f) return {0.0f, 0.0f, false};
+    float sq = std::sqrt(d);
+    return {-b - sq, -b + sq, true};
+}
+
+inline std::array<float, 3> ComputeScattering(const Vec3& viewDir, const Vec3& sunDir,
+                                              float mieStrength, float mieG)
+{
+    Vec3 origin = {0.0f, kEarthRadius + kCameraHeight, 0.0f};
+
+    Hit atmHit = RaySphere(origin, viewDir, kAtmosphereRadius);
+    if (!atmHit.hit || atmHit.tFar <= 0.0f) return {0.0f, 0.0f, 0.0f};
+    float marchEnd = atmHit.tFar;
+
+    Hit earthHit = RaySphere(origin, viewDir, kEarthRadius);
+    if (earthHit.hit && earthHit.tNear > 0.0f) marchEnd = std::min(marchEnd, earthHit.tNear);
+
+    float stepLen = marchEnd / static_cast<float>(kNumViewSteps);
+    float opticalR = 0.0f;
+    float opticalM = 0.0f;
+    float sumR[3] = {0.0f, 0.0f, 0.0f};
+    float sumM[3] = {0.0f, 0.0f, 0.0f};
+
+    for (int i = 0; i < kNumViewSteps; ++i)
+    {
+        float t = (static_cast<float>(i) + 0.5f) * stepLen;
+        Vec3 p = Add(origin, Scale(viewDir, t));
+        float h = Length(p) - kEarthRadius;
+        if (h < 0.0f) break;
+
+        float dR = std::exp(-h / kHeightR) * stepLen;
+        float dM = std::exp(-h / kHeightM) * stepLen;
+        opticalR += dR;
+        opticalM += dM;
+
+        Hit sunHit = RaySphere(p, sunDir, kAtmosphereRadius);
+        if (!sunHit.hit || sunHit.tFar <= 0.0f) continue;
+        float sunStep = sunHit.tFar / static_cast<float>(kNumSunSteps);
+        float sunR = 0.0f;
+        float sunM = 0.0f;
+        bool sunBlocked = false;
+        for (int j = 0; j < kNumSunSteps; ++j)
+        {
+            float st = (static_cast<float>(j) + 0.5f) * sunStep;
+            Vec3 sp = Add(p, Scale(sunDir, st));
+            float sh = Length(sp) - kEarthRadius;
+            if (sh < 0.0f) { sunBlocked = true; break; }
+            sunR += std::exp(-sh / kHeightR) * sunStep;
+            sunM += std::exp(-sh / kHeightM) * sunStep;
+        }
+        if (sunBlocked) continue;
+
+        float tau[3];
+        tau[0] = kBetaR[0] * (opticalR + sunR) + kBetaM * mieStrength * 1.1f * (opticalM + sunM);
+        tau[1] = kBetaR[1] * (opticalR + sunR) + kBetaM * mieStrength * 1.1f * (opticalM + sunM);
+        tau[2] = kBetaR[2] * (opticalR + sunR) + kBetaM * mieStrength * 1.1f * (opticalM + sunM);
+        float atten[3] = {std::exp(-tau[0]), std::exp(-tau[1]), std::exp(-tau[2])};
+        sumR[0] += atten[0] * dR; sumR[1] += atten[1] * dR; sumR[2] += atten[2] * dR;
+        sumM[0] += atten[0] * dM; sumM[1] += atten[1] * dM; sumM[2] += atten[2] * dM;
+    }
+
+    float cosTheta = Dot(viewDir, sunDir);
+    float phaseR = 0.0596831f * (1.0f + cosTheta * cosTheta);
+    float gg = mieG * mieG;
+    float phaseM = 0.0795775f * (1.0f - gg) /
+                   std::pow(std::max(1.0f + gg - 2.0f * mieG * cosTheta, 1e-6f), 1.5f);
+
+    return {
+        kSunIntensity * (sumR[0] * kBetaR[0] * phaseR + sumM[0] * kBetaM * mieStrength * phaseM),
+        kSunIntensity * (sumR[1] * kBetaR[1] * phaseR + sumM[1] * kBetaM * mieStrength * phaseM),
+        kSunIntensity * (sumR[2] * kBetaR[2] * phaseR + sumM[2] * kBetaM * mieStrength * phaseM),
+    };
+}
+
+inline std::array<float, 3> ComputeSunTransmittance(const Vec3& sunDir, float mieStrength)
+{
+    Vec3 origin = {0.0f, kEarthRadius + kCameraHeight, 0.0f};
+    Hit hit = RaySphere(origin, sunDir, kAtmosphereRadius);
+    if (!hit.hit || hit.tFar <= 0.0f) return {0.0f, 0.0f, 0.0f};
+    float stepLen = hit.tFar / static_cast<float>(kNumSunSteps);
+    float opticalR = 0.0f;
+    float opticalM = 0.0f;
+    for (int j = 0; j < kNumSunSteps; ++j)
+    {
+        float st = (static_cast<float>(j) + 0.5f) * stepLen;
+        Vec3 sp = Add(origin, Scale(sunDir, st));
+        float sh = Length(sp) - kEarthRadius;
+        if (sh < 0.0f) return {0.0f, 0.0f, 0.0f};
+        opticalR += std::exp(-sh / kHeightR) * stepLen;
+        opticalM += std::exp(-sh / kHeightM) * stepLen;
+    }
+    return {
+        std::exp(-(kBetaR[0] * opticalR + kBetaM * mieStrength * 1.1f * opticalM)),
+        std::exp(-(kBetaR[1] * opticalR + kBetaM * mieStrength * 1.1f * opticalM)),
+        std::exp(-(kBetaR[2] * opticalR + kBetaM * mieStrength * 1.1f * opticalM)),
+    };
+}
+} // namespace atmosphere_cpu
+
+// Effective lighting colours derived from the atmospheric model for one
+// sun direction. Sampled once per frame and pushed to mesh / cloud
+// shaders so the whole scene is internally consistent.
+struct AtmosphereSamples
+{
+    std::array<float, 3> zenith;
+    std::array<float, 3> horizon;
+    std::array<float, 3> ground;
+    std::array<float, 3> sun;
+};
+
+AtmosphereSamples SampleAtmosphericEnvironment(const rock::SkySettings& sky,
+                                               float sunDirX, float sunDirY, float sunDirZ)
+{
+    using atmosphere_cpu::Vec3;
+    Vec3 sun{sunDirX, sunDirY, sunDirZ};
+
+    const float mie = std::clamp(sky.mieStrength, 0.0f, 8.0f);
+    const float mieG = std::clamp(sky.mieEccentricity, -0.99f, 0.99f);
+
+    Vec3 up{0.0f, 1.0f, 0.0f};
+
+    // Horizon view perpendicular to the sun in the XZ plane: gives a
+    // colour that's a balanced average of the warm and cool sides.
+    Vec3 sunHorizontal = {sun.x, 0.0f, sun.z};
+    float lenH = std::sqrt(sunHorizontal.x * sunHorizontal.x + sunHorizontal.z * sunHorizontal.z);
+    Vec3 horizonDir;
+    if (lenH > 1e-4f)
+    {
+        sunHorizontal.x /= lenH; sunHorizontal.z /= lenH;
+        // perpendicular in XZ plane (rotate 90°)
+        horizonDir = {-sunHorizontal.z, 0.05f, sunHorizontal.x};
+        float ln = std::sqrt(horizonDir.x * horizonDir.x + horizonDir.y * horizonDir.y + horizonDir.z * horizonDir.z);
+        horizonDir = {horizonDir.x / ln, horizonDir.y / ln, horizonDir.z / ln};
+    }
+    else
+    {
+        horizonDir = {1.0f, 0.05f, 0.0f};
+    }
+
+    AtmosphereSamples out{};
+    out.zenith  = atmosphere_cpu::ComputeScattering(up, sun, mie, mieG);
+    out.horizon = atmosphere_cpu::ComputeScattering(horizonDir, sun, mie, mieG);
+
+    // Ground = albedo × upward-hemisphere irradiance approximation.
+    // Simple heuristic: 0.6 × zenith + 0.4 × horizon, multiplied by the
+    // user-tunable groundAlbedo. This is what surfaces facing down "see"
+    // reflected back up to them.
+    std::array<float, 3> avgSky = {
+        out.zenith[0] * 0.6f + out.horizon[0] * 0.4f,
+        out.zenith[1] * 0.6f + out.horizon[1] * 0.4f,
+        out.zenith[2] * 0.6f + out.horizon[2] * 0.4f,
+    };
+    out.ground = {
+        avgSky[0] * sky.groundAlbedo[0],
+        avgSky[1] * sky.groundAlbedo[1],
+        avgSky[2] * sky.groundAlbedo[2],
+    };
+
+    // Sun colour as seen from the ground: white × atmospheric transmittance.
+    out.sun = atmosphere_cpu::ComputeSunTransmittance(sun, mie);
+    return out;
+}
+
 // Records a fullscreen sky pass into the supplied command list. Caller is
 // responsible for: render target / viewport / scissor already bound, and
 // re-binding any other root signatures it needs after the call returns.
 void RenderSkyPass(ID3D12GraphicsCommandList* commandList, const rock::SkySettings& sky, const SkyShaderConstants& base)
 {
-    if (sky.mode != rock::SkyMode::Procedural)
+    if (sky.mode != rock::SkyMode::Atmospheric)
     {
         return;
     }
@@ -3135,27 +3317,15 @@ void RenderSkyPass(ID3D12GraphicsCommandList* commandList, const rock::SkySettin
     }
 
     SkyShaderConstants constants = base;
-    constants.zenithColor[0] = sky.zenithColor[0];
-    constants.zenithColor[1] = sky.zenithColor[1];
-    constants.zenithColor[2] = sky.zenithColor[2];
-    constants.zenithColor[3] = 1.0f;
-    constants.horizonColor[0] = sky.horizonColor[0];
-    constants.horizonColor[1] = sky.horizonColor[1];
-    constants.horizonColor[2] = sky.horizonColor[2];
-    constants.horizonColor[3] = 1.0f;
-    constants.groundColor[0] = sky.groundColor[0];
-    constants.groundColor[1] = sky.groundColor[1];
-    constants.groundColor[2] = sky.groundColor[2];
-    constants.groundColor[3] = 1.0f;
-    constants.sunColor[0] = sky.sunColor[0];
-    constants.sunColor[1] = sky.sunColor[1];
-    constants.sunColor[2] = sky.sunColor[2];
+    constants.mieStrength = std::clamp(sky.mieStrength, 0.0f, 8.0f);
+    constants.mieEccentricity = std::clamp(sky.mieEccentricity, -0.99f, 0.99f);
     const float sunHalfAngleRad = std::clamp(sky.sunSizeDegrees, 0.05f, 30.0f) * 0.5f * 3.14159265358979323846f / 180.0f;
     constants.sunSize = std::cos(sunHalfAngleRad);
-    constants.horizonSoftness = std::clamp(sky.horizonSoftness, 0.05f, 8.0f);
     constants.sunGlowStrength = std::clamp(sky.sunGlowStrength, 0.0f, 4.0f);
-    constants.pad0 = 0.0f;
-    constants.pad1 = 0.0f;
+    constants.groundAlbedo[0] = sky.groundAlbedo[0];
+    constants.groundAlbedo[1] = sky.groundAlbedo[1];
+    constants.groundAlbedo[2] = sky.groundAlbedo[2];
+    constants.groundAlbedo[3] = 1.0f;
 
     commandList->SetGraphicsRootSignature(g_skyRootSignature.Get());
     commandList->SetPipelineState(g_skyPso.Get());
@@ -3208,8 +3378,10 @@ struct CloudRenderShaderConstants
     float fieldCenterZ;
     float fieldRadius;
     float fieldFalloff;
+    float atmosphereSunColor[4];
+    float atmosphereSkyColor[4];
 };
-static_assert(sizeof(CloudRenderShaderConstants) == 44 * sizeof(UINT), "CloudRenderShaderConstants must be 44 DWORDs");
+static_assert(sizeof(CloudRenderShaderConstants) == 52 * sizeof(UINT), "CloudRenderShaderConstants must be 52 DWORDs");
 
 bool EnsureCloudPipelines(std::string* error)
 {
@@ -3293,7 +3465,7 @@ bool EnsureCloudPipelines(std::string* error)
         D3D12_ROOT_PARAMETER rootParams[3]{};
         rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
         rootParams[0].Constants.ShaderRegister = 0;
-        rootParams[0].Constants.Num32BitValues = 44;
+        rootParams[0].Constants.Num32BitValues = 52;
         rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
         rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
@@ -4580,12 +4752,10 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.gridCellCount != std::clamp(g_graph.Settings().preview.gridCellCount, 1, 200) ||
         g_gpuMeshPreview.gridCellSizeMeters != std::clamp(g_graph.Settings().preview.gridCellSizeMeters, 1.0f, 10000.0f) ||
         g_gpuMeshPreview.skyMode != static_cast<int>(g_graph.Settings().sky.mode) ||
-        g_gpuMeshPreview.skyZenithColor != g_graph.Settings().sky.zenithColor ||
-        g_gpuMeshPreview.skyHorizonColor != g_graph.Settings().sky.horizonColor ||
-        g_gpuMeshPreview.skyGroundColor != g_graph.Settings().sky.groundColor ||
-        g_gpuMeshPreview.skySunColor != g_graph.Settings().sky.sunColor ||
+        g_gpuMeshPreview.skyMieStrength != g_graph.Settings().sky.mieStrength ||
+        g_gpuMeshPreview.skyMieEccentricity != g_graph.Settings().sky.mieEccentricity ||
+        g_gpuMeshPreview.skyGroundAlbedo != g_graph.Settings().sky.groundAlbedo ||
         g_gpuMeshPreview.skySunSizeDegrees != g_graph.Settings().sky.sunSizeDegrees ||
-        g_gpuMeshPreview.skyHorizonSoftness != g_graph.Settings().sky.horizonSoftness ||
         g_gpuMeshPreview.skySunGlowStrength != g_graph.Settings().sky.sunGlowStrength ||
         g_gpuMeshPreview.cloudsEnabled != (g_graph.Settings().clouds.enabled ? 1 : 0) ||
         g_gpuMeshPreview.cloudSeed != g_graph.Settings().clouds.seed ||
@@ -4882,30 +5052,33 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         cloudShadowCb.cloudShadowSizeX = shadowSizeX;
         cloudShadowCb.cloudShadowSizeZ = shadowSizeZ;
 
-        // Sky-driven hemisphere ambient. When the sky is in SolidColor mode
-        // the entire dome is the viewport background, so feed that for all
-        // four sky colour slots; otherwise pull the user-tuned procedural
-        // sky colours so the ground lighting tracks the visible sky.
+        // Atmospheric environment: in Atmospheric mode the four colours are
+        // sampled from the same Nishita model the sky shader uses, so the
+        // terrain ambient and the sky stay consistent across sun elevation
+        // (warm everything at sunset, dim everything at night). SolidColor
+        // mode falls back to the viewport background as a uniform dome.
         const rock::SkySettings& sky = g_graph.Settings().sky;
-        const auto& bg = g_graph.Settings().preview.viewportBackground;
         const auto fillColor4 = [](float dst[4], const std::array<float, 3>& src) {
             dst[0] = src[0]; dst[1] = src[1]; dst[2] = src[2]; dst[3] = 1.0f;
         };
-        if (sky.mode == rock::SkyMode::Procedural)
+        if (sky.mode == rock::SkyMode::Atmospheric)
         {
-            fillColor4(cloudShadowCb.skyZenithColor, sky.zenithColor);
-            fillColor4(cloudShadowCb.skyHorizonColor, sky.horizonColor);
-            fillColor4(cloudShadowCb.skyGroundColor, sky.groundColor);
-            fillColor4(cloudShadowCb.skySunColor, sky.sunColor);
+            const AtmosphereSamples atm = SampleAtmosphericEnvironment(
+                sky, constants.sunDirection[0], constants.sunDirection[1], constants.sunDirection[2]);
+            fillColor4(cloudShadowCb.skyZenithColor, atm.zenith);
+            fillColor4(cloudShadowCb.skyHorizonColor, atm.horizon);
+            fillColor4(cloudShadowCb.skyGroundColor, atm.ground);
+            fillColor4(cloudShadowCb.skySunColor, atm.sun);
         }
         else
         {
+            const auto& bg = g_graph.Settings().preview.viewportBackground;
             fillColor4(cloudShadowCb.skyZenithColor, bg);
             fillColor4(cloudShadowCb.skyHorizonColor, bg);
             fillColor4(cloudShadowCb.skyGroundColor, bg);
-            // Keep the user-tuned sun colour even in solid sky mode so
-            // changing the sky to a flat grey doesn't kill warm sun light.
-            fillColor4(cloudShadowCb.skySunColor, sky.sunColor);
+            // White sun in flat-sky mode (no atmosphere reddening to simulate).
+            const std::array<float, 3> white{1.0f, 1.0f, 1.0f};
+            fillColor4(cloudShadowCb.skySunColor, white);
         }
 
         if (g_gpuClouds.meshCbMapped)
@@ -5011,6 +5184,30 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             cloudBase.nearPlane = constants.nearPlane;
             cloudBase.farPlane = constants.farPlane;
 
+            // Pull atmosphere-derived sun + ambient sky colours so the
+            // cloud body warms with sunset, dims at night and stays
+            // visually consistent with the sky / terrain lighting. In
+            // SolidColor sky mode pass white so the cloud user-colour
+            // shows through unchanged.
+            const rock::SkySettings& skyForCloud = g_graph.Settings().sky;
+            std::array<float, 3> atmSunColor{1.0f, 1.0f, 1.0f};
+            std::array<float, 3> atmSkyColor{1.0f, 1.0f, 1.0f};
+            if (skyForCloud.mode == rock::SkyMode::Atmospheric)
+            {
+                const AtmosphereSamples atm = SampleAtmosphericEnvironment(
+                    skyForCloud, constants.sunDirection[0], constants.sunDirection[1], constants.sunDirection[2]);
+                atmSunColor = atm.sun;
+                atmSkyColor = atm.zenith;
+            }
+            cloudBase.atmosphereSunColor[0] = atmSunColor[0];
+            cloudBase.atmosphereSunColor[1] = atmSunColor[1];
+            cloudBase.atmosphereSunColor[2] = atmSunColor[2];
+            cloudBase.atmosphereSunColor[3] = 1.0f;
+            cloudBase.atmosphereSkyColor[0] = atmSkyColor[0];
+            cloudBase.atmosphereSkyColor[1] = atmSkyColor[1];
+            cloudBase.atmosphereSkyColor[2] = atmSkyColor[2];
+            cloudBase.atmosphereSkyColor[3] = 1.0f;
+
             // windRad / seconds / windOffsetX / windOffsetZ are already
             // computed earlier for the cloud-shadow generation pass.
             std::string cloudVolumeError;
@@ -5058,12 +5255,10 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.pbrAlbedo = g_graph.Settings().preview.pbrAlbedo;
         g_gpuMeshPreview.gridColor = g_graph.Settings().preview.gridColor;
         g_gpuMeshPreview.skyMode = static_cast<int>(g_graph.Settings().sky.mode);
-        g_gpuMeshPreview.skyZenithColor = g_graph.Settings().sky.zenithColor;
-        g_gpuMeshPreview.skyHorizonColor = g_graph.Settings().sky.horizonColor;
-        g_gpuMeshPreview.skyGroundColor = g_graph.Settings().sky.groundColor;
-        g_gpuMeshPreview.skySunColor = g_graph.Settings().sky.sunColor;
+        g_gpuMeshPreview.skyMieStrength = g_graph.Settings().sky.mieStrength;
+        g_gpuMeshPreview.skyMieEccentricity = g_graph.Settings().sky.mieEccentricity;
+        g_gpuMeshPreview.skyGroundAlbedo = g_graph.Settings().sky.groundAlbedo;
         g_gpuMeshPreview.skySunSizeDegrees = g_graph.Settings().sky.sunSizeDegrees;
-        g_gpuMeshPreview.skyHorizonSoftness = g_graph.Settings().sky.horizonSoftness;
         g_gpuMeshPreview.skySunGlowStrength = g_graph.Settings().sky.sunGlowStrength;
         g_gpuMeshPreview.cloudsEnabled = g_graph.Settings().clouds.enabled ? 1 : 0;
         g_gpuMeshPreview.cloudSeed = g_graph.Settings().clouds.seed;
@@ -5111,7 +5306,7 @@ void DrawGpuMeshPreview(ImDrawList* drawList, const ImVec2& min, const ImVec2& m
 
 ViewportDisplayMode CurrentViewportDisplayMode(const rock::GraphSettings& settings)
 {
-    if (settings.sky.mode == rock::SkyMode::Procedural)
+    if (settings.sky.mode == rock::SkyMode::Atmospheric)
     {
         return ViewportDisplayMode::Sky;
     }
@@ -5166,7 +5361,7 @@ void ApplyViewportDisplayMode(rock::GraphSettings& settings, ViewportDisplayMode
         break;
     case ViewportDisplayMode::Sky:
         settings.preview.lightingMode = 1;
-        settings.sky.mode = rock::SkyMode::Procedural;
+        settings.sky.mode = rock::SkyMode::Atmospheric;
         break;
     }
 }
@@ -7098,13 +7293,11 @@ void DrawDisplaySettingsPanel()
         rock::SkySettings& sky = settings.sky;
         if (displayMode == ViewportDisplayMode::Sky)
         {
-            ImGui::SeparatorText("天球");
-            DrawColorRgbRow("天頂色", "SkyZenithColor", sky.zenithColor, rock::SkySettings{}.zenithColor);
-            DrawColorRgbRow("地平色", "SkyHorizonColor", sky.horizonColor, rock::SkySettings{}.horizonColor);
-            DrawColorRgbRow("地面色", "SkyGroundColor", sky.groundColor, rock::SkySettings{}.groundColor);
-            DrawColorRgbRow("太陽色", "SkySunColor", sky.sunColor, rock::SkySettings{}.sunColor);
+            ImGui::SeparatorText("天球 (大気散乱)");
+            DrawPropertyFloatRow("ヘイズ (Mie 強度)", "SkyMieStrength", &sky.mieStrength, 0.0f, 8.0f, rock::SkySettings{}.mieStrength, "Sky mie strength changed", false, "Mie 散乱の強さ。大きいほど大気が霞んで見え、太陽周辺のグローも強くなります。0 で純 Rayleigh (透明な青空)、1 で標準的な大気。");
+            DrawPropertyFloatRow("Mie 偏向 (g)", "SkyMieG", &sky.mieEccentricity, -0.95f, 0.95f, rock::SkySettings{}.mieEccentricity, "Sky mie g changed", false, "Henyey-Greenstein g 値。0 で等方散乱、正で前方 (太陽方向) 散乱が強くなりグローが太陽周りに集中。0.7-0.85 が現実的。");
+            DrawColorRgbRow("地面アルベド", "SkyGroundAlbedo", sky.groundAlbedo, rock::SkySettings{}.groundAlbedo);
             DrawPropertyFloatRow("太陽サイズ (deg)", "SkySunSize", &sky.sunSizeDegrees, 0.1f, 20.0f, rock::SkySettings{}.sunSizeDegrees, "Sky sun size changed", false, "太陽ディスクの直径(度)。実際の太陽は約 0.5 度ですが、視認性のためデフォルトはやや大きめです。");
-            DrawPropertyFloatRow("地平ソフトネス", "SkyHorizonSoftness", &sky.horizonSoftness, 0.1f, 6.0f, rock::SkySettings{}.horizonSoftness, "Sky horizon softness changed", false, "天頂↔地平のグラデーション形状。大きいほど地平色が空高くまで広がります(=もやっとした地平)。1.0 で線形補間。");
             DrawPropertyFloatRow("太陽グロー", "SkySunGlow", &sky.sunGlowStrength, 0.0f, 2.0f, rock::SkySettings{}.sunGlowStrength, "Sky sun glow changed", false, "太陽周辺の柔らかい光の強さ。0 でグロー無し。");
 
             ImGui::SeparatorText("ボリューム雲");

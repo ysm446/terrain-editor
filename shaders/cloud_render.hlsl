@@ -44,6 +44,8 @@ cbuffer CloudConstants : register(b0)
     float  fieldCenterZ;
     float  fieldRadius;
     float  fieldFalloff;
+    float4 atmosphereSunColor;    // sun colour after atmospheric transmittance; white when atmospheric mode is off
+    float4 atmosphereSkyColor;    // mid-zenith sky colour for cloud bottom shading
 };
 
 Texture3D<float> CloudVolume : register(t0);
@@ -215,12 +217,15 @@ float4 CloudPS(VsOut input) : SV_Target
         if (density > 0.0)
         {
             // Top-lit shading: top of the cloud (yNorm = 1) reads the full
-            // cloud color, the bottom slightly less. Keeps the cloud near the
-            // tinted brightness the user picked instead of crushing it to grey
-            // through extra sun/ambient factors.
+            // cloud color, the bottom slightly less. The cloud body is
+            // multiplied by atmosphereSunColor so warm-sunset / dim-night
+            // skies tint the cloud accordingly, and the bottom mixes in
+            // atmosphereSkyColor for cool ambient on the underside.
             float yNorm = saturate((p.y - altitudeMin) / max(altitudeMax - altitudeMin, 1.0));
             float topLight = lerp(0.85, 1.05, yNorm);
-            float3 lit = cloudColor.rgb * topLight;
+            float3 sunlitColor = cloudColor.rgb * atmosphereSunColor.rgb;
+            float3 ambientColor = cloudColor.rgb * atmosphereSkyColor.rgb * 0.4;
+            float3 lit = lerp(ambientColor, sunlitColor, yNorm) * topLight;
 
             float dT = exp(-density * absorption * stepLen);
             float dA = (1.0 - dT) * transmittance;

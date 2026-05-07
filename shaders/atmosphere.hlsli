@@ -1,0 +1,161 @@
+// Nishita-style single-scatter atmospheric model.
+//
+// The same constants are mirrored in src/main.cpp (CPU port) so the sky
+// shader and the CPU sampler that feeds terrain/cloud ambient lighting
+// produce matching results. If you change a constant here, change it
+// there too.
+//
+// Coordinate convention: planet centre at world origin (0, 0, 0). The
+// camera viewpoint for the sky atmosphere is placed at a fixed sea-level
+// height regardless of the editor camera so colours stay stable across
+// camera moves. View / sun directions are passed in as world-space unit
+// vectors with +Y up.
+
+#ifndef ATMOSPHERE_HLSLI
+#define ATMOSPHERE_HLSLI
+
+static const float kAtmEarthRadius      = 6360e3;
+static const float kAtmAtmosphereRadius = 6420e3;
+static const float kAtmHeightR          = 7994.0;   // Rayleigh scale height (m)
+static const float kAtmHeightM          = 1200.0;   // Mie scale height (m)
+static const float3 kAtmBetaR           = float3(5.802e-6, 13.558e-6, 33.1e-6);  // Rayleigh β_λ
+static const float kAtmBetaM            = 21e-6;
+static const float kAtmSunIntensity     = 22.0;
+// Sea-level viewers suffer worst-case Rayleigh reddening on horizon rays
+// because the path traverses a long stretch of dense atmosphere. Raising
+// the synthetic viewer to ~500 m approximates a typical terrain-editor
+// camera position (looking at mountains), produces cleaner blue horizons,
+// and still leaves the visible atmosphere thickness above. Single-scatter
+// Nishita doesn't model multi-scatter blue-fill so this is the easiest
+// way to keep daytime horizons from looking warm.
+static const float kAtmCameraHeight     = 500.0;
+
+static const int   kAtmNumViewSteps = 32;
+static const int   kAtmNumSunSteps  = 8;
+
+// Two intersection ts of a ray (origin, dir) with a sphere centred at the
+// world origin of the supplied radius. .x = near, .y = far. Returns -1, -1
+// if no intersection. dir must be unit length.
+float2 AtmRaySphere(float3 origin, float3 dir, float radius)
+{
+    float b = dot(origin, dir);
+    float c = dot(origin, origin) - radius * radius;
+    float d = b * b - c;
+    if (d < 0.0)
+    {
+        return float2(-1.0, -1.0);
+    }
+    float sq = sqrt(d);
+    return float2(-b - sq, -b + sq);
+}
+
+// Atmospheric in-scattering integrated along the ray (origin, viewDir).
+// `mieStrength` multiplies the Mie scattering coefficient (haze).
+// `mieG` is the Henyey-Greenstein eccentricity (sun glow tightness).
+// Output is RGB radiance in the same arbitrary linear units as the rest
+// of the renderer (sun colour ends up around 1.0 at zenith).
+float3 AtmComputeScattering(float3 viewDir, float3 sunDir, float mieStrength, float mieG)
+{
+    float3 origin = float3(0.0, kAtmEarthRadius + kAtmCameraHeight, 0.0);
+
+    float2 atmHit = AtmRaySphere(origin, viewDir, kAtmAtmosphereRadius);
+    if (atmHit.y <= 0.0)
+    {
+        return float3(0.0, 0.0, 0.0);
+    }
+    float marchEnd = atmHit.y;
+
+    // If the view ray hits the planet (e.g. looking straight down past the
+    // horizon) end the march at the surface — keeps the lower hemisphere
+    // dark instead of integrating noise from clipped samples.
+    float2 earthHit = AtmRaySphere(origin, viewDir, kAtmEarthRadius);
+    if (earthHit.x > 0.0)
+    {
+        marchEnd = min(marchEnd, earthHit.x);
+    }
+
+    float stepLen = marchEnd / (float)kAtmNumViewSteps;
+    float opticalR = 0.0;
+    float opticalM = 0.0;
+    float3 sumR = float3(0.0, 0.0, 0.0);
+    float3 sumM = float3(0.0, 0.0, 0.0);
+
+    [loop]
+    for (int i = 0; i < kAtmNumViewSteps; ++i)
+    {
+        float t = ((float)i + 0.5) * stepLen;
+        float3 p = origin + viewDir * t;
+        float h = length(p) - kAtmEarthRadius;
+        if (h < 0.0) break;
+
+        float dR = exp(-h / kAtmHeightR) * stepLen;
+        float dM = exp(-h / kAtmHeightM) * stepLen;
+        opticalR += dR;
+        opticalM += dM;
+
+        float2 sunHit = AtmRaySphere(p, sunDir, kAtmAtmosphereRadius);
+        if (sunHit.y <= 0.0) continue;
+        float sunStep = sunHit.y / (float)kAtmNumSunSteps;
+        float sunR = 0.0;
+        float sunM = 0.0;
+        bool sunBlocked = false;
+        [loop]
+        for (int j = 0; j < kAtmNumSunSteps; ++j)
+        {
+            float st = ((float)j + 0.5) * sunStep;
+            float3 sp = p + sunDir * st;
+            float sh = length(sp) - kAtmEarthRadius;
+            if (sh < 0.0) { sunBlocked = true; break; }
+            sunR += exp(-sh / kAtmHeightR) * sunStep;
+            sunM += exp(-sh / kAtmHeightM) * sunStep;
+        }
+        if (sunBlocked) continue;
+
+        float3 tau = kAtmBetaR * (opticalR + sunR) +
+                     kAtmBetaM * mieStrength * 1.1 * (opticalM + sunM);
+        float3 atten = exp(-tau);
+        sumR += atten * dR;
+        sumM += atten * dM;
+    }
+
+    float cosTheta = dot(viewDir, sunDir);
+    float phaseR = 0.0596831 * (1.0 + cosTheta * cosTheta);  // 3 / (16π)
+    float g = mieG;
+    float gg = g * g;
+    float phaseM = 0.0795775 * (1.0 - gg) /
+                   pow(max(1.0 + gg - 2.0 * g * cosTheta, 1e-6), 1.5);  // 1 / (4π)
+
+    return kAtmSunIntensity *
+           (sumR * kAtmBetaR * phaseR + sumM * kAtmBetaM * mieStrength * phaseM);
+}
+
+// Atmospheric transmittance from sea-level along the sun direction —
+// gives the sun colour as seen from the ground. Multiply by the desired
+// sun base spectrum (typically white) to get a sun colour that warms up
+// at sunset and dims at horizon.
+float3 AtmComputeSunTransmittance(float3 sunDir, float mieStrength)
+{
+    float3 origin = float3(0.0, kAtmEarthRadius + kAtmCameraHeight, 0.0);
+    float2 hit = AtmRaySphere(origin, sunDir, kAtmAtmosphereRadius);
+    if (hit.y <= 0.0)
+    {
+        return float3(0.0, 0.0, 0.0);
+    }
+    float stepLen = hit.y / (float)kAtmNumSunSteps;
+    float opticalR = 0.0;
+    float opticalM = 0.0;
+    [loop]
+    for (int j = 0; j < kAtmNumSunSteps; ++j)
+    {
+        float st = ((float)j + 0.5) * stepLen;
+        float3 sp = origin + sunDir * st;
+        float sh = length(sp) - kAtmEarthRadius;
+        if (sh < 0.0) return float3(0.0, 0.0, 0.0);
+        opticalR += exp(-sh / kAtmHeightR) * stepLen;
+        opticalM += exp(-sh / kAtmHeightM) * stepLen;
+    }
+    float3 tau = kAtmBetaR * opticalR + kAtmBetaM * mieStrength * 1.1 * opticalM;
+    return exp(-tau);
+}
+
+#endif // ATMOSPHERE_HLSLI
