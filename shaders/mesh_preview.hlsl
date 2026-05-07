@@ -46,7 +46,7 @@ cbuffer CloudShadowMeshConstants : register(b1)
     float4 skyGroundColor;
     float4 skySunColor;
     float atmosphereDensity;
-    float aerialPerspectiveStrength;
+    float atmosphereMieStrength;
     float atmospherePad0;
     float atmospherePad1;
 };
@@ -285,21 +285,24 @@ float4 PSSurface(VSOut i) : SV_TARGET
 
     // Aerial perspective — fog distant terrain toward an atmospheric tint.
     // Skipped for mask preview so masks stay readable.
-    if (aerialPerspectiveStrength > 0.001 && maskPreview < 0.5)
+    if (atmosphereDensity > 0.001 && maskPreview < 0.5)
     {
         float viewDist = length(cameraPosition.xyz - i.worldPos);
-        // Approximate extinction = density × (β_R_avg + β_M). Tuned so that
-        // density=1 gives ≈63% fog at ~26km and ≈86% at ~50km — comfortable
-        // for typical terrain viewport ranges.
-        float fogExtinction = atmosphereDensity * 38e-6;
-        float fogFactor = 1.0 - exp(-viewDist * fogExtinction);
-        fogFactor = saturate(fogFactor * aerialPerspectiveStrength);
+        // Automatic aerial perspective. Distance haze is integrated as a
+        // standard Beer-Lambert extinction with no upper clip — far terrain
+        // is allowed to converge fully to fogColor, which is what real
+        // atmospheric perspective does. Users dial overall strength via
+        // atmosphereDensity / atmosphereMieStrength.
+        float fogExtinction = atmosphereDensity * (45e-6 + atmosphereMieStrength * 12e-6);
+        float fogFactor = saturate(1.0 - exp(-viewDist * fogExtinction));
 
-        // Direction-dependent fog colour. Horizon-tinted by default, with a
-        // shift toward sun colour when looking toward the sun (Mie haze).
+        // Direction-dependent fog colour. Use the sky's actual horizon
+        // colour (matches the sky shader so terrain blends seamlessly into
+        // the sky), with a mild warm push near the sun direction.
         float3 viewDir = normalize(i.worldPos - cameraPosition.xyz);
         float cosSun = saturate(dot(viewDir, sunDirection.xyz));
-        float3 fogColor = lerp(skyHorizonColor.rgb, skySunColor.rgb, cosSun * 0.3);
+        float warmPush = cosSun * saturate(atmosphereMieStrength * 0.12);
+        float3 fogColor = lerp(skyHorizonColor.rgb, skySunColor.rgb, warmPush);
         col = lerp(col, fogColor, fogFactor);
     }
 

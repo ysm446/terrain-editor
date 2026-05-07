@@ -201,8 +201,8 @@ for each step:
     if density > 0:
         # 雲頂は太陽光、雲底は半球光 + 地面 bounce
         sunlit = cloudColor × atmosphereSunColor
-        skyTerm = atmosphereSkyColor × 2.5
-        skyTerm = lerp(skyTerm, luminance(skyTerm), 0.65)  # Mie 内部散乱の脱飽和近似
+        skyTerm = atmosphereSkyColor × 1.5
+        skyTerm = lerp(skyTerm, luminance(skyTerm), 0.35)  # Mie 内部散乱の脱飽和近似 (弱め)
         ambient = cloudColor × (skyTerm + atmosphereSunColor × 0.5)
         lit = lerp(ambient, sunlit, yNorm)
         
@@ -228,9 +228,9 @@ return float4(accumulated, 1 - transmittance)  # premultiplied alpha
 #### 雲頂・雲底の色 (大気連動)
 
 - **雲頂 (yNorm = 1)**: `cloudColor × atmosphereSunColor` — 太陽の自動色 (夕焼けで暖色) がそのまま乗る
-- **雲底 (yNorm = 0)**: `cloudColor × (atmosphereSkyColor × 2.5 + atmosphereSunColor × 0.5)`
-  - `× 2.5`: 天頂色を半球輝度に近似スケール (zenith 1 点だと過小評価のため)
-  - `lerp(skyTerm, luminance, 0.65)`: 雲内部 Mie 多重散乱で色が脱飽和する効果の近似 (= 雲底が氷のような青ではなく、自然な灰色寄りになる)
+- **雲底 (yNorm = 0)**: `cloudColor × (atmosphereSkyColor × 1.5 + atmosphereSunColor × 0.5)`
+  - `× 1.5`: 天頂色を半球輝度に近似スケール (zenith 1 点だと過小評価のため)。multi-scatter LUT 導入で天頂値自体が以前より明るいので、過去の `× 2.5` から下げています。
+  - `lerp(skyTerm, luminance, 0.35)`: 雲内部 Mie 多重散乱で色が脱飽和する効果の近似 (= 雲底が氷のような青ではなく、自然な灰色寄りになる)。強すぎると夕焼けの暖色が消えるので 0.35 程度に抑えています。
 
 ### 3. 雲影 (`shaders/cloud_shadow.hlsl`)
 
@@ -258,22 +258,24 @@ mesh shader 側の `ComputeCloudShadowVisibility` が地形頂点 (x, z, y) を�
 | `shadowResolution` / `shadowSamples` | 雲影テクスチャ解像度 / 太陽方向サンプル | 1024 / 16 |
 | `fieldRadius` / `fieldFalloff` | フィールド境界 | 6000 / 2000 |
 
-## 遠景フォグ (Aerial Perspective)
+## 自動遠景フォグ / 地平ヘイズ (Aerial Perspective)
 
-地形の遠景に大気の霞を重ねる効果。`mesh_preview.hlsl` PSSurface の最後で適用:
+地形の遠景に大気の霞を重ねる効果。独立した強度スライダーは持たず、`atmosphereDensity` と `mieStrength` から自動で決まります。`mesh_preview.hlsl` PSSurface の最後で適用:
 
 ```hlsl
 viewDist = length(worldPos - cameraPos)
-fogExtinction = atmosphereDensity × 38e-6  # Rayleigh + Mie の概算
-fogFactor = 1 - exp(-viewDist × fogExtinction) × aerialPerspectiveStrength
+fogExtinction = atmosphereDensity × (45e-6 + mieStrength × 12e-6)
+fogFactor = saturate(1 - exp(-viewDist × fogExtinction))
 
-# 視線方向別のフォグ色 (太陽方向で暖色になる)
-fogColor = lerp(skyHorizonColor, skySunColor, saturate(dot(viewDir, sunDir)) × 0.3)
+# 視線方向別のフォグ色。空シェーダーの地平色をそのまま使うので
+# 空と地形遠景の合流ラインで色がずれない。太陽方向に近いレイは
+# 太陽色を少し混ぜて夕焼け方向の地平に温度を持たせる。
+fogColor = lerp(skyHorizonColor, skySunColor, sunDirectionTerm)
 
 col = lerp(col, fogColor, fogFactor)
 ```
 
-`atmosphereDensity = 1` で約 26 km で 63%、50 km で 86% フォグになる調整。`aerialPerspectiveStrength` は見た目だけの追加スケールで、0 で完全無効、1 で物理どおり、2+ で霧深め。
+クリップなしの素直な Beer-Lambert 減衰なので、十分に遠い地形は完全にフォグ色に飽和します。`atmosphereDensity` を上げると空の Rayleigh 散乱と一緒に遠景フォグも強くなり、Mie は太陽方向の温度と太陽グローに主に効きます。空シェーダーの地平帯も同様に、地平の輝度を捏造せずに微妙に脱飽和+クール側へ寄せるだけにしてあります。
 
 ## SkySettings パラメータ一覧
 
@@ -283,9 +285,8 @@ col = lerp(col, fogColor, fogFactor)
 | --- | --- | --- |
 | `mode` | `SolidColor` / `Atmospheric` | SolidColor (デフォルト) |
 | `atmosphereDensity` | Rayleigh 係数 β_R 倍率。空の濃さ。 | 1.0 (地球標準) |
-| `mieStrength` | Mie 係数倍率。haze 量 | 1.0 |
+| `mieStrength` | Mie 係数倍率。haze 量 | 0.2 |
 | `mieEccentricity` | HG g 値。太陽グローの鋭さ | 0.76 |
-| `aerialPerspectiveStrength` | 遠景フォグ強度 | 1.0 |
 | `groundAlbedo` | 地面の概算反射色 | (0.3, 0.3, 0.3) |
 | `sunSizeDegrees` | 太陽ディスクの直径 | 2.5° |
 | `sunGlowStrength` | 太陽周辺グローの強さ | 0.3 |
@@ -319,11 +320,11 @@ LUT・3D テクスチャは `g_srvHeap` の slot を 1 つずつ確保。雲影�
 
 ### 日中なのに地平が暖色寄り
 
-Hillaire 単散乱の既知のアーティファクトです。`atmosphere_multiscatter.hlsl` の LUT で大幅に緩和されますが、完全には消えません。`mieStrength` を 0.5-0.7 に下げると地平のオレンジが減り、`atmosphereDensity` を上げると逆に強調されます。
+Nishita 単散乱の既知のアーティファクトです。`atmosphere_multiscatter.hlsl` の LUT で大半が緩和されますが、完全には消えません。空シェーダー側ではさらに地平帯 (`abs(ray.y) ≤ 0.20`) で太陽が高い時 (`smoothstep(0.05, 0.30, sun.y)` で gating) に微妙に脱飽和+クール側へ寄せています。`mieStrength` は 0.2 前後が日中の編集ビューでは扱いやすく、値を上げるほど太陽方向の霞・グローと一緒に地平の暖色帯も出やすくなります。低い太陽高度では物理的にも暖色が増えるため、昼の確認は Sun Elevation を 30° 以上にして切り分けてください。
 
 ### 雲が暗すぎる/明るすぎる
 
-雲底のシェーディングは `atmosphereSkyColor × 2.5 + atmosphereSunColor × 0.5` で計算。**夜になっても雲がうっすら明るい場合**は `atmosphereSunColor` の最低値を見直す (現状は太陽が地平下なら 0)。**夕焼け時に雲が灰色のまま**な場合は `atmosphereSunColor × 0.5` の係数を上げて bounce を強める。
+雲底のシェーディングは `atmosphereSkyColor × 1.5 + atmosphereSunColor × 0.5` で計算 (雲底の脱飽和 lerp は 0.35)。**夜になっても雲がうっすら明るい場合**は `atmosphereSunColor` の最低値を見直す (現状は太陽が地平下なら 0)。**夕焼け時に雲が灰色のまま**な場合は脱飽和 lerp を 0.2 程度まで下げると暖色が乗りやすくなります (もっと bounce が欲しいなら `atmosphereSunColor × 0.5` の係数を上げる)。
 
 ### 雲が地平に薄く伸びて見える / 横線がある
 
@@ -333,6 +334,6 @@ Hillaire 単散乱の既知のアーティファクトです。`atmosphere_multi
 
 `SkyMode` が `SolidColor` のままになっていないか確認。表示メニュー → 天球モードに切り替えてください。
 
-### 大気密度を上げたら雲が消えた
+### 大気密度を上げたら遠景が白っぽい
 
-`atmosphereDensity` は雲のシェーディングには影響しませんが、`aerialPerspectiveStrength` が連動するので地形のフォグが強くなって遠くの雲が見えにくくなることがあります。`aerialPerspectiveStrength` を 0 に戻して切り分けてください。
+`atmosphereDensity` は空の散乱と地形の自動遠景フォグに連動します。地平の厚みを出すために密度を上げすぎると、遠くの地形は白っぽくなります。雲だけが原因か切り分ける場合は、いったん `mieStrength` を下げるか、雲を非表示にして確認してください。

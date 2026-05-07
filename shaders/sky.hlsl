@@ -70,27 +70,30 @@ float4 SkyPS(VsOut input) : SV_Target
     }
     else
     {
-        // Use a horizon-grazing sample as the bright atmospheric reference
-        // (it carries the long-path haze colour). Then fade *gradually*
-        // toward groundAlbedo-tinted ambient over a wide angular range so
-        // the bright haze visibly bleeds below the geometric horizon —
-        // mimics aerial perspective and stops the horizon looking like a
-        // hard cut between sky and ground.
+        // Use a horizon-grazing sample as the atmospheric reference (it
+        // carries the long-path haze colour) and fade to groundAlbedo-tinted
+        // ambient over a narrow band right under the geometric horizon. A
+        // wide fade looked unnatural — clouds/terrain occupy the lower
+        // hemisphere in normal viewing, so the visible band is small.
         float3 upRay = float3(ray.x, max(-ray.y, 0.02), ray.z);
         upRay = normalize(upRay);
         float3 ambient = AtmComputeScattering(upRay, sunDirection.xyz, atmosphereDensity, mieStrength, mieEccentricity,
                                               MultiScatterLut, MultiScatterSampler, true);
-        float fade = smoothstep(0.0, 0.55, -ray.y);
+        float fade = smoothstep(0.0, 0.08, -ray.y);
         sky = lerp(ambient, ambient * groundAlbedo.rgb, fade);
     }
 
-    // Slight desaturation near the horizon. Single-scatter + multi-scatter
-    // alone produces a quite-saturated cyan band right at ray.y = 0; a small
-    // pull toward luminance gives a more aerial-perspective-like haze that
-    // matches UE5 better without robbing the zenith of its blue.
-    float horizonProx = 1.0 - saturate(abs(ray.y) * 3.0);
+    // Subtle horizon desaturation. The multi-scatter LUT already handles
+    // most of the "warm noon horizon" artefact; this is just a small nudge
+    // toward the band's own luminance with a slight cool lift, no
+    // fabricated brightness floor — the atmosphere model owns radiance.
+    // Gated to mid-high sun so sunset / dusk colours stay saturated.
+    float horizonBand = 1.0 - smoothstep(0.0, 0.20, abs(ray.y));
+    float dayHaze = smoothstep(0.05, 0.30, sunDirection.y);
     float skyLum = dot(sky, float3(0.2126, 0.7152, 0.0722));
-    sky = lerp(sky, float3(skyLum, skyLum, skyLum), horizonProx * 0.22);
+    float3 cool = float3(skyLum * 0.96, skyLum, skyLum * 1.04);
+    float hazeAmount = horizonBand * dayHaze * 0.35;
+    sky = lerp(sky, cool, hazeAmount);
 
     // Sun disc + glow. The sun's colour as seen from the ground is just
     // the white solar spectrum × atmospheric transmittance along sunDir,
@@ -100,8 +103,13 @@ float4 SkyPS(VsOut input) : SV_Target
     float disc = smoothstep(sunSize - 0.0008, sunSize + 0.001, cosTheta);
     sky = lerp(sky, sunBase * 6.0, disc);
 
-    float glow = pow(saturate(cosTheta), 256.0);
-    sky += sunBase * glow * sunGlowStrength;
+    // Soft additive glow merged with the Mie forward peak. A sharper
+    // exponent (e.g. 256) carved a visible inner halo edge inside the
+    // already-bright Mie cone; pow(cos, 96) gives a smoother bloom that
+    // sits naturally on top of the HG falloff. Scale lowered so the
+    // total brightness near the disc roughly matches the previous look.
+    float glow = pow(saturate(cosTheta), 96.0);
+    sky += sunBase * glow * sunGlowStrength * 0.4;
 
     return float4(sky, 1.0);
 }

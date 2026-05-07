@@ -216,22 +216,23 @@ float4 CloudPS(VsOut input) : SV_Target
         float density = SampleCloudDensity(p);
         if (density > 0.0)
         {
-            // Top of the cloud receives almost direct sunlight (transmittance
-            // along the sun ray is ~1 at noon); the bottom is lit by the
-            // hemispherical sky + a small amount of sun bounced off the
-            // ground. Inside a thick cloud, Mie scattering bounces light many
-            // times and washes out colour saturation, so although the sky is
-            // blue we desaturate the sky term toward its luminance to match
-            // the typical near-neutral grey of cumulus undersides.
+            // Top of the cloud receives almost direct sunlight; the bottom
+            // is lit by the hemispherical sky + a small amount of sun
+            // bounced off the ground. Multi-scatter inside a thick cloud
+            // washes out saturation a little, so we desaturate the sky term
+            // mildly — strong desaturation (0.65) flattened sunset reds, so
+            // 0.35 keeps the colour while still reading as a cumulus belly.
+            // The vertical brightness gradient comes from the
+            // lerp(ambient, sunlit, yNorm) below, so no separate topLight
+            // multiplier is needed.
             float yNorm = saturate((p.y - altitudeMin) / max(altitudeMax - altitudeMin, 1.0));
-            float topLight = lerp(0.85, 1.05, yNorm);
-            float3 skyTerm = atmosphereSkyColor.rgb * 2.5;
+            float3 skyTerm = atmosphereSkyColor.rgb * 1.5;
             float skyLum = dot(skyTerm, float3(0.299, 0.587, 0.114));
-            skyTerm = lerp(skyTerm, float3(skyLum, skyLum, skyLum), 0.65);
+            skyTerm = lerp(skyTerm, float3(skyLum, skyLum, skyLum), 0.35);
             float3 sunBounce = atmosphereSunColor.rgb * 0.5;
             float3 sunlitColor = cloudColor.rgb * atmosphereSunColor.rgb;
             float3 ambientColor = cloudColor.rgb * (skyTerm + sunBounce);
-            float3 lit = lerp(ambientColor, sunlitColor, yNorm) * topLight;
+            float3 lit = lerp(ambientColor, sunlitColor, yNorm);
 
             float dT = exp(-density * absorption * stepLen);
             float dA = (1.0 - dT) * transmittance;

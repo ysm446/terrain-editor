@@ -1255,7 +1255,7 @@ bool LoadAppSettings(std::string* error = nullptr)
         settings.preview.lod = std::clamp(visibilityJson.value("previewLod", settings.preview.lod), 0, 4);
         settings.preview.lightingMode = std::clamp(visibilityJson.value("lightingMode", settings.preview.lightingMode), 0, 1);
         settings.preview.sunAzimuthDegrees = std::clamp(visibilityJson.value("sunAzimuthDegrees", settings.preview.sunAzimuthDegrees), 0.0f, 360.0f);
-        settings.preview.sunElevationDegrees = std::clamp(visibilityJson.value("sunElevationDegrees", settings.preview.sunElevationDegrees), 1.0f, 89.0f);
+        settings.preview.sunElevationDegrees = std::clamp(visibilityJson.value("sunElevationDegrees", settings.preview.sunElevationDegrees), -10.0f, 89.0f);
         settings.preview.sunIntensity = std::clamp(visibilityJson.value("sunIntensity", settings.preview.sunIntensity), 0.0f, 5.0f);
         settings.preview.ambientStrength = std::clamp(visibilityJson.value("ambientStrength", settings.preview.ambientStrength), 0.0f, 2.0f);
         settings.preview.shadowStrength = std::clamp(visibilityJson.value("shadowStrength", settings.preview.shadowStrength), 0.0f, 1.0f);
@@ -7564,7 +7564,7 @@ void DrawDisplaySettingsPanel()
             {
                 SaveAppSettingsSilently();
             }
-            if (DrawPropertyFloatRow("Sun Elevation (deg)", "DisplaySunElevation", &settings.preview.sunElevationDegrees, 1.0f, 89.0f, rock::PreviewSettings{}.sunElevationDegrees, "Sun elevation changed", false, "太陽の高さです。低いほど影が長く、凹凸が強調されます。"))
+            if (DrawPropertyFloatRow("Sun Elevation (deg)", "DisplaySunElevation", &settings.preview.sunElevationDegrees, -10.0f, 89.0f, rock::PreviewSettings{}.sunElevationDegrees, "Sun elevation changed", false, "太陽の高さです。低いほど影が長く、凹凸が強調されます。0° は地平線、負値は地平より下 (夜遷移の確認用)。"))
             {
                 SaveAppSettingsSilently();
             }
