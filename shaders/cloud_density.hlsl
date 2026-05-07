@@ -46,13 +46,25 @@ float Fade(float t)
     return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
 }
 
-float Perlin3D(float x, float y, float z, int s)
+// Periodic Perlin: integer coords are wrapped mod `period` before being
+// hashed for gradients. The result is that Perlin3DPeriodic(x, ..., period)
+// has period exactly `period` along each axis, which lets us write the 3D
+// noise into a tileable texture (the values at uvw = 0 and uvw = 1 in
+// normalized texture space match seamlessly).
+int WrapInt(int v, int period)
+{
+    int m = v % period;
+    return m < 0 ? m + period : m;
+}
+
+float Perlin3DPeriodic(float x, float y, float z, int s, int period)
 {
     float fx = floor(x);
     float fy = floor(y);
     float fz = floor(z);
-    int x0 = (int)fx, y0 = (int)fy, z0 = (int)fz;
-    int x1 = x0 + 1, y1 = y0 + 1, z1 = z0 + 1;
+    int xi0 = (int)fx, yi0 = (int)fy, zi0 = (int)fz;
+    int x0 = WrapInt(xi0,     period), y0 = WrapInt(yi0,     period), z0 = WrapInt(zi0,     period);
+    int x1 = WrapInt(xi0 + 1, period), y1 = WrapInt(yi0 + 1, period), z1 = WrapInt(zi0 + 1, period);
     float dx = x - fx, dy = y - fy, dz = z - fz;
 
     float3 g000 = Gradient3(x0, y0, z0, s);
@@ -79,19 +91,24 @@ float Perlin3D(float x, float y, float z, int s)
     return lerp(lx0, lx1, w);
 }
 
-float Fbm3D(float3 p, int s)
+// fBM with periodic Perlin. `basePeriod` is the period at the lowest
+// frequency; each octave doubles both frequency and period so the period
+// stays consistent through the octave summation.
+float Fbm3DPeriodic(float3 p, int s, int basePeriod)
 {
     float total = 0.0f;
     float amplitude = 1.0f;
     float maxAmp = 0.0f;
     float freq = 1.0f;
+    int period = basePeriod;
     [unroll]
     for (int i = 0; i < 4; ++i)
     {
-        total += Perlin3D(p.x * freq, p.y * freq, p.z * freq, s + i * 1013) * amplitude;
+        total += Perlin3DPeriodic(p.x * freq, p.y * freq, p.z * freq, s + i * 1013, period) * amplitude;
         maxAmp += amplitude;
         amplitude *= 0.5f;
         freq *= 2.0f;
+        period *= 2;
     }
     return maxAmp > 0.0f ? total / maxAmp : 0.0f;
 }
@@ -106,8 +123,11 @@ void CSGenerate(uint3 dtid : SV_DispatchThreadID)
     float3 uvw = ((float3)dtid + 0.5) / (float)resolution;
 
     // Two scales of fBM combined: a wide base shape + finer detail.
-    float baseShape = Fbm3D(uvw * 4.0, seed);
-    float detail    = Fbm3D(uvw * 12.0, seed + 1);
+    // basePeriod must match the input scale so uvw=1 wraps to the same
+    // gradient layout as uvw=0 (otherwise the texture has a visible seam
+    // at world-space multiples of horizontalScale).
+    float baseShape = Fbm3DPeriodic(uvw * 4.0,  seed,     4);
+    float detail    = Fbm3DPeriodic(uvw * 12.0, seed + 1, 12);
     float n = baseShape * 0.7 + detail * 0.3;
     n = saturate(n * 0.5 + 0.5);
 
