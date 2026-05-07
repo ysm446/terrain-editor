@@ -2,6 +2,13 @@
 
 ## 未リリース
 
+- ノードグラフ上のノードアイコン色を、ハイトフィールド系は緑、マスク系はオレンジに統一しました。
+- ハイトフィールドから川筋マスクを抽出する `Mask Fluvial` ノードを追加しました。入力ハイトフィールドにフロー累積を流し、上流寄与が `Accumulation Threshold` を超えるセルをマスクとして出力します。GIS 標準の D8(最急降下、細い線)と MFD(複数方向重み付き分配、面的)を切り替えでき、川縁のテーパー(`Edge Power`)、閾値前後の smoothstep 幅(`Softness`)、局所窪みを埋める反復(`Pit Fill Iterations`、0 で湖を残す)を調整できます。
+  - 既定値は川筋寄りに調整: D8 / 閾値 0.5% / Softness 0.15 / Edge Power 1.6 / Pit Fill 8 回。
+  - 出力は `Mask` の 1 本のみ(マスク系ノードとして純粋に扱うため、Heightmap パススルー出力は持ちません)。ノード本体を選んだだけで自動的に Mask プレビューに切り替わるよう、Heightmap 出力を持たず Mask 出力のみのノードでは `SetPreviewNode` が `previewField` を Mask にする調整を入れています。
+  - 実装: 標高降順に並べたインデックス列を 1 周することで O(N log N) で累積を計算。MFD は重み `slope^p` で下流分配、`MFD Exponent` (既定 4.0) で D8 寄り↔面的の中間を取れます。Pit Fill は「8 近傍がすべて自分以上のセルを min_neighbor + ε に持ち上げる」反復で、深い穴は反復回数で埋めます。
+  - キャッシュ: 既存ノードと同じく入力ハッシュ + パラメータハッシュで個別キャッシュ。
+  - `.terrainproj` の `nodes[].maskFluvial` に保存。
 - ノード関連ドキュメントを `docs/nodes/` 配下へ整理しました。ノード候補一覧は `docs/nodes/node_candidates.md`、Fluvial Erosion 関連資料は `docs/nodes/fluvial_erosion/`、Multi-Scale Erosion 関連資料は `docs/nodes/multi_scale_erosion/` に移動しています。
 - 既存ノードの簡易ドキュメントと `docs/nodes/README.md` の索引を追加しました。`Heightmap Load`、`Shape`、`Heightmap Blur`、`Erosion Noise`、`Mask Noise`、`Mask Blend` の各ノードについて、入出力・主な設定・用途メモを `docs/nodes/<node>/` 配下へまとめています。
 - 天球・雲・遠景フォグの不自然なアートハックを物理寄りに整理しました。多重散乱 LUT を入れたあとも残っていた以下の重ね掛けや強制補正を整理しています。

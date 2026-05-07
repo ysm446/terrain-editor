@@ -21,6 +21,7 @@ enum class NodeKind
     MultiScaleErosion = 8,
     MaskNoise = 9,
     MaskBlend = 10,
+    MaskFluvial = 11,
 };
 
 enum class PinKind
@@ -62,6 +63,12 @@ enum class MaskBlendMode
     Max,
 };
 
+enum class FlowAccumulationAlgorithm
+{
+    D8,
+    MFD,
+};
+
 enum class PreviewStage
 {
     Graph = 3,
@@ -71,6 +78,7 @@ enum class PreviewStage
     MultiScaleErosion = 7,
     MaskNoise = 8,
     MaskBlend = 9,
+    MaskFluvial = 10,
 };
 
 enum class HeightfieldPreviewField
@@ -143,6 +151,23 @@ struct MaskBlendSettings
     float intensity = 1.0f;
 };
 
+// Heightfield -> mask. Performs D8 (or MFD) flow accumulation on the
+// input heights and emits a mask highlighting the most-accumulated
+// channels — i.e. river streams. Defaults are tuned for narrow channel
+// extraction; lower the threshold or switch to MFD for a softer wetness
+// map. Heights pass through unchanged.
+struct MaskFluvialSettings
+{
+    FlowAccumulationAlgorithm algorithm = FlowAccumulationAlgorithm::D8;
+    // Minimum upstream cells required to start showing as river. Stored
+    // as a fraction of total grid cells (e.g. 0.005 = 0.5%).
+    float accumulationThreshold = 0.005f;
+    float softness = 0.15f;       // smoothstep transition width relative to threshold
+    float power = 1.6f;           // pow(mask, power) — > 1 narrows river edges
+    int pitFillIterations = 8;    // 0 keeps lakes, ~8 removes most local pits
+    float mfdExponent = 4.0f;     // MFD slope exponent (only when MFD selected)
+};
+
 struct MultiScaleErosionSettings
 {
     int iterations = 50;
@@ -193,6 +218,7 @@ struct Node
     MultiScaleErosionSettings multiScaleErosion;
     MaskNoiseSettings maskNoise;
     MaskBlendSettings maskBlend;
+    MaskFluvialSettings maskFluvial;
 };
 
 struct Link
@@ -333,6 +359,7 @@ struct HeightfieldPipeline
             HeightmapBlur,
             ErosionNoise,
             MultiScaleErosion,
+            MaskFluvial,
         };
 
         Kind kind = Kind::HeightmapBlur;
@@ -340,6 +367,7 @@ struct HeightfieldPipeline
         HeightmapBlurSettings heightmapBlur;
         ErosionNoiseSettings erosionNoise;
         MultiScaleErosionSettings multiScaleErosion;
+        MaskFluvialSettings maskFluvial;
     };
 
     bool hasSource = false;

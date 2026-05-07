@@ -1734,6 +1734,14 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
                     {"simulationResolution", node.maskNoise.simulationResolution},
                     {"backend", static_cast<int>(node.maskNoise.backend)},
                 }},
+                {"maskFluvial", {
+                    {"algorithm", static_cast<int>(node.maskFluvial.algorithm)},
+                    {"accumulationThreshold", node.maskFluvial.accumulationThreshold},
+                    {"softness", node.maskFluvial.softness},
+                    {"power", node.maskFluvial.power},
+                    {"pitFillIterations", node.maskFluvial.pitFillIterations},
+                    {"mfdExponent", node.maskFluvial.mfdExponent},
+                }},
                 {"maskBlend", {
                     {"mode", static_cast<int>(node.maskBlend.mode)},
                     {"intensity", node.maskBlend.intensity},
@@ -1976,6 +1984,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 const nlohmann::json nodeMultiScaleErosionJson = nodeJson.value("multiScaleErosion", nlohmann::json::object());
                 const nlohmann::json nodeMaskNoiseJson = nodeJson.value("maskNoise", nlohmann::json::object());
                 const nlohmann::json nodeMaskBlendJson = nodeJson.value("maskBlend", nlohmann::json::object());
+                const nlohmann::json nodeMaskFluvialJson = nodeJson.value("maskFluvial", nlohmann::json::object());
                 node.heightmap.path = nodeHeightmapJson.value("path", node.heightmap.path);
                 node.heightmap.scaleMeters = std::clamp(nodeHeightmapJson.value("scaleMeters", node.heightmap.scaleMeters), 1.0f, 1000000.0f);
                 node.heightmap.relativeVerticalScalePercent = std::clamp(nodeHeightmapJson.value("relativeVerticalScalePercent", node.heightmap.relativeVerticalScalePercent), 0.0f, 10000.0f);
@@ -2039,6 +2048,17 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                     node.maskBlend.mode = static_cast<rock::MaskBlendMode>(modeInt);
                 }
                 node.maskBlend.intensity = std::clamp(nodeMaskBlendJson.value("intensity", node.maskBlend.intensity), 0.0f, 1.0f);
+                {
+                    const int algoInt = std::clamp(nodeMaskFluvialJson.value("algorithm", static_cast<int>(node.maskFluvial.algorithm)),
+                                                    static_cast<int>(rock::FlowAccumulationAlgorithm::D8),
+                                                    static_cast<int>(rock::FlowAccumulationAlgorithm::MFD));
+                    node.maskFluvial.algorithm = static_cast<rock::FlowAccumulationAlgorithm>(algoInt);
+                }
+                node.maskFluvial.accumulationThreshold = std::clamp(nodeMaskFluvialJson.value("accumulationThreshold", node.maskFluvial.accumulationThreshold), 0.0f, 1.0f);
+                node.maskFluvial.softness = std::clamp(nodeMaskFluvialJson.value("softness", node.maskFluvial.softness), 0.001f, 4.0f);
+                node.maskFluvial.power = std::clamp(nodeMaskFluvialJson.value("power", node.maskFluvial.power), 0.1f, 8.0f);
+                node.maskFluvial.pitFillIterations = std::clamp(nodeMaskFluvialJson.value("pitFillIterations", node.maskFluvial.pitFillIterations), 0, 64);
+                node.maskFluvial.mfdExponent = std::clamp(nodeMaskFluvialJson.value("mfdExponent", node.maskFluvial.mfdExponent), 0.1f, 16.0f);
 
                 const auto readPins = [&](const nlohmann::json& pinsJson, rock::PinKind pinKind, std::vector<rock::Pin>& pins) {
                     if (!pinsJson.is_array())
@@ -5912,22 +5932,20 @@ void DrawHeightfieldMapPreview(const ImVec2& min, const ImVec2& max)
 
 ImVec4 NodeAccentColor(rock::NodeKind kind)
 {
+    const ImVec4 heightfieldGreen(0.42f, 0.70f, 0.50f, 1.0f);
+    const ImVec4 maskOrange(0.92f, 0.56f, 0.24f, 1.0f);
     switch (kind)
     {
     case rock::NodeKind::HeightmapLoad:
-        return ImVec4(0.38f, 0.62f, 0.53f, 1.0f);
     case rock::NodeKind::Shape:
-        return ImVec4(0.50f, 0.68f, 0.48f, 1.0f);
     case rock::NodeKind::HeightmapBlur:
-        return ImVec4(0.58f, 0.61f, 0.44f, 1.0f);
     case rock::NodeKind::ErosionNoise:
-        return ImVec4(0.66f, 0.55f, 0.42f, 1.0f);
     case rock::NodeKind::MultiScaleErosion:
-        return ImVec4(0.42f, 0.66f, 0.74f, 1.0f);
+        return heightfieldGreen;
     case rock::NodeKind::MaskNoise:
-        return ImVec4(0.62f, 0.46f, 0.74f, 1.0f);
     case rock::NodeKind::MaskBlend:
-        return ImVec4(0.50f, 0.42f, 0.78f, 1.0f);
+    case rock::NodeKind::MaskFluvial:
+        return maskOrange;
     default:
         return ImVec4(0.75f, 0.75f, 0.75f, 1.0f);
     }
@@ -5951,6 +5969,8 @@ ImVec2 InitialNodePosition(rock::NodeKind kind)
         return ImVec2(40.0f, 520.0f);
     case rock::NodeKind::MaskBlend:
         return ImVec2(320.0f, 520.0f);
+    case rock::NodeKind::MaskFluvial:
+        return ImVec2(880.0f, 240.0f);
     default:
         return ImVec2(40.0f, 64.0f);
     }
@@ -6623,6 +6643,7 @@ void DrawNodeGraph()
         addNodeMenuItem(rock::NodeKind::HeightmapBlur);
         addNodeMenuItem(rock::NodeKind::ErosionNoise);
         addNodeMenuItem(rock::NodeKind::MultiScaleErosion);
+        addNodeMenuItem(rock::NodeKind::MaskFluvial);
         addNodeMenuItem(rock::NodeKind::MaskNoise);
         addNodeMenuItem(rock::NodeKind::MaskBlend);
         ImGui::EndPopup();
@@ -7465,6 +7486,53 @@ void DrawPropertiesPanel()
         if (DrawPropertyPercentRow("Blend Intensity (%)", "MaskBlendIntensity", &mb.intensity, 0.0f, 1.0f, rock::MaskBlendSettings{}.intensity, "Mask blend intensity changed", "A をベースに、A と Blend(A, B) の間を補間する強さです。0 で A のみ、1 で完全に合成結果を使います。"))
         {
             EvaluateGraph();
+        }
+
+        ImGui::EndTable();
+        return;
+    }
+
+    if (selectedNode->kind == rock::NodeKind::MaskFluvial && ImGui::BeginTable("MaskFluvialRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 210.0f);
+        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+        rock::MaskFluvialSettings& mf = editableNode->maskFluvial;
+        mf.accumulationThreshold = std::clamp(mf.accumulationThreshold, 0.0f, 1.0f);
+        mf.softness = std::clamp(mf.softness, 0.001f, 4.0f);
+        mf.power = std::clamp(mf.power, 0.1f, 8.0f);
+        mf.pitFillIterations = std::clamp(mf.pitFillIterations, 0, 64);
+        mf.mfdExponent = std::clamp(mf.mfdExponent, 0.1f, 16.0f);
+
+        int algoInt = static_cast<int>(mf.algorithm);
+        if (DrawPropertyComboRow("Algorithm", "MaskFluvialAlgorithm", &algoInt, "D8\0MFD\0\0", "流れ累積アルゴリズムです。D8 は最急降下方向のみに流す(細い線)、MFD は複数方向に重み付き分配(太い面)。", static_cast<int>(rock::MaskFluvialSettings{}.algorithm)))
+        {
+            mf.algorithm = static_cast<rock::FlowAccumulationAlgorithm>(std::clamp(algoInt,
+                static_cast<int>(rock::FlowAccumulationAlgorithm::D8),
+                static_cast<int>(rock::FlowAccumulationAlgorithm::MFD)));
+            EvaluateGraph();
+        }
+        if (DrawPropertyPercentRow("Accumulation Threshold (%)", "MaskFluvialThreshold", &mf.accumulationThreshold, 0.0f, 1.0f, rock::MaskFluvialSettings{}.accumulationThreshold, "Mask fluvial threshold changed", "全セル数に対する割合で、これ以上の上流寄与があるセルが川として現れます。下げるほど支流が増え、上げるほど太い本流のみ残ります。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Softness", "MaskFluvialSoftness", &mf.softness, 0.001f, 4.0f, rock::MaskFluvialSettings{}.softness, "Mask fluvial softness changed", true, "閾値前後の smoothstep 幅です。小さいほどシャープな川筋、大きいほど湿地帯のような広がり。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Edge Power", "MaskFluvialPower", &mf.power, 0.1f, 8.0f, rock::MaskFluvialSettings{}.power, "Mask fluvial power changed", true, "pow(mask, power) で川縁をテーパーします。1 を超えると細く、1 未満で太く見えます。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyIntRow("Pit Fill Iterations", "MaskFluvialPitFill", &mf.pitFillIterations, 0, 64, rock::MaskFluvialSettings{}.pitFillIterations, "Mask fluvial pit fill changed", true, "局所窪みを埋める反復回数です。0 で湖を残し、増やすほど排水経路が確実につながります。"))
+        {
+            EvaluateGraph();
+        }
+        if (mf.algorithm == rock::FlowAccumulationAlgorithm::MFD)
+        {
+            if (DrawPropertyFloatRow("MFD Exponent", "MaskFluvialMfdExponent", &mf.mfdExponent, 0.1f, 16.0f, rock::MaskFluvialSettings{}.mfdExponent, "Mask fluvial MFD exponent changed", true, "MFD 時の下流分配の鋭さです。大きいほど D8 寄り(主流に集中)、小さいほど面的に広がります。"))
+            {
+                EvaluateGraph();
+            }
         }
 
         ImGui::EndTable();

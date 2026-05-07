@@ -116,6 +116,19 @@ uint64_t HashMaskBlendSettings(const MaskBlendSettings& settings)
     return hash;
 }
 
+uint64_t HashMaskFluvialSettings(const MaskFluvialSettings& settings, int resolution)
+{
+    uint64_t hash = 8589869056ull;
+    HashCombine(hash, static_cast<uint64_t>(settings.algorithm));
+    HashCombine(hash, HashFloat(settings.accumulationThreshold));
+    HashCombine(hash, HashFloat(settings.softness));
+    HashCombine(hash, HashFloat(settings.power));
+    HashCombine(hash, static_cast<uint64_t>(settings.pitFillIterations));
+    HashCombine(hash, HashFloat(settings.mfdExponent));
+    HashCombine(hash, static_cast<uint64_t>(resolution));
+    return hash;
+}
+
 uint64_t HashMultiScaleErosionSettings(const MultiScaleErosionSettings& settings, int resolution)
 {
     uint64_t hash = 11400714819323198485ull;
@@ -1437,6 +1450,159 @@ void ApplyMultiScaleErosion(HeightfieldGrid& grid, const MultiScaleErosionSettin
     grid.age.assign(targetCellCount, 0.0f);
 }
 
+// Mask Fluvial: D8 / MFD flow accumulation -> river-stream mask.
+// Heights pass through. Fills grid.mask with a normalized 0..1 mask
+// where the upstream-cell count exceeds accumulationThreshold.
+void ApplyMaskFluvial(HeightfieldGrid& grid, const MaskFluvialSettings& settings)
+{
+    const int n = grid.resolution;
+    const size_t cellCount = static_cast<size_t>(n) * static_cast<size_t>(n);
+    if (n < 3 || grid.heights.size() < cellCount)
+    {
+        return;
+    }
+
+    // 1. Iterative pit fill (optional). Any interior cell whose 8 neighbours
+    // are all >= itself gets raised to (min_neighbour + epsilon). Boundary
+    // cells act as outlets and are left alone. Repeat until either no
+    // changes happen or pitFillIterations is reached.
+    std::vector<float> filled = grid.heights;
+    const int pitIters = std::clamp(settings.pitFillIterations, 0, 64);
+    constexpr float kPitEpsilon = 1e-4f;
+    for (int iter = 0; iter < pitIters; ++iter)
+    {
+        bool anyChange = false;
+        for (int z = 1; z < n - 1; ++z)
+        {
+            for (int x = 1; x < n - 1; ++x)
+            {
+                const size_t idx = static_cast<size_t>(z) * static_cast<size_t>(n) + static_cast<size_t>(x);
+                const float h = filled[idx];
+                float minNeighbor = std::numeric_limits<float>::infinity();
+                for (int dz = -1; dz <= 1; ++dz)
+                {
+                    for (int dx = -1; dx <= 1; ++dx)
+                    {
+                        if (dx == 0 && dz == 0) continue;
+                        const size_t nidx = static_cast<size_t>(z + dz) * static_cast<size_t>(n) + static_cast<size_t>(x + dx);
+                        if (filled[nidx] < minNeighbor) minNeighbor = filled[nidx];
+                    }
+                }
+                if (h <= minNeighbor)
+                {
+                    filled[idx] = minNeighbor + kPitEpsilon;
+                    anyChange = true;
+                }
+            }
+        }
+        if (!anyChange) break;
+    }
+
+    // 2. Sort cell indices by height descending. Accumulation must process
+    // each cell after every higher cell upstream of it has already pushed
+    // its flow downhill, so a topological sort by elevation works.
+    std::vector<int> indices(cellCount);
+    std::iota(indices.begin(), indices.end(), 0);
+    std::sort(std::execution::par, indices.begin(), indices.end(),
+              [&filled](int a, int b) { return filled[a] > filled[b]; });
+
+    // 3. Flow accumulation. Each cell starts with weight 1 and pushes its
+    // accumulator to one (D8) or several (MFD) downhill neighbours.
+    std::vector<float> accum(cellCount, 1.0f);
+    static const int kDx[8]    = {-1, 0, 1, -1, 1, -1, 0, 1};
+    static const int kDz[8]    = {-1, -1, -1, 0, 0, 1, 1, 1};
+    static const float kDist[8] = {
+        1.41421356f, 1.0f, 1.41421356f,
+        1.0f,              1.0f,
+        1.41421356f, 1.0f, 1.41421356f,
+    };
+
+    if (settings.algorithm == FlowAccumulationAlgorithm::D8)
+    {
+        for (int idx : indices)
+        {
+            const int x = idx % n;
+            const int z = idx / n;
+            const float h = filled[static_cast<size_t>(idx)];
+            int bestK = -1;
+            float bestSlope = 0.0f;
+            for (int k = 0; k < 8; ++k)
+            {
+                const int nx = x + kDx[k];
+                const int nz = z + kDz[k];
+                if (nx < 0 || nx >= n || nz < 0 || nz >= n) continue;
+                const float nh = filled[static_cast<size_t>(nz) * n + nx];
+                const float slope = (h - nh) / kDist[k];
+                if (slope > bestSlope) { bestSlope = slope; bestK = k; }
+            }
+            if (bestK >= 0)
+            {
+                const int nx = x + kDx[bestK];
+                const int nz = z + kDz[bestK];
+                accum[static_cast<size_t>(nz) * n + nx] += accum[static_cast<size_t>(idx)];
+            }
+        }
+    }
+    else
+    {
+        const float p = std::clamp(settings.mfdExponent, 0.1f, 16.0f);
+        for (int idx : indices)
+        {
+            const int x = idx % n;
+            const int z = idx / n;
+            const float h = filled[static_cast<size_t>(idx)];
+            float weights[8] = {0};
+            float weightSum = 0.0f;
+            for (int k = 0; k < 8; ++k)
+            {
+                const int nx = x + kDx[k];
+                const int nz = z + kDz[k];
+                if (nx < 0 || nx >= n || nz < 0 || nz >= n) continue;
+                const float nh = filled[static_cast<size_t>(nz) * n + nx];
+                const float slope = (h - nh) / kDist[k];
+                if (slope > 0.0f)
+                {
+                    weights[k] = std::pow(slope, p);
+                    weightSum += weights[k];
+                }
+            }
+            if (weightSum > 0.0f)
+            {
+                const float inv = 1.0f / weightSum;
+                const float a = accum[static_cast<size_t>(idx)];
+                for (int k = 0; k < 8; ++k)
+                {
+                    if (weights[k] > 0.0f)
+                    {
+                        const int nx = x + kDx[k];
+                        const int nz = z + kDz[k];
+                        accum[static_cast<size_t>(nz) * n + nx] += a * weights[k] * inv;
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. Convert accumulation to mask via smoothstep around the threshold,
+    // then pow() to taper river edges. Threshold is given as a fraction of
+    // total grid cells so it stays meaningful across resolutions.
+    const float thresholdLow = std::max(1.0f,
+        std::clamp(settings.accumulationThreshold, 0.0f, 1.0f) * static_cast<float>(cellCount));
+    const float softness = std::clamp(settings.softness, 0.001f, 4.0f);
+    const float thresholdHigh = thresholdLow * (1.0f + 4.0f * softness);
+    const float power = std::clamp(settings.power, 0.1f, 8.0f);
+    const float invRange = 1.0f / std::max(thresholdHigh - thresholdLow, 1e-3f);
+
+    grid.mask.assign(cellCount, 0.0f);
+    for (size_t i = 0; i < cellCount; ++i)
+    {
+        float t = (accum[i] - thresholdLow) * invRange;
+        t = std::clamp(t, 0.0f, 1.0f);
+        const float smooth = t * t * (3.0f - 2.0f * t);
+        grid.mask[i] = std::pow(smooth, power);
+    }
+}
+
 MeshData BuildMeshFromHeightfield(const HeightfieldGrid& grid, int meshResolution)
 {
     MeshData mesh;
@@ -1746,6 +1912,10 @@ MeshData BuildMeshFromHeightPipeline(const HeightfieldPipeline& pipeline, int re
         {
             ApplyMultiScaleErosion(grid, operation.multiScaleErosion);
         }
+        else if (operation.kind == HeightfieldPipeline::HeightfieldOperation::Kind::MaskFluvial)
+        {
+            ApplyMaskFluvial(grid, operation.maskFluvial);
+        }
     }
     if (message != nullptr && !pipeline.heightfieldOperations.empty())
     {
@@ -1820,6 +1990,10 @@ MeshData NodeGraph::BuildMeshFromHeightPipelineCached(const HeightfieldPipeline&
             {
                 ApplyMultiScaleErosion(grid, operation.multiScaleErosion);
             }
+            else if (operation.kind == HeightfieldPipeline::HeightfieldOperation::Kind::MaskFluvial)
+            {
+                ApplyMaskFluvial(grid, operation.maskFluvial);
+            }
             continue;
         }
 
@@ -1834,6 +2008,9 @@ MeshData NodeGraph::BuildMeshFromHeightPipelineCached(const HeightfieldPipeline&
             break;
         case HeightfieldPipeline::HeightfieldOperation::Kind::MultiScaleErosion:
             parameterHash = HashMultiScaleErosionSettings(operation.multiScaleErosion, simulationResolution);
+            break;
+        case HeightfieldPipeline::HeightfieldOperation::Kind::MaskFluvial:
+            parameterHash = HashMaskFluvialSettings(operation.maskFluvial, simulationResolution);
             break;
         }
         HeightfieldNodeCache& operationCache = heightfieldCache_[operation.nodeId];
@@ -1854,6 +2031,10 @@ MeshData NodeGraph::BuildMeshFromHeightPipelineCached(const HeightfieldPipeline&
             else if (operation.kind == HeightfieldPipeline::HeightfieldOperation::Kind::MultiScaleErosion)
             {
                 ApplyMultiScaleErosion(operationGrid, operation.multiScaleErosion);
+            }
+            else if (operation.kind == HeightfieldPipeline::HeightfieldOperation::Kind::MaskFluvial)
+            {
+                ApplyMaskFluvial(operationGrid, operation.maskFluvial);
             }
             operationCache.grid = std::move(operationGrid);
             operationCache.message.clear();
@@ -2069,6 +2250,10 @@ GraphId NodeGraph::CreateNode(NodeKind kind)
         AddPin(nodeId, PinKind::Output, ValueType::Mask, "Flows");
         AddPin(nodeId, PinKind::Output, ValueType::Mask, "Deposits");
         break;
+    case NodeKind::MaskFluvial:
+        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "HeightField");
+        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
+        break;
     case NodeKind::MaskNoise:
         AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
         break;
@@ -2125,10 +2310,23 @@ bool NodeGraph::SetPreviewNode(GraphId nodeId)
         return false;
     }
 
+    // If the node has no HeightField output but does have a Mask output,
+    // selecting the node body should default to the mask view — otherwise
+    // the user sees terrain when the node produces a mask, which is
+    // confusing. (Pin clicks still override via SetPreviewPin.)
+    bool hasHeightOutput = false;
+    bool hasMaskOutput = false;
+    for (const Pin& pin : node->outputs)
+    {
+        if (pin.valueType == ValueType::HeightField) hasHeightOutput = true;
+        else if (pin.valueType == ValueType::Mask) hasMaskOutput = true;
+    }
+    const bool defaultToMask = !hasHeightOutput && hasMaskOutput;
+
     evaluation_.previewNodeId = nodeId;
     evaluation_.previewPinId = 0;
-    evaluation_.previewShowsMask = false;
-    evaluation_.previewField = HeightfieldPreviewField::Heightmap;
+    evaluation_.previewShowsMask = defaultToMask;
+    evaluation_.previewField = defaultToMask ? HeightfieldPreviewField::Mask : HeightfieldPreviewField::Heightmap;
     evaluation_.previewStage = stage;
     evaluation_.dirty = true;
     evaluation_.status = std::format("Preview node changed to {}", node->title);
@@ -2210,8 +2408,11 @@ HeightfieldPipeline NodeGraph::PipelineFor(PreviewStage stage) const
         return PipelineTo(NodeKind::ErosionNoise);
     case PreviewStage::MultiScaleErosion:
         return PipelineTo(NodeKind::MultiScaleErosion);
+    case PreviewStage::MaskFluvial:
+        return PipelineTo(NodeKind::MaskFluvial);
     case PreviewStage::Graph:
     default:
+        if (const Node* node = FindFirstNode(NodeKind::MaskFluvial)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::MultiScaleErosion)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::ErosionNoise)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::HeightmapBlur)) { return PipelineToNode(*node); }
@@ -2434,6 +2635,7 @@ HeightfieldPipeline NodeGraph::PipelineToNode(const Node& targetNode) const
                 node->heightmapBlur,
                 {},
                 {},
+                {},
             });
         }
         else if (node->kind == NodeKind::ErosionNoise)
@@ -2443,6 +2645,7 @@ HeightfieldPipeline NodeGraph::PipelineToNode(const Node& targetNode) const
                 node->id,
                 {},
                 node->erosionNoise,
+                {},
                 {},
             });
         }
@@ -2454,6 +2657,18 @@ HeightfieldPipeline NodeGraph::PipelineToNode(const Node& targetNode) const
                 {},
                 {},
                 node->multiScaleErosion,
+                {},
+            });
+        }
+        else if (node->kind == NodeKind::MaskFluvial)
+        {
+            pipeline.heightfieldOperations.push_back({
+                HeightfieldPipeline::HeightfieldOperation::Kind::MaskFluvial,
+                node->id,
+                {},
+                {},
+                {},
+                node->maskFluvial,
             });
         }
         else if (node->kind == NodeKind::HeightmapLoad)
@@ -2659,6 +2874,8 @@ std::string_view ToString(NodeKind kind)
         return "Mask Noise";
     case NodeKind::MaskBlend:
         return "Mask Blend";
+    case NodeKind::MaskFluvial:
+        return "Mask Fluvial";
     default:
         return "Unknown";
     }
@@ -2682,6 +2899,8 @@ std::string_view ToString(PreviewStage stage)
         return "Mask Noise";
     case PreviewStage::MaskBlend:
         return "Mask Blend";
+    case PreviewStage::MaskFluvial:
+        return "Mask Fluvial";
     default:
         return "Unknown";
     }
@@ -2720,6 +2939,8 @@ PreviewStage PreviewStageFor(NodeKind kind)
         return PreviewStage::MaskNoise;
     case NodeKind::MaskBlend:
         return PreviewStage::MaskBlend;
+    case NodeKind::MaskFluvial:
+        return PreviewStage::MaskFluvial;
     default:
         return PreviewStage::Graph;
     }
