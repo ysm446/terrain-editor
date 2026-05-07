@@ -3282,10 +3282,13 @@ bool EnsureCloudPipelines(std::string* error)
         psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
         psoDesc.DepthStencilState.DepthEnable = FALSE;
         psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
-        // Standard alpha blend over the existing sky color in the RT.
+        // Premultiplied-alpha blend. The PS accumulates `lit * dA` over the
+        // ray-march, which is already alpha-weighted (Σ dA = alpha), so the
+        // GPU must NOT multiply by SRC_ALPHA again — that would crush thin
+        // clouds darker than the sky behind them.
         D3D12_RENDER_TARGET_BLEND_DESC& blend = psoDesc.BlendState.RenderTarget[0];
         blend.BlendEnable = TRUE;
-        blend.SrcBlend = D3D12_BLEND_SRC_ALPHA;
+        blend.SrcBlend = D3D12_BLEND_ONE;
         blend.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
         blend.BlendOp = D3D12_BLEND_OP_ADD;
         blend.SrcBlendAlpha = D3D12_BLEND_ONE;

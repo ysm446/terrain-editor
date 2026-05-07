@@ -2,6 +2,7 @@
 
 ## 未リリース
 
+- 薄い雲が背景の空より暗く見えていた問題を修正しました。雲シェーダーは `accumulated += lit * dA` でレイマーチを積分していて、これは既に alpha 乗算済み (premultiplied) の色を出します。にもかかわらずブレンド状態が `SRC_ALPHA / INV_SRC_ALPHA` で 2 度目の alpha 乗算をしていたため、たとえば alpha = 0.2 の薄い雲では `0.2 × 0.2 + 0.8 × sky = 0.04 + 0.8 × sky` となって空より暗くなっていました。`ONE / INV_SRC_ALPHA` (premultiplied) に変更して `accumulated + (1 - alpha) × sky` で正しく合成するようにしました。
 - 雲のテクスチャに縦/横の継ぎ目が見えていた問題を修正しました (特にフィールド中央 = 地形中心で目立っていました)。`cloud_density.hlsl` の Perlin 生成を周期版 `Perlin3DPeriodic` / `Fbm3DPeriodic` に置き換え、整数座標を `mod period` してから勾配ハッシュを引くようにしました。`Fbm3D` の各オクターブでも周波数倍と同じく period も倍にすることで、`uvw = 0` と `uvw = 1` で勾配配置が一致してテクスチャがシームレスにタイリングします。`SamplerState` の WRAP モードと組み合わさってフィールド内のどこでも継ぎ目が出なくなります。
 - 雲が地平線まで無限に続いてしまう問題を修正しました。`CloudSettings` に `fieldRadius` と `fieldFalloff` を追加し、地形の中心 (mesh bounds の中心) を原点に円形のフィールド境界を設けて、その外側では雲の密度を 0 にフェードアウトします。シェーダー (cloud_render / cloud_shadow) の `SampleCloudDensity` で `ComputeFieldFade` を乗算する形。デフォルトは半径 6000m / フェード 2000m なので、典型的な 4-8km 地形だと地形の周りだけに雲が出る形になります。表示設定パネルに「Field Radius」「Field Falloff」を追加し、`.terrainproj` にも保存します。
 - レビューフィードバックの反映: (1) 表示設定パネルの `Lighting Mode` から `Shadow Debug` を削除しました。シェーダー側の `DebugShadowColor` 分岐も死コードになるので除去。`.terrainproj` 経由で値 2 が入っていた古いプロジェクトは load 時に 0..1 にクランプされます。 (2) 表示設定パネルの「天球」「ボリューム雲」の前に `ImGui::SeparatorText` を入れて区切りを入れました。雲セクション側のトグルラベルも「ボリューム雲」→「有効」に短縮。 (3) 雲の色が灰色っぽく見えていた問題を直しました。`cloud_render.hlsl` のシェーディングが太陽の高度と垂直プロファイルで二重に減衰させていたため、白を指定しても 50% 程度のグレーに収束していました。シンプルに `cloudColor × lerp(0.85, 1.05, yNorm)` の top-lit ランプだけにして、上面でフルカラー、下面で 85% に落ち着く形に。
