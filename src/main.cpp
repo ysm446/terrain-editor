@@ -52,7 +52,7 @@ namespace
 constexpr int kFrameCount = 2;
 constexpr int kSrvDescriptorCount = 64;
 constexpr float kFullFrameSensorHeightMm = 24.0f;
-constexpr int kMaxSerializedNodeKind = static_cast<int>(rock::NodeKind::MaskBlend);
+constexpr int kMaxSerializedNodeKind = static_cast<int>(rock::NodeKind::MaskFluvial);
 constexpr int kMaxSerializedPreviewStage = static_cast<int>(rock::PreviewStage::MaskBlend);
 constexpr std::array<int, 5> kResolutionPresets = {128, 256, 512, 1024, 2048};
 
@@ -4330,7 +4330,8 @@ bool IsTerrainNodeKind(rock::NodeKind kind)
         kind == rock::NodeKind::ErosionNoise ||
         kind == rock::NodeKind::MultiScaleErosion ||
         kind == rock::NodeKind::MaskNoise ||
-        kind == rock::NodeKind::MaskBlend;
+        kind == rock::NodeKind::MaskBlend ||
+        kind == rock::NodeKind::MaskFluvial;
 }
 
 int CurrentPreviewMeshResolution()
