@@ -31,8 +31,22 @@ cbuffer Constants : register(b0)
     float padding2;
 };
 
+cbuffer CloudShadowMeshConstants : register(b1)
+{
+    float cloudShadowEnabled;
+    float cloudShadowStrength;
+    float cloudShadowAltitudeMin;
+    float cloudShadowPadA;
+    float cloudShadowMinX;
+    float cloudShadowMinZ;
+    float cloudShadowSizeX;
+    float cloudShadowSizeZ;
+};
+
 Texture2D shadowMap : register(t0);
+Texture2D<float> cloudShadowMap : register(t1);
 SamplerState shadowSampler : register(s0);
+SamplerState linearSampler : register(s1);
 
 float3 LightSpace01(float3 worldPos)
 {
@@ -85,6 +99,33 @@ float4 VSShadow(VSIn i) : SV_POSITION
 {
     float3 lightUv = LightSpace01(i.pos);
     return float4(lightUv.x * 2.0 - 1.0, lightUv.y * 2.0 - 1.0, saturate(lightUv.z), 1.0);
+}
+
+// Sample the cloud shadow texture by projecting the ground point along the
+// sun direction up to altitudeMin (the cloud band base) and looking up the
+// transmittance at that (x, z). Returns 1.0 when not in cloud shadow,
+// 0.0 when fully under cloud.
+float ComputeCloudShadowVisibility(float3 worldPos)
+{
+    if (cloudShadowEnabled < 0.5 || cloudShadowSizeX <= 0.0 || cloudShadowSizeZ <= 0.0)
+    {
+        return 1.0;
+    }
+    if (sunDirection.y < 0.05)
+    {
+        return 1.0;
+    }
+    float dy = cloudShadowAltitudeMin - worldPos.y;
+    float2 offsetXZ = float2(sunDirection.x, sunDirection.z) * (dy / sunDirection.y);
+    float worldX = worldPos.x + offsetXZ.x;
+    float worldZ = worldPos.z + offsetXZ.y;
+    float u = (worldX - cloudShadowMinX) / cloudShadowSizeX;
+    float v = (worldZ - cloudShadowMinZ) / cloudShadowSizeZ;
+    if (u < 0.0 || u > 1.0 || v < 0.0 || v > 1.0)
+    {
+        return 1.0;
+    }
+    return cloudShadowMap.SampleLevel(linearSampler, float2(u, v), 0);
 }
 
 float ComputeShadowVisibility(float3 worldPos)
@@ -187,17 +228,23 @@ float4 PSSurface(VSOut i) : SV_TARGET
         float3 L = normalize(sunDirection.xyz);
         float ndl = saturate(dot(n, L));
         float visibility = ComputeShadowVisibility(i.worldPos);
+        float cloudVisibility = ComputeCloudShadowVisibility(i.worldPos);
+        float cloudShadowFactor = lerp(1.0, cloudVisibility, cloudShadowStrength);
         float viewFacing = pow(saturate(dot(n, V) * 0.5 + 0.5), 0.35);
         float shadowAmount = (1.0 - visibility) * shadowStrength;
         float shadowMix = lerp(1.0 - shadowStrength * 0.75, 1.0, visibility);
         float upFacing = saturate(n.y * 0.55 + 0.45);
         float3 skyTint = lerp(float3(0.42, 0.45, 0.45), float3(0.58, 0.61, 0.62), upFacing) * ambientStrength;
-        float3 sunTint = float3(1.00, 0.96, 0.88) * ndl * sunIntensity * shadowMix;
+        // Cloud shadow attenuates the sun (direct light) fully but only
+        // partially attenuates ambient sky light, since clouds scatter light
+        // back down and the sky term is dominated by skylight not sun.
+        float3 sunTint = float3(1.00, 0.96, 0.88) * ndl * sunIntensity * shadowMix * cloudShadowFactor;
         float3 bounceTint = float3(0.28, 0.30, 0.28) * ambientStrength * shadowAmount;
+        float ambientCloudMix = lerp(1.0, cloudVisibility, cloudShadowStrength * 0.4);
         float3 slopeMicroShade = lerp(float3(0.78, 0.80, 0.82), float3(1.06, 1.05, 1.02), viewFacing);
-        col = albedoColor.rgb * (skyTint + sunTint + bounceTint) * slopeMicroShade;
+        col = albedoColor.rgb * (skyTint * ambientCloudMix + sunTint + bounceTint) * slopeMicroShade;
         col = lerp(col, dot(col, float3(0.299, 0.587, 0.114)).xxx, shadowAmount * 0.18);
-        col += pow(saturate(ndl), 24.0) * sunIntensity * visibility * 0.045;
+        col += pow(saturate(ndl), 24.0) * sunIntensity * visibility * cloudShadowFactor * 0.045;
     }
     if (maskPreview > 0.5)
     {

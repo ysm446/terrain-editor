@@ -255,6 +255,9 @@ struct CloudSettings
     float windDirectionDegrees = 45.0f;
     float windSpeedMetersPerSec = 0.0f;
     int qualitySamples = 32;
+    float shadowStrength = 0.7f;
+    int shadowResolution = 1024;
+    int shadowSamples = 16;
 };
 
 struct GraphSettings

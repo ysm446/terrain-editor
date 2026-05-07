@@ -247,6 +247,21 @@ static_assert(offsetof(MeshPreviewConstants, lightWorldRadius) == 224);
 static_assert(offsetof(MeshPreviewConstants, padding2) == 236);
 static_assert(sizeof(MeshPreviewConstants) == 240);
 
+// Cloud shadow data lives in its own cbuffer (b1) bound via a root CBV so
+// the mesh root signature stays under the 64-DWORD limit.
+struct CloudShadowMeshConstants
+{
+    float cloudShadowEnabled;
+    float cloudShadowStrength;
+    float cloudShadowAltitudeMin;
+    float cloudShadowPadA;
+    float cloudShadowMinX;
+    float cloudShadowMinZ;
+    float cloudShadowSizeX;
+    float cloudShadowSizeZ;
+};
+static_assert(sizeof(CloudShadowMeshConstants) == 32);
+
 struct GpuMeshPreview
 {
     int width = 0;
@@ -316,6 +331,9 @@ struct GpuMeshPreview
     float cloudWindDirectionDegrees = 0.0f;
     float cloudWindSpeed = 0.0f;
     int cloudQualitySamples = 0;
+    float cloudShadowStrength = 0.0f;
+    int cloudShadowResolution = 0;
+    int cloudShadowSamples = 0;
     D3D12_RESOURCE_STATES colorState = D3D12_RESOURCE_STATE_COMMON;
     D3D12_RESOURCE_STATES shadowState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     D3D12_RESOURCE_STATES depthState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
@@ -340,6 +358,8 @@ ComPtr<ID3D12RootSignature> g_cloudVolumeRootSignature;
 ComPtr<ID3D12PipelineState> g_cloudVolumePso;
 ComPtr<ID3D12RootSignature> g_cloudRenderRootSignature;
 ComPtr<ID3D12PipelineState> g_cloudRenderPso;
+ComPtr<ID3D12RootSignature> g_cloudShadowRootSignature;
+ComPtr<ID3D12PipelineState> g_cloudShadowPso;
 bool g_cloudPipelinesReady = false;
 std::string g_cloudPipelineStatus = "Cloud pipelines not initialized";
 
@@ -352,6 +372,18 @@ struct GpuClouds
     bool volumeSrvAllocated = false;
     bool volumeReady = false;
     int cachedSeed = INT_MIN;
+    ComPtr<ID3D12Resource> shadowTexture;       // 1024x1024 R8_UNORM transmittance map
+    D3D12_RESOURCE_STATES shadowState = D3D12_RESOURCE_STATE_COMMON;
+    D3D12_CPU_DESCRIPTOR_HANDLE shadowSrvCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE shadowSrvGpu{};
+    bool shadowSrvAllocated = false;
+    int shadowResolution = 0;
+    ComPtr<ID3D12Resource> meshCbUploadBuffer;  // 256-byte CBV with CloudShadowMeshConstants
+    void* meshCbMapped = nullptr;
+    ComPtr<ID3D12Resource> dummyShadowTexture;  // 1x1 white R8 used when clouds are off
+    D3D12_CPU_DESCRIPTOR_HANDLE dummyShadowSrvCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE dummyShadowSrvGpu{};
+    bool dummyShadowAllocated = false;
 };
 GpuClouds g_gpuClouds;
 ComPtr<ID3D12DescriptorHeap> g_meshPreviewRtvHeap;
@@ -710,12 +742,26 @@ void CleanupD3D()
     g_cloudVolumeRootSignature.Reset();
     g_cloudRenderPso.Reset();
     g_cloudRenderRootSignature.Reset();
+    g_cloudShadowPso.Reset();
+    g_cloudShadowRootSignature.Reset();
     g_cloudPipelinesReady = false;
+    if (g_gpuClouds.meshCbUploadBuffer && g_gpuClouds.meshCbMapped)
+    {
+        g_gpuClouds.meshCbUploadBuffer->Unmap(0, nullptr);
+        g_gpuClouds.meshCbMapped = nullptr;
+    }
     g_gpuClouds.volumeTexture.Reset();
+    g_gpuClouds.shadowTexture.Reset();
+    g_gpuClouds.dummyShadowTexture.Reset();
+    g_gpuClouds.meshCbUploadBuffer.Reset();
     g_gpuClouds.volumeReady = false;
     g_gpuClouds.cachedSeed = INT_MIN;
     g_gpuClouds.volumeState = D3D12_RESOURCE_STATE_COMMON;
+    g_gpuClouds.shadowState = D3D12_RESOURCE_STATE_COMMON;
+    g_gpuClouds.shadowResolution = 0;
     g_gpuClouds.volumeSrvAllocated = false;
+    g_gpuClouds.shadowSrvAllocated = false;
+    g_gpuClouds.dummyShadowAllocated = false;
     g_meshPreviewRtvHeap.Reset();
     g_meshPreviewDsvHeap.Reset();
     if (g_fenceEvent)
@@ -770,6 +816,11 @@ std::filesystem::path CloudDensityShaderPath()
 std::filesystem::path CloudRenderShaderPath()
 {
     return ShaderPath("cloud_render.hlsl");
+}
+
+std::filesystem::path CloudShadowShaderPath()
+{
+    return ShaderPath("cloud_shadow.hlsl");
 }
 
 void EvaluateGraph();
@@ -1538,6 +1589,9 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
                 {"windDirectionDegrees", clouds.windDirectionDegrees},
                 {"windSpeedMetersPerSec", clouds.windSpeedMetersPerSec},
                 {"qualitySamples", clouds.qualitySamples},
+                {"shadowStrength", clouds.shadowStrength},
+                {"shadowResolution", clouds.shadowResolution},
+                {"shadowSamples", clouds.shadowSamples},
             }},
         };
 
@@ -1795,6 +1849,9 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
             clouds.windDirectionDegrees = std::clamp(cloudsJson.value("windDirectionDegrees", clouds.windDirectionDegrees), 0.0f, 360.0f);
             clouds.windSpeedMetersPerSec = std::clamp(cloudsJson.value("windSpeedMetersPerSec", clouds.windSpeedMetersPerSec), 0.0f, 500.0f);
             clouds.qualitySamples = std::clamp(cloudsJson.value("qualitySamples", clouds.qualitySamples), 8, 128);
+            clouds.shadowStrength = std::clamp(cloudsJson.value("shadowStrength", clouds.shadowStrength), 0.0f, 1.0f);
+            clouds.shadowResolution = std::clamp(cloudsJson.value("shadowResolution", clouds.shadowResolution), 256, 4096);
+            clouds.shadowSamples = std::clamp(cloudsJson.value("shadowSamples", clouds.shadowSamples), 4, 64);
         }
 
         const nlohmann::json nodesJson = root.value("nodes", nlohmann::json::array());
@@ -2032,32 +2089,57 @@ bool EnsureMeshPreviewPipeline(std::string* error)
     shadowRange.RegisterSpace = 0;
     shadowRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    D3D12_ROOT_PARAMETER rootParams[2]{};
+    D3D12_DESCRIPTOR_RANGE cloudShadowRange{};
+    cloudShadowRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    cloudShadowRange.NumDescriptors = 1;
+    cloudShadowRange.BaseShaderRegister = 1;
+    cloudShadowRange.RegisterSpace = 0;
+    cloudShadowRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    // Root parameter budget: 60 (mesh constants) + 2 (cloud shadow CBV)
+    // + 1 (shadow table) + 1 (cloud shadow table) = 64 DWORDs (the limit).
+    D3D12_ROOT_PARAMETER rootParams[4]{};
     rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     rootParams[0].Constants.ShaderRegister = 0;
     rootParams[0].Constants.RegisterSpace = 0;
     rootParams[0].Constants.Num32BitValues = sizeof(MeshPreviewConstants) / sizeof(UINT);
     rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
-    rootParams[1].DescriptorTable.pDescriptorRanges = &shadowRange;
+    rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    rootParams[1].Descriptor.ShaderRegister = 1;
+    rootParams[1].Descriptor.RegisterSpace = 0;
     rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    rootParams[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[2].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[2].DescriptorTable.pDescriptorRanges = &shadowRange;
+    rootParams[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    rootParams[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[3].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[3].DescriptorTable.pDescriptorRanges = &cloudShadowRange;
+    rootParams[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
-    D3D12_STATIC_SAMPLER_DESC shadowSampler{};
-    shadowSampler.Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
-    shadowSampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-    shadowSampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-    shadowSampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-    shadowSampler.ShaderRegister = 0;
-    shadowSampler.RegisterSpace = 0;
-    shadowSampler.MaxLOD = D3D12_FLOAT32_MAX;
-    shadowSampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    D3D12_STATIC_SAMPLER_DESC samplers[2]{};
+    samplers[0].Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
+    samplers[0].AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samplers[0].AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samplers[0].AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samplers[0].ShaderRegister = 0;
+    samplers[0].RegisterSpace = 0;
+    samplers[0].MaxLOD = D3D12_FLOAT32_MAX;
+    samplers[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    samplers[1].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    samplers[1].AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samplers[1].AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samplers[1].AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samplers[1].ShaderRegister = 1;
+    samplers[1].RegisterSpace = 0;
+    samplers[1].MaxLOD = D3D12_FLOAT32_MAX;
+    samplers[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
     D3D12_ROOT_SIGNATURE_DESC rsDesc{};
-    rsDesc.NumParameters = 2;
+    rsDesc.NumParameters = 4;
     rsDesc.pParameters = rootParams;
-    rsDesc.NumStaticSamplers = 1;
-    rsDesc.pStaticSamplers = &shadowSampler;
+    rsDesc.NumStaticSamplers = 2;
+    rsDesc.pStaticSamplers = samplers;
     rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
     ComPtr<ID3DBlob> sigBlob, errBlob;
@@ -3206,6 +3288,69 @@ bool EnsureCloudPipelines(std::string* error)
         if (FAILED(psoHr)) { if (error) *error = "Create cloud render PSO failed"; g_cloudPipelineStatus = "Cloud render PSO failed"; return false; }
     }
 
+    // -------- Cloud shadow compute pipeline --------
+    {
+        D3D12_DESCRIPTOR_RANGE volumeRange{};
+        volumeRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        volumeRange.NumDescriptors = 1;
+        volumeRange.BaseShaderRegister = 0;
+        volumeRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+        D3D12_DESCRIPTOR_RANGE uavRange{};
+        uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+        uavRange.NumDescriptors = 1;
+        uavRange.BaseShaderRegister = 0;
+        uavRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+        D3D12_ROOT_PARAMETER rootParams[3]{};
+        rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+        rootParams[0].Constants.ShaderRegister = 0;
+        rootParams[0].Constants.Num32BitValues = 20;
+        rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
+        rootParams[1].DescriptorTable.pDescriptorRanges = &volumeRange;
+        rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        rootParams[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        rootParams[2].DescriptorTable.NumDescriptorRanges = 1;
+        rootParams[2].DescriptorTable.pDescriptorRanges = &uavRange;
+        rootParams[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+        D3D12_STATIC_SAMPLER_DESC sampler{};
+        sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+        sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+        sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+        sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+        sampler.ShaderRegister = 0;
+        sampler.MaxLOD = D3D12_FLOAT32_MAX;
+        sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+        D3D12_ROOT_SIGNATURE_DESC rsDesc{};
+        rsDesc.NumParameters = 3;
+        rsDesc.pParameters = rootParams;
+        rsDesc.NumStaticSamplers = 1;
+        rsDesc.pStaticSamplers = &sampler;
+
+        ComPtr<ID3DBlob> sigBlob, errBlob;
+        HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
+        if (FAILED(hr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Serialize cloud shadow root sig failed"; g_cloudPipelineStatus = "Cloud shadow root signature failed"; return false; }
+        hr = g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_cloudShadowRootSignature));
+        if (FAILED(hr)) { if (error) *error = "Create cloud shadow root sig failed"; g_cloudPipelineStatus = "Cloud shadow root signature failed"; return false; }
+
+        ComPtr<ID3DBlob> csBlob;
+        errBlob.Reset();
+        const std::filesystem::path shaderPath = CloudShadowShaderPath();
+        const HRESULT compileHr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE,
+                                                      "CSGenerate", "cs_5_0", compileFlags, 0, &csBlob, &errBlob);
+        if (FAILED(compileHr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile cloud shadow shader failed"; g_cloudPipelineStatus = "Cloud shadow shader compile failed"; return false; }
+
+        D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{};
+        psoDesc.pRootSignature = g_cloudShadowRootSignature.Get();
+        psoDesc.CS = {csBlob->GetBufferPointer(), csBlob->GetBufferSize()};
+        hr = g_device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&g_cloudShadowPso));
+        if (FAILED(hr)) { if (error) *error = "Create cloud shadow PSO failed"; g_cloudPipelineStatus = "Cloud shadow PSO failed"; return false; }
+    }
+
     g_cloudPipelinesReady = true;
     g_cloudPipelineStatus = "Cloud pipelines ready";
     return true;
@@ -3359,6 +3504,262 @@ void RenderCloudPass(ID3D12GraphicsCommandList* commandList,
     commandList->SetGraphicsRootDescriptorTable(2, depthSrvGpu);
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     commandList->DrawInstanced(3, 1, 0, 0);
+}
+
+// Mirrors cbuffer in shaders/cloud_shadow.hlsl. 24 DWORDs.
+struct CloudShadowShaderConstants
+{
+    float boundsMinX;
+    float boundsMinZ;
+    float boundsSizeX;
+    float boundsSizeZ;
+    float altitudeMin;
+    float altitudeMax;
+    float horizontalScale;
+    float coverage;
+    float densityMultiplier;
+    float absorption;
+    float windOffsetX;
+    float windOffsetZ;
+    float sunDirection[4];
+    UINT  resolution;
+    UINT  numSamples;
+    float pad0;
+    float pad1;
+};
+static_assert(sizeof(CloudShadowShaderConstants) == 20 * sizeof(UINT), "CloudShadowShaderConstants must be 20 DWORDs");
+
+bool EnsureDummyCloudShadowTexture(std::string* error)
+{
+    if (g_gpuClouds.dummyShadowTexture && g_gpuClouds.dummyShadowAllocated)
+    {
+        return true;
+    }
+    D3D12_HEAP_PROPERTIES defaultHeap = HeapProperties(D3D12_HEAP_TYPE_DEFAULT);
+    D3D12_HEAP_PROPERTIES uploadHeap = HeapProperties(D3D12_HEAP_TYPE_UPLOAD);
+    D3D12_RESOURCE_DESC desc = Texture2DResourceDesc(1, 1, DXGI_FORMAT_R8_UNORM, D3D12_RESOURCE_FLAG_NONE);
+    HRESULT hr = g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &desc,
+                                                   D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                                   IID_PPV_ARGS(&g_gpuClouds.dummyShadowTexture));
+    if (FAILED(hr)) { if (error) *error = "Create dummy cloud shadow texture failed"; return false; }
+
+    UINT64 uploadSize = 0;
+    g_device->GetCopyableFootprints(&desc, 0, 1, 0, nullptr, nullptr, nullptr, &uploadSize);
+    D3D12_RESOURCE_DESC uploadDesc = BufferResourceDesc(uploadSize);
+    ComPtr<ID3D12Resource> upload;
+    hr = g_device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &uploadDesc,
+                                           D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&upload));
+    if (FAILED(hr)) { if (error) *error = "Create dummy upload heap failed"; return false; }
+
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
+    UINT numRows = 0;
+    UINT64 rowSizeBytes = 0;
+    g_device->GetCopyableFootprints(&desc, 0, 1, 0, &footprint, &numRows, &rowSizeBytes, &uploadSize);
+
+    void* mapped = nullptr;
+    upload->Map(0, nullptr, &mapped);
+    static_cast<uint8_t*>(mapped)[footprint.Offset] = 255;
+    upload->Unmap(0, nullptr);
+
+    ComPtr<ID3D12CommandAllocator> allocator;
+    ComPtr<ID3D12GraphicsCommandList> commandList;
+    g_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator));
+    g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&commandList));
+
+    D3D12_TEXTURE_COPY_LOCATION dst{};
+    dst.pResource = g_gpuClouds.dummyShadowTexture.Get();
+    dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    dst.SubresourceIndex = 0;
+    D3D12_TEXTURE_COPY_LOCATION src{};
+    src.pResource = upload.Get();
+    src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    src.PlacedFootprint = footprint;
+    commandList->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+
+    D3D12_RESOURCE_BARRIER toSrv{};
+    toSrv.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    toSrv.Transition.pResource = g_gpuClouds.dummyShadowTexture.Get();
+    toSrv.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+    toSrv.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    toSrv.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    commandList->ResourceBarrier(1, &toSrv);
+    commandList->Close();
+    ID3D12CommandList* lists[] = {commandList.Get()};
+    g_commandQueue->ExecuteCommandLists(1, lists);
+    const UINT64 fenceVal = ++g_fenceLastSignaledValue;
+    g_commandQueue->Signal(g_fence.Get(), fenceVal);
+    WaitForFenceValue(fenceVal);
+
+    AllocateSrvDescriptor(nullptr, &g_gpuClouds.dummyShadowSrvCpu, &g_gpuClouds.dummyShadowSrvGpu);
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+    srvDesc.Format = DXGI_FORMAT_R8_UNORM;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Texture2D.MipLevels = 1;
+    g_device->CreateShaderResourceView(g_gpuClouds.dummyShadowTexture.Get(), &srvDesc, g_gpuClouds.dummyShadowSrvCpu);
+    g_gpuClouds.dummyShadowAllocated = true;
+    return true;
+}
+
+bool EnsureCloudShadowMeshCb(std::string* error)
+{
+    if (g_gpuClouds.meshCbUploadBuffer && g_gpuClouds.meshCbMapped)
+    {
+        return true;
+    }
+    D3D12_HEAP_PROPERTIES uploadHeap = HeapProperties(D3D12_HEAP_TYPE_UPLOAD);
+    D3D12_RESOURCE_DESC desc = BufferResourceDesc(256);  // CBVs are 256-byte aligned
+    HRESULT hr = g_device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &desc,
+                                                   D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                                   IID_PPV_ARGS(&g_gpuClouds.meshCbUploadBuffer));
+    if (FAILED(hr)) { if (error) *error = "Create cloud shadow mesh CB failed"; return false; }
+    hr = g_gpuClouds.meshCbUploadBuffer->Map(0, nullptr, &g_gpuClouds.meshCbMapped);
+    if (FAILED(hr)) { if (error) *error = "Map cloud shadow mesh CB failed"; return false; }
+    CloudShadowMeshConstants zeros{};
+    std::memcpy(g_gpuClouds.meshCbMapped, &zeros, sizeof(zeros));
+    return true;
+}
+
+bool EnsureCloudShadowTexture(int resolution, std::string* error)
+{
+    if (g_gpuClouds.shadowTexture && g_gpuClouds.shadowResolution == resolution)
+    {
+        return true;
+    }
+    g_gpuClouds.shadowTexture.Reset();
+    g_gpuClouds.shadowResolution = resolution;
+
+    D3D12_HEAP_PROPERTIES defaultHeap = HeapProperties(D3D12_HEAP_TYPE_DEFAULT);
+    D3D12_RESOURCE_DESC desc = Texture2DResourceDesc(static_cast<UINT>(resolution), static_cast<UINT>(resolution),
+                                                      DXGI_FORMAT_R8_UNORM,
+                                                      D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    HRESULT hr = g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &desc,
+                                                   D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+                                                   IID_PPV_ARGS(&g_gpuClouds.shadowTexture));
+    if (FAILED(hr)) { if (error) *error = "Create cloud shadow texture failed"; return false; }
+    g_gpuClouds.shadowState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+
+    if (!g_gpuClouds.shadowSrvAllocated)
+    {
+        AllocateSrvDescriptor(nullptr, &g_gpuClouds.shadowSrvCpu, &g_gpuClouds.shadowSrvGpu);
+        g_gpuClouds.shadowSrvAllocated = true;
+    }
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+    srvDesc.Format = DXGI_FORMAT_R8_UNORM;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Texture2D.MipLevels = 1;
+    g_device->CreateShaderResourceView(g_gpuClouds.shadowTexture.Get(), &srvDesc, g_gpuClouds.shadowSrvCpu);
+    return true;
+}
+
+// Generates the cloud shadow texture. Called each frame the viewport renders
+// (cheap — ~0.5ms for 1024² × 16 samples). Reads the same 3D cloud volume the
+// cloud render pass uses, so the visible cloud and its cast shadow stay in sync.
+bool RunCloudShadowGeneration(const rock::CloudSettings& clouds,
+                              float boundsMinX, float boundsMinZ,
+                              float boundsSizeX, float boundsSizeZ,
+                              const float sunDirection[3],
+                              float windOffsetX, float windOffsetZ,
+                              std::string* error)
+{
+    if (!g_cloudPipelinesReady || !g_gpuClouds.volumeReady) return false;
+    const int resolution = std::clamp(clouds.shadowResolution, 256, 4096);
+    if (!EnsureCloudShadowTexture(resolution, error)) return false;
+
+    ComPtr<ID3D12CommandAllocator> allocator;
+    ComPtr<ID3D12GraphicsCommandList> commandList;
+    ThrowIfFailed(g_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)), "Cloud shadow allocator failed");
+    ThrowIfFailed(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&commandList)), "Cloud shadow CL failed");
+
+    if (g_gpuClouds.shadowState != D3D12_RESOURCE_STATE_UNORDERED_ACCESS)
+    {
+        D3D12_RESOURCE_BARRIER b{};
+        b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        b.Transition.pResource = g_gpuClouds.shadowTexture.Get();
+        b.Transition.StateBefore = g_gpuClouds.shadowState;
+        b.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        commandList->ResourceBarrier(1, &b);
+    }
+
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    heapDesc.NumDescriptors = 2;
+    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    ComPtr<ID3D12DescriptorHeap> tableHeap;
+    HRESULT hr = g_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&tableHeap));
+    if (FAILED(hr)) { if (error) *error = "Create cloud shadow descriptor heap failed"; return false; }
+
+    const UINT incSize = g_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    D3D12_CPU_DESCRIPTOR_HANDLE cpuStart = tableHeap->GetCPUDescriptorHandleForHeapStart();
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC volumeSrv{};
+    volumeSrv.Format = DXGI_FORMAT_R8_UNORM;
+    volumeSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D;
+    volumeSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    volumeSrv.Texture3D.MipLevels = 1;
+    g_device->CreateShaderResourceView(g_gpuClouds.volumeTexture.Get(), &volumeSrv, cpuStart);
+
+    D3D12_CPU_DESCRIPTOR_HANDLE uavCpu = cpuStart;
+    uavCpu.ptr += incSize;
+    D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+    uavDesc.Format = DXGI_FORMAT_R8_UNORM;
+    uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+    g_device->CreateUnorderedAccessView(g_gpuClouds.shadowTexture.Get(), nullptr, &uavDesc, uavCpu);
+
+    CloudShadowShaderConstants c{};
+    c.boundsMinX = boundsMinX;
+    c.boundsMinZ = boundsMinZ;
+    c.boundsSizeX = std::max(boundsSizeX, 1.0f);
+    c.boundsSizeZ = std::max(boundsSizeZ, 1.0f);
+    c.altitudeMin = clouds.altitudeMin;
+    c.altitudeMax = std::max(clouds.altitudeMax, clouds.altitudeMin + 1.0f);
+    c.horizontalScale = std::max(clouds.horizontalScale, 1.0f);
+    c.coverage = std::clamp(clouds.coverage, 0.0f, 1.0f);
+    c.densityMultiplier = std::clamp(clouds.densityMultiplier, 0.0f, 8.0f);
+    c.absorption = std::max(clouds.absorption, 0.0f);
+    c.windOffsetX = windOffsetX;
+    c.windOffsetZ = windOffsetZ;
+    c.sunDirection[0] = sunDirection[0];
+    c.sunDirection[1] = sunDirection[1];
+    c.sunDirection[2] = sunDirection[2];
+    c.sunDirection[3] = 0.0f;
+    c.resolution = static_cast<UINT>(resolution);
+    c.numSamples = static_cast<UINT>(std::clamp(clouds.shadowSamples, 4, 64));
+    c.pad0 = c.pad1 = 0.0f;
+
+    ID3D12DescriptorHeap* heaps[] = {tableHeap.Get()};
+    commandList->SetDescriptorHeaps(1, heaps);
+    commandList->SetComputeRootSignature(g_cloudShadowRootSignature.Get());
+    commandList->SetPipelineState(g_cloudShadowPso.Get());
+    commandList->SetComputeRoot32BitConstants(0, sizeof(c) / 4, &c, 0);
+    D3D12_GPU_DESCRIPTOR_HANDLE tableGpu = tableHeap->GetGPUDescriptorHandleForHeapStart();
+    D3D12_GPU_DESCRIPTOR_HANDLE uavGpu = tableGpu;
+    uavGpu.ptr += incSize;
+    commandList->SetComputeRootDescriptorTable(1, tableGpu);
+    commandList->SetComputeRootDescriptorTable(2, uavGpu);
+
+    const UINT groupCount = (static_cast<UINT>(resolution) + 7u) / 8u;
+    commandList->Dispatch(groupCount, groupCount, 1);
+
+    D3D12_RESOURCE_BARRIER toSrv{};
+    toSrv.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    toSrv.Transition.pResource = g_gpuClouds.shadowTexture.Get();
+    toSrv.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    toSrv.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    toSrv.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    commandList->ResourceBarrier(1, &toSrv);
+    g_gpuClouds.shadowState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+
+    ThrowIfFailed(commandList->Close(), "Close cloud shadow CL failed");
+    ID3D12CommandList* lists[] = {commandList.Get()};
+    g_commandQueue->ExecuteCommandLists(1, lists);
+    const UINT64 fenceValue = ++g_fenceLastSignaledValue;
+    ThrowIfFailed(g_commandQueue->Signal(g_fence.Get(), fenceValue), "Signal cloud shadow fence failed");
+    WaitForFenceValue(fenceValue);
+
+    return true;
 }
 
 int EffectiveMeshResolution(int resolution, int lod)
@@ -4099,6 +4500,9 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.cloudWindDirectionDegrees != g_graph.Settings().clouds.windDirectionDegrees ||
         g_gpuMeshPreview.cloudWindSpeed != g_graph.Settings().clouds.windSpeedMetersPerSec ||
         g_gpuMeshPreview.cloudQualitySamples != g_graph.Settings().clouds.qualitySamples ||
+        g_gpuMeshPreview.cloudShadowStrength != g_graph.Settings().clouds.shadowStrength ||
+        g_gpuMeshPreview.cloudShadowResolution != g_graph.Settings().clouds.shadowResolution ||
+        g_gpuMeshPreview.cloudShadowSamples != g_graph.Settings().clouds.shadowSamples ||
         (g_graph.Settings().clouds.enabled && g_graph.Settings().clouds.windSpeedMetersPerSec > 0.0f) ||
         (showGrid && !g_gpuMeshPreview.gridVertexBuffer) ||
         g_gpuMeshPreview.colorState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
@@ -4331,13 +4735,70 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         skyBase.sunDirection[2] = constants.sunDirection[2];
         RenderSkyPass(commandList.Get(), g_graph.Settings().sky, skyBase);
 
+        // Cloud shadow texture: regenerated each frame from the same cloud
+        // volume the cloud render pass uses. Before the mesh draw so the
+        // surface PS can sample it. CloudShadowMeshConstants in the upload
+        // CB tells the shader where the texture lives in world XZ.
+        const rock::CloudSettings& cloudSettingsForShadow = g_graph.Settings().clouds;
+        const float windRad = cloudSettingsForShadow.windDirectionDegrees * 3.14159265358979323846f / 180.0f;
+        const float seconds = static_cast<float>(std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count());
+        const float windOffsetX = std::cos(windRad) * cloudSettingsForShadow.windSpeedMetersPerSec * seconds;
+        const float windOffsetZ = std::sin(windRad) * cloudSettingsForShadow.windSpeedMetersPerSec * seconds;
+
+        // Expand the shadow footprint a bit beyond the mesh so projected
+        // shadows don't get clamped to the mesh edges.
+        const float shadowMargin = std::max(boundsDiagonal * 0.4f, 1024.0f);
+        const float shadowMinX = boundsMin.x - shadowMargin;
+        const float shadowMinZ = boundsMin.z - shadowMargin;
+        const float shadowSizeX = (boundsMax.x - boundsMin.x) + shadowMargin * 2.0f;
+        const float shadowSizeZ = (boundsMax.z - boundsMin.z) + shadowMargin * 2.0f;
+
+        bool cloudShadowReady = false;
+        if (cloudSettingsForShadow.enabled && cloudSettingsForShadow.shadowStrength > 0.001f)
+        {
+            std::string ignored;
+            if (EnsureCloudVolume(cloudSettingsForShadow.seed, &ignored))
+            {
+                cloudShadowReady = RunCloudShadowGeneration(
+                    cloudSettingsForShadow,
+                    shadowMinX, shadowMinZ, shadowSizeX, shadowSizeZ,
+                    constants.sunDirection, windOffsetX, windOffsetZ, &ignored);
+            }
+        }
+
+        std::string cloudShadowCbError;
+        EnsureCloudShadowMeshCb(&cloudShadowCbError);
+        EnsureDummyCloudShadowTexture(&cloudShadowCbError);
+
+        CloudShadowMeshConstants cloudShadowCb{};
+        cloudShadowCb.cloudShadowEnabled = cloudShadowReady ? 1.0f : 0.0f;
+        cloudShadowCb.cloudShadowStrength = cloudShadowReady ? std::clamp(cloudSettingsForShadow.shadowStrength, 0.0f, 1.0f) : 0.0f;
+        cloudShadowCb.cloudShadowAltitudeMin = cloudSettingsForShadow.altitudeMin;
+        cloudShadowCb.cloudShadowPadA = 0.0f;
+        cloudShadowCb.cloudShadowMinX = shadowMinX;
+        cloudShadowCb.cloudShadowMinZ = shadowMinZ;
+        cloudShadowCb.cloudShadowSizeX = shadowSizeX;
+        cloudShadowCb.cloudShadowSizeZ = shadowSizeZ;
+        if (g_gpuClouds.meshCbMapped)
+        {
+            std::memcpy(g_gpuClouds.meshCbMapped, &cloudShadowCb, sizeof(cloudShadowCb));
+        }
+
         // Restore mesh state for the surface draws below. Cloud pass moves to
         // after the mesh draws so it can sample depth and limit ray-march.
         ID3D12DescriptorHeap* descriptorHeaps[] = {g_srvHeap.Get()};
         commandList->SetDescriptorHeaps(1, descriptorHeaps);
         commandList->SetGraphicsRootSignature(g_meshPreviewRootSignature.Get());
         commandList->SetGraphicsRoot32BitConstants(0, sizeof(constants) / 4, &constants, 0);
-        commandList->SetGraphicsRootDescriptorTable(1, g_gpuMeshPreview.shadowSrvGpu);
+        if (g_gpuClouds.meshCbUploadBuffer)
+        {
+            commandList->SetGraphicsRootConstantBufferView(1, g_gpuClouds.meshCbUploadBuffer->GetGPUVirtualAddress());
+        }
+        commandList->SetGraphicsRootDescriptorTable(2, g_gpuMeshPreview.shadowSrvGpu);
+        D3D12_GPU_DESCRIPTOR_HANDLE cloudShadowGpu = cloudShadowReady && g_gpuClouds.shadowSrvAllocated
+            ? g_gpuClouds.shadowSrvGpu
+            : g_gpuClouds.dummyShadowSrvGpu;
+        commandList->SetGraphicsRootDescriptorTable(3, cloudShadowGpu);
 
         if (showSurface && g_gpuMeshPreview.triIndexCount > 0)
         {
@@ -4421,11 +4882,8 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             cloudBase.nearPlane = constants.nearPlane;
             cloudBase.farPlane = constants.farPlane;
 
-            const float windRad = cloudSettings.windDirectionDegrees * 3.14159265358979323846f / 180.0f;
-            const float seconds = static_cast<float>(std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count());
-            const float windOffsetX = std::cos(windRad) * cloudSettings.windSpeedMetersPerSec * seconds;
-            const float windOffsetZ = std::sin(windRad) * cloudSettings.windSpeedMetersPerSec * seconds;
-
+            // windRad / seconds / windOffsetX / windOffsetZ are already
+            // computed earlier for the cloud-shadow generation pass.
             std::string cloudVolumeError;
             if (EnsureCloudVolume(cloudSettings.seed, &cloudVolumeError))
             {
@@ -4486,6 +4944,9 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.cloudWindDirectionDegrees = g_graph.Settings().clouds.windDirectionDegrees;
         g_gpuMeshPreview.cloudWindSpeed = g_graph.Settings().clouds.windSpeedMetersPerSec;
         g_gpuMeshPreview.cloudQualitySamples = g_graph.Settings().clouds.qualitySamples;
+        g_gpuMeshPreview.cloudShadowStrength = g_graph.Settings().clouds.shadowStrength;
+        g_gpuMeshPreview.cloudShadowResolution = g_graph.Settings().clouds.shadowResolution;
+        g_gpuMeshPreview.cloudShadowSamples = g_graph.Settings().clouds.shadowSamples;
         g_gpuMeshPreview.colorState    = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         return true;
     }
@@ -6392,6 +6853,9 @@ void DrawDisplaySettingsPanel()
             DrawPropertyFloatRow("Wind Direction (deg)", "CloudWindDir", &clouds.windDirectionDegrees, 0.0f, 360.0f, rock::CloudSettings{}.windDirectionDegrees, "Cloud wind direction changed", false, "風の向き(度、北=0、東=90)。Wind Speed > 0 のときに雲が流れる方向。", "%.0f");
             DrawPropertyFloatRow("Wind Speed (m/s)", "CloudWindSpeed", &clouds.windSpeedMetersPerSec, 0.0f, 200.0f, rock::CloudSettings{}.windSpeedMetersPerSec, "Cloud wind speed changed", false, "雲が流れる速度 (m/s)。0 で静止。動かすとフレーム毎にビューポートが再描画され負荷が増えます。");
             DrawPropertyIntRow("Quality (samples)", "CloudQuality", &clouds.qualitySamples, 8, 96, rock::CloudSettings{}.qualitySamples, "Cloud quality changed", false, "1 ピクセルあたりのレイマーチサンプル数。大きいほど雲のディテールが上がりますが負荷も増えます。32 が標準、低スペックなら 16、高品質なら 64。");
+            DrawPropertyFloatRow("Shadow Strength", "CloudShadowStrength", &clouds.shadowStrength, 0.0f, 1.0f, rock::CloudSettings{}.shadowStrength, "Cloud shadow strength changed", false, "雲が地形に落とす影の強さ。0 で影無し、1 で完全に暗くなります。太陽方向に projection した雲の透過率を地形シェーダーで乗算します。");
+            DrawPropertyIntRow("Shadow Resolution", "CloudShadowResolution", &clouds.shadowResolution, 256, 4096, rock::CloudSettings{}.shadowResolution, "Cloud shadow resolution changed", false, "雲影テクスチャの解像度 (片辺ピクセル数)。1024 で約 1MB。大きいほど影の輪郭が細かくなりますが生成負荷が増えます。");
+            DrawPropertyIntRow("Shadow Samples", "CloudShadowSamples", &clouds.shadowSamples, 4, 64, rock::CloudSettings{}.shadowSamples, "Cloud shadow samples changed", false, "雲影テクスチャ生成時に太陽方向へ撃つレイのサンプル数。大きいほど厚い雲の影が正確になりますが生成時間も増えます。16 が標準。");
         }
 
         ImGui::EndTable();
