@@ -369,6 +369,16 @@ ComPtr<ID3D12RootSignature> g_skyRootSignature;
 ComPtr<ID3D12PipelineState> g_skyPso;
 bool g_skyPipelineReady = false;
 std::string g_skyPipelineStatus = "Sky pipeline not initialized";
+ComPtr<ID3D12RootSignature> g_atmosphereMultiScatterRootSignature;
+ComPtr<ID3D12PipelineState> g_atmosphereMultiScatterPso;
+ComPtr<ID3D12Resource> g_atmosphereMultiScatterTexture;
+D3D12_RESOURCE_STATES g_atmosphereMultiScatterState = D3D12_RESOURCE_STATE_COMMON;
+D3D12_CPU_DESCRIPTOR_HANDLE g_atmosphereMultiScatterSrvCpu{};
+D3D12_GPU_DESCRIPTOR_HANDLE g_atmosphereMultiScatterSrvGpu{};
+bool g_atmosphereMultiScatterSrvAllocated = false;
+bool g_atmosphereMultiScatterReady = false;
+float g_atmosphereCachedMie = std::numeric_limits<float>::quiet_NaN();
+float g_atmosphereCachedMieG = std::numeric_limits<float>::quiet_NaN();
 ComPtr<ID3D12RootSignature> g_cloudVolumeRootSignature;
 ComPtr<ID3D12PipelineState> g_cloudVolumePso;
 ComPtr<ID3D12RootSignature> g_cloudRenderRootSignature;
@@ -753,6 +763,14 @@ void CleanupD3D()
     g_skyPso.Reset();
     g_skyRootSignature.Reset();
     g_skyPipelineReady = false;
+    g_atmosphereMultiScatterPso.Reset();
+    g_atmosphereMultiScatterRootSignature.Reset();
+    g_atmosphereMultiScatterTexture.Reset();
+    g_atmosphereMultiScatterState = D3D12_RESOURCE_STATE_COMMON;
+    g_atmosphereMultiScatterSrvAllocated = false;
+    g_atmosphereMultiScatterReady = false;
+    g_atmosphereCachedMie = std::numeric_limits<float>::quiet_NaN();
+    g_atmosphereCachedMieG = std::numeric_limits<float>::quiet_NaN();
     g_cloudVolumePso.Reset();
     g_cloudVolumeRootSignature.Reset();
     g_cloudRenderPso.Reset();
@@ -821,6 +839,11 @@ std::filesystem::path MaskNoiseShaderPath()
 std::filesystem::path SkyShaderPath()
 {
     return ShaderPath("sky.hlsl");
+}
+
+std::filesystem::path AtmosphereMultiScatterShaderPath()
+{
+    return ShaderPath("atmosphere_multiscatter.hlsl");
 }
 
 std::filesystem::path CloudDensityShaderPath()
@@ -3029,16 +3052,39 @@ bool EnsureSkyPipeline(std::string* error)
         return false;
     }
 
-    D3D12_ROOT_PARAMETER rootParam{};
-    rootParam.ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    rootParam.Constants.ShaderRegister = 0;
-    rootParam.Constants.RegisterSpace = 0;
-    rootParam.Constants.Num32BitValues = 28;
-    rootParam.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    D3D12_DESCRIPTOR_RANGE lutRange{};
+    lutRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    lutRange.NumDescriptors = 1;
+    lutRange.BaseShaderRegister = 0;
+    lutRange.RegisterSpace = 0;
+    lutRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_ROOT_PARAMETER rootParams[2]{};
+    rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    rootParams[0].Constants.ShaderRegister = 0;
+    rootParams[0].Constants.RegisterSpace = 0;
+    rootParams[0].Constants.Num32BitValues = 28;
+    rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[1].DescriptorTable.pDescriptorRanges = &lutRange;
+    rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    D3D12_STATIC_SAMPLER_DESC lutSampler{};
+    lutSampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    lutSampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    lutSampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    lutSampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    lutSampler.ShaderRegister = 0;
+    lutSampler.RegisterSpace = 0;
+    lutSampler.MaxLOD = D3D12_FLOAT32_MAX;
+    lutSampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
     D3D12_ROOT_SIGNATURE_DESC rsDesc{};
-    rsDesc.NumParameters = 1;
-    rsDesc.pParameters = &rootParam;
+    rsDesc.NumParameters = 2;
+    rsDesc.pParameters = rootParams;
+    rsDesc.NumStaticSamplers = 1;
+    rsDesc.pStaticSamplers = &lutSampler;
     rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
     ComPtr<ID3DBlob> sigBlob, errBlob;
@@ -3106,6 +3152,176 @@ bool EnsureSkyPipeline(std::string* error)
 
     g_skyPipelineReady = true;
     g_skyPipelineStatus = "Sky pipeline ready";
+    return true;
+}
+
+// 32×32 R16G16B16A16_FLOAT multi-scatter LUT, regenerated only when the
+// Mie atmospheric parameters change.
+static constexpr UINT kAtmMultiScatterResolution = 32u;
+
+bool EnsureAtmosphereMultiScatterPipeline(std::string* error)
+{
+    if (g_atmosphereMultiScatterPso && g_atmosphereMultiScatterRootSignature)
+    {
+        return true;
+    }
+    if (!g_device)
+    {
+        if (error) *error = "D3D12 device is not available";
+        return false;
+    }
+
+    D3D12_DESCRIPTOR_RANGE uavRange{};
+    uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    uavRange.NumDescriptors = 1;
+    uavRange.BaseShaderRegister = 0;
+    uavRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_ROOT_PARAMETER rootParams[2]{};
+    rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    rootParams[0].Constants.ShaderRegister = 0;
+    rootParams[0].Constants.Num32BitValues = 4;
+    rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[1].DescriptorTable.pDescriptorRanges = &uavRange;
+    rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    D3D12_ROOT_SIGNATURE_DESC rsDesc{};
+    rsDesc.NumParameters = 2;
+    rsDesc.pParameters = rootParams;
+
+    ComPtr<ID3DBlob> sigBlob, errBlob;
+    HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
+    if (FAILED(hr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Serialize multi-scatter root sig failed"; return false; }
+    hr = g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_atmosphereMultiScatterRootSignature));
+    if (FAILED(hr)) { if (error) *error = "Create multi-scatter root signature failed"; return false; }
+
+    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
+#if defined(_DEBUG)
+    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+#endif
+
+    ComPtr<ID3DBlob> csBlob;
+    errBlob.Reset();
+    const std::filesystem::path shaderPath = AtmosphereMultiScatterShaderPath();
+    HRESULT compileHr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE,
+                                            "CSGenerate", "cs_5_0", compileFlags, 0, &csBlob, &errBlob);
+    if (FAILED(compileHr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile multi-scatter shader failed"; return false; }
+
+    D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{};
+    psoDesc.pRootSignature = g_atmosphereMultiScatterRootSignature.Get();
+    psoDesc.CS = {csBlob->GetBufferPointer(), csBlob->GetBufferSize()};
+    hr = g_device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&g_atmosphereMultiScatterPso));
+    if (FAILED(hr)) { if (error) *error = "Create multi-scatter PSO failed"; return false; }
+    return true;
+}
+
+bool EnsureAtmosphereMultiScatterLut(float mieStrength, float mieEccentricity, std::string* error)
+{
+    if (!EnsureAtmosphereMultiScatterPipeline(error)) return false;
+
+    if (!g_atmosphereMultiScatterTexture)
+    {
+        D3D12_HEAP_PROPERTIES heap = HeapProperties(D3D12_HEAP_TYPE_DEFAULT);
+        D3D12_RESOURCE_DESC desc = Texture2DResourceDesc(kAtmMultiScatterResolution, kAtmMultiScatterResolution,
+                                                         DXGI_FORMAT_R16G16B16A16_FLOAT,
+                                                         D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+        HRESULT hr = g_device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
+                                                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+                                                       IID_PPV_ARGS(&g_atmosphereMultiScatterTexture));
+        if (FAILED(hr)) { if (error) *error = "Create multi-scatter texture failed"; return false; }
+        g_atmosphereMultiScatterState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        g_atmosphereMultiScatterReady = false;
+
+        if (!g_atmosphereMultiScatterSrvAllocated)
+        {
+            AllocateSrvDescriptor(nullptr, &g_atmosphereMultiScatterSrvCpu, &g_atmosphereMultiScatterSrvGpu);
+            g_atmosphereMultiScatterSrvAllocated = true;
+        }
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+        srvDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Texture2D.MipLevels = 1;
+        g_device->CreateShaderResourceView(g_atmosphereMultiScatterTexture.Get(), &srvDesc, g_atmosphereMultiScatterSrvCpu);
+    }
+
+    if (g_atmosphereMultiScatterReady &&
+        g_atmosphereCachedMie == mieStrength &&
+        g_atmosphereCachedMieG == mieEccentricity)
+    {
+        return true;
+    }
+
+    ComPtr<ID3D12CommandAllocator> allocator;
+    ComPtr<ID3D12GraphicsCommandList> commandList;
+    ThrowIfFailed(g_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)), "Multi-scatter allocator failed");
+    ThrowIfFailed(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&commandList)), "Multi-scatter CL failed");
+
+    if (g_atmosphereMultiScatterState != D3D12_RESOURCE_STATE_UNORDERED_ACCESS)
+    {
+        D3D12_RESOURCE_BARRIER b{};
+        b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        b.Transition.pResource = g_atmosphereMultiScatterTexture.Get();
+        b.Transition.StateBefore = g_atmosphereMultiScatterState;
+        b.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        commandList->ResourceBarrier(1, &b);
+    }
+
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    heapDesc.NumDescriptors = 1;
+    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    ComPtr<ID3D12DescriptorHeap> uavHeap;
+    HRESULT hr = g_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&uavHeap));
+    if (FAILED(hr)) { if (error) *error = "Create multi-scatter UAV heap failed"; return false; }
+    D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+    uavDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+    g_device->CreateUnorderedAccessView(g_atmosphereMultiScatterTexture.Get(), nullptr, &uavDesc,
+                                         uavHeap->GetCPUDescriptorHandleForHeapStart());
+
+    struct MultiScatterConstants
+    {
+        float mieStrength;
+        float mieEccentricity;
+        float pad0;
+        float pad1;
+    };
+    MultiScatterConstants mc{};
+    mc.mieStrength = mieStrength;
+    mc.mieEccentricity = mieEccentricity;
+
+    ID3D12DescriptorHeap* heaps[] = {uavHeap.Get()};
+    commandList->SetDescriptorHeaps(1, heaps);
+    commandList->SetComputeRootSignature(g_atmosphereMultiScatterRootSignature.Get());
+    commandList->SetPipelineState(g_atmosphereMultiScatterPso.Get());
+    commandList->SetComputeRoot32BitConstants(0, 4, &mc, 0);
+    commandList->SetComputeRootDescriptorTable(1, uavHeap->GetGPUDescriptorHandleForHeapStart());
+    const UINT groupCount = (kAtmMultiScatterResolution + 7u) / 8u;
+    commandList->Dispatch(groupCount, groupCount, 1);
+
+    D3D12_RESOURCE_BARRIER toSrv{};
+    toSrv.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    toSrv.Transition.pResource = g_atmosphereMultiScatterTexture.Get();
+    toSrv.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    toSrv.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    toSrv.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    commandList->ResourceBarrier(1, &toSrv);
+    g_atmosphereMultiScatterState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+
+    ThrowIfFailed(commandList->Close(), "Close multi-scatter CL failed");
+    ID3D12CommandList* lists[] = {commandList.Get()};
+    g_commandQueue->ExecuteCommandLists(1, lists);
+    const UINT64 fenceValue = ++g_fenceLastSignaledValue;
+    ThrowIfFailed(g_commandQueue->Signal(g_fence.Get(), fenceValue), "Signal multi-scatter fence failed");
+    WaitForFenceValue(fenceValue);
+
+    g_atmosphereCachedMie = mieStrength;
+    g_atmosphereCachedMieG = mieEccentricity;
+    g_atmosphereMultiScatterReady = true;
     return true;
 }
 
@@ -3316,9 +3532,18 @@ void RenderSkyPass(ID3D12GraphicsCommandList* commandList, const rock::SkySettin
         return;
     }
 
+    const float mieS = std::clamp(sky.mieStrength, 0.0f, 8.0f);
+    const float mieG = std::clamp(sky.mieEccentricity, -0.99f, 0.99f);
+    std::string lutError;
+    const bool lutReady = EnsureAtmosphereMultiScatterLut(mieS, mieG, &lutError);
+    if (!lutReady || !g_atmosphereMultiScatterSrvAllocated)
+    {
+        return;
+    }
+
     SkyShaderConstants constants = base;
-    constants.mieStrength = std::clamp(sky.mieStrength, 0.0f, 8.0f);
-    constants.mieEccentricity = std::clamp(sky.mieEccentricity, -0.99f, 0.99f);
+    constants.mieStrength = mieS;
+    constants.mieEccentricity = mieG;
     const float sunHalfAngleRad = std::clamp(sky.sunSizeDegrees, 0.05f, 30.0f) * 0.5f * 3.14159265358979323846f / 180.0f;
     constants.sunSize = std::cos(sunHalfAngleRad);
     constants.sunGlowStrength = std::clamp(sky.sunGlowStrength, 0.0f, 4.0f);
@@ -3327,9 +3552,15 @@ void RenderSkyPass(ID3D12GraphicsCommandList* commandList, const rock::SkySettin
     constants.groundAlbedo[2] = sky.groundAlbedo[2];
     constants.groundAlbedo[3] = 1.0f;
 
+    // The multi-scatter LUT SRV lives in g_srvHeap, so that heap must be
+    // bound before SetGraphicsRootDescriptorTable. The mesh pass below
+    // also sets it but we need it earlier for the sky.
+    ID3D12DescriptorHeap* heaps[] = {g_srvHeap.Get()};
+    commandList->SetDescriptorHeaps(1, heaps);
     commandList->SetGraphicsRootSignature(g_skyRootSignature.Get());
     commandList->SetPipelineState(g_skyPso.Get());
     commandList->SetGraphicsRoot32BitConstants(0, sizeof(constants) / 4, &constants, 0);
+    commandList->SetGraphicsRootDescriptorTable(1, g_atmosphereMultiScatterSrvGpu);
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     // Sky PSO has no input layout, so the IA stage ignores any VB/IB still
     // bound from the prior shadow pass. We leave them alone so the surface

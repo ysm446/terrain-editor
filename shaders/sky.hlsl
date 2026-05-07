@@ -30,6 +30,9 @@ cbuffer SkyConstants : register(b0)
     float4 groundAlbedo;     // .a unused
 };
 
+Texture2D<float4> MultiScatterLut : register(t0);
+SamplerState MultiScatterSampler : register(s0);
+
 struct VsOut
 {
     float4 pos : SV_Position;
@@ -58,7 +61,8 @@ float4 SkyPS(VsOut input) : SV_Target
     float3 sky;
     if (ray.y >= 0.0)
     {
-        sky = AtmComputeScattering(ray, sunDirection.xyz, mieStrength, mieEccentricity);
+        sky = AtmComputeScattering(ray, sunDirection.xyz, mieStrength, mieEccentricity,
+                                   MultiScatterLut, MultiScatterSampler, true);
     }
     else
     {
@@ -67,7 +71,8 @@ float4 SkyPS(VsOut input) : SV_Target
         // the horizon so we don't get a hard line.
         float3 upRay = float3(ray.x, max(-ray.y, 0.05), ray.z);
         upRay = normalize(upRay);
-        float3 ambient = AtmComputeScattering(upRay, sunDirection.xyz, mieStrength, mieEccentricity);
+        float3 ambient = AtmComputeScattering(upRay, sunDirection.xyz, mieStrength, mieEccentricity,
+                                              MultiScatterLut, MultiScatterSampler, true);
         float fade = saturate(-ray.y * 4.0);
         sky = lerp(ambient, ambient * groundAlbedo.rgb * 0.7, fade);
     }

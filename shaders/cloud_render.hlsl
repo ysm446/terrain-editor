@@ -216,15 +216,19 @@ float4 CloudPS(VsOut input) : SV_Target
         float density = SampleCloudDensity(p);
         if (density > 0.0)
         {
-            // Top-lit shading: top of the cloud (yNorm = 1) reads the full
-            // cloud color, the bottom slightly less. The cloud body is
-            // multiplied by atmosphereSunColor so warm-sunset / dim-night
-            // skies tint the cloud accordingly, and the bottom mixes in
-            // atmosphereSkyColor for cool ambient on the underside.
+            // Top of the cloud receives almost direct sunlight (transmittance
+            // along the sun ray is ~1 at noon); the bottom is lit by the
+            // hemispherical sky + a small amount of sun bounced off the
+            // ground. atmosphereSkyColor is the zenith *radiance* in the same
+            // units as the sky shader output, so we boost it to roughly
+            // approximate a full-hemisphere irradiance instead of a single
+            // zenith point sample. atmosphereSunColor is the dimensionless
+            // [0,1] atmospheric transmittance along the sun direction.
             float yNorm = saturate((p.y - altitudeMin) / max(altitudeMax - altitudeMin, 1.0));
             float topLight = lerp(0.85, 1.05, yNorm);
             float3 sunlitColor = cloudColor.rgb * atmosphereSunColor.rgb;
-            float3 ambientColor = cloudColor.rgb * atmosphereSkyColor.rgb * 0.4;
+            float3 ambientColor = cloudColor.rgb *
+                (atmosphereSkyColor.rgb * 2.5 + atmosphereSunColor.rgb * 0.35);
             float3 lit = lerp(ambientColor, sunlitColor, yNorm) * topLight;
 
             float dT = exp(-density * absorption * stepLen);

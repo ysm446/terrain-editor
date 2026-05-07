@@ -49,12 +49,30 @@ float2 AtmRaySphere(float3 origin, float3 dir, float radius)
     return float2(-b - sq, -b + sq);
 }
 
+// Sample the multi-scatter LUT at (altitude, cos(sun zenith)). The LUT is
+// 32×32 float4 with U=cos(sunZenith) in [0,1] and V=altitude/atmosphereHeight
+// in [0,1]. Returns 0 if the caller passes a null sampler — used by the
+// multi-scatter LUT generator itself which obviously can't sample its own
+// output.
+float3 AtmSampleMultiScatter(Texture2D<float4> lut, SamplerState samp, float altitude, float cosSunZenith)
+{
+    float u = saturate(cosSunZenith * 0.5 + 0.5);
+    float v = saturate(altitude / (kAtmAtmosphereRadius - kAtmEarthRadius));
+    return lut.SampleLevel(samp, float2(u, v), 0).rgb;
+}
+
 // Atmospheric in-scattering integrated along the ray (origin, viewDir).
 // `mieStrength` multiplies the Mie scattering coefficient (haze).
 // `mieG` is the Henyey-Greenstein eccentricity (sun glow tightness).
 // Output is RGB radiance in the same arbitrary linear units as the rest
 // of the renderer (sun colour ends up around 1.0 at zenith).
-float3 AtmComputeScattering(float3 viewDir, float3 sunDir, float mieStrength, float mieG)
+//
+// The multi-scatter LUT, when valid, adds a Hillaire-style isotropic
+// second-order term at each ray-march step so the noon horizon comes out
+// closer to a UE5-like blue/white instead of single-scatter's warm cast.
+float3 AtmComputeScattering(float3 viewDir, float3 sunDir, float mieStrength, float mieG,
+                            Texture2D<float4> multiScatterLut, SamplerState multiScatterSampler,
+                            bool useMultiScatter)
 {
     float3 origin = float3(0.0, kAtmEarthRadius + kAtmCameraHeight, 0.0);
 
@@ -79,6 +97,7 @@ float3 AtmComputeScattering(float3 viewDir, float3 sunDir, float mieStrength, fl
     float opticalM = 0.0;
     float3 sumR = float3(0.0, 0.0, 0.0);
     float3 sumM = float3(0.0, 0.0, 0.0);
+    float3 sumMS = float3(0.0, 0.0, 0.0);
 
     [loop]
     for (int i = 0; i < kAtmNumViewSteps; ++i)
@@ -92,6 +111,18 @@ float3 AtmComputeScattering(float3 viewDir, float3 sunDir, float mieStrength, fl
         float dM = exp(-h / kAtmHeightM) * stepLen;
         opticalR += dR;
         opticalM += dM;
+
+        // Multi-scatter contribution accumulates at every step, even where
+        // the sun is blocked (in shadow regions multiple scatter still
+        // brings light from elsewhere in the sky — that's the whole point).
+        if (useMultiScatter)
+        {
+            float cosSunZenith = dot(normalize(p), sunDir);
+            float3 multi = AtmSampleMultiScatter(multiScatterLut, multiScatterSampler, h, cosSunZenith);
+            float3 viewTau = kAtmBetaR * opticalR + kAtmBetaM * mieStrength * 1.1 * opticalM;
+            float3 viewTransmit = exp(-viewTau);
+            sumMS += viewTransmit * multi * (kAtmBetaR * dR + kAtmBetaM * mieStrength * dM);
+        }
 
         float2 sunHit = AtmRaySphere(p, sunDir, kAtmAtmosphereRadius);
         if (sunHit.y <= 0.0) continue;
@@ -126,7 +157,7 @@ float3 AtmComputeScattering(float3 viewDir, float3 sunDir, float mieStrength, fl
                    pow(max(1.0 + gg - 2.0 * g * cosTheta, 1e-6), 1.5);  // 1 / (4π)
 
     return kAtmSunIntensity *
-           (sumR * kAtmBetaR * phaseR + sumM * kAtmBetaM * mieStrength * phaseM);
+           (sumR * kAtmBetaR * phaseR + sumM * kAtmBetaM * mieStrength * phaseM) + sumMS;
 }
 
 // Atmospheric transmittance from sea-level along the sun direction —
