@@ -219,10 +219,6 @@ float4 PSSurface(VSOut i) : SV_TARGET
     baseColor = lerp(baseColor, slopeTint, slope * 0.42);
 
     float3 col = baseColor * light;
-    if (lightingMode > 1.5 && maskPreview < 0.5)
-    {
-        return float4(saturate(DebugShadowColor(i.worldPos)), 1.0);
-    }
     if (lightingMode > 0.5 && maskPreview < 0.5)
     {
         float3 L = normalize(sunDirection.xyz);

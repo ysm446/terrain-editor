@@ -1206,7 +1206,7 @@ bool LoadAppSettings(std::string* error = nullptr)
         settings.preview.gridCellSizeMeters = std::clamp(visibilityJson.value("gridCellSizeMeters", settings.preview.gridCellSizeMeters), 1.0f, 10000.0f);
         settings.preview.resolution = NearestResolutionPreset(visibilityJson.value("previewResolution", settings.preview.resolution));
         settings.preview.lod = std::clamp(visibilityJson.value("previewLod", settings.preview.lod), 0, 4);
-        settings.preview.lightingMode = std::clamp(visibilityJson.value("lightingMode", settings.preview.lightingMode), 0, 2);
+        settings.preview.lightingMode = std::clamp(visibilityJson.value("lightingMode", settings.preview.lightingMode), 0, 1);
         settings.preview.sunAzimuthDegrees = std::clamp(visibilityJson.value("sunAzimuthDegrees", settings.preview.sunAzimuthDegrees), 0.0f, 360.0f);
         settings.preview.sunElevationDegrees = std::clamp(visibilityJson.value("sunElevationDegrees", settings.preview.sunElevationDegrees), 1.0f, 89.0f);
         settings.preview.sunIntensity = std::clamp(visibilityJson.value("sunIntensity", settings.preview.sunIntensity), 0.0f, 5.0f);
@@ -6771,9 +6771,9 @@ void DrawDisplaySettingsPanel()
                 SaveAppSettingsSilently();
             }
         }
-        if (DrawPropertyComboRow("Lighting Mode", "DisplayLightingMode", &settings.preview.lightingMode, "Simple\0PBR Preview\0Shadow Debug\0", "3Dビューのライティングモードです。Simple はマスク確認向け、PBR Preview は地形の陰影確認向け、Shadow Debug はシャドウ判定の確認用です。", rock::PreviewSettings{}.lightingMode))
+        if (DrawPropertyComboRow("Lighting Mode", "DisplayLightingMode", &settings.preview.lightingMode, "Simple\0PBR Preview\0", "3Dビューのライティングモードです。Simple はマスク確認向け、PBR Preview は地形の陰影確認向けです。", rock::PreviewSettings{}.lightingMode))
         {
-            settings.preview.lightingMode = std::clamp(settings.preview.lightingMode, 0, 2);
+            settings.preview.lightingMode = std::clamp(settings.preview.lightingMode, 0, 1);
             SaveAppSettingsSilently();
         }
         if (settings.preview.lightingMode >= 1)
@@ -6818,6 +6818,7 @@ void DrawDisplaySettingsPanel()
             SaveAppSettingsSilently();
         }
 
+        ImGui::SeparatorText("天球");
         rock::SkySettings& sky = settings.sky;
         {
             int skyModeInt = static_cast<int>(sky.mode);
@@ -6838,8 +6839,9 @@ void DrawDisplaySettingsPanel()
             DrawPropertyFloatRow("太陽グロー", "SkySunGlow", &sky.sunGlowStrength, 0.0f, 2.0f, rock::SkySettings{}.sunGlowStrength, "Sky sun glow changed", false, "太陽周辺の柔らかい光の強さ。0 でグロー無し。");
         }
 
+        ImGui::SeparatorText("ボリューム雲");
         rock::CloudSettings& clouds = settings.clouds;
-        DrawPropertyBoolRow("ボリューム雲", "CloudEnabled", &clouds.enabled, "Clouds enabled toggled", "ボリューム雲のレイマーチ描画を有効化します。3D 密度テクスチャ (128³ R8 = 2MB) を生成し、雲帯 [Altitude Min, Max] とのレイ交差をフルスクリーンパスで毎フレーム積分します。", rock::CloudSettings{}.enabled);
+        DrawPropertyBoolRow("有効", "CloudEnabled", &clouds.enabled, "Clouds enabled toggled", "ボリューム雲のレイマーチ描画を有効化します。3D 密度テクスチャ (128³ R8 = 2MB) を生成し、雲帯 [Altitude Min, Max] とのレイ交差をフルスクリーンパスで毎フレーム積分します。", rock::CloudSettings{}.enabled);
         if (clouds.enabled)
         {
             DrawPropertyIntRow("Cloud Seed", "CloudSeed", &clouds.seed, 0, 999999, rock::CloudSettings{}.seed, "Cloud seed changed", false, "3D 密度ノイズのシード。変更すると雲のパターンが変わります(テクスチャを再生成)。");

@@ -121,10 +121,6 @@ float4 CloudPS(VsOut input) : SV_Target
     float transmittance = 1.0;
     float3 accumulated = float3(0, 0, 0);
 
-    // Vertical brightness ramp suggests top-lit clouds without a real light
-    // march. Multiplied into the lit color of each step.
-    float sunLit = saturate(sunDirection.y) * 0.7 + 0.3;
-
     [loop]
     for (int i = 0; i < numSteps; ++i)
     {
@@ -133,10 +129,14 @@ float4 CloudPS(VsOut input) : SV_Target
         float density = SampleCloudDensity(p);
         if (density > 0.0)
         {
+            // Top-lit shading: top of the cloud (yNorm = 1) reads the full
+            // cloud color, the bottom slightly less. Keeps the cloud near the
+            // tinted brightness the user picked instead of crushing it to grey
+            // through extra sun/ambient factors.
             float yNorm = saturate((p.y - altitudeMin) / max(altitudeMax - altitudeMin, 1.0));
-            float topLight = lerp(0.55, 1.0, yNorm);
+            float topLight = lerp(0.85, 1.05, yNorm);
+            float3 lit = cloudColor.rgb * topLight;
 
-            float3 lit = cloudColor.rgb * topLight * sunLit;
             float dT = exp(-density * absorption * stepLen);
             float dA = (1.0 - dT) * transmittance;
             accumulated += lit * dA;
