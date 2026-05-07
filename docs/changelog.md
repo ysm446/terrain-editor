@@ -5,6 +5,7 @@
 - `Mask Fluvial` ノードを含むプロジェクトを保存・再読み込みすると、ノード種別が `Mask Blend` として復元されてしまう不具合を修正しました。原因は `kMaxSerializedNodeKind` が `MaskBlend (=10)` のまま固定で、新規追加した `MaskFluvial (=11)` が読み込み時に `std::clamp` でひとつ手前のノード種別へ詰められていたためです。`IsTerrainNodeKind` の許可リストにも `MaskFluvial` を追加。
 - 評価中の「計算中」バッジが、preview 対象のノードだけでなく **その時点で実際にカーネルが走っているノード** を追って表示されるようになりました。ハイトフィールドソースから始まり、上流から下流の各 op、最後に preview 対象、という順でバッジが移動するので、長い評価中にどのノードで時間がかかっているかが視覚的にわかります。実装は `node_graph` に `std::atomic<GraphId>& CurrentlyEvaluatingNodeId()` を追加し、各ノードのキャッシュミスパスでカーネル実行直前に `store()`、`Evaluate()` 終了で 0 にクリア。UI は atomic を読んで一致するノードに badge を出します。すべてキャッシュヒットだった場合は従来どおり preview 対象のみに表示。
 - 上部メニューバーから `エクスポート` メニューを削除しました。
+- `docs/nodes/` 配下を `heightfield/` と `mask/` に分け、ハイトフィールド系ノードとマスク系ノードのドキュメントをカテゴリ別に整理しました。
 - ノードグラフ上のノードアイコン色を、ハイトフィールド系は緑、マスク系はオレンジに統一しました。
 - ハイトフィールドから川筋マスクを抽出する `Mask Fluvial` ノードを追加しました。入力ハイトフィールドにフロー累積を流し、`Output Curve` に応じて連続的なドレナージマップ(Log)、二値の川筋(Threshold)、線形マップ(Linear)としてマスク出力します。GIS 標準の D8(最急降下、細い線)と MFD(複数方向重み付き分配、面的)を切り替え可能。
   - 既定は **Log カーブ + D8 + 閾値 0%** で、樹枝状の川筋ネットワーク全体が見える GIS 標準のドレナージマップ表示。`Gamma` (既定 0.5) で細い支流の明度を調整、小さいほどコントラストが上がり全枝が見えます。`Threshold` モードに切り替えると従来の閾値ベースの二値川筋抽出になり、`Softness` / `Edge Power` で川縁を整えられます。`Pit Fill Iterations` (既定 8) で局所窪みを埋め、0 にすると湖が残ります。
@@ -13,8 +14,8 @@
   - 並列化: Pit Fill (Jacobi、行並列)、最大値リダクション、最終マスク変換 (`std::log` / `std::pow` が重いので効果大) を `ParallelForRows` で並列化。インデックスソートも `std::execution::par`。累積ループ自体は標高順依存があるため逐次のままです。
   - キャッシュ: 既存ノードと同じく入力ハッシュ + パラメータハッシュで個別キャッシュ。
   - `.terrainproj` の `nodes[].maskFluvial` に保存。`outputCurve` / `gamma` フィールドが追加。
-- ノード関連ドキュメントを `docs/nodes/` 配下へ整理しました。ノード候補一覧は `docs/nodes/node_candidates.md`、Fluvial Erosion 関連資料は `docs/nodes/fluvial_erosion/`、Multi-Scale Erosion 関連資料は `docs/nodes/multi_scale_erosion/` に移動しています。
-- 既存ノードの簡易ドキュメントと `docs/nodes/README.md` の索引を追加しました。`Heightmap Load`、`Shape`、`Heightmap Blur`、`Erosion Noise`、`Mask Noise`、`Mask Blend` の各ノードについて、入出力・主な設定・用途メモを `docs/nodes/<node>/` 配下へまとめています。
+- ノード関連ドキュメントを `docs/nodes/` 配下へ整理しました。ノード候補一覧は `docs/nodes/node_candidates.md`、Fluvial Erosion 関連資料は `docs/nodes/heightfield/fluvial_erosion/`、Multi-Scale Erosion 関連資料は `docs/nodes/heightfield/multi_scale_erosion/` に移動しています。
+- 既存ノードの簡易ドキュメントと `docs/nodes/README.md` の索引を追加しました。`Heightmap Load`、`Shape`、`Heightmap Blur`、`Erosion Noise`、`Mask Noise`、`Mask Blend` の各ノードについて、入出力・主な設定・用途メモを `docs/nodes/heightfield/<node>/` または `docs/nodes/mask/<node>/` 配下へまとめています。
 - 天球・雲・遠景フォグの不自然なアートハックを物理寄りに整理しました。多重散乱 LUT を入れたあとも残っていた以下の重ね掛けや強制補正を整理しています。
   - **天球の地平ベール**: 輝度を `lerp(0.56, 0.82, ...)` で強制底上げしていた `paleHaze` を撤去し、地平帯は実際の散乱結果から計算した輝度を中心に微妙に脱飽和+わずかにクール側に寄せるだけにしました。底上げが無くなったため夕焼け時に灰色寄りピンクへ潰れていた挙動が解消し、Mie 強度を上げても暖色が素直に残ります。haze の効きを `dayHaze = smoothstep(0.05, 0.30, sun.y)` に絞り、太陽高度が低い時は完全にスキップするように。地平帯の幅も `abs(ray.y) ≤ 0.20` に狭めました。
   - **下半球フェード**: 水平線下 `smoothstep(0, 0.55, -ray.y)`(約 33°)で groundAlbedo に向けてフェードしていたのを `0.08`(約 4.6°)に縮小。雲フィールドの外側など空+地面が同時に見える構図で、地平直下に大気色が滲みすぎる問題を解消。
@@ -106,11 +107,11 @@
 - 表示設定の `Resolution` 上限を `512` から `2048` に引き上げ、保存済み設定の読み込み時も `2048` まで保持できるようにしました。
 - `2Dビュー` が表示用メッシュ解像度ではなく、`Simulation Resolution` の評価済みハイトフィールドを元にマップ表示するようにしました。表示負荷が高い場合は画面密度に合わせて間引きつつ、元のシミュレーション解像度をステータスに表示します。
 - `Heightmap Blur` の水平・垂直 Gaussian パスの z ループを `std::execution::par` で並列化しました。Multi-Scale Erosion と同じ `ParallelForRows` ヘルパーを共有します。マルチコア環境で大半径やマルチイテレーション時の評価時間が短縮されます。
-- 実験的な `Fluvial Erosion` (KTT) ノードを削除しました。`Multi-Scale Erosion` ノードが本命の浸食ノードとして定着したため、KTT 系の粒子輸送実装、GPU compute 経路、シェーダー (`shaders/fluvial_erosion_compute.hlsl`)、UI、シリアライズ、関連ヘルパー (`KttRandom2`、`ResampleHeightfieldGrid`、`SmoothHeightfieldHeights`、`AddResampledHeightDelta`) をまとめて除去しました。`docs/nodes/fluvial_erosion/` のアルゴリズムガイドは履歴として残しています。
+- 実験的な `Fluvial Erosion` (KTT) ノードを削除しました。`Multi-Scale Erosion` ノードが本命の浸食ノードとして定着したため、KTT 系の粒子輸送実装、GPU compute 経路、シェーダー (`shaders/fluvial_erosion_compute.hlsl`)、UI、シリアライズ、関連ヘルパー (`KttRandom2`、`ResampleHeightfieldGrid`、`SmoothHeightfieldHeights`、`AddResampledHeightDelta`) をまとめて除去しました。`docs/nodes/heightfield/fluvial_erosion/` のアルゴリズムガイドは履歴として残しています。
 - `Multi-Scale Erosion` のプロパティパネルに `Stream Power` / `Thermal` / `Deposition` のセクション区切りを追加しました。3 パスのパラメータ群が視覚的に区別できなかった問題を解消します。
 - `Multi-Scale Erosion` のプロパティパネルで `Backend` を一番上に移動し、CPU/GPU の切り替えを最初に確認できるようにしました。
 - `Multi-Scale Erosion` に GPU Compute バックエンドを追加しました。`shaders/multi_scale_erosion_compute.hlsl` (Schott et al. の `erosion.glsl` / `thermal.glsl` / `deposition.glsl` を HLSL 移植) を D3D12 compute pipeline で実行します。プロパティの `Backend` で `CPU Reference` / `GPU Compute` を切り替えます。GPU 経路はバックグラウンド評価スレッドからメインスレッドへジョブを積んで D3D12 上で実行する KTT と同じスケジューラを使い、初期化や実行時に失敗すると CPU 版へフォールバックします。
-- `Multi-Scale Erosion` のアルゴリズム入門ガイド `docs/nodes/multi_scale_erosion/multi_scale_erosion_algorithm_guide.md` を追加しました。KTT のガイドと同じ形式で、SPE / Thermal / Deposition の各パスの直感的な役割、マルチグリッド処理の意味、解像度不変性の仕組み、見た目が崩れたときの調整順を解説しています。
+- `Multi-Scale Erosion` のアルゴリズム入門ガイド `docs/nodes/heightfield/multi_scale_erosion/multi_scale_erosion_algorithm_guide.md` を追加しました。KTT のガイドと同じ形式で、SPE / Thermal / Deposition の各パスの直感的な役割、マルチグリッド処理の意味、解像度不変性の仕組み、見た目が崩れたときの調整順を解説しています。
 - `Multi-Scale Erosion` にマルチグリッドピラミッド処理を追加し、`Use Multigrid` トグルで切り替え可能にしました (既定 ON)。粗い解像度 (`64`) から目標解像度へ `x2` でアップサンプルしながら段階的に浸食を適用する Schott et al. 論文本来の構成です。粗い段階で大局の谷ネットワークが決まり、細かい段階は細部の追加だけになるので、解像度を変えても大局構造がほぼ変わらなくなります。OFF にすると従来通り入力解像度のみで実行する単一段階モードになります。`Iterations` は Multigrid 有効時は各レベルでの反復数を意味します。
 - `Multi-Scale Erosion` の Thermal の `matter` (= `eps × cellArea`) と Deposition の雨量基準 `cellArea` を、実 cellSize ではなく **基準 cellSize 4 m** (= 解像度 512 / 2048 m terrain) で固定するように変更しました。これまでは解像度を変えると Thermal の効きが cellSize² で変わって見た目が大きくドリフトしていた問題を解消します。基準 4 m での既存チューニングはそのままです。なお SPE の `stream` 累積は前進反復のため完全な解像度不変は構造上できず、解像度を上げる場合は `Iterations` の比例的な増量を推奨します。
 - `Multi-Scale Erosion` の `Thermal Strength` 上限を `0.001` から `0.01` に引き上げました。タラス崩壊をより強くかけて V 字谷を U 字に丸めたい用途で頭打ちになっていたためです。
@@ -120,7 +121,7 @@
 - プロパティ行の「既定値に戻す」ボタンのツールチップに、戻し先の既定値を表示するようにしました。
 - F12 でスクリーンショットを保存したあと、保存したファイルを Explorer で選択表示するようにしました。
 
-- 新しい浸食ノード `Multi-Scale Erosion` を追加しました。Schott et al. "Terrain Amplification using Multi-scale Erosion" (SIGGRAPH 2024, MIT) のコンピュートシェーダー 3 本 (Stream Power Erosion / Thermal / Deposition) を CPU 移植し、グリッドベースの河川浸食・タラス崩壊・土砂堆積を 1 ノードに束ねました。出力ピンは `Heightmap` / `Flows` / `Deposits` の 3 つで、KTT (粒子ベース) と並んで使い分けられます。詳細は `docs/nodes/multi_scale_erosion/multi_scale_erosion_node.md` を参照してください。
+- 新しい浸食ノード `Multi-Scale Erosion` を追加しました。Schott et al. "Terrain Amplification using Multi-scale Erosion" (SIGGRAPH 2024, MIT) のコンピュートシェーダー 3 本 (Stream Power Erosion / Thermal / Deposition) を CPU 移植し、グリッドベースの河川浸食・タラス崩壊・土砂堆積を 1 ノードに束ねました。出力ピンは `Heightmap` / `Flows` / `Deposits` の 3 つで、KTT (粒子ベース) と並んで使い分けられます。詳細は `docs/nodes/heightfield/multi_scale_erosion/multi_scale_erosion_node.md` を参照してください。
 
 ## 0.17.2 - 2026-05-06 00:42
 
@@ -291,7 +292,7 @@
 
 ## 0.15.31 - 2026-05-05 05:12
 
-- `docs/nodes/fluvial_erosion/fluvial_erosion_hda_notes.md` の Terrain Editor 向け方針を、簡易MVPではなく、KTT の挙動と調整感へかなり近づける実装方針として書き直しました。
+- `docs/nodes/heightfield/fluvial_erosion/fluvial_erosion_hda_notes.md` の Terrain Editor 向け方針を、簡易MVPではなく、KTT の挙動と調整感へかなり近づける実装方針として書き直しました。
 
 ## 0.15.30 - 2026-05-05 05:02
 
@@ -434,7 +435,7 @@
 - `Fluvial Erosion` に `Backend` を追加し、将来の `GPU Compute` 実装へ向けた切り替えの土台を作りました。
 - 現時点の `GPU Compute` は未実装のため、選択時も `CPU Reference` へフォールバックする旨をUIに表示するようにしました。
 - `.terrainproj` の保存・読み込みに `backend` を追加しました。
-- `docs/nodes/fluvial_erosion/fluvial_erosion_node.md` に CPU/GPU 一致方針を追記しました。
+- `docs/nodes/heightfield/fluvial_erosion/fluvial_erosion_node.md` に CPU/GPU 一致方針を追記しました。
 
 ## 0.15.1 - 2026-05-04 23:22
 
@@ -549,7 +550,7 @@
 
 ## 0.7.1 - 2026-05-04 16:07
 
-- `docs/nodes/fluvial_erosion/fluvial_erosion_node.md` に Fluvial Erosion ノードの更新履歴と現状アップデートを追記しました。
+- `docs/nodes/heightfield/fluvial_erosion/fluvial_erosion_node.md` に Fluvial Erosion ノードの更新履歴と現状アップデートを追記しました。
 
 ## 0.7.0 - 2026-05-04 16:03
 
@@ -563,7 +564,7 @@
 
 ## 0.5.1 - 2026-05-04 15:49
 
-- Fluvial Erosion ノードの現状プロセスと今後追加すべきアルゴリズムを `docs/nodes/fluvial_erosion/fluvial_erosion_node.md` として整理しました。
+- Fluvial Erosion ノードの現状プロセスと今後追加すべきアルゴリズムを `docs/nodes/heightfield/fluvial_erosion/fluvial_erosion_node.md` として整理しました。
 
 ## 0.5.0 - 2026-05-04 15:32
 
@@ -591,7 +592,7 @@
 ## 0.4.0 - 2026-05-04 14:04
 
 - KTT を参考にしたノード候補一覧を `docs/nodes/node_candidates.md` として追加しました。
-- KTT Fluvial Erosion の内容と Terrain Editor 向け実装メモを `docs/nodes/fluvial_erosion/fluvial_erosion_hda_notes.md` として追加しました。
+- KTT Fluvial Erosion の内容と Terrain Editor 向け実装メモを `docs/nodes/heightfield/fluvial_erosion/fluvial_erosion_hda_notes.md` として追加しました。
 - CPU 版の Fluvial Erosion ノードを追加し、Heightmap Load から HeightField として接続して地形メッシュへ反映できるようにしました。
 - Fluvial Erosion の主要パラメータを Inspector で編集し、プロジェクト保存/読み込みに対応しました。
 
