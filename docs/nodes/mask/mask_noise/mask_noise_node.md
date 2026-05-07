@@ -1,6 +1,6 @@
 # Mask Noise ノード
 
-Perlin / fBM ノイズから `Mask` を生成する入力ノードです。地形の一部だけに処理をかけるための領域マスクや、見た目確認用のパターン作成に使います。
+Perlin / fBM ノイズから `Mask` を生成する入力ノードです。地形の一部だけに処理をかけるための領域マスクや、見た目確認用のパターン作成に使います。Heightfield 入力を受け取らないマスク専用の発生源で、3D プレビューでは平面上にマスク値を表示します。
 
 ## 入出力
 
@@ -13,14 +13,39 @@ Perlin / fBM ノイズから `Mask` を生成する入力ノードです。地�
 
 | 設定 | 役割 |
 | --- | --- |
-| `Backend` | `CPU Parallel` または `GPU Compute` |
-| `Seed` | ノイズパターン |
-| `Octaves` | fBM の階層数 |
-| `Frequency` | 基本周波数 |
-| `Lacunarity` | オクターブごとの周波数倍率 |
-| `Persistence` | オクターブごとの振幅倍率 |
-| `Simulation Resolution` | 生成するマスク解像度 |
+| `Backend` | `CPU Parallel`(マルチスレッド)または `GPU Compute`(D3D12 compute、利用可能なら高速) |
+| `Seed` | ハッシュのオフセット。同じパラメータでも異なるパターンを得るために使う |
+| `Octaves` | fBM の階層数(1〜12)。多いほど細かいディテールが乗る |
+| `Frequency` | 基本周波数。グリッド全体に対する大スケール波の数 |
+| `Lacunarity` | オクターブごとの周波数倍率(標準 2.0) |
+| `Persistence` | オクターブごとの振幅倍率(標準 0.5)。大きいほど高オクターブが目立つ |
+| `Simulation Resolution` | 出力マスクの解像度(2〜2048) |
+
+## アルゴリズム概要
+
+1. グリッド座標 `(x, z)` を `[0, 1]` に正規化し、`(u * frequency, v * frequency)` で Perlin ベース fBM を評価。
+2. 各オクターブで Perlin 2D を計算し、`amplitude *= persistence`、`frequency *= lacunarity` で減衰させながら積算。
+3. 結果は概ね `[-1, 1]` レンジなので `× 0.5 + 0.5` で `[0, 1]` に再マップしてマスク値に。
+4. CPU 経路は行並列(`ParallelForRows`)、GPU 経路は専用 compute shader が `g_maskNoiseGpuEvaluator` 経由で呼ばれます。
+
+## バックエンド選択
+
+| バックエンド | 特徴 |
+| --- | --- |
+| `GPU Compute`(既定) | D3D12 デバイスがあれば最速。デバイス未初期化や生成失敗時は自動的に CPU へフォールバック |
+| `CPU Parallel` | GPU 経路に頼らずに済む。プロファイル対象や検証用に明示的に切り替えるとき向き |
+
+## 用途の使い分け
+
+| 目的 | パラメータの方向性 |
+| --- | --- |
+| 大きな領域分け(高地 / 低地など) | `Frequency` 小、`Octaves` 1〜2 |
+| 自然な雲状ノイズ | `Frequency` 中、`Octaves` 4〜6、`Persistence` 0.5 付近 |
+| 細かい斑模様 / ザラつき | `Frequency` 大、`Persistence` 0.6〜0.8 |
+| Mask Blend で他マスクと組み合わせる土台 | `Octaves` 2〜3 で滑らかなベース、変化は Blend 側で |
 
 ## メモ
 
-Mask 系ノードはハイトフィールドを持たないため、3D プレビューでは平面上にマスク値を表示します。GPU 経路が使えない場合は CPU 版へフォールバックします。
+- Mask 系ノードは Heightfield を持たないため、3D プレビューでは平面上にマスク値が表示されます。
+- `Seed` を変えるとパターンだけが変わり、形状的特徴(周波数や階層構造)は維持されます。同じ地形に対して複数案を比較したい時に便利です。
+- キャッシュは `Mask Noise` 単体のパラメータハッシュで決まります。下流の `Mask Blend` を編集してもこのノードは再評価されません。

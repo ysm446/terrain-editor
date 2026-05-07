@@ -18,6 +18,7 @@ Terrain Editor のノード関連ドキュメントをまとめるフォルダ�
 | --- | --- |
 | Mask Noise | [mask/mask_noise/mask_noise_node.md](mask/mask_noise/mask_noise_node.md) |
 | Mask Blend | [mask/mask_blend/mask_blend_node.md](mask/mask_blend/mask_blend_node.md) |
+| Mask Fluvial | [mask/mask_fluvial/mask_fluvial_node.md](mask/mask_fluvial/mask_fluvial_node.md) |
 
 ## 関連資料
 
