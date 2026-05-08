@@ -5835,7 +5835,10 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         commandList->SetGraphicsRootSignature(g_meshPreviewRootSignature.Get());
         commandList->SetGraphicsRoot32BitConstants(0, sizeof(constants) / 4, &constants, 0);
 
-        if (hasMeshVertices && constants.shadowEnabled > 0.5f && showSurface && g_gpuMeshPreview.triIndexCount > 0)
+        const bool wantsShadow = constants.shadowEnabled > 0.5f && showSurface;
+        const bool canCpuShadow = hasMeshVertices && g_gpuMeshPreview.triIndexCount > 0;
+        const bool canDisplacementShadow = useDisplacement && displacementReady && g_gpuMeshPreview.displacementTriIndexCount > 0;
+        if (wantsShadow && (canCpuShadow || canDisplacementShadow))
         {
             if (g_gpuMeshPreview.shadowState != D3D12_RESOURCE_STATE_DEPTH_WRITE)
             {
@@ -5856,11 +5859,77 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             commandList->RSSetScissorRects(1, &shadowScissor);
             commandList->ClearDepthStencilView(g_gpuMeshPreview.shadowDsvCpu, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
             commandList->OMSetRenderTargets(0, nullptr, FALSE, &g_gpuMeshPreview.shadowDsvCpu);
-            D3D12_INDEX_BUFFER_VIEW shadowIbv{g_gpuMeshPreview.indexBuffer->GetGPUVirtualAddress(), g_gpuMeshPreview.triIndexCount * sizeof(UINT), DXGI_FORMAT_R32_UINT};
-            commandList->IASetIndexBuffer(&shadowIbv);
-            commandList->SetPipelineState(g_meshPreviewShadowPso.Get());
-            commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            commandList->DrawIndexedInstanced(g_gpuMeshPreview.triIndexCount, 1, 0, 0, 0);
+
+            if (canDisplacementShadow)
+            {
+                // Phase 2c-2: displacement shadow path. The shadow VS only
+                // reads cbuffer Constants (b0) for the light* fields and
+                // samples the height texture (t2) — it doesn't touch the
+                // shadow map / cloud shadow / mask. We bind dummy SRVs at
+                // the slots the shader doesn't access (especially t0 — the
+                // shadow target's own SRV, which would otherwise alias the
+                // currently-bound DSV and trip up D3D12 validation).
+                void* mappedCbv = nullptr;
+                D3D12_RANGE readRange{0, 0};
+                g_meshPreviewDisplacementCbv->Map(0, &readRange, &mappedCbv);
+                std::memcpy(mappedCbv, &constants, sizeof(constants));
+                g_meshPreviewDisplacementCbv->Unmap(0, nullptr);
+
+                DisplacementShaderConstants dispConsts{};
+                const int M = g_gpuMeshPreview.displacementMeshResolution;
+                dispConsts.gridResolution = static_cast<float>(M);
+                dispConsts.terrainSize = previewGrid.terrainSizeMeters;
+                dispConsts.halfSize = previewGrid.terrainSizeMeters * 0.5f;
+                dispConsts.worldDX = (M > 1) ? previewGrid.terrainSizeMeters / static_cast<float>(M - 1) : 1.0f;
+
+                commandList->SetGraphicsRootSignature(g_meshPreviewDisplacementRootSignature.Get());
+                commandList->SetGraphicsRootConstantBufferView(0, g_meshPreviewDisplacementCbv->GetGPUVirtualAddress());
+                commandList->SetGraphicsRootConstantBufferView(1, g_gpuClouds.meshCbUploadBuffer->GetGPUVirtualAddress());
+                commandList->SetGraphicsRoot32BitConstants(2, sizeof(dispConsts) / 4, &dispConsts, 0);
+                // Slot 3 (shadow SRV) — we are CURRENTLY writing the shadow
+                // target as DSV. Binding its own SRV here would alias and
+                // is the most likely cause of the original Phase 2c crash.
+                // The shadow PSO has no PS so this slot is never sampled,
+                // but the root signature still requires a valid descriptor
+                // — bind the cloud dummy SRV instead.
+                commandList->SetGraphicsRootDescriptorTable(3, g_gpuClouds.dummyShadowSrvGpu);
+                commandList->SetGraphicsRootDescriptorTable(4, g_gpuClouds.dummyShadowSrvGpu);
+                commandList->SetGraphicsRootDescriptorTable(5, g_gpuMeshPreview.displacementHeightSrvGpu);
+                commandList->SetGraphicsRootDescriptorTable(6, g_gpuMeshPreview.displacementMaskSrvGpu);
+
+                D3D12_INDEX_BUFFER_VIEW shadowIbv{
+                    g_gpuMeshPreview.displacementTriIndexBuffer->GetGPUVirtualAddress(),
+                    g_gpuMeshPreview.displacementTriIndexCount * static_cast<UINT>(sizeof(UINT)),
+                    DXGI_FORMAT_R32_UINT};
+                commandList->IASetIndexBuffer(&shadowIbv);
+                commandList->IASetVertexBuffers(0, 0, nullptr);
+                commandList->SetPipelineState(g_meshPreviewDisplacementShadowPso.Get());
+                commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+                commandList->DrawIndexedInstanced(g_gpuMeshPreview.displacementTriIndexCount, 1, 0, 0, 0);
+
+                // Restore CPU root sig + bindings for the surface / grid
+                // draws below (they assume the CPU root sig is current).
+                commandList->SetGraphicsRootSignature(g_meshPreviewRootSignature.Get());
+                commandList->SetGraphicsRoot32BitConstants(0, sizeof(constants) / 4, &constants, 0);
+                if (g_gpuClouds.meshCbUploadBuffer)
+                {
+                    commandList->SetGraphicsRootConstantBufferView(1, g_gpuClouds.meshCbUploadBuffer->GetGPUVirtualAddress());
+                }
+                commandList->SetGraphicsRootDescriptorTable(2, g_gpuMeshPreview.shadowSrvGpu);
+                commandList->SetGraphicsRootDescriptorTable(3, g_gpuClouds.dummyShadowSrvGpu);
+                if (hasMeshVertices)
+                {
+                    commandList->IASetVertexBuffers(0, 1, &vbv);
+                }
+            }
+            else
+            {
+                D3D12_INDEX_BUFFER_VIEW shadowIbv{g_gpuMeshPreview.indexBuffer->GetGPUVirtualAddress(), g_gpuMeshPreview.triIndexCount * sizeof(UINT), DXGI_FORMAT_R32_UINT};
+                commandList->IASetIndexBuffer(&shadowIbv);
+                commandList->SetPipelineState(g_meshPreviewShadowPso.Get());
+                commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+                commandList->DrawIndexedInstanced(g_gpuMeshPreview.triIndexCount, 1, 0, 0, 0);
+            }
 
             D3D12_RESOURCE_BARRIER shadowToSrv{};
             shadowToSrv.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;

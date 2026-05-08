@@ -2,6 +2,7 @@
 
 ## 未リリース
 
+- Phase 2c の crash 切り分け第二段(2c-2): **GPU モードでもシャドウが描画される** ように `g_meshPreviewDisplacementShadowPso` を再導入しました。前回(reverted した 2c)からの変更点は **シャドウ描画中にバインドする root param 3 (shadowMap SRV) をシャドウターゲット自身ではなく cloud の dummy SRV に差し替え** たこと。シャドウパス中はシャドウターゲットが `D3D12_RESOURCE_STATE_DEPTH_WRITE` でバインドされており、その同じリソースの SRV を bind すると D3D12 が DSV/SRV alias として detect → device removed していた可能性が高いです(displacement shadow PSO は PS を持たないので t0 は実際には参照されないため、dummy で問題なし)。
 - Phase 2c の crash 切り分けの第一段(2c-1): **CPU メッシュアップロードのスキップだけを再導入** しました。`GpuDisplacement` モードでは `UpdateMeshPreviewBuffers` を呼ばず、~40MB の VB/IB アップロードを完全削減します。`displacementReady` を early-return 条件に追加して、CPU 頂点バッファが無くても displacement 経路だけで描画継続できるように。シャドウのディスプレイス経路化(これが落ちていた可能性が高い)はまだ入れず、GPU モードではシャドウが描画されない既知の制限となります — 2c-2 でシャドウ経路を再追加し原因を切り分けます。
 - GPU メッシュバックエンドに切り替えるとアプリがクラッシュする不具合を一時的に回避するため、Phase 2c で入れた「CPU メッシュアップロードのスキップ」と「シャドウのディスプレイス経路化」を **revert** しました。GPU モードでは現状ハイブリッド動作(CPU メッシュは引き続きアップロード + サーフェス描画のみディスプレイス)で、純粋な性能向上にはなっていませんが落ちないことを優先しました。クラッシュの原因切り分けと再実装は次の対応で行います。
 - GPU 頂点ディスプレイスの **本来の高速化**(Phase 2c):
