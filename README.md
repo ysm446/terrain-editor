@@ -16,18 +16,23 @@
 - `data/ui_themes` の JSON UI テーマを `設定 > UIテーマ` から切り替え可能
 - `data/app_settings.json` に UI テーマ、3D カメラ、2D マップ表示、プレビュー表示、ライティング設定、最近使ったプロジェクトを保存
 
-## 地形ノード
+## ノード
 
-- `Import Heightmap`
-  - ハイトマップ画像を読み込みます。
-  - 地形スケールをメートル単位で指定できます。
-  - Relative Vertical Scale と縦方向オフセットを指定できます。
-  - 表示解像度とは別にシミュレーション解像度を持ち、ビューポートのメッシュ解像度は見た目だけの設定として扱います。
-- `Fluvial Erosion`
-  - CPU ベースのハイトフィールド浸食を適用します。
-  - Flow accumulation / drainage area 的な影響、Sediment Capacity、堆積、マルチスケール処理を含みます。
-  - `Heightmap` と `Fluvial Mask` を出力します。
-  - 上流入力やノードパラメータが変わるまで、中間ハイトフィールド結果をキャッシュします。
+ノードは `ハイトフィールド系` と `マスク系` の 2 カテゴリに分かれており、ノードグラフ上の右クリックメニューもこの分類で整理されています。詳細は [docs/nodes/README.md](docs/nodes/README.md) の索引を参照してください。
+
+### ハイトフィールド系
+
+- **`Import Heightmap`** — 画像ハイトマップを読み込みます。地形スケール (m)、Relative Vertical Scale、縦方向オフセット、シミュレーション解像度を指定可能。
+- **`Shape`** — 半球やピラミッドなどのプロシージャル形状をハイトフィールドとして生成。
+- **`Heightmap Blur`** — 分離可能ガウシアンによる滑化。半径・強度・反復回数を調整可能。
+- **`Erosion Noise`** — 入力勾配に沿った方向性ノイズで谷筋風のディテールを足す軽量ノード(シミュレーションではありません)。
+- **`Multi-Scale Erosion`** — Schott et al. SIGGRAPH 2024 の Stream Power + Thermal + Deposition の CPU 実装。マルチグリッドピラミッドで解像度依存性を抑え、`Heightmap` / `Flows` / `Deposits` を出力。
+
+### マスク系
+
+- **`Mask Noise`** — Perlin / fBM ベースのマスク発生源。GPU compute 経路と CPU 並列フォールバックを持ちます。
+- **`Mask Blend`** — 2 つのマスクを `Add` / `Multiply` / `Min` / `Max` で合成。`Mask Fluvial` も上流に置けます。
+- **`Mask Fluvial`** — ハイトフィールドから D8 / MFD フロー累積を計算して川筋マスクを抽出。`Log` / `Threshold` / `Linear` の 3 つの出力カーブから選べ、既定の Log カーブは GIS 標準の連続的な樹枝状ドレナージマップを出します。
 
 まずは汎用的な浸食ワークフローを作ることを優先しています。アルプスの山と日本の山の違いのような地質・地域性のプリセットは、コアの浸食モデルの上に重ねる後工程として扱う想定です。
 
@@ -45,24 +50,27 @@
 - ステータスバーに評価状態と計算時間を表示
 - 評価中のノードには `計算中` / `計算待ち` バッジを表示
 
-## 3D 表示モード
+## 表示モード
 
-- `Simple`
-  - 軽量な地形・マスク確認用の表示モードです。
-- `PBR Preview`
-  - 太陽方向、光量、環境光、影の強さ、シャドウマップ解像度、バイアス、Albedo、ビューポート背景色を調整できる地形確認向けのライティング表示です。
-  - 完全なプロダクション用 PBR マテリアルではなく、地形の凹凸や影を読みやすくするプレビューとして扱っています。
-- `Shadow Debug`
-  - シャドウマップの範囲や比較結果を可視化し、影設定を調整するためのデバッグ表示です。
+ビューポート左上の `表示` メニューから切り替えできます。
+
+- **`シンプル`** — 軽量な地形・マスク確認用のフラットシェーディング表示。
+- **`PBR`** — 太陽方向、光量、環境光、影の強さ、シャドウマップ解像度、バイアス、Albedo を調整できる地形プレビュー用ライティング(完全な PBR マテリアルではなく、凹凸と影を読みやすくする想定)。
+- **`天球`** — Nishita 単散乱 + Hillaire 多重散乱 LUT による物理ベース大気と、レイマーチ式ボリューム雲を有効化。太陽の高度を変えるだけで青空 → 黄昏 → 夕焼け → 夜が連動し、雲は太陽方向ライトマーチによる自己遮蔽と Henyey-Greenstein 位相関数でボリューム感のある陰影を出します。詳細は [docs/sky_and_clouds/sky_and_clouds.md](docs/sky_and_clouds/sky_and_clouds.md) を参照。
 
 ## エクスポートと補助機能
 
 - 評価済み地形メッシュの OBJ エクスポート
 - 最終メッシュ評価では、共有頂点、三角形インデックス、ユニークエッジ、頂点法線を持つインデックス付きトポロジを生成
 - F12 キーでアプリケーションウィンドウ全体を PNG スクリーンショットとして保存
-- 変更履歴は `docs/changelog.md` に記録
-- Fluvial Erosion の実装メモは `docs/fluvial_erosion_node.md` と `docs/fluvial_erosion_hda_notes.md` に記録
-- 今後追加したいノード候補は `docs/node_candidates.md` に記録
+
+## ドキュメント
+
+- 変更履歴: [docs/changelog.md](docs/changelog.md)
+- ノードドキュメント索引: [docs/nodes/README.md](docs/nodes/README.md)
+- Multi-Scale Erosion アルゴリズム解説: [docs/nodes/heightfield/multi_scale_erosion/multi_scale_erosion_algorithm_guide.md](docs/nodes/heightfield/multi_scale_erosion/multi_scale_erosion_algorithm_guide.md)
+- 大気・雲システム解説: [docs/sky_and_clouds/sky_and_clouds.md](docs/sky_and_clouds/sky_and_clouds.md)
+- 今後追加したいノード候補: [docs/nodes/node_candidates.md](docs/nodes/node_candidates.md)
 
 ## ビルド
 

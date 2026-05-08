@@ -29,20 +29,18 @@ There is no test framework, lint task, or CI configured. Verification is manual 
 
 ## Architecture
 
-The application is a single executable. `src/main.cpp` (~270 KB) owns the Win32 window, D3D12 device/swapchain, ImGui setup, file IO, viewport rendering, and all property-panel UI. `src/node_graph.{h,cpp}` owns the data model and evaluation. `src/obj_exporter.cpp` is an isolated utility.
+The application is a single executable. `src/main.cpp` (~390 KB) owns the Win32 window, D3D12 device/swapchain, ImGui setup, file IO, viewport rendering, and all property-panel UI. `src/node_graph.{h,cpp}` owns the data model and evaluation. `src/obj_exporter.cpp` is an isolated utility.
 
 ### NodeGraph evaluation pipeline
 
-`rock::NodeGraph` holds `nodes_`, `links_`, per-node settings, and an in-memory `heightfieldCache_` keyed by node id. The graph is evaluated through a preview pipeline built around `HeightfieldPipeline`:
+`rock::NodeGraph` holds `nodes_`, `links_`, per-node settings, an in-memory `heightfieldCache_` keyed by node id, and a parallel `maskCache_` for mask-graph nodes. There are two evaluation tracks that meet only at the `Mask Fluvial` node:
 
-- **Preview pipeline** — built from the currently selected node back to the source. Drives the 3D and 2D viewports. Runs asynchronously: `StartAsyncEvaluation()` in `main.cpp` snapshots the graph, hands it to `std::async`, and the main thread polls the future. The current graph carries `Evaluating...` status until the result is merged via `ApplyEvaluationResultFrom`.
-- **OBJ export** — writes the currently evaluated preview mesh.
+- **Heightfield pipeline** — built by walking upstream from the target node and collecting `HeightfieldOperation`s on top of a `Heightmap Load` or `Shape` source. Current ops: `Heightmap Blur`, `Erosion Noise`, `Multi-Scale Erosion`, `Mask Fluvial`. Drives the 3D / 2D viewports and OBJ export.
+- **Mask graph** — `Mask Noise`, `Mask Blend` (and `Mask Fluvial` as a bridge) live in their own pipeline rooted in `EvaluateMaskGridForNodeCached`. `Mask Fluvial` consumes a heightfield, so when the mask graph encounters one it pulls the heightfield pipeline result via `EvaluateHeightPipelineCached` and lifts `grid.mask` out as a `MaskGrid`.
 
-`HeightfieldPipeline` is built from the graph by walking upstream from the target node. It collects heightfield operations layered on top of a `Heightmap Load` or `Shape` source.
+Evaluation runs asynchronously: `StartAsyncEvaluation()` in `main.cpp` snapshots the graph, hands it to `std::async`, and the main thread polls the future. The current graph carries `Evaluating...` status until the result is merged via `ApplyEvaluationResultFrom`. `rock::CurrentlyEvaluatingNodeId()` exposes a thread-safe atomic that the worker stores into before each cache miss; the UI thread reads it to paint a "計算中" badge that walks the upstream chain in real time.
 
-- **Heightfield chain** (`HeightfieldOperation`): heightfield ops (`Heightmap Blur`, `Erosion Noise`, `Multi-Scale Erosion`) layered on top of a `Heightmap Load` or `Shape` source.
-
-Caching: `BuildMeshFromHeightPipelineCached` caches each heightfield operation's output by (input hash, parameter hash, resolution). Touching unrelated nodes does not re-run upstream work. Hash functions live next to each settings struct (e.g. `HashFluvialSettings`).
+Caching: each operation node has its own cache entry keyed by `(input hash, parameter hash, resolution)`. Touching unrelated nodes does not re-run upstream work. Hash functions live next to each settings struct (e.g. `HashMaskFluvialSettings`, `HashMultiScaleErosionSettings`).
 
 ### Heightfield model
 
@@ -51,29 +49,44 @@ Caching: `BuildMeshFromHeightPipelineCached` caches each heightfield operation's
 | Field      | Meaning                                               |
 | ---------- | ----------------------------------------------------- |
 | `heights`  | The heightmap (meters, 1 unit = 1 m).                 |
-| `mask`     | Generic 0–1 mask used as the visualization channel.   |
-| `deposits` | Sediment deposit accumulator from fluvial erosion.    |
-| `flows`    | Particle visit count from fluvial erosion.            |
+| `mask`     | Generic 0–1 mask used as the visualization channel. Mask Fluvial writes its drainage map here. |
+| `deposits` | Sediment deposit accumulator (Multi-Scale Erosion).   |
+| `flows`    | Stream / flow accumulator (Multi-Scale Erosion).      |
 | `age`      | Per-cell age (decays where the cell is reshaped).     |
 
-`HeightfieldPreviewField` (`Heightmap` / `Deposits` / `Flows` / `Age`) selects which of those is copied into `mask` for visualization; the value is set when the user clicks one of a node's output pins. Add a new field by extending the enum, `HeightfieldGrid`, `SelectHeightfieldPreviewField`, and the `heightfieldFieldName` lambdas in `main.cpp`.
+`HeightfieldPreviewField` (`Heightmap` / `Deposits` / `Flows` / `Age` / `Mask`) selects which of those is copied into `mask` for visualization; the value is set when the user clicks an output pin. Add a new field by extending the enum, `HeightfieldGrid`, `SelectHeightfieldPreviewField`, and the `heightfieldFieldName` lambdas in `main.cpp`.
 
-### Fluvial Erosion (the load-bearing node)
+`MaskGrid` (`resolution`, `values`) is the parallel data type for pure mask nodes. `Mask Fluvial`'s bridge into the mask graph copies `grid.mask` out into a `MaskGrid` so downstream `Mask Blend` can mix it with `Mask Noise`.
 
-`ApplyFluvialErosionSingleLevel` is a CPU port of the KTT_Fluvial_Erosion HDA (the OpenCL kernels `Fluvial_Sim_Test` for forces and `Fluvial_Sim` for transport). When working on this node, treat the HDA as the spec. Several non-obvious details matter:
+### Multi-Scale Erosion (the load-bearing erosion node)
 
-- Particle height read/write goes through `sampleHeight` and `splatField` (4-tap bilinear), **not** `floor(px)/floor(pz)`. The naive nearest-cell write breaks mirror symmetry around `(n-1)/2` and produces a directional bias that compounds across iterations.
-- `referenceDetailSize` is the KTT `Detail_Scale`; `stepScale = cellSize / detailScale` drives both step count and per-step velocity gain. When `stepScale` is large (i.e. coarse simulation cells with `detailScale ≈ 1m`), particles teleport and the per-cell modifications become rectangular blocks. The multi-level pyramid (`kFluvialLevelStrengths` / `levelResolutions`) currently zeroes out the 16/32/64 levels for this reason — the active levels are 128, 256, 512.
-- Angles are compared in *tangent* space. `Wear/Deposit/MaxAngle` are converted via `tan(deg * π/180)` and compared against `length(force)`.
-- `flowVolume` binds to `Update_Forces`'s `Flow_Cutting`, not anything in `Smooth_Flows`. It scales the `wear * Flow_Cutting` feedback into the gradient and only activates when `dx <= Detail_Scale`.
+`ApplyMultiScaleErosion` is a CPU port of the Schott et al. SIGGRAPH 2024 shaders (`erosion.glsl` / `thermal.glsl` / `deposition.glsl`, source repo: `H-Schott/MultiScaleErosion`). The legacy KTT-based fluvial node is no longer in the codebase but historical reference material is kept under `docs/nodes/heightfield/fluvial_erosion/`.
 
-The detailed mapping between HDA parameters and the CPU implementation is in `docs/fluvial_erosion_hda_notes.md` — keep that file in sync whenever the kernel parity changes. The HDA itself is at `ref/KTT/Kruger.KTT_Fluvial_Erosion.1.0.hda` (gzip-compressed CPIO inside).
+The current node uses three coupled passes:
+
+- **Stream Power Erosion** (D8 weighted-flow with `flow_p` exponent on slope, `speStrength * (stream^streamExp) * (slope^slopeExp)`).
+- **Thermal / talus** with a 3×3 stencil (wraparound boundary, optional noise on the threshold angle).
+- **Deposition** sharing the same D8 flow direction as SPE.
+
+A multi-grid pyramid (`useMultigrid = true`) runs from `kCoarsestPyramidLevel` up to the target with bilinear upsampling between levels — drainage networks form quickly at coarse cellSize and finer levels only refine, giving near-resolution-invariant results.
+
+### Mask Fluvial
+
+D8 / MFD flow-accumulation node that emits a `Mask`. Heights pass through unchanged (no heightfield output pin). Algorithm: optional iterative pit-fill (Jacobi double-buffer, `ParallelForRows`), `std::execution::par` sort by descending height, then a single sequential pass that pushes each cell's accumulator to its downhill neighbour(s). Output curves: `Log` (default — continuous dendritic drainage map), `Threshold` (binary river extraction), `Linear`. The accumulation loop is inherently sequential due to the descending-height topological order; the surrounding work (sort, pit fill, mask conversion with `std::log` / `std::pow`) is parallelised.
+
+### Sky and clouds
+
+Optional `Atmospheric` sky mode (Nishita single-scatter Rayleigh + Mie + Henyey-Greenstein) with a Hillaire 2020 multi-scatter LUT (`shaders/atmosphere_multiscatter.hlsl`). Sun colour, terrain ambient and cloud lighting are all derived from the same model so day → sunset → night transitions stay coherent when the sun elevation slider moves.
+
+Volumetric clouds (`shaders/cloud_render.hlsl`) raymarch a 128³ R8 density volume bounded by a cylinder (altitude slab × disc fade). Shading is `ambient + sunlit × lightTransmittance × phase`: the light transmittance comes from a short Beer-Lambert march toward the sun (`lightSamples` × `lightStepMeters`), and `phase` is a 4π-normalised HG. `lightSamples = 0` falls back to the original yNorm vertical ramp. Cloud shadows are pre-baked into a 1024² R8 from a top-down march and sampled by the terrain mesh shader.
+
+Detailed parameter / formula reference is in `docs/sky_and_clouds/sky_and_clouds.md` — keep that file in sync when the cloud / atmosphere model changes.
 
 ### Project files
 
-- `.terrainproj` (JSON, current) saves nodes/links/settings/preview state.
+- `.terrainproj` (JSON, current) saves nodes/links/settings/preview state, including grid display configuration under the `preview` block.
 - `.rockproj` (legacy) load is preserved for old samples in `data/`.
-- `data/app_settings.json` persists UI theme, camera, and recent projects.
+- `data/app_settings.json` persists UI theme, camera, and recent projects (no per-project visual state).
 - UI themes are JSON files under `data/ui_themes/`, switchable from `設定 > UIテーマ`.
 
 ## Conventions
@@ -89,6 +102,8 @@ The detailed mapping between HDA parameters and the CPU implementation is in `do
 - `README.md` — feature overview (Japanese).
 - `AGENTS.md` — versioning rules and the UTF-8 read/write recipes.
 - `docs/changelog.md` — required for every user-visible change.
-- `docs/fluvial_erosion_hda_notes.md` — HDA-vs-CPU parity reference.
-- `docs/fluvial_erosion_node.md` — implementation notes for the node.
-- `docs/node_candidates.md` — backlog of node ideas.
+- `docs/nodes/README.md` — index of per-node documentation (heightfield + mask categories).
+- `docs/nodes/heightfield/multi_scale_erosion/multi_scale_erosion_algorithm_guide.md` — current load-bearing erosion node's algorithm notes.
+- `docs/nodes/heightfield/fluvial_erosion/` — historical KTT-based fluvial reference (no longer wired into the build).
+- `docs/nodes/node_candidates.md` — backlog of node ideas.
+- `docs/sky_and_clouds/sky_and_clouds.md` — sky / atmosphere / volumetric cloud reference.
