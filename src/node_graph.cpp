@@ -10,7 +10,6 @@
 #include <numeric>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -35,9 +34,6 @@ struct HeightmapImage
     std::string precision;
     std::vector<float> values;
 };
-
-void AddEdge(MeshData& mesh, std::unordered_set<uint64_t>& edgeKeys, uint32_t a, uint32_t b);
-void AccumulateNormal(MeshVertex& vertex, float nx, float ny, float nz);
 
 void HashCombine(uint64_t& seed, uint64_t value)
 {
@@ -1845,6 +1841,12 @@ void ApplyRock(HeightfieldGrid& grid, const RockSettings& settings)
     });
 }
 
+// Phase 1 mesh build: pre-allocate every vertex / triangle / edge slot so
+// the hot loops can write at known indices and run in parallel. Top
+// surface uses gradient-based per-vertex normals computed straight from
+// the heightfield (no per-triangle accumulation, no race), walls and the
+// bottom face have constant normals, and edges are emitted in a
+// structured pattern so the unordered_set dedup is gone.
 MeshData BuildMeshFromHeightfield(const HeightfieldGrid& grid, int meshResolution)
 {
     MeshData mesh;
@@ -1854,148 +1856,232 @@ MeshData BuildMeshFromHeightfield(const HeightfieldGrid& grid, int meshResolutio
         return mesh;
     }
     meshResolution = std::clamp(meshResolution, 2, 2048);
-
+    const int M = meshResolution;
+    const int M1 = M - 1;
     const float halfSize = grid.terrainSizeMeters * 0.5f;
-    const size_t surfaceVertexCount = static_cast<size_t>(meshResolution) * static_cast<size_t>(meshResolution);
-    mesh.vertices.reserve(surfaceVertexCount * 2u + static_cast<size_t>(meshResolution) * 8u);
-    mesh.triangles.reserve(static_cast<size_t>(meshResolution - 1) * static_cast<size_t>(meshResolution - 1) * 4u + static_cast<size_t>(meshResolution - 1) * 8u);
-    mesh.edges.reserve(mesh.triangles.capacity() * 3u);
-
-    for (int z = 0; z < meshResolution; ++z)
-    {
-        const float v = meshResolution > 1 ? static_cast<float>(z) / static_cast<float>(meshResolution - 1) : 0.0f;
-        for (int x = 0; x < meshResolution; ++x)
-        {
-            const float u = meshResolution > 1 ? static_cast<float>(x) / static_cast<float>(meshResolution - 1) : 0.0f;
-            const float height = SampleHeightfieldValue(grid.heights, gridResolution, u, v);
-            mesh.vertices.push_back({
-                std::lerp(-halfSize, halfSize, u),
-                height,
-                std::lerp(halfSize, -halfSize, v),
-                0.0f,
-                0.0f,
-                0.0f,
-                SampleHeightfieldValue(grid.mask, gridResolution, u, v),
-            });
-        }
-    }
-
-    std::unordered_set<uint64_t> edgeKeys;
-    const auto indexAt = [meshResolution](int x, int z) {
-        return static_cast<uint32_t>(z * meshResolution + x);
-    };
-    const auto addTriangle = [&](uint32_t a, uint32_t b, uint32_t c, bool keepWinding = false) {
-        const MeshVertex& va = mesh.vertices[a];
-        const MeshVertex& vb = mesh.vertices[b];
-        const MeshVertex& vc = mesh.vertices[c];
-        const float ux = vb.x - va.x;
-        const float uy = vb.y - va.y;
-        const float uz = vb.z - va.z;
-        const float vx = vc.x - va.x;
-        const float vy = vc.y - va.y;
-        const float vz = vc.z - va.z;
-        float nx = uy * vz - uz * vy;
-        float ny = uz * vx - ux * vz;
-        float nz = ux * vy - uy * vx;
-        if (!keepWinding && ny < 0.0f)
-        {
-            std::swap(b, c);
-            nx = -nx;
-            ny = -ny;
-            nz = -nz;
-        }
-        AccumulateNormal(mesh.vertices[a], nx, ny, nz);
-        AccumulateNormal(mesh.vertices[b], nx, ny, nz);
-        AccumulateNormal(mesh.vertices[c], nx, ny, nz);
-        mesh.triangles.push_back({a, b, c});
-        AddEdge(mesh, edgeKeys, a, b);
-        AddEdge(mesh, edgeKeys, b, c);
-        AddEdge(mesh, edgeKeys, c, a);
-    };
-
-    for (int z = 0; z < meshResolution - 1; ++z)
-    {
-        for (int x = 0; x < meshResolution - 1; ++x)
-        {
-            const uint32_t a = indexAt(x, z);
-            const uint32_t b = indexAt(x + 1, z);
-            const uint32_t c = indexAt(x + 1, z + 1);
-            const uint32_t d = indexAt(x, z + 1);
-            addTriangle(a, b, c);
-            addTriangle(a, c, d);
-        }
-    }
-
+    const float worldDX = grid.terrainSizeMeters / static_cast<float>(M1);
     const float baseY = 0.0f;
-    const auto addVertex = [&](float x, float y, float z, float mask = 0.0f) {
-        const uint32_t index = static_cast<uint32_t>(mesh.vertices.size());
-        mesh.vertices.push_back({x, y, z, 0.0f, 0.0f, 0.0f, mask});
-        return index;
+    const float invM1 = 1.0f / static_cast<float>(M1);
+
+    // Vertex layout (all sizes exact, no push_back):
+    //   [0, M*M)                         top surface
+    //   [topEnd, topEnd + 16*M1)          walls — 4 sides × M1 segments × 4 verts
+    //   [wallEnd, wallEnd + M*M)          bottom surface
+    const size_t topVerts = static_cast<size_t>(M) * static_cast<size_t>(M);
+    const size_t wallVerts = static_cast<size_t>(16) * static_cast<size_t>(M1);
+    const size_t bottomVerts = topVerts;
+    const size_t topVertsStart = 0;
+    const size_t wallVertsStart = topVertsStart + topVerts;
+    const size_t bottomVertsStart = wallVertsStart + wallVerts;
+    mesh.vertices.resize(topVerts + wallVerts + bottomVerts);
+
+    // Triangle layout:
+    //   [0, 2*M1*M1)                     top surface
+    //   [topTriEnd, topTriEnd + 8*M1)    walls — 2 tris × 4 sides × M1 segments
+    //   [wallTriEnd, wallTriEnd + 2*M1*M1) bottom surface
+    const size_t topTris = static_cast<size_t>(M1) * static_cast<size_t>(M1) * 2;
+    const size_t wallTris = static_cast<size_t>(M1) * static_cast<size_t>(8);
+    const size_t bottomTris = topTris;
+    const size_t topTrisStart = 0;
+    const size_t wallTrisStart = topTrisStart + topTris;
+    const size_t bottomTrisStart = wallTrisStart + wallTris;
+    mesh.triangles.resize(topTris + wallTris + bottomTris);
+
+    // Edge layout (structured emission, no dedup):
+    //   top: M*M1 horizontal + M1*M vertical + M1*M1 diagonals
+    //   walls: 5 unique edges per segment × 4 sides × M1 segments
+    //   bottom: same counts as top
+    const size_t topEdges = static_cast<size_t>(M) * static_cast<size_t>(M1) * 2u + static_cast<size_t>(M1) * static_cast<size_t>(M1);
+    const size_t wallEdges = static_cast<size_t>(5) * static_cast<size_t>(4) * static_cast<size_t>(M1);
+    const size_t bottomEdges = topEdges;
+    const size_t topEdgesStart = 0;
+    const size_t wallEdgesStart = topEdgesStart + topEdges;
+    const size_t bottomEdgesStart = wallEdgesStart + wallEdges;
+    mesh.edges.resize(topEdges + wallEdges + bottomEdges);
+
+    const auto topIdx = [M](int x, int z) -> uint32_t {
+        return static_cast<uint32_t>(z * M + x);
     };
-    const auto addWallSegment = [&](uint32_t topA, uint32_t topB) {
-        const MeshVertex& a = mesh.vertices[topA];
-        const MeshVertex& b = mesh.vertices[topB];
-        const uint32_t sideTopA = addVertex(a.x, a.y, a.z, a.mask);
-        const uint32_t sideTopB = addVertex(b.x, b.y, b.z, b.mask);
-        const uint32_t sideBottomA = addVertex(a.x, baseY, a.z, a.mask);
-        const uint32_t sideBottomB = addVertex(b.x, baseY, b.z, b.mask);
-        addTriangle(sideTopA, sideBottomA, sideBottomB, true);
-        addTriangle(sideTopA, sideBottomB, sideTopB, true);
+    const auto bottomIdx = [M, bottomVertsStart](int x, int z) -> uint32_t {
+        return static_cast<uint32_t>(bottomVertsStart + static_cast<size_t>(z * M + x));
     };
 
-    for (int x = 0; x < meshResolution - 1; ++x)
-    {
-        addWallSegment(indexAt(x, 0), indexAt(x + 1, 0));
-        addWallSegment(indexAt(x + 1, meshResolution - 1), indexAt(x, meshResolution - 1));
-    }
-    for (int z = 0; z < meshResolution - 1; ++z)
-    {
-        addWallSegment(indexAt(0, z + 1), indexAt(0, z));
-        addWallSegment(indexAt(meshResolution - 1, z), indexAt(meshResolution - 1, z + 1));
-    }
-
-    const uint32_t bottomStart = static_cast<uint32_t>(mesh.vertices.size());
-    for (int z = 0; z < meshResolution; ++z)
-    {
-        const float v = meshResolution > 1 ? static_cast<float>(z) / static_cast<float>(meshResolution - 1) : 0.0f;
-        for (int x = 0; x < meshResolution; ++x)
+    // ---- Top surface vertices (parallel) ----
+    // Gradient normal is computed from a 4-tap central difference of the
+    // heightfield. SampleHeightfieldValue clamps u/v to [0, 1] so the
+    // boundary samples degrade to a one-sided difference automatically.
+    ParallelForRows(M, [&](int z) {
+        const float v = static_cast<float>(z) * invM1;
+        const float worldZ = std::lerp(halfSize, -halfSize, v);
+        const float vMinus = static_cast<float>(z - 1) * invM1;
+        const float vPlus = static_cast<float>(z + 1) * invM1;
+        for (int x = 0; x < M; ++x)
         {
-            const float u = meshResolution > 1 ? static_cast<float>(x) / static_cast<float>(meshResolution - 1) : 0.0f;
-            addVertex(std::lerp(-halfSize, halfSize, u), baseY, std::lerp(halfSize, -halfSize, v));
+            const float u = static_cast<float>(x) * invM1;
+            const float worldX = std::lerp(-halfSize, halfSize, u);
+            const float uMinus = static_cast<float>(x - 1) * invM1;
+            const float uPlus = static_cast<float>(x + 1) * invM1;
+
+            const float h = SampleHeightfieldValue(grid.heights, gridResolution, u, v);
+            const float hxm = SampleHeightfieldValue(grid.heights, gridResolution, uMinus, v);
+            const float hxp = SampleHeightfieldValue(grid.heights, gridResolution, uPlus, v);
+            const float hzm = SampleHeightfieldValue(grid.heights, gridResolution, u, vMinus);
+            const float hzp = SampleHeightfieldValue(grid.heights, gridResolution, u, vPlus);
+
+            // World z increases as v decreases (worldZ = lerp(halfSize, -halfSize, v))
+            // so dhdz against world z is (hzm - hzp) / (2 * dx).
+            const float dhdx = (hxp - hxm) / (2.0f * worldDX);
+            const float dhdz = (hzm - hzp) / (2.0f * worldDX);
+            const float nxRaw = -dhdx;
+            const float nyRaw = 1.0f;
+            const float nzRaw = -dhdz;
+            const float lenSq = nxRaw * nxRaw + nyRaw * nyRaw + nzRaw * nzRaw;
+            const float invLen = (lenSq > 1e-12f) ? (1.0f / std::sqrt(lenSq)) : 1.0f;
+
+            const size_t idx = static_cast<size_t>(z) * static_cast<size_t>(M) + static_cast<size_t>(x);
+            mesh.vertices[idx] = {
+                worldX,
+                h,
+                worldZ,
+                nxRaw * invLen,
+                nyRaw * invLen,
+                nzRaw * invLen,
+                SampleHeightfieldValue(grid.mask, gridResolution, u, v),
+            };
         }
-    }
-    const auto bottomIndexAt = [bottomStart, meshResolution](int x, int z) {
-        return bottomStart + static_cast<uint32_t>(z * meshResolution + x);
+    });
+
+    // ---- Top surface triangles (parallel, fixed winding) ----
+    ParallelForRows(M1, [&](int z) {
+        const size_t rowBase = topTrisStart + static_cast<size_t>(z) * static_cast<size_t>(M1) * 2;
+        for (int x = 0; x < M1; ++x)
+        {
+            const uint32_t a = topIdx(x, z);
+            const uint32_t b = topIdx(x + 1, z);
+            const uint32_t c = topIdx(x + 1, z + 1);
+            const uint32_t d = topIdx(x, z + 1);
+            const size_t triIdx = rowBase + static_cast<size_t>(x) * 2;
+            mesh.triangles[triIdx + 0] = {a, b, c};
+            mesh.triangles[triIdx + 1] = {a, c, d};
+        }
+    });
+
+    // ---- Top surface edges (structured, parallel) ----
+    // Per row (z, z+1) emit: horizontal at z, plus the row's vertical and
+    // diagonals between z and z+1. The last row z=M-1 has only horizontal.
+    ParallelForRows(M, [&](int z) {
+        const bool hasNextRow = z < M1;
+        const size_t rowEdgesBefore = static_cast<size_t>(z) * (static_cast<size_t>(M1) * 3u);
+        const size_t lastRowOffset = hasNextRow ? rowEdgesBefore : (static_cast<size_t>(M1) * static_cast<size_t>(M1) * 3u);
+        size_t cursor = topEdgesStart + lastRowOffset;
+        // Horizontal edges along row z.
+        for (int x = 0; x < M1; ++x)
+        {
+            mesh.edges[cursor++] = {topIdx(x, z), topIdx(x + 1, z)};
+        }
+        if (!hasNextRow) return;
+        // Vertical and diagonal edges between row z and z+1.
+        for (int x = 0; x < M1; ++x)
+        {
+            mesh.edges[cursor++] = {topIdx(x, z), topIdx(x, z + 1)};
+            mesh.edges[cursor++] = {topIdx(x, z), topIdx(x + 1, z + 1)};
+        }
+        // Final right-edge vertical for x = M1.
+        mesh.edges[cursor++] = {topIdx(M1, z), topIdx(M1, z + 1)};
+    });
+
+    // ---- Walls (parallel per side) ----
+    // Each segment owns 4 vertices (TopA, TopB, BottomA, BottomB) and 2
+    // triangles. Normals are constant per side, so no gradient sampling
+    // needed. Emit 5 unique edges per segment too.
+    auto emitWallSegment = [&](size_t segIndex, uint32_t topAIdx, uint32_t topBIdx,
+                               float nx, float nz) {
+        const size_t vBase = wallVertsStart + segIndex * 4;
+        const size_t triBase = wallTrisStart + segIndex * 2;
+        const size_t edgeBase = wallEdgesStart + segIndex * 5;
+
+        const MeshVertex& va = mesh.vertices[topAIdx];
+        const MeshVertex& vb = mesh.vertices[topBIdx];
+        mesh.vertices[vBase + 0] = {va.x, va.y,  va.z, nx, 0.0f, nz, va.mask};  // TopA
+        mesh.vertices[vBase + 1] = {vb.x, vb.y,  vb.z, nx, 0.0f, nz, vb.mask};  // TopB
+        mesh.vertices[vBase + 2] = {va.x, baseY, va.z, nx, 0.0f, nz, va.mask};  // BottomA
+        mesh.vertices[vBase + 3] = {vb.x, baseY, vb.z, nx, 0.0f, nz, vb.mask};  // BottomB
+
+        const uint32_t v0 = static_cast<uint32_t>(vBase + 0);
+        const uint32_t v1 = static_cast<uint32_t>(vBase + 1);
+        const uint32_t v2 = static_cast<uint32_t>(vBase + 2);
+        const uint32_t v3 = static_cast<uint32_t>(vBase + 3);
+        // Same winding the original used (CCW from outside).
+        mesh.triangles[triBase + 0] = {v0, v2, v3};
+        mesh.triangles[triBase + 1] = {v0, v3, v1};
+
+        mesh.edges[edgeBase + 0] = {v0, v1};  // top edge of segment
+        mesh.edges[edgeBase + 1] = {v2, v3};  // bottom edge
+        mesh.edges[edgeBase + 2] = {v0, v2};  // left vertical
+        mesh.edges[edgeBase + 3] = {v1, v3};  // right vertical
+        mesh.edges[edgeBase + 4] = {v0, v3};  // diagonal
     };
-    for (int z = 0; z < meshResolution - 1; ++z)
-    {
-        for (int x = 0; x < meshResolution - 1; ++x)
-        {
-            const uint32_t a = bottomIndexAt(x, z);
-            const uint32_t b = bottomIndexAt(x + 1, z);
-            const uint32_t c = bottomIndexAt(x + 1, z + 1);
-            const uint32_t d = bottomIndexAt(x, z + 1);
-            addTriangle(a, c, b, true);
-            addTriangle(a, d, c, true);
-        }
-    }
 
-    for (MeshVertex& vertex : mesh.vertices)
-    {
-        const float length = std::sqrt(vertex.nx * vertex.nx + vertex.ny * vertex.ny + vertex.nz * vertex.nz);
-        if (length > 0.000001f)
+    // Side 0 = front (+Z, world +halfSize), Side 1 = back (-Z),
+    // Side 2 = left (-X), Side 3 = right (+X).
+    ParallelForRows(M1, [&](int s) {
+        emitWallSegment(0u * static_cast<size_t>(M1) + static_cast<size_t>(s),
+                         topIdx(s, 0),       topIdx(s + 1, 0),       0.0f,  1.0f);
+        emitWallSegment(1u * static_cast<size_t>(M1) + static_cast<size_t>(s),
+                         topIdx(s + 1, M1),  topIdx(s, M1),          0.0f, -1.0f);
+        emitWallSegment(2u * static_cast<size_t>(M1) + static_cast<size_t>(s),
+                         topIdx(0, s + 1),   topIdx(0, s),          -1.0f,  0.0f);
+        emitWallSegment(3u * static_cast<size_t>(M1) + static_cast<size_t>(s),
+                         topIdx(M1, s),      topIdx(M1, s + 1),      1.0f,  0.0f);
+    });
+
+    // ---- Bottom surface vertices (parallel, constant down-facing normal) ----
+    ParallelForRows(M, [&](int z) {
+        const float v = static_cast<float>(z) * invM1;
+        const float worldZ = std::lerp(halfSize, -halfSize, v);
+        for (int x = 0; x < M; ++x)
         {
-            vertex.nx /= length;
-            vertex.ny /= length;
-            vertex.nz /= length;
+            const float u = static_cast<float>(x) * invM1;
+            const float worldX = std::lerp(-halfSize, halfSize, u);
+            const size_t idx = bottomVertsStart + static_cast<size_t>(z) * static_cast<size_t>(M) + static_cast<size_t>(x);
+            mesh.vertices[idx] = {worldX, baseY, worldZ, 0.0f, -1.0f, 0.0f, 0.0f};
         }
-        else
+    });
+
+    // ---- Bottom surface triangles (parallel, reverse winding so normal faces down) ----
+    ParallelForRows(M1, [&](int z) {
+        const size_t rowBase = bottomTrisStart + static_cast<size_t>(z) * static_cast<size_t>(M1) * 2;
+        for (int x = 0; x < M1; ++x)
         {
-            vertex.nx = 0.0f;
-            vertex.ny = 1.0f;
-            vertex.nz = 0.0f;
+            const uint32_t a = bottomIdx(x, z);
+            const uint32_t b = bottomIdx(x + 1, z);
+            const uint32_t c = bottomIdx(x + 1, z + 1);
+            const uint32_t d = bottomIdx(x, z + 1);
+            const size_t triIdx = rowBase + static_cast<size_t>(x) * 2;
+            mesh.triangles[triIdx + 0] = {a, c, b};
+            mesh.triangles[triIdx + 1] = {a, d, c};
         }
-    }
+    });
+
+    // ---- Bottom surface edges (mirror top layout) ----
+    ParallelForRows(M, [&](int z) {
+        const bool hasNextRow = z < M1;
+        const size_t rowEdgesBefore = static_cast<size_t>(z) * (static_cast<size_t>(M1) * 3u);
+        const size_t lastRowOffset = hasNextRow ? rowEdgesBefore : (static_cast<size_t>(M1) * static_cast<size_t>(M1) * 3u);
+        size_t cursor = bottomEdgesStart + lastRowOffset;
+        for (int x = 0; x < M1; ++x)
+        {
+            mesh.edges[cursor++] = {bottomIdx(x, z), bottomIdx(x + 1, z)};
+        }
+        if (!hasNextRow) return;
+        for (int x = 0; x < M1; ++x)
+        {
+            mesh.edges[cursor++] = {bottomIdx(x, z), bottomIdx(x, z + 1)};
+            mesh.edges[cursor++] = {bottomIdx(x, z), bottomIdx(x + 1, z + 1)};
+        }
+        mesh.edges[cursor++] = {bottomIdx(M1, z), bottomIdx(M1, z + 1)};
+    });
+
     return mesh;
 }
 
@@ -2006,34 +2092,11 @@ int EffectiveMeshResolution(const Settings& settings, int maxResolution = 512)
     return std::clamp(settings.resolution / divisor, 16, maxResolution);
 }
 
-uint64_t EdgeKey(uint32_t a, uint32_t b)
-{
-    const uint32_t lo = std::min(a, b);
-    const uint32_t hi = std::max(a, b);
-    return (static_cast<uint64_t>(lo) << 32) | hi;
-}
-
-void AddEdge(MeshData& mesh, std::unordered_set<uint64_t>& edgeKeys, uint32_t a, uint32_t b)
-{
-    const uint64_t key = EdgeKey(a, b);
-    if (edgeKeys.insert(key).second)
-    {
-        mesh.edges.push_back({std::min(a, b), std::max(a, b)});
-    }
-}
-
-void AccumulateNormal(MeshVertex& vertex, float nx, float ny, float nz)
-{
-    vertex.nx += nx;
-    vertex.ny += ny;
-    vertex.nz += nz;
-}
-
 // Lightweight mesh builder for Mask Noise / Mask Blend previews. The
-// heightfield is flat (y = 0), so we skip the wall, bottom, normal-accumulation
-// and edge-dedup work that BuildMeshFromHeightfield needs for terrain. All
-// surface normals are (0, 1, 0) and the grid topology is regular, so triangles
-// and edges can be written by index in parallel rows without hash sets.
+// heightfield is flat (y = 0), so we skip the wall and bottom geometry
+// that BuildMeshFromHeightfield needs for terrain. All surface normals
+// are (0, 1, 0) and the grid topology is regular, so triangles and edges
+// can be written by index in parallel rows.
 MeshData BuildFlatMaskMesh(const HeightfieldGrid& grid, int meshResolution)
 {
     MeshData mesh;
