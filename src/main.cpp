@@ -354,6 +354,9 @@ struct GpuMeshPreview
     int cloudShadowSamples = 0;
     float cloudFieldRadius = 0.0f;
     float cloudFieldFalloff = 0.0f;
+    int cloudLightSamples = 0;
+    float cloudLightStepMeters = 0.0f;
+    float cloudPhaseEccentricity = 0.0f;
     D3D12_RESOURCE_STATES colorState = D3D12_RESOURCE_STATE_COMMON;
     D3D12_RESOURCE_STATES shadowState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     D3D12_RESOURCE_STATES depthState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
@@ -5075,6 +5078,9 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.cloudShadowSamples != g_graph.Settings().clouds.shadowSamples ||
         g_gpuMeshPreview.cloudFieldRadius != g_graph.Settings().clouds.fieldRadius ||
         g_gpuMeshPreview.cloudFieldFalloff != g_graph.Settings().clouds.fieldFalloff ||
+        g_gpuMeshPreview.cloudLightSamples != g_graph.Settings().clouds.lightSamples ||
+        g_gpuMeshPreview.cloudLightStepMeters != g_graph.Settings().clouds.lightStepMeters ||
+        g_gpuMeshPreview.cloudPhaseEccentricity != g_graph.Settings().clouds.phaseEccentricity ||
         (g_graph.Settings().clouds.enabled && g_graph.Settings().clouds.windSpeedMetersPerSec > 0.0f) ||
         (showGrid && !g_gpuMeshPreview.gridVertexBuffer) ||
         g_gpuMeshPreview.colorState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
@@ -5585,6 +5591,9 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.cloudShadowSamples = g_graph.Settings().clouds.shadowSamples;
         g_gpuMeshPreview.cloudFieldRadius = g_graph.Settings().clouds.fieldRadius;
         g_gpuMeshPreview.cloudFieldFalloff = g_graph.Settings().clouds.fieldFalloff;
+        g_gpuMeshPreview.cloudLightSamples = g_graph.Settings().clouds.lightSamples;
+        g_gpuMeshPreview.cloudLightStepMeters = g_graph.Settings().clouds.lightStepMeters;
+        g_gpuMeshPreview.cloudPhaseEccentricity = g_graph.Settings().clouds.phaseEccentricity;
         g_gpuMeshPreview.colorState    = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         return true;
     }
