@@ -5869,6 +5869,13 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
                 // the slots the shader doesn't access (especially t0 — the
                 // shadow target's own SRV, which would otherwise alias the
                 // currently-bound DSV and trip up D3D12 validation).
+                // Descriptor heap MUST be set before binding any descriptor
+                // table (CBV_SRV_UAV). The CPU shadow PSO only used 32-bit
+                // constants so it never needed this — the displacement
+                // shadow PSO does, hence the explicit set here.
+                ID3D12DescriptorHeap* shadowHeaps[] = {g_srvHeap.Get()};
+                commandList->SetDescriptorHeaps(1, shadowHeaps);
+
                 void* mappedCbv = nullptr;
                 D3D12_RANGE readRange{0, 0};
                 g_meshPreviewDisplacementCbv->Map(0, &readRange, &mappedCbv);
