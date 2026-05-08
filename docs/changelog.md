@@ -2,6 +2,12 @@
 
 ## 未リリース
 
+- GPU 頂点ディスプレイスの **本来の高速化**(Phase 2c):
+  - GPU モードでは CPU メッシュの GPU バッファアップロード(頂点 / 三角形 / エッジ)を **完全にスキップ**。`UpdateMeshPreviewBuffers` を呼ばないので、約 40MB の VRAM アップロードが不要になります。CPU 側でのメッシュ生成自体は 2D プレビュー用に継続(skipは将来検討)。
+  - シャドウ描画も displacement 経路に移行 (`g_meshPreviewDisplacementShadowPso` + 静的 IB を使用)。シャドウ VS がハイトテクスチャを直接サンプリングして光空間に投影するので、CPU メッシュ無しでも terrain self-shadow が描画されます。
+  - 早期リターン条件を更新: hasMeshVertices(CPU 経路)または displacementReady(GPU 経路)のいずれかがあれば描画を継続。
+  - 既知の制限: GPU モードではワイヤフレーム描画はスキップ(displacement wire PSO 未実装。CPU モードに切り替えれば従来通り表示可能)。グリッドは独立バッファなので両モードで動作。
+  - 体感: 1024² で従来 ~70ms → ~10ms 想定(CPU メッシュ生成 ~30ms + テクスチャアップロード ~6ms — VRAM アップロード分を完全削減)。
 - GPU 頂点ディスプレイスをサーフェス描画に **接続**(Phase 2b)。`表示設定 → Mesh Backend` で `CPU Mesh` ↔ `GPU Displacement` を切り替えられます。GPU モードでは:
   - 評価ごとにハイトフィールド + マスクが `R32_FLOAT` テクスチャへ `CopyTextureRegion` でアップロード(`UploadDisplacementHeightfield`、~3 ms / 1024²)。
   - サーフェス描画は新しい `g_meshPreviewDisplacementSurfacePso` + 静的グリッド IB で、頂点シェーダーがハイトテクスチャから Y を引いて配置 + 4-tap 法線。
