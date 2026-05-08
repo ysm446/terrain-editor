@@ -5619,28 +5619,15 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
 
     try
     {
-        // Phase 2c: skip the CPU mesh upload entirely when the GPU
-        // displacement backend is selected. The CPU mesh is still built
-        // (Evaluate() needs it for the 2D preview / OBJ export), it's
-        // just no longer pushed to GPU vertex/index/edge buffers.
-        const bool useDisplacement = g_graph.Settings().preview.meshBackend == rock::MeshPreviewBackend::GpuDisplacement;
+        // GPU displacement is currently a hybrid path: the CPU mesh still
+        // gets built and uploaded so that wireframe, shadow, and 2D
+        // preview keep working. Only the 3D surface draw is replaced with
+        // the displacement PSO when the backend toggle is on. Skipping
+        // the CPU upload entirely (Phase 2c) caused a crash on toggle in
+        // some scenes — backed out until we can repro and fix it cleanly.
         if (meshDirty)
         {
-            if (!useDisplacement)
-            {
-                UpdateMeshPreviewBuffers(mesh);
-            }
-            else
-            {
-                // Release any CPU buffers left from a previous CPU-mode
-                // session so the dirty check is accurate next time.
-                g_gpuMeshPreview.vertexBuffer.Reset();
-                g_gpuMeshPreview.indexBuffer.Reset();
-                g_gpuMeshPreview.edgeIndexBuffer.Reset();
-                g_gpuMeshPreview.vertexCount = 0;
-                g_gpuMeshPreview.triIndexCount = 0;
-                g_gpuMeshPreview.edgeIndexCount = 0;
-            }
+            UpdateMeshPreviewBuffers(mesh);
             g_gpuMeshPreview.graphVersion = currentVersion;
         }
         if (showGrid)
@@ -5648,9 +5635,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             EnsureGridPreviewBuffer();
         }
 
-        // GPU displacement preflight: build pipeline / IBs / textures if the
-        // user has the toggle on and we have a heightfield to upload. Failure
-        // here just falls back to the CPU mesh path silently.
+        const bool useDisplacement = g_graph.Settings().preview.meshBackend == rock::MeshPreviewBackend::GpuDisplacement;
         bool displacementReady = false;
         const rock::HeightfieldGrid& previewGrid = g_graph.Evaluation().previewHeightfield;
         if (useDisplacement && previewGrid.resolution >= 2)
@@ -5672,7 +5657,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         }
 
         const bool hasMeshVertices = g_gpuMeshPreview.vertexCount > 0 && g_gpuMeshPreview.vertexBuffer;
-        if (!hasMeshVertices && !displacementReady && (!showGrid || g_gpuMeshPreview.gridVertexCount == 0))
+        if (!hasMeshVertices && (!showGrid || g_gpuMeshPreview.gridVertexCount == 0))
         {
             return false;
         }
@@ -5835,10 +5820,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         commandList->SetGraphicsRootSignature(g_meshPreviewRootSignature.Get());
         commandList->SetGraphicsRoot32BitConstants(0, sizeof(constants) / 4, &constants, 0);
 
-        const bool wantsShadow = constants.shadowEnabled > 0.5f && showSurface;
-        const bool canCpuShadow = hasMeshVertices && g_gpuMeshPreview.triIndexCount > 0;
-        const bool canDisplacementShadow = displacementReady && g_gpuMeshPreview.displacementTriIndexCount > 0;
-        if (wantsShadow && (canCpuShadow || canDisplacementShadow))
+        if (hasMeshVertices && constants.shadowEnabled > 0.5f && showSurface && g_gpuMeshPreview.triIndexCount > 0)
         {
             if (g_gpuMeshPreview.shadowState != D3D12_RESOURCE_STATE_DEPTH_WRITE)
             {
@@ -5859,72 +5841,11 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             commandList->RSSetScissorRects(1, &shadowScissor);
             commandList->ClearDepthStencilView(g_gpuMeshPreview.shadowDsvCpu, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
             commandList->OMSetRenderTargets(0, nullptr, FALSE, &g_gpuMeshPreview.shadowDsvCpu);
-
-            if (useDisplacement && canDisplacementShadow)
-            {
-                // Displacement shadow: same root sig as the displacement
-                // surface draw. The shadow VS reads cbuffer Constants for
-                // the light* fields and samples the height texture for Y.
-                void* mappedCbv = nullptr;
-                D3D12_RANGE readRange{0, 0};
-                g_meshPreviewDisplacementCbv->Map(0, &readRange, &mappedCbv);
-                std::memcpy(mappedCbv, &constants, sizeof(constants));
-                g_meshPreviewDisplacementCbv->Unmap(0, nullptr);
-
-                DisplacementShaderConstants dispConsts{};
-                const int M = g_gpuMeshPreview.displacementMeshResolution;
-                dispConsts.gridResolution = static_cast<float>(M);
-                dispConsts.terrainSize = previewGrid.terrainSizeMeters;
-                dispConsts.halfSize = previewGrid.terrainSizeMeters * 0.5f;
-                dispConsts.worldDX = (M > 1) ? previewGrid.terrainSizeMeters / static_cast<float>(M - 1) : 1.0f;
-
-                commandList->SetGraphicsRootSignature(g_meshPreviewDisplacementRootSignature.Get());
-                commandList->SetGraphicsRootConstantBufferView(0, g_meshPreviewDisplacementCbv->GetGPUVirtualAddress());
-                if (g_gpuClouds.meshCbUploadBuffer)
-                {
-                    commandList->SetGraphicsRootConstantBufferView(1, g_gpuClouds.meshCbUploadBuffer->GetGPUVirtualAddress());
-                }
-                commandList->SetGraphicsRoot32BitConstants(2, sizeof(dispConsts) / 4, &dispConsts, 0);
-                commandList->SetGraphicsRootDescriptorTable(3, g_gpuMeshPreview.shadowSrvGpu);
-                // Shadow PSO has no PS, so cloud-shadow bindings are unused
-                // — but the root signature still requires valid handles.
-                commandList->SetGraphicsRootDescriptorTable(4, g_gpuClouds.dummyShadowSrvGpu);
-                commandList->SetGraphicsRootDescriptorTable(5, g_gpuMeshPreview.displacementHeightSrvGpu);
-                commandList->SetGraphicsRootDescriptorTable(6, g_gpuMeshPreview.displacementMaskSrvGpu);
-
-                D3D12_INDEX_BUFFER_VIEW shadowIbv{
-                    g_gpuMeshPreview.displacementTriIndexBuffer->GetGPUVirtualAddress(),
-                    g_gpuMeshPreview.displacementTriIndexCount * static_cast<UINT>(sizeof(UINT)),
-                    DXGI_FORMAT_R32_UINT};
-                commandList->IASetIndexBuffer(&shadowIbv);
-                commandList->IASetVertexBuffers(0, 0, nullptr);
-                commandList->SetPipelineState(g_meshPreviewDisplacementShadowPso.Get());
-                commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-                commandList->DrawIndexedInstanced(g_gpuMeshPreview.displacementTriIndexCount, 1, 0, 0, 0);
-
-                // Restore the CPU root sig + constants for any subsequent
-                // CPU-path draws (grid, etc.).
-                commandList->SetGraphicsRootSignature(g_meshPreviewRootSignature.Get());
-                commandList->SetGraphicsRoot32BitConstants(0, sizeof(constants) / 4, &constants, 0);
-                if (g_gpuClouds.meshCbUploadBuffer)
-                {
-                    commandList->SetGraphicsRootConstantBufferView(1, g_gpuClouds.meshCbUploadBuffer->GetGPUVirtualAddress());
-                }
-                commandList->SetGraphicsRootDescriptorTable(2, g_gpuMeshPreview.shadowSrvGpu);
-                commandList->SetGraphicsRootDescriptorTable(3, g_gpuClouds.dummyShadowSrvGpu);
-                if (hasMeshVertices)
-                {
-                    commandList->IASetVertexBuffers(0, 1, &vbv);
-                }
-            }
-            else
-            {
-                D3D12_INDEX_BUFFER_VIEW shadowIbv{g_gpuMeshPreview.indexBuffer->GetGPUVirtualAddress(), g_gpuMeshPreview.triIndexCount * sizeof(UINT), DXGI_FORMAT_R32_UINT};
-                commandList->IASetIndexBuffer(&shadowIbv);
-                commandList->SetPipelineState(g_meshPreviewShadowPso.Get());
-                commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-                commandList->DrawIndexedInstanced(g_gpuMeshPreview.triIndexCount, 1, 0, 0, 0);
-            }
+            D3D12_INDEX_BUFFER_VIEW shadowIbv{g_gpuMeshPreview.indexBuffer->GetGPUVirtualAddress(), g_gpuMeshPreview.triIndexCount * sizeof(UINT), DXGI_FORMAT_R32_UINT};
+            commandList->IASetIndexBuffer(&shadowIbv);
+            commandList->SetPipelineState(g_meshPreviewShadowPso.Get());
+            commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            commandList->DrawIndexedInstanced(g_gpuMeshPreview.triIndexCount, 1, 0, 0, 0);
 
             D3D12_RESOURCE_BARRIER shadowToSrv{};
             shadowToSrv.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
