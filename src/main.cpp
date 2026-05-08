@@ -6675,14 +6675,22 @@ void DrawNodeGraph()
                 EvaluateGraph();
             }
         };
-        addNodeMenuItem(rock::NodeKind::HeightmapLoad);
-        addNodeMenuItem(rock::NodeKind::Shape);
-        addNodeMenuItem(rock::NodeKind::HeightmapBlur);
-        addNodeMenuItem(rock::NodeKind::ErosionNoise);
-        addNodeMenuItem(rock::NodeKind::MultiScaleErosion);
-        addNodeMenuItem(rock::NodeKind::MaskFluvial);
-        addNodeMenuItem(rock::NodeKind::MaskNoise);
-        addNodeMenuItem(rock::NodeKind::MaskBlend);
+        if (ImGui::BeginMenu("ハイトフィールド"))
+        {
+            addNodeMenuItem(rock::NodeKind::HeightmapLoad);
+            addNodeMenuItem(rock::NodeKind::Shape);
+            addNodeMenuItem(rock::NodeKind::HeightmapBlur);
+            addNodeMenuItem(rock::NodeKind::ErosionNoise);
+            addNodeMenuItem(rock::NodeKind::MultiScaleErosion);
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("マスク"))
+        {
+            addNodeMenuItem(rock::NodeKind::MaskNoise);
+            addNodeMenuItem(rock::NodeKind::MaskBlend);
+            addNodeMenuItem(rock::NodeKind::MaskFluvial);
+            ImGui::EndMenu();
+        }
         ImGui::EndPopup();
     }
     ImGui::PopStyleVar(4);
