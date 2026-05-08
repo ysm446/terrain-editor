@@ -5657,9 +5657,15 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         {
             std::string ignoredErr;
             const int previewMeshResolution = CurrentPreviewMeshResolution();
+            // Cloud-shadow CBV + dummy SRV are normally created lazily on
+            // the first cloudy frame. The displacement root signature
+            // requires them bound, so force initialisation here regardless
+            // of whether clouds are enabled this frame.
             if (EnsureMeshPreviewDisplacementPipeline(&ignoredErr) &&
                 EnsureDisplacementGridIndexBuffers(previewMeshResolution, &ignoredErr) &&
-                EnsureDisplacementHeightTextures(previewGrid.resolution, &ignoredErr))
+                EnsureDisplacementHeightTextures(previewGrid.resolution, &ignoredErr) &&
+                EnsureCloudShadowMeshCb(&ignoredErr) &&
+                EnsureDummyCloudShadowTexture(&ignoredErr))
             {
                 displacementReady = true;
             }
