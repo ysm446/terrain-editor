@@ -23,6 +23,7 @@ enum class NodeKind
     MaskNoise = 9,
     MaskBlend = 10,
     MaskFluvial = 11,
+    Rock = 12,
 };
 
 enum class PinKind
@@ -95,6 +96,7 @@ enum class PreviewStage
     MaskNoise = 8,
     MaskBlend = 9,
     MaskFluvial = 10,
+    Rock = 11,
 };
 
 enum class HeightfieldPreviewField
@@ -165,6 +167,23 @@ struct MaskBlendSettings
 {
     MaskBlendMode mode = MaskBlendMode::Add;
     float intensity = 1.0f;
+};
+
+// Heightfield + mask. Tiles the terrain with a jittered Voronoi grid and
+// raises each cell into a rock dome with sub-cell roughness; outputs the
+// modified heights and a 0..1 mask of where rocks sit. Tuned for "bare
+// rock surface" displacement rather than discrete boulder placement —
+// for the latter, use a future Crumbling node.
+struct RockSettings
+{
+    int seed = 0;
+    float density = 8.0f;        // Voronoi cell pitch (m). Smaller = finer rocks.
+    float coverage = 1.0f;       // 0..1, fraction of cells that get a rock (gaps elsewhere).
+    float rockFill = 0.85f;      // 0..1, dome radius / (density / 2). < 1 leaves seams between rocks.
+    float rockHeight = 1.5f;     // m, max bump height per rock.
+    float heightJitter = 0.5f;   // 0..1, per-cell height variation (0 = uniform).
+    float bumpiness = 0.6f;      // 0..1, sub-cell roughness amplitude.
+    float crackDepth = 0.3f;     // m, depth carved at Voronoi cell boundaries (0 = no cracks).
 };
 
 // Heightfield -> mask. Performs D8 (or MFD) flow accumulation on the
@@ -240,6 +259,7 @@ struct Node
     MaskNoiseSettings maskNoise;
     MaskBlendSettings maskBlend;
     MaskFluvialSettings maskFluvial;
+    RockSettings rock;
 };
 
 struct Link
@@ -389,6 +409,7 @@ struct HeightfieldPipeline
             ErosionNoise,
             MultiScaleErosion,
             MaskFluvial,
+            Rock,
         };
 
         Kind kind = Kind::HeightmapBlur;
@@ -397,6 +418,7 @@ struct HeightfieldPipeline
         ErosionNoiseSettings erosionNoise;
         MultiScaleErosionSettings multiScaleErosion;
         MaskFluvialSettings maskFluvial;
+        RockSettings rock;
     };
 
     bool hasSource = false;

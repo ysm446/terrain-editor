@@ -52,7 +52,7 @@ namespace
 constexpr int kFrameCount = 2;
 constexpr int kSrvDescriptorCount = 64;
 constexpr float kFullFrameSensorHeightMm = 24.0f;
-constexpr int kMaxSerializedNodeKind = static_cast<int>(rock::NodeKind::MaskFluvial);
+constexpr int kMaxSerializedNodeKind = static_cast<int>(rock::NodeKind::Rock);
 constexpr int kMaxSerializedPreviewStage = static_cast<int>(rock::PreviewStage::MaskBlend);
 constexpr std::array<int, 5> kResolutionPresets = {128, 256, 512, 1024, 2048};
 
@@ -1741,6 +1741,16 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
                     {"pitFillIterations", node.maskFluvial.pitFillIterations},
                     {"mfdExponent", node.maskFluvial.mfdExponent},
                 }},
+                {"rock", {
+                    {"seed", node.rock.seed},
+                    {"density", node.rock.density},
+                    {"coverage", node.rock.coverage},
+                    {"rockFill", node.rock.rockFill},
+                    {"rockHeight", node.rock.rockHeight},
+                    {"heightJitter", node.rock.heightJitter},
+                    {"bumpiness", node.rock.bumpiness},
+                    {"crackDepth", node.rock.crackDepth},
+                }},
                 {"maskBlend", {
                     {"mode", static_cast<int>(node.maskBlend.mode)},
                     {"intensity", node.maskBlend.intensity},
@@ -1996,6 +2006,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 const nlohmann::json nodeMaskNoiseJson = nodeJson.value("maskNoise", nlohmann::json::object());
                 const nlohmann::json nodeMaskBlendJson = nodeJson.value("maskBlend", nlohmann::json::object());
                 const nlohmann::json nodeMaskFluvialJson = nodeJson.value("maskFluvial", nlohmann::json::object());
+                const nlohmann::json nodeRockJson = nodeJson.value("rock", nlohmann::json::object());
                 node.heightmap.path = nodeHeightmapJson.value("path", node.heightmap.path);
                 node.heightmap.scaleMeters = std::clamp(nodeHeightmapJson.value("scaleMeters", node.heightmap.scaleMeters), 1.0f, 1000000.0f);
                 node.heightmap.relativeVerticalScalePercent = std::clamp(nodeHeightmapJson.value("relativeVerticalScalePercent", node.heightmap.relativeVerticalScalePercent), 0.0f, 10000.0f);
@@ -2077,6 +2088,14 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 node.maskFluvial.power = std::clamp(nodeMaskFluvialJson.value("power", node.maskFluvial.power), 0.1f, 8.0f);
                 node.maskFluvial.pitFillIterations = std::clamp(nodeMaskFluvialJson.value("pitFillIterations", node.maskFluvial.pitFillIterations), 0, 64);
                 node.maskFluvial.mfdExponent = std::clamp(nodeMaskFluvialJson.value("mfdExponent", node.maskFluvial.mfdExponent), 0.1f, 16.0f);
+                node.rock.seed = std::clamp(nodeRockJson.value("seed", node.rock.seed), 0, 999999);
+                node.rock.density = std::clamp(nodeRockJson.value("density", node.rock.density), 0.5f, 1000.0f);
+                node.rock.coverage = std::clamp(nodeRockJson.value("coverage", node.rock.coverage), 0.0f, 1.0f);
+                node.rock.rockFill = std::clamp(nodeRockJson.value("rockFill", node.rock.rockFill), 0.05f, 1.0f);
+                node.rock.rockHeight = std::clamp(nodeRockJson.value("rockHeight", node.rock.rockHeight), 0.0f, 100.0f);
+                node.rock.heightJitter = std::clamp(nodeRockJson.value("heightJitter", node.rock.heightJitter), 0.0f, 1.0f);
+                node.rock.bumpiness = std::clamp(nodeRockJson.value("bumpiness", node.rock.bumpiness), 0.0f, 1.0f);
+                node.rock.crackDepth = std::clamp(nodeRockJson.value("crackDepth", node.rock.crackDepth), 0.0f, 10.0f);
 
                 const auto readPins = [&](const nlohmann::json& pinsJson, rock::PinKind pinKind, std::vector<rock::Pin>& pins) {
                     if (!pinsJson.is_array())
@@ -4348,7 +4367,8 @@ bool IsTerrainNodeKind(rock::NodeKind kind)
         kind == rock::NodeKind::MultiScaleErosion ||
         kind == rock::NodeKind::MaskNoise ||
         kind == rock::NodeKind::MaskBlend ||
-        kind == rock::NodeKind::MaskFluvial;
+        kind == rock::NodeKind::MaskFluvial ||
+        kind == rock::NodeKind::Rock;
 }
 
 int CurrentPreviewMeshResolution()
@@ -5974,6 +5994,7 @@ ImVec4 NodeAccentColor(rock::NodeKind kind)
     case rock::NodeKind::HeightmapBlur:
     case rock::NodeKind::ErosionNoise:
     case rock::NodeKind::MultiScaleErosion:
+    case rock::NodeKind::Rock:
         return heightfieldGreen;
     case rock::NodeKind::MaskNoise:
     case rock::NodeKind::MaskBlend:
@@ -6004,6 +6025,8 @@ ImVec2 InitialNodePosition(rock::NodeKind kind)
         return ImVec2(320.0f, 520.0f);
     case rock::NodeKind::MaskFluvial:
         return ImVec2(880.0f, 240.0f);
+    case rock::NodeKind::Rock:
+        return ImVec2(880.0f, 380.0f);
     default:
         return ImVec2(40.0f, 64.0f);
     }
@@ -6691,6 +6714,7 @@ void DrawNodeGraph()
             addNodeMenuItem(rock::NodeKind::HeightmapBlur);
             addNodeMenuItem(rock::NodeKind::ErosionNoise);
             addNodeMenuItem(rock::NodeKind::MultiScaleErosion);
+            addNodeMenuItem(rock::NodeKind::Rock);
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("マスク"))
@@ -7609,6 +7633,57 @@ void DrawPropertiesPanel()
             {
                 EvaluateGraph();
             }
+        }
+
+        ImGui::EndTable();
+        return;
+    }
+
+    if (selectedNode->kind == rock::NodeKind::Rock && ImGui::BeginTable("RockRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 210.0f);
+        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+        rock::RockSettings& rk = editableNode->rock;
+        rk.density = std::clamp(rk.density, 0.5f, 1000.0f);
+        rk.coverage = std::clamp(rk.coverage, 0.0f, 1.0f);
+        rk.rockFill = std::clamp(rk.rockFill, 0.05f, 1.0f);
+        rk.rockHeight = std::clamp(rk.rockHeight, 0.0f, 100.0f);
+        rk.heightJitter = std::clamp(rk.heightJitter, 0.0f, 1.0f);
+        rk.bumpiness = std::clamp(rk.bumpiness, 0.0f, 1.0f);
+        rk.crackDepth = std::clamp(rk.crackDepth, 0.0f, 10.0f);
+        rk.seed = std::clamp(rk.seed, 0, 999999);
+
+        if (DrawPropertyIntRow("Seed", "RockSeed", &rk.seed, 0, 999999, rock::RockSettings{}.seed, "Rock seed changed", true, "ハッシュのオフセットです。同じパラメータでも異なる岩配置を得るために使います。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Density (m)", "RockDensity", &rk.density, 0.5f, 200.0f, rock::RockSettings{}.density, "Rock density changed", true, "Voronoi セル一辺の長さ (m)。岩のおおよそのサイズに対応します。小さいほど細かい岩肌、大きいほど巨石サイズ。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyPercentRow("Coverage (%)", "RockCoverage", &rk.coverage, 0.0f, 1.0f, rock::RockSettings{}.coverage, "Rock coverage changed", "セルが岩になる確率です。1.0 で全セル、下げると元の地形が見える隙間が増えます。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyPercentRow("Rock Fill (%)", "RockFill", &rk.rockFill, 0.05f, 1.0f, rock::RockSettings{}.rockFill, "Rock fill changed", "セル内のドーム半径比です。1.0 でセル境界まで到達、下げると隣接ドームの間に元地形の溝が通ります。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Rock Height (m)", "RockHeight", &rk.rockHeight, 0.0f, 50.0f, rock::RockSettings{}.rockHeight, "Rock height changed", true, "岩塊の最大盛り上がり (m)。地形の起伏スケールに対して大きすぎると岩肌が浮き上がりすぎるので、地形の標高変化の数% 程度が目安。", "%.2f"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyPercentRow("Height Jitter (%)", "RockHeightJitter", &rk.heightJitter, 0.0f, 1.0f, rock::RockSettings{}.heightJitter, "Rock height jitter changed", "岩ごとの高さ振れ幅です。0 で全部同じ高さ、1 で 0 倍〜2 倍の範囲でランダム。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyPercentRow("Bumpiness (%)", "RockBumpiness", &rk.bumpiness, 0.0f, 1.0f, rock::RockSettings{}.bumpiness, "Rock bumpiness changed", "サブセル凹凸の振幅です。0 で滑らかなドーム、上げるほど岩肌の角が立ちます。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Crack Depth (m)", "RockCrackDepth", &rk.crackDepth, 0.0f, 5.0f, rock::RockSettings{}.crackDepth, "Rock crack depth changed", true, "Voronoi セル境界に彫る亀裂の深さ (m)。0 で岩塊が滑らかに繋がり、上げるほど角が立った岩肌に。", "%.2f"))
+        {
+            EvaluateGraph();
         }
 
         ImGui::EndTable();

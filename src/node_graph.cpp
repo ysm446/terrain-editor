@@ -117,6 +117,21 @@ uint64_t HashMaskBlendSettings(const MaskBlendSettings& settings)
     return hash;
 }
 
+uint64_t HashRockSettings(const RockSettings& settings, int resolution)
+{
+    uint64_t hash = 6364136223846793005ull;
+    HashCombine(hash, static_cast<uint64_t>(settings.seed));
+    HashCombine(hash, HashFloat(settings.density));
+    HashCombine(hash, HashFloat(settings.coverage));
+    HashCombine(hash, HashFloat(settings.rockFill));
+    HashCombine(hash, HashFloat(settings.rockHeight));
+    HashCombine(hash, HashFloat(settings.heightJitter));
+    HashCombine(hash, HashFloat(settings.bumpiness));
+    HashCombine(hash, HashFloat(settings.crackDepth));
+    HashCombine(hash, static_cast<uint64_t>(resolution));
+    return hash;
+}
+
 uint64_t HashMaskFluvialSettings(const MaskFluvialSettings& settings, int resolution)
 {
     uint64_t hash = 8589869056ull;
@@ -1668,6 +1683,168 @@ void ApplyMaskFluvial(HeightfieldGrid& grid, const MaskFluvialSettings& settings
     }
 }
 
+namespace rock_node
+{
+inline uint32_t Hash2(int32_t x, int32_t y, int32_t seed)
+{
+    uint32_t h = static_cast<uint32_t>(x) * 0x27d4eb2du + static_cast<uint32_t>(y) * 0x9e3779b9u + static_cast<uint32_t>(seed) * 0x85ebca6bu;
+    h ^= h >> 16;
+    h *= 0x21f0aaadu;
+    h ^= h >> 15;
+    h *= 0x735a2d97u;
+    h ^= h >> 15;
+    return h;
+}
+
+inline float HashFloat01(int32_t x, int32_t y, int32_t seed)
+{
+    return static_cast<float>(Hash2(x, y, seed) & 0xFFFFFFu) / static_cast<float>(0xFFFFFFu);
+}
+
+// One Voronoi pass: jittered grid where each integer cell holds a single
+// site at its centre + a per-cell offset in [-0.45, 0.45]. Returns the two
+// nearest distances (F1, F2) and the integer coordinates of the F1 cell —
+// callers reuse those coordinates to fetch per-cell randomisation.
+inline void VoronoiF1F2(float x, float z, int32_t seed,
+                        float& f1, float& f2,
+                        int32_t& f1cx, int32_t& f1cz)
+{
+    const int32_t cx = static_cast<int32_t>(std::floor(x));
+    const int32_t cz = static_cast<int32_t>(std::floor(z));
+    f1 = std::numeric_limits<float>::infinity();
+    f2 = std::numeric_limits<float>::infinity();
+    f1cx = cx;
+    f1cz = cz;
+    for (int dz = -1; dz <= 1; ++dz)
+    {
+        for (int dx = -1; dx <= 1; ++dx)
+        {
+            const int32_t gx = cx + dx;
+            const int32_t gz = cz + dz;
+            const float jx = HashFloat01(gx, gz, seed) * 0.9f - 0.45f;
+            const float jz = HashFloat01(gx, gz, seed + 73) * 0.9f - 0.45f;
+            const float sx = static_cast<float>(gx) + 0.5f + jx;
+            const float sz = static_cast<float>(gz) + 0.5f + jz;
+            const float dxs = sx - x;
+            const float dzs = sz - z;
+            const float d = std::sqrt(dxs * dxs + dzs * dzs);
+            if (d < f1)
+            {
+                f2 = f1;
+                f1 = d;
+                f1cx = gx;
+                f1cz = gz;
+            }
+            else if (d < f2)
+            {
+                f2 = d;
+            }
+        }
+    }
+}
+
+inline float Smoothstep01(float t)
+{
+    t = std::clamp(t, 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+} // namespace rock_node
+
+// Rock: tiles the terrain with a jittered Voronoi grid, raising each cell
+// into a dome with sub-cell roughness and an optional crack at the cell
+// boundary. Heights are added (peaks rise above the input terrain), and a
+// 0..1 mask of "where the rock dome is significant" is written to grid.mask.
+void ApplyRock(HeightfieldGrid& grid, const RockSettings& settings)
+{
+    const int n = grid.resolution;
+    const size_t cellCount = static_cast<size_t>(n) * static_cast<size_t>(n);
+    if (n < 2 || grid.heights.size() < cellCount || settings.density <= 0.0f)
+    {
+        return;
+    }
+
+    grid.mask.assign(cellCount, 0.0f);
+
+    const float density = std::max(settings.density, 0.1f);
+    const float coverage = std::clamp(settings.coverage, 0.0f, 1.0f);
+    const float rockFill = std::clamp(settings.rockFill, 0.05f, 1.0f);
+    const float rockHeight = std::max(settings.rockHeight, 0.0f);
+    const float heightJitter = std::clamp(settings.heightJitter, 0.0f, 1.0f);
+    const float bumpiness = std::clamp(settings.bumpiness, 0.0f, 1.0f);
+    const float crackDepth = std::max(settings.crackDepth, 0.0f);
+    const int32_t seed = settings.seed;
+    // Sub-cell detail uses a second Voronoi at 4× density. Cheap and gives
+    // the angular "fractured stone" look without a separate Perlin pass.
+    const float subSeed = static_cast<float>(seed) * 7.917f + 31.4f;
+    (void)subSeed;
+    const int32_t subSeedI = seed * 7919 + 31337;
+
+    // Voronoi grid is parameterised in cell units, so divide world (m)
+    // by `density` to step into cell-space. The terrain spans
+    // [-halfSize, +halfSize]; matching the renderer's coordinate basis is
+    // not strictly required here (the result is locally identical) but it
+    // keeps cracks aligned with terrain when the size changes.
+    const float terrainSize = std::max(grid.terrainSizeMeters, 1.0f);
+    const float halfSize = terrainSize * 0.5f;
+    const float invStep = (n > 1) ? 1.0f / static_cast<float>(n - 1) : 0.0f;
+    const float crackWidth = density * 0.08f;
+
+    ParallelForRows(n, [&](int z) {
+        const float worldZ = -halfSize + static_cast<float>(z) * invStep * terrainSize;
+        const float cellZ = worldZ / density;
+        for (int x = 0; x < n; ++x)
+        {
+            const float worldX = -halfSize + static_cast<float>(x) * invStep * terrainSize;
+            const float cellX = worldX / density;
+
+            float f1 = 0.0f, f2 = 0.0f;
+            int32_t f1cx = 0, f1cz = 0;
+            rock_node::VoronoiF1F2(cellX, cellZ, seed, f1, f2, f1cx, f1cz);
+
+            const float cellRandom = rock_node::HashFloat01(f1cx, f1cz, seed + 17);
+            if (cellRandom > coverage)
+            {
+                continue;
+            }
+
+            // Distance is in cell-pitch units (1 = `density` metres). Dome
+            // radius in the same units = rockFill * 0.5 (cell radius).
+            const float domeRadius = rockFill * 0.5f;
+            if (f1 >= domeRadius)
+            {
+                // Out of dome — but cracks at cell boundaries can still
+                // carve here when they straddle two filled cells.
+                continue;
+            }
+
+            const float dome = rock_node::Smoothstep01(1.0f - f1 / domeRadius);
+
+            // Per-cell height variation centred on rockHeight.
+            const float heightRand = rock_node::HashFloat01(f1cx, f1cz, seed + 53);
+            const float cellHeight = rockHeight * (1.0f - heightJitter + heightJitter * 2.0f * heightRand);
+
+            // Sub-cell detail: same Voronoi sampled at 4× pitch with an
+            // independent seed, mapped to a -0.5..+0.5 modulation.
+            float sub_f1 = 0.0f, sub_f2 = 0.0f;
+            int32_t sub_cx = 0, sub_cz = 0;
+            rock_node::VoronoiF1F2(cellX * 4.0f, cellZ * 4.0f, subSeedI, sub_f1, sub_f2, sub_cx, sub_cz);
+            const float subDetail = rock_node::Smoothstep01(1.0f - sub_f1 / 0.5f) - 0.5f;
+
+            float rockH = cellHeight * dome * (1.0f + bumpiness * subDetail);
+
+            // Crack carving along Voronoi cell boundaries. (F2 - F1) is the
+            // perpendicular distance to the boundary in cell units.
+            const float boundary = (f2 - f1);
+            const float edge = std::clamp(1.0f - boundary / std::max(crackWidth, 1e-4f), 0.0f, 1.0f);
+            rockH -= edge * crackDepth;
+
+            const size_t idx = static_cast<size_t>(z) * static_cast<size_t>(n) + static_cast<size_t>(x);
+            grid.heights[idx] += rockH;
+            grid.mask[idx] = std::clamp(dome * (1.0f - edge), 0.0f, 1.0f);
+        }
+    });
+}
+
 MeshData BuildMeshFromHeightfield(const HeightfieldGrid& grid, int meshResolution)
 {
     MeshData mesh;
@@ -1981,6 +2158,10 @@ MeshData BuildMeshFromHeightPipeline(const HeightfieldPipeline& pipeline, int re
         {
             ApplyMaskFluvial(grid, operation.maskFluvial);
         }
+        else if (operation.kind == HeightfieldPipeline::HeightfieldOperation::Kind::Rock)
+        {
+            ApplyRock(grid, operation.rock);
+        }
     }
     if (message != nullptr && !pipeline.heightfieldOperations.empty())
     {
@@ -2062,6 +2243,10 @@ HeightfieldGrid NodeGraph::EvaluateHeightPipelineCached(const HeightfieldPipelin
             {
                 ApplyMaskFluvial(grid, operation.maskFluvial);
             }
+            else if (operation.kind == HeightfieldPipeline::HeightfieldOperation::Kind::Rock)
+            {
+                ApplyRock(grid, operation.rock);
+            }
             continue;
         }
 
@@ -2079,6 +2264,9 @@ HeightfieldGrid NodeGraph::EvaluateHeightPipelineCached(const HeightfieldPipelin
             break;
         case HeightfieldPipeline::HeightfieldOperation::Kind::MaskFluvial:
             parameterHash = HashMaskFluvialSettings(operation.maskFluvial, simulationResolution);
+            break;
+        case HeightfieldPipeline::HeightfieldOperation::Kind::Rock:
+            parameterHash = HashRockSettings(operation.rock, simulationResolution);
             break;
         }
         HeightfieldNodeCache& operationCache = heightfieldCache_[operation.nodeId];
@@ -2104,6 +2292,10 @@ HeightfieldGrid NodeGraph::EvaluateHeightPipelineCached(const HeightfieldPipelin
             else if (operation.kind == HeightfieldPipeline::HeightfieldOperation::Kind::MaskFluvial)
             {
                 ApplyMaskFluvial(operationGrid, operation.maskFluvial);
+            }
+            else if (operation.kind == HeightfieldPipeline::HeightfieldOperation::Kind::Rock)
+            {
+                ApplyRock(operationGrid, operation.rock);
             }
             operationCache.grid = std::move(operationGrid);
             operationCache.message.clear();
@@ -2340,6 +2532,11 @@ GraphId NodeGraph::CreateNode(NodeKind kind)
         AddPin(nodeId, PinKind::Input, ValueType::HeightField, "HeightField");
         AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
         break;
+    case NodeKind::Rock:
+        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "HeightField");
+        AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
+        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
+        break;
     case NodeKind::MaskNoise:
         AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
         break;
@@ -2496,8 +2693,11 @@ HeightfieldPipeline NodeGraph::PipelineFor(PreviewStage stage) const
         return PipelineTo(NodeKind::MultiScaleErosion);
     case PreviewStage::MaskFluvial:
         return PipelineTo(NodeKind::MaskFluvial);
+    case PreviewStage::Rock:
+        return PipelineTo(NodeKind::Rock);
     case PreviewStage::Graph:
     default:
+        if (const Node* node = FindFirstNode(NodeKind::Rock)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::MaskFluvial)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::MultiScaleErosion)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::ErosionNoise)) { return PipelineToNode(*node); }
@@ -2747,6 +2947,7 @@ HeightfieldPipeline NodeGraph::PipelineToNode(const Node& targetNode) const
                 {},
                 {},
                 {},
+                {},
             });
         }
         else if (node->kind == NodeKind::ErosionNoise)
@@ -2756,6 +2957,7 @@ HeightfieldPipeline NodeGraph::PipelineToNode(const Node& targetNode) const
                 node->id,
                 {},
                 node->erosionNoise,
+                {},
                 {},
                 {},
             });
@@ -2769,6 +2971,7 @@ HeightfieldPipeline NodeGraph::PipelineToNode(const Node& targetNode) const
                 {},
                 node->multiScaleErosion,
                 {},
+                {},
             });
         }
         else if (node->kind == NodeKind::MaskFluvial)
@@ -2780,6 +2983,19 @@ HeightfieldPipeline NodeGraph::PipelineToNode(const Node& targetNode) const
                 {},
                 {},
                 node->maskFluvial,
+                {},
+            });
+        }
+        else if (node->kind == NodeKind::Rock)
+        {
+            pipeline.heightfieldOperations.push_back({
+                HeightfieldPipeline::HeightfieldOperation::Kind::Rock,
+                node->id,
+                {},
+                {},
+                {},
+                {},
+                node->rock,
             });
         }
         else if (node->kind == NodeKind::HeightmapLoad)
@@ -2997,6 +3213,8 @@ std::string_view ToString(NodeKind kind)
         return "Mask Blend";
     case NodeKind::MaskFluvial:
         return "Mask Fluvial";
+    case NodeKind::Rock:
+        return "Rock";
     default:
         return "Unknown";
     }
@@ -3022,6 +3240,8 @@ std::string_view ToString(PreviewStage stage)
         return "Mask Blend";
     case PreviewStage::MaskFluvial:
         return "Mask Fluvial";
+    case PreviewStage::Rock:
+        return "Rock";
     default:
         return "Unknown";
     }
@@ -3062,6 +3282,8 @@ PreviewStage PreviewStageFor(NodeKind kind)
         return PreviewStage::MaskBlend;
     case NodeKind::MaskFluvial:
         return PreviewStage::MaskFluvial;
+    case NodeKind::Rock:
+        return PreviewStage::Rock;
     default:
         return PreviewStage::Graph;
     }

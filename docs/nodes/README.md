@@ -11,6 +11,7 @@ Terrain Editor のノード関連ドキュメントをまとめるフォルダ�
 | Heightmap Blur | [heightfield/heightmap_blur/heightmap_blur_node.md](heightfield/heightmap_blur/heightmap_blur_node.md) |
 | Erosion Noise | [heightfield/erosion_noise/erosion_noise_node.md](heightfield/erosion_noise/erosion_noise_node.md) |
 | Multi-Scale Erosion | [heightfield/multi_scale_erosion/multi_scale_erosion_node.md](heightfield/multi_scale_erosion/multi_scale_erosion_node.md) |
+| Rock | [heightfield/rock/rock_node.md](heightfield/rock/rock_node.md) |
 
 ## Mask 系ノード
 
