@@ -1106,9 +1106,6 @@ bool SaveAppSettings(std::string* error = nullptr)
             {"fps", g_ui.showFps},
             {"meshSurface", settings.preview.showSurface},
             {"meshWireframe", settings.preview.showWireframe},
-            {"grid", settings.preview.showGrid},
-            {"gridCellCount", settings.preview.gridCellCount},
-            {"gridCellSizeMeters", settings.preview.gridCellSizeMeters},
             {"previewResolution", settings.preview.resolution},
             {"previewLod", settings.preview.lod},
             {"lightingMode", settings.preview.lightingMode},
@@ -1123,11 +1120,6 @@ bool SaveAppSettings(std::string* error = nullptr)
                 settings.preview.pbrAlbedo[0],
                 settings.preview.pbrAlbedo[1],
                 settings.preview.pbrAlbedo[2],
-            }},
-            {"gridColor", {
-                settings.preview.gridColor[0],
-                settings.preview.gridColor[1],
-                settings.preview.gridColor[2],
             }},
             {"viewportBackground", {
                 settings.preview.viewportBackground[0],
@@ -1251,9 +1243,6 @@ bool LoadAppSettings(std::string* error = nullptr)
         g_ui.showFps = visibilityJson.value("fps", g_ui.showFps);
         settings.preview.showSurface = visibilityJson.value("meshSurface", settings.preview.showSurface);
         settings.preview.showWireframe = visibilityJson.value("meshWireframe", settings.preview.showWireframe);
-        settings.preview.showGrid = visibilityJson.value("grid", settings.preview.showGrid);
-        settings.preview.gridCellCount = std::clamp(visibilityJson.value("gridCellCount", settings.preview.gridCellCount), 1, 200);
-        settings.preview.gridCellSizeMeters = std::clamp(visibilityJson.value("gridCellSizeMeters", settings.preview.gridCellSizeMeters), 1.0f, 10000.0f);
         settings.preview.resolution = NearestResolutionPreset(visibilityJson.value("previewResolution", settings.preview.resolution));
         settings.preview.lod = std::clamp(visibilityJson.value("previewLod", settings.preview.lod), 0, 4);
         settings.preview.lightingMode = std::clamp(visibilityJson.value("lightingMode", settings.preview.lightingMode), 0, 1);
@@ -1269,12 +1258,6 @@ bool LoadAppSettings(std::string* error = nullptr)
             settings.preview.pbrAlbedo[0] = std::clamp(visibilityJson["pbrAlbedo"][0].get<float>(), 0.0f, 1.0f);
             settings.preview.pbrAlbedo[1] = std::clamp(visibilityJson["pbrAlbedo"][1].get<float>(), 0.0f, 1.0f);
             settings.preview.pbrAlbedo[2] = std::clamp(visibilityJson["pbrAlbedo"][2].get<float>(), 0.0f, 1.0f);
-        }
-        if (visibilityJson.contains("gridColor") && visibilityJson["gridColor"].is_array() && visibilityJson["gridColor"].size() == 3)
-        {
-            settings.preview.gridColor[0] = std::clamp(visibilityJson["gridColor"][0].get<float>(), 0.0f, 1.0f);
-            settings.preview.gridColor[1] = std::clamp(visibilityJson["gridColor"][1].get<float>(), 0.0f, 1.0f);
-            settings.preview.gridColor[2] = std::clamp(visibilityJson["gridColor"][2].get<float>(), 0.0f, 1.0f);
         }
         if (visibilityJson.contains("viewportBackground") && visibilityJson["viewportBackground"].is_array() && visibilityJson["viewportBackground"].size() == 3)
         {
@@ -1628,6 +1611,14 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
             }},
             {"preview", {
                 {"lightingMode", preview.lightingMode},
+                {"showGrid", preview.showGrid},
+                {"gridCellCount", preview.gridCellCount},
+                {"gridCellSizeMeters", preview.gridCellSizeMeters},
+                {"gridColor", {
+                    preview.gridColor[0],
+                    preview.gridColor[1],
+                    preview.gridColor[2],
+                }},
             }},
             {"sky", {
                 {"mode", static_cast<int>(sky.mode)},
@@ -1941,6 +1932,15 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
         if (!previewJson.empty())
         {
             preview.lightingMode = std::clamp(previewJson.value("lightingMode", preview.lightingMode), 0, 1);
+            preview.showGrid = previewJson.value("showGrid", preview.showGrid);
+            preview.gridCellCount = std::clamp(previewJson.value("gridCellCount", preview.gridCellCount), 1, 200);
+            preview.gridCellSizeMeters = std::clamp(previewJson.value("gridCellSizeMeters", preview.gridCellSizeMeters), 1.0f, 10000.0f);
+            if (previewJson.contains("gridColor") && previewJson["gridColor"].is_array() && previewJson["gridColor"].size() == 3)
+            {
+                preview.gridColor[0] = std::clamp(previewJson["gridColor"][0].get<float>(), 0.0f, 1.0f);
+                preview.gridColor[1] = std::clamp(previewJson["gridColor"][1].get<float>(), 0.0f, 1.0f);
+                preview.gridColor[2] = std::clamp(previewJson["gridColor"][2].get<float>(), 0.0f, 1.0f);
+            }
         }
         else if (sky.mode == rock::SkyMode::Atmospheric)
         {
