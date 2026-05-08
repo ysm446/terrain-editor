@@ -181,21 +181,29 @@ struct MaskBlendSettings
     float intensity = 1.0f;
 };
 
-// Heightfield + mask. Tiles the terrain with a jittered Voronoi grid and
-// raises each cell into a rock dome with sub-cell roughness; outputs the
-// modified heights and a 0..1 mask of where rocks sit. Tuned for "bare
-// rock surface" displacement rather than discrete boulder placement —
-// for the latter, use a future Crumbling node.
+// Heightfield + mask. Scatters rocks on a jittered Voronoi grid (used
+// purely as a deterministic Poisson-like scatter pattern) and lifts each
+// scatter point into a rotated, possibly elongated dome with per-rock
+// facet detail. Rock size is specified directly in metres and is
+// independent of scatter spacing, so rocks freely overlap and pixels
+// take the max rock contribution. The natural max-blend already
+// produces creases where rocks meet — there is no separate crack
+// carving step.
 struct RockSettings
 {
     int seed = 0;
-    float density = 8.0f;        // Voronoi cell pitch (m). Smaller = finer rocks.
-    float coverage = 1.0f;       // 0..1, fraction of cells that get a rock (gaps elsewhere).
-    float rockFill = 0.85f;      // 0..1, dome radius / (density / 2). < 1 leaves seams between rocks.
-    float rockHeight = 1.5f;     // m, max bump height per rock.
-    float heightJitter = 0.5f;   // 0..1, per-cell height variation (0 = uniform).
-    float bumpiness = 0.6f;      // 0..1, sub-cell roughness amplitude.
-    float crackDepth = 0.3f;     // m, depth carved at Voronoi cell boundaries (0 = no cracks).
+    float density = 8.0f;            // Scatter pitch (m). Spacing between rock centres.
+    float coverage = 1.0f;           // 0..1, fraction of scatter points that become a rock.
+    float rockSizeMinM = 5.0f;       // Min rock diameter (m). Each rock samples uniformly from [min, max].
+    float rockSizeMaxM = 10.0f;      // Max rock diameter (m). May be larger or smaller than density — overlap is handled by max-blend.
+    float rockHeight = 1.5f;         // m, max bump height per rock.
+    float heightJitter = 0.5f;       // 0..1, per-rock height variation (0 = uniform).
+    float rotationVariation = 1.0f;  // 0..1, fraction of full 2π rotation each rock can take. 0 = aligned, 1 = full random.
+    float aspectVariation = 0.3f;    // 0..1, per-rock aspect ratio variation. 0 = circular, 1 = up to 2:1 along a random axis.
+    float edgeSharpness = 1.0f;      // 0 = circular silhouette (smooth dome). > 0 = polyhedral silhouette hard-clipped by 4–7 sided polygon; the value blends interior height between radial and polyhedral. 1 = pure flat-faceted polyhedron.
+    float bumpiness = 0.6f;          // 0..1, surface detail amplitude (smooth or faceted, see facetSharpness).
+    float facetSharpness = 0.5f;     // 0 = smooth dome with rounded bumps, 1 = polyhedral flat facets with sharp creases.
+    float facetScale = 2.5f;         // Sub-cell Voronoi frequency in the rock-local frame (higher = more, smaller facets per rock).
 };
 
 // Heightfield -> mask. Performs D8 (or MFD) flow accumulation on the

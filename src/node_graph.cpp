@@ -119,11 +119,16 @@ uint64_t HashRockSettings(const RockSettings& settings, int resolution)
     HashCombine(hash, static_cast<uint64_t>(settings.seed));
     HashCombine(hash, HashFloat(settings.density));
     HashCombine(hash, HashFloat(settings.coverage));
-    HashCombine(hash, HashFloat(settings.rockFill));
+    HashCombine(hash, HashFloat(settings.rockSizeMinM));
+    HashCombine(hash, HashFloat(settings.rockSizeMaxM));
     HashCombine(hash, HashFloat(settings.rockHeight));
     HashCombine(hash, HashFloat(settings.heightJitter));
+    HashCombine(hash, HashFloat(settings.rotationVariation));
+    HashCombine(hash, HashFloat(settings.aspectVariation));
+    HashCombine(hash, HashFloat(settings.edgeSharpness));
     HashCombine(hash, HashFloat(settings.bumpiness));
-    HashCombine(hash, HashFloat(settings.crackDepth));
+    HashCombine(hash, HashFloat(settings.facetSharpness));
+    HashCombine(hash, HashFloat(settings.facetScale));
     HashCombine(hash, static_cast<uint64_t>(resolution));
     return hash;
 }
@@ -1763,27 +1768,48 @@ void ApplyRock(HeightfieldGrid& grid, const RockSettings& settings)
 
     const float density = std::max(settings.density, 0.1f);
     const float coverage = std::clamp(settings.coverage, 0.0f, 1.0f);
-    const float rockFill = std::clamp(settings.rockFill, 0.05f, 1.0f);
+    // Sizes are specified in metres; convert to cell-pitch units (1 cell = density m).
+    const float rockSizeMinM = std::clamp(settings.rockSizeMinM, 0.1f, 200.0f);
+    const float rockSizeMaxM = std::clamp(std::max(settings.rockSizeMaxM, rockSizeMinM), 0.1f, 200.0f);
+    const float rockSizeMinCells = rockSizeMinM / density;
+    const float rockSizeMaxCells = rockSizeMaxM / density;
     const float rockHeight = std::max(settings.rockHeight, 0.0f);
     const float heightJitter = std::clamp(settings.heightJitter, 0.0f, 1.0f);
+    const float rotationVar = std::clamp(settings.rotationVariation, 0.0f, 1.0f);
+    const float aspectVar = std::clamp(settings.aspectVariation, 0.0f, 1.0f);
+    const float edgeSharpness = std::clamp(settings.edgeSharpness, 0.0f, 1.0f);
     const float bumpiness = std::clamp(settings.bumpiness, 0.0f, 1.0f);
-    const float crackDepth = std::max(settings.crackDepth, 0.0f);
+    const float facetSharpness = std::clamp(settings.facetSharpness, 0.0f, 1.0f);
+    const float facetScale = std::clamp(settings.facetScale, 0.5f, 8.0f);
     const int32_t seed = settings.seed;
-    // Sub-cell detail uses a second Voronoi at 4× density. Cheap and gives
-    // the angular "fractured stone" look without a separate Perlin pass.
-    const float subSeed = static_cast<float>(seed) * 7.917f + 31.4f;
-    (void)subSeed;
     const int32_t subSeedI = seed * 7919 + 31337;
+    const int32_t facetSeedI = seed * 2347 + 8675309;
+    const int32_t rotSeed = seed * 4519 + 91173;
+    const int32_t sizeSeed = seed * 1583 + 22441;
+    const int32_t aspectSeed = seed * 2381 + 33797;
+    const int32_t aspectAxisSeed = seed * 4093 + 51817;
+    const int32_t subOffsetSeedX = seed * 643 + 5081;
+    const int32_t subOffsetSeedZ = seed * 757 + 6151;
+    const int32_t polyCountSeed = seed * 1009 + 13513;
+    const int32_t polyAngleSeed = seed * 137 + 60013;
+    const int32_t polyRadiusSeed = seed * 251 + 70003;
+    const bool needPolyhedral = edgeSharpness > 0.0f;
 
-    // Voronoi grid is parameterised in cell units, so divide world (m)
-    // by `density` to step into cell-space. The terrain spans
-    // [-halfSize, +halfSize]; matching the renderer's coordinate basis is
-    // not strictly required here (the result is locally identical) but it
-    // keeps cracks aligned with terrain when the size changes.
     const float terrainSize = std::max(grid.terrainSizeMeters, 1.0f);
     const float halfSize = terrainSize * 0.5f;
     const float invStep = (n > 1) ? 1.0f / static_cast<float>(n - 1) : 0.0f;
-    const float crackWidth = density * 0.08f;
+
+    // Search radius covers the worst case: largest rock × max aspect stretch.
+    // aspect uses pow(2, aspectVar) to give a symmetric multiplicative range
+    // around 1.0 (e.g. aspectVar = 0.5 → aspect ∈ [√½, √2]).
+    const float maxDomeRadius = rockSizeMaxCells * 0.5f;
+    const float maxAspect = std::pow(2.0f, aspectVar);
+    const float maxReach = maxDomeRadius * maxAspect;
+    const int searchRadius = std::max(1, static_cast<int>(std::ceil(maxReach - 0.05f)));
+    // Apex sharpness: higher facetSharpness pinches the apex, but at full
+    // edgeSharpness the dome is already a flat-faceted polyhedron so we
+    // keep the falloff linear (exp = 1).
+    const float domeExp = 1.0f + facetSharpness * 1.5f * (1.0f - edgeSharpness);
 
     ParallelForRows(n, [&](int z) {
         const float worldZ = -halfSize + static_cast<float>(z) * invStep * terrainSize;
@@ -1792,51 +1818,154 @@ void ApplyRock(HeightfieldGrid& grid, const RockSettings& settings)
         {
             const float worldX = -halfSize + static_cast<float>(x) * invStep * terrainSize;
             const float cellX = worldX / density;
+            const int32_t baseCx = static_cast<int32_t>(std::floor(cellX));
+            const int32_t baseCz = static_cast<int32_t>(std::floor(cellZ));
 
-            float f1 = 0.0f, f2 = 0.0f;
-            int32_t f1cx = 0, f1cz = 0;
-            rock_node::VoronoiF1F2(cellX, cellZ, seed, f1, f2, f1cx, f1cz);
+            // Track the largest rock contribution at this pixel.
+            float bestRockH = 0.0f;
+            float bestDome = 0.0f;
 
-            const float cellRandom = rock_node::HashFloat01(f1cx, f1cz, seed + 17);
-            if (cellRandom > coverage)
+            for (int dz = -searchRadius; dz <= searchRadius; ++dz)
+            {
+                for (int dx = -searchRadius; dx <= searchRadius; ++dx)
+                {
+                    const int32_t gx = baseCx + dx;
+                    const int32_t gz = baseCz + dz;
+                    const float jx = rock_node::HashFloat01(gx, gz, seed) * 0.9f - 0.45f;
+                    const float jz = rock_node::HashFloat01(gx, gz, seed + 73) * 0.9f - 0.45f;
+                    const float sx = static_cast<float>(gx) + 0.5f + jx;
+                    const float sz = static_cast<float>(gz) + 0.5f + jz;
+                    const float ddx = cellX - sx;
+                    const float ddz = cellZ - sz;
+                    const float d_iso = std::sqrt(ddx * ddx + ddz * ddz);
+
+                    if (d_iso >= maxReach)
+                    {
+                        continue;
+                    }
+
+                    // Per-seed coverage gate: this cell may not be a rock at all.
+                    const float cellRandom = rock_node::HashFloat01(gx, gz, seed + 17);
+                    if (cellRandom > coverage)
+                    {
+                        continue;
+                    }
+
+                    // Per-rock random size in [rockSizeMinCells, rockSizeMaxCells].
+                    const float sizeRand = rock_node::HashFloat01(gx, gz, sizeSeed);
+                    const float rockSizeCells = rockSizeMinCells + sizeRand * (rockSizeMaxCells - rockSizeMinCells);
+                    const float domeRadius_per = rockSizeCells * 0.5f;
+
+                    // Per-rock rotation. rotationVar = 1 → full 2π, 0 → no rotation.
+                    const float rotRand = rock_node::HashFloat01(gx, gz, rotSeed);
+                    const float theta = (rotRand - 0.5f) * 2.0f * 3.14159265358979323846f * rotationVar;
+                    const float cosT = std::cos(theta);
+                    const float sinT = std::sin(theta);
+
+                    // Per-rock area-preserving aspect. aspect ∈ [pow(2,-aspectVar), pow(2,aspectVar)].
+                    // aspectAxis ∈ {0, 1} chooses which axis (in the rock's local frame) is the long one.
+                    const float aspectRand = rock_node::HashFloat01(gx, gz, aspectSeed);
+                    const float aspect = std::pow(2.0f, aspectVar * (2.0f * aspectRand - 1.0f));
+                    const float axisRand = rock_node::HashFloat01(gx, gz, aspectAxisSeed);
+                    const float aspect_x = (axisRand < 0.5f) ? aspect : (1.0f / aspect);
+                    const float aspect_z = 1.0f / aspect_x;
+
+                    // Local rock-frame coordinates: rotate into the rock's
+                    // own frame, then divide by the per-axis aspect to get
+                    // an elliptic distance metric.
+                    const float rx_unrot = ddx * cosT + ddz * sinT;
+                    const float rz_unrot = -ddx * sinT + ddz * cosT;
+                    const float rx = rx_unrot / aspect_x;
+                    const float rz = rz_unrot / aspect_z;
+                    const float d_local = std::sqrt(rx * rx + rz * rz);
+                    if (d_local >= domeRadius_per)
+                    {
+                        continue;
+                    }
+
+                    // Per-rock height variation centred on rockHeight.
+                    const float heightRand = rock_node::HashFloat01(gx, gz, seed + 53);
+                    const float cellHeight = rockHeight * (1.0f - heightJitter + heightJitter * 2.0f * heightRand);
+
+                    // Radial component: smooth circular dome (falls off linearly
+                    // from centre to elliptic boundary).
+                    const float radialT = std::clamp(1.0f - d_local / domeRadius_per, 0.0f, 1.0f);
+
+                    // Polyhedral component: signed-distance field of an irregular
+                    // 4–7 sided convex polygon inscribed in the elliptic dome.
+                    // When edgeSharpness > 0 we hard-clip the rock to the polygon
+                    // — pixels outside the polygon get no contribution at all,
+                    // so there's no halo of soft radial dome leaking past the
+                    // polygon edges. The blend by edgeSharpness only affects
+                    // the *interior* dome height (radial vs flat-facet shape).
+                    float polyhedralT = 0.0f;
+                    if (needPolyhedral)
+                    {
+                        const int facetCount = 4 + static_cast<int>(rock_node::HashFloat01(gx, gz, polyCountSeed) * 4.0f); // 4..7
+                        const float facetCountF = static_cast<float>(facetCount);
+                        const float kPi = 3.14159265358979323846f;
+                        // Polygon vertices touch the elliptic boundary; edges sit
+                        // at the inradius. Per-edge jitter shrinks edges further
+                        // in for irregular convex shapes.
+                        const float baseInradius = domeRadius_per * std::cos(kPi / facetCountF);
+                        const float edgeAngularSpan = (2.0f * kPi) / facetCountF;
+                        float polyDist = std::numeric_limits<float>::max();
+                        for (int i = 0; i < facetCount; ++i)
+                        {
+                            const float baseAngle = static_cast<float>(i) * edgeAngularSpan;
+                            const float aJit = (rock_node::HashFloat01(gx, gz, polyAngleSeed + i * 17) - 0.5f) * (edgeAngularSpan * 0.5f);
+                            const float theta_i = baseAngle + aJit;
+                            const float n_x = std::cos(theta_i);
+                            const float n_z = std::sin(theta_i);
+                            const float rJit = rock_node::HashFloat01(gx, gz, polyRadiusSeed + i * 23);
+                            const float r_i = baseInradius * (1.0f - rJit * 0.3f);
+                            const float interiorDist = r_i - (rx * n_x + rz * n_z);
+                            if (interiorDist < polyDist) polyDist = interiorDist;
+                        }
+                        // Hard polygon clip — outside polygon, this rock contributes nothing.
+                        if (polyDist <= 0.0f) continue;
+                        polyhedralT = std::clamp(polyDist / std::max(baseInradius, 1e-4f), 0.0f, 1.0f);
+                    }
+
+                    // Blend interior dome height by edgeSharpness.
+                    // Outside polygon was already excluded by the hard clip above
+                    // (when needPolyhedral); so radialT here is always meaningful too.
+                    const float t = (1.0f - edgeSharpness) * radialT + edgeSharpness * polyhedralT;
+                    if (t <= 0.0f) continue;
+                    const float dome = std::pow(t, domeExp);
+
+                    // Per-rock facet field, sampled in the rock's local
+                    // (rotated, unsquashed) frame. Per-rock random offset
+                    // gives every rock a unique facet pattern.
+                    const float subOffX = rock_node::HashFloat01(gx, gz, subOffsetSeedX) * 1024.0f;
+                    const float subOffZ = rock_node::HashFloat01(gx, gz, subOffsetSeedZ) * 1024.0f;
+                    float sub_f1 = 0.0f, sub_f2 = 0.0f;
+                    int32_t sub_cx = 0, sub_cz = 0;
+                    rock_node::VoronoiF1F2(subOffX + rx * facetScale, subOffZ + rz * facetScale,
+                                           subSeedI, sub_f1, sub_f2, sub_cx, sub_cz);
+                    const float smoothBump = rock_node::Smoothstep01(1.0f - sub_f1 / 0.5f) - 0.5f;
+                    const float facetH = rock_node::HashFloat01(sub_cx, sub_cz, facetSeedI) - 0.5f;
+                    const float edgeT = std::clamp((sub_f2 - sub_f1) * 4.0f, 0.0f, 1.0f);
+                    const float facetTerm = facetH * edgeT - (1.0f - edgeT) * 0.25f;
+                    const float surfaceMod = (1.0f - facetSharpness) * smoothBump + facetSharpness * facetTerm;
+
+                    const float rockH = cellHeight * dome * (1.0f + bumpiness * surfaceMod);
+                    if (rockH > bestRockH)
+                    {
+                        bestRockH = rockH;
+                        bestDome = dome;
+                    }
+                }
+            }
+
+            if (bestRockH <= 0.0f)
             {
                 continue;
             }
-
-            // Distance is in cell-pitch units (1 = `density` metres). Dome
-            // radius in the same units = rockFill * 0.5 (cell radius).
-            const float domeRadius = rockFill * 0.5f;
-            if (f1 >= domeRadius)
-            {
-                // Out of dome — but cracks at cell boundaries can still
-                // carve here when they straddle two filled cells.
-                continue;
-            }
-
-            const float dome = rock_node::Smoothstep01(1.0f - f1 / domeRadius);
-
-            // Per-cell height variation centred on rockHeight.
-            const float heightRand = rock_node::HashFloat01(f1cx, f1cz, seed + 53);
-            const float cellHeight = rockHeight * (1.0f - heightJitter + heightJitter * 2.0f * heightRand);
-
-            // Sub-cell detail: same Voronoi sampled at 4× pitch with an
-            // independent seed, mapped to a -0.5..+0.5 modulation.
-            float sub_f1 = 0.0f, sub_f2 = 0.0f;
-            int32_t sub_cx = 0, sub_cz = 0;
-            rock_node::VoronoiF1F2(cellX * 4.0f, cellZ * 4.0f, subSeedI, sub_f1, sub_f2, sub_cx, sub_cz);
-            const float subDetail = rock_node::Smoothstep01(1.0f - sub_f1 / 0.5f) - 0.5f;
-
-            float rockH = cellHeight * dome * (1.0f + bumpiness * subDetail);
-
-            // Crack carving along Voronoi cell boundaries. (F2 - F1) is the
-            // perpendicular distance to the boundary in cell units.
-            const float boundary = (f2 - f1);
-            const float edge = std::clamp(1.0f - boundary / std::max(crackWidth, 1e-4f), 0.0f, 1.0f);
-            rockH -= edge * crackDepth;
 
             const size_t idx = static_cast<size_t>(z) * static_cast<size_t>(n) + static_cast<size_t>(x);
-            grid.heights[idx] += rockH;
-            grid.mask[idx] = std::clamp(dome * (1.0f - edge), 0.0f, 1.0f);
+            grid.heights[idx] += bestRockH;
+            grid.mask[idx] = bestDome;
         }
     });
 }

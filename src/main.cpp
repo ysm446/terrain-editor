@@ -1785,11 +1785,16 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
                     {"seed", node.rock.seed},
                     {"density", node.rock.density},
                     {"coverage", node.rock.coverage},
-                    {"rockFill", node.rock.rockFill},
+                    {"rockSizeMinM", node.rock.rockSizeMinM},
+                    {"rockSizeMaxM", node.rock.rockSizeMaxM},
                     {"rockHeight", node.rock.rockHeight},
                     {"heightJitter", node.rock.heightJitter},
+                    {"rotationVariation", node.rock.rotationVariation},
+                    {"aspectVariation", node.rock.aspectVariation},
+                    {"edgeSharpness", node.rock.edgeSharpness},
                     {"bumpiness", node.rock.bumpiness},
-                    {"crackDepth", node.rock.crackDepth},
+                    {"facetSharpness", node.rock.facetSharpness},
+                    {"facetScale", node.rock.facetScale},
                 }},
                 {"maskBlend", {
                     {"mode", static_cast<int>(node.maskBlend.mode)},
@@ -2137,11 +2142,49 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 node.rock.seed = std::clamp(nodeRockJson.value("seed", node.rock.seed), 0, 999999);
                 node.rock.density = std::clamp(nodeRockJson.value("density", node.rock.density), 0.5f, 1000.0f);
                 node.rock.coverage = std::clamp(nodeRockJson.value("coverage", node.rock.coverage), 0.0f, 1.0f);
-                node.rock.rockFill = std::clamp(nodeRockJson.value("rockFill", node.rock.rockFill), 0.05f, 1.0f);
+                // サイズはバージョンごとにキー名と単位が変わってきた:
+                //   3.5.x: rockFill (ratio)        — 単一値、セルの何割を岩が埋めるか
+                //   3.6.0: rockSize (ratio)        — 単一値、リネームのみ
+                //   3.7.0: rockSizeMin/Max (ratio) — Min/Max レンジ
+                //   3.8.0: rockSizeMinM/MaxM (m)   — 単位をメートルに変更(現行)
+                // ratio → m への換算は ratio × density なので、density は先に読む(済)。
+                const float density = node.rock.density;
+                const float legacyRockFill = nodeRockJson.value("rockFill", -1.0f);
+                const float legacyRockSize = nodeRockJson.value("rockSize", -1.0f);
+                const float legacyMinRatio = nodeRockJson.value("rockSizeMin", -1.0f);
+                const float legacyMaxRatio = nodeRockJson.value("rockSizeMax", -1.0f);
+                if (legacyRockFill > 0.0f)
+                {
+                    node.rock.rockSizeMinM = legacyRockFill * density;
+                    node.rock.rockSizeMaxM = node.rock.rockSizeMinM;
+                }
+                else if (legacyRockSize > 0.0f)
+                {
+                    node.rock.rockSizeMinM = legacyRockSize * density;
+                    node.rock.rockSizeMaxM = node.rock.rockSizeMinM;
+                }
+                else if (legacyMinRatio > 0.0f || legacyMaxRatio > 0.0f)
+                {
+                    const float minR = (legacyMinRatio > 0.0f) ? legacyMinRatio : 0.7f;
+                    const float maxR = (legacyMaxRatio > 0.0f) ? legacyMaxRatio : 1.2f;
+                    node.rock.rockSizeMinM = minR * density;
+                    node.rock.rockSizeMaxM = maxR * density;
+                }
+                else
+                {
+                    node.rock.rockSizeMinM = nodeRockJson.value("rockSizeMinM", node.rock.rockSizeMinM);
+                    node.rock.rockSizeMaxM = nodeRockJson.value("rockSizeMaxM", node.rock.rockSizeMaxM);
+                }
+                node.rock.rockSizeMinM = std::clamp(node.rock.rockSizeMinM, 0.1f, 200.0f);
+                node.rock.rockSizeMaxM = std::clamp(std::max(node.rock.rockSizeMaxM, node.rock.rockSizeMinM), 0.1f, 200.0f);
                 node.rock.rockHeight = std::clamp(nodeRockJson.value("rockHeight", node.rock.rockHeight), 0.0f, 100.0f);
                 node.rock.heightJitter = std::clamp(nodeRockJson.value("heightJitter", node.rock.heightJitter), 0.0f, 1.0f);
+                node.rock.rotationVariation = std::clamp(nodeRockJson.value("rotationVariation", node.rock.rotationVariation), 0.0f, 1.0f);
+                node.rock.aspectVariation = std::clamp(nodeRockJson.value("aspectVariation", node.rock.aspectVariation), 0.0f, 1.0f);
+                node.rock.edgeSharpness = std::clamp(nodeRockJson.value("edgeSharpness", node.rock.edgeSharpness), 0.0f, 1.0f);
                 node.rock.bumpiness = std::clamp(nodeRockJson.value("bumpiness", node.rock.bumpiness), 0.0f, 1.0f);
-                node.rock.crackDepth = std::clamp(nodeRockJson.value("crackDepth", node.rock.crackDepth), 0.0f, 10.0f);
+                node.rock.facetSharpness = std::clamp(nodeRockJson.value("facetSharpness", node.rock.facetSharpness), 0.0f, 1.0f);
+                node.rock.facetScale = std::clamp(nodeRockJson.value("facetScale", node.rock.facetScale), 0.5f, 8.0f);
 
                 const auto readPins = [&](const nlohmann::json& pinsJson, rock::PinKind pinKind, std::vector<rock::Pin>& pins) {
                     if (!pinsJson.is_array())
@@ -8348,27 +8391,38 @@ void DrawPropertiesPanel()
         rock::RockSettings& rk = editableNode->rock;
         rk.density = std::clamp(rk.density, 0.5f, 1000.0f);
         rk.coverage = std::clamp(rk.coverage, 0.0f, 1.0f);
-        rk.rockFill = std::clamp(rk.rockFill, 0.05f, 1.0f);
+        rk.rockSizeMinM = std::clamp(rk.rockSizeMinM, 0.1f, 200.0f);
+        rk.rockSizeMaxM = std::clamp(std::max(rk.rockSizeMaxM, rk.rockSizeMinM), 0.1f, 200.0f);
         rk.rockHeight = std::clamp(rk.rockHeight, 0.0f, 100.0f);
         rk.heightJitter = std::clamp(rk.heightJitter, 0.0f, 1.0f);
+        rk.rotationVariation = std::clamp(rk.rotationVariation, 0.0f, 1.0f);
+        rk.aspectVariation = std::clamp(rk.aspectVariation, 0.0f, 1.0f);
+        rk.edgeSharpness = std::clamp(rk.edgeSharpness, 0.0f, 1.0f);
         rk.bumpiness = std::clamp(rk.bumpiness, 0.0f, 1.0f);
-        rk.crackDepth = std::clamp(rk.crackDepth, 0.0f, 10.0f);
+        rk.facetSharpness = std::clamp(rk.facetSharpness, 0.0f, 1.0f);
+        rk.facetScale = std::clamp(rk.facetScale, 0.5f, 8.0f);
         rk.seed = std::clamp(rk.seed, 0, 999999);
 
         if (DrawPropertyIntRow("Seed", "RockSeed", &rk.seed, 0, 999999, rock::RockSettings{}.seed, "Rock seed changed", true, "ハッシュのオフセットです。同じパラメータでも異なる岩配置を得るために使います。"))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyFloatRow("Density (m)", "RockDensity", &rk.density, 0.5f, 200.0f, rock::RockSettings{}.density, "Rock density changed", true, "Voronoi セル一辺の長さ (m)。岩のおおよそのサイズに対応します。小さいほど細かい岩肌、大きいほど巨石サイズ。"))
+        if (DrawPropertyFloatRow("Density (m)", "RockDensity", &rk.density, 0.5f, 200.0f, rock::RockSettings{}.density, "Rock density changed", true, "岩中心のばらまき間隔 (m)。岩同士の中心間距離を決めます。岩サイズとは独立。", "%.2f"))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyPercentRow("Coverage (%)", "RockCoverage", &rk.coverage, 0.0f, 1.0f, rock::RockSettings{}.coverage, "Rock coverage changed", "セルが岩になる確率です。1.0 で全セル、下げると元の地形が見える隙間が増えます。"))
+        if (DrawPropertyPercentRow("Coverage (%)", "RockCoverage", &rk.coverage, 0.0f, 1.0f, rock::RockSettings{}.coverage, "Rock coverage changed", "scatter 点が岩になる確率です。1.0 で全点、下げると元の地形が見える隙間が増えます。"))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyPercentRow("Rock Fill (%)", "RockFill", &rk.rockFill, 0.05f, 1.0f, rock::RockSettings{}.rockFill, "Rock fill changed", "セル内のドーム半径比です。1.0 でセル境界まで到達、下げると隣接ドームの間に元地形の溝が通ります。"))
+        if (DrawPropertyFloatRow("Rock Size Min (m)", "RockSizeMinM", &rk.rockSizeMinM, 0.1f, 200.0f, rock::RockSettings{}.rockSizeMinM, "Rock size min changed", true, "岩の最小直径 (m)。各岩は [Min, Max] の範囲からランダムに選ばれます。Density より大きいと岩が重なり、小さいと隙間ができます。", "%.2f"))
         {
+            if (rk.rockSizeMaxM < rk.rockSizeMinM) rk.rockSizeMaxM = rk.rockSizeMinM;
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Rock Size Max (m)", "RockSizeMaxM", &rk.rockSizeMaxM, 0.1f, 200.0f, rock::RockSettings{}.rockSizeMaxM, "Rock size max changed", true, "岩の最大直径 (m)。Min < Max で自動補正。重なる岩同士は max 合成され、接合線で自然な折れ線が出ます。", "%.2f"))
+        {
+            if (rk.rockSizeMaxM < rk.rockSizeMinM) rk.rockSizeMinM = rk.rockSizeMaxM;
             EvaluateGraph();
         }
         if (DrawPropertyFloatRow("Rock Height (m)", "RockHeight", &rk.rockHeight, 0.0f, 50.0f, rock::RockSettings{}.rockHeight, "Rock height changed", true, "岩塊の最大盛り上がり (m)。地形の起伏スケールに対して大きすぎると岩肌が浮き上がりすぎるので、地形の標高変化の数% 程度が目安。", "%.2f"))
@@ -8379,11 +8433,27 @@ void DrawPropertiesPanel()
         {
             EvaluateGraph();
         }
-        if (DrawPropertyPercentRow("Bumpiness (%)", "RockBumpiness", &rk.bumpiness, 0.0f, 1.0f, rock::RockSettings{}.bumpiness, "Rock bumpiness changed", "サブセル凹凸の振幅です。0 で滑らかなドーム、上げるほど岩肌の角が立ちます。"))
+        if (DrawPropertyPercentRow("Rotation Variation (%)", "RockRotationVariation", &rk.rotationVariation, 0.0f, 1.0f, rock::RockSettings{}.rotationVariation, "Rock rotation variation changed", "各岩のランダム回転量です。0 で全岩が同じ向き、1 で完全ランダム回転。表面の面の向きが岩ごとに変わるので散らばり感が出ます。"))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyFloatRow("Crack Depth (m)", "RockCrackDepth", &rk.crackDepth, 0.0f, 5.0f, rock::RockSettings{}.crackDepth, "Rock crack depth changed", true, "Voronoi セル境界に彫る亀裂の深さ (m)。0 で岩塊が滑らかに繋がり、上げるほど角が立った岩肌に。", "%.2f"))
+        if (DrawPropertyPercentRow("Aspect Variation (%)", "RockAspectVariation", &rk.aspectVariation, 0.0f, 1.0f, rock::RockSettings{}.aspectVariation, "Rock aspect variation changed", "各岩の細長さの振れ幅です。0 で円形、1 で最大 2:1 まで細長い岩が混ざります。回転と組み合わせて GeoGen のような不揃いな配置になります。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyPercentRow("Edge Sharpness (%)", "RockEdgeSharpness", &rk.edgeSharpness, 0.0f, 1.0f, rock::RockSettings{}.edgeSharpness, "Rock edge sharpness changed", "岩のシルエット形状です。0 で滑らかな円形ドーム、1 で 4–7 角形のダイヤモンドカット風シルエット。岩ごとに辺数・角度・半径がランダムに揺らぎます。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyPercentRow("Bumpiness (%)", "RockBumpiness", &rk.bumpiness, 0.0f, 1.0f, rock::RockSettings{}.bumpiness, "Rock bumpiness changed", "表面ディテールの振幅です。0 で滑らかなドーム、上げるほど岩肌の凹凸が強くなります。Facet Sharpness と組み合わせて多面体感を調整します。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyPercentRow("Facet Sharpness (%)", "RockFacetSharpness", &rk.facetSharpness, 0.0f, 1.0f, rock::RockSettings{}.facetSharpness, "Rock facet sharpness changed", "表面ディテールの形状です。0 で滑らかな丸み、1 で多面体状の平らな面 + 鋭いエッジ。岩肌に角を立てたいときに上げます。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Facet Scale", "RockFacetScale", &rk.facetScale, 0.5f, 8.0f, rock::RockSettings{}.facetScale, "Rock facet scale changed", true, "1 つの岩に乗る面の細かさです。大きいほど面が小さく細かくなり、小さいほど大きな面が少数現れます。", "%.2f"))
         {
             EvaluateGraph();
         }
