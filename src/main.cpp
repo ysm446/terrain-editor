@@ -5619,15 +5619,31 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
 
     try
     {
-        // GPU displacement is currently a hybrid path: the CPU mesh still
-        // gets built and uploaded so that wireframe, shadow, and 2D
-        // preview keep working. Only the 3D surface draw is replaced with
-        // the displacement PSO when the backend toggle is on. Skipping
-        // the CPU upload entirely (Phase 2c) caused a crash on toggle in
-        // some scenes — backed out until we can repro and fix it cleanly.
+        // Phase 2c-1: skip the CPU mesh upload (vb / ib / edge ib) when
+        // the GPU displacement backend is on. The CPU mesh struct is still
+        // built (Evaluate needs it for the 2D edge preview / OBJ export),
+        // it just doesn't get pushed to GPU. Shadow and wireframe in this
+        // mode are silently disabled — Phase 2c-2 will re-add a
+        // displacement shadow path once we're sure the CPU-skip itself is
+        // stable.
+        const bool useDisplacement = g_graph.Settings().preview.meshBackend == rock::MeshPreviewBackend::GpuDisplacement;
         if (meshDirty)
         {
-            UpdateMeshPreviewBuffers(mesh);
+            if (!useDisplacement)
+            {
+                UpdateMeshPreviewBuffers(mesh);
+            }
+            else
+            {
+                // Release any CPU buffers carried over from CpuMesh mode
+                // so the dirty check stays accurate when we toggle back.
+                g_gpuMeshPreview.vertexBuffer.Reset();
+                g_gpuMeshPreview.indexBuffer.Reset();
+                g_gpuMeshPreview.edgeIndexBuffer.Reset();
+                g_gpuMeshPreview.vertexCount = 0;
+                g_gpuMeshPreview.triIndexCount = 0;
+                g_gpuMeshPreview.edgeIndexCount = 0;
+            }
             g_gpuMeshPreview.graphVersion = currentVersion;
         }
         if (showGrid)
@@ -5635,7 +5651,6 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             EnsureGridPreviewBuffer();
         }
 
-        const bool useDisplacement = g_graph.Settings().preview.meshBackend == rock::MeshPreviewBackend::GpuDisplacement;
         bool displacementReady = false;
         const rock::HeightfieldGrid& previewGrid = g_graph.Evaluation().previewHeightfield;
         if (useDisplacement && previewGrid.resolution >= 2)
@@ -5657,7 +5672,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         }
 
         const bool hasMeshVertices = g_gpuMeshPreview.vertexCount > 0 && g_gpuMeshPreview.vertexBuffer;
-        if (!hasMeshVertices && (!showGrid || g_gpuMeshPreview.gridVertexCount == 0))
+        if (!hasMeshVertices && !displacementReady && (!showGrid || g_gpuMeshPreview.gridVertexCount == 0))
         {
             return false;
         }
