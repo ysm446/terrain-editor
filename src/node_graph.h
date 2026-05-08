@@ -71,6 +71,18 @@ enum class FlowAccumulationAlgorithm
     MFD,
 };
 
+// How the 3D viewport renders the heightfield. CPU mesh builds an explicit
+// vertex / triangle / edge mesh on the host and uploads it; GPU
+// displacement uploads the heightfield as a texture and lets a vertex
+// shader sample it on a static UV grid. The latter avoids re-uploading a
+// large vertex buffer per parameter change at the cost of one extra
+// texture upload (~few ms vs tens of ms).
+enum class MeshPreviewBackend
+{
+    CpuMesh,
+    GpuDisplacement,
+};
+
 enum class MaskFluvialOutputCurve
 {
     // log(1 + accum) / log(1 + maxAdjusted), then pow(gamma). Continuous
@@ -277,6 +289,7 @@ struct PreviewSettings
     bool showWireframe = false;
     bool showGrid = true;
     int lightingMode = 0;
+    MeshPreviewBackend meshBackend = MeshPreviewBackend::CpuMesh;
     float sunAzimuthDegrees = 315.0f;
     float sunElevationDegrees = 38.0f;
     float sunIntensity = 1.05f;

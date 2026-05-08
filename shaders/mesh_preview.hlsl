@@ -53,8 +53,25 @@ cbuffer CloudShadowMeshConstants : register(b1)
 
 Texture2D shadowMap : register(t0);
 Texture2D<float> cloudShadowMap : register(t1);
+// Phase 2 GPU-displacement only: input heightfield + mask sampled per-vertex.
+// Bound to the same root signature as the CPU mesh path; the displacement
+// VS reads them, the standard VSMain ignores them.
+Texture2D<float> displacementHeights : register(t2);
+Texture2D<float> displacementMask : register(t3);
 SamplerState shadowSampler : register(s0);
 SamplerState linearSampler : register(s1);
+
+cbuffer DisplacementConstants : register(b2)
+{
+    // Mesh-side parameters: gridResolution = M (vertex count along one
+    // edge), terrainSize = world width in metres, halfSize precomputed.
+    // worldDX = terrainSize / (M - 1) is also pre-computed for normal
+    // gradient scaling.
+    float displacementGridResolution;
+    float displacementTerrainSize;
+    float displacementHalfSize;
+    float displacementWorldDX;
+};
 
 float3 LightSpace01(float3 worldPos)
 {
@@ -106,6 +123,78 @@ VSOut VSMain(VSIn i)
 float4 VSShadow(VSIn i) : SV_POSITION
 {
     float3 lightUv = LightSpace01(i.pos);
+    return float4(lightUv.x * 2.0 - 1.0, lightUv.y * 2.0 - 1.0, saturate(lightUv.z), 1.0);
+}
+
+// GPU vertex displacement path. The mesh has only a static UV grid (no
+// position / normal / mask attributes); we reconstruct (x, z) from the
+// vertex id, sample the height texture for Y, compute the normal from a
+// 4-tap height gradient, and sample the mask texture. Same VSOut as the
+// CPU mesh path so PSSurface / PSEdge work unchanged.
+float3 SampleDisplacedWorldPos(float u, float v)
+{
+    float h = displacementHeights.SampleLevel(linearSampler, float2(u, v), 0).r;
+    return float3(
+        lerp(-displacementHalfSize, displacementHalfSize, u),
+        h,
+        lerp(displacementHalfSize, -displacementHalfSize, v));
+}
+
+float3 SampleDisplacedNormal(float u, float v)
+{
+    float invM1 = 1.0 / (displacementGridResolution - 1.0);
+    float uMinus = max(u - invM1, 0.0);
+    float uPlus  = min(u + invM1, 1.0);
+    float vMinus = max(v - invM1, 0.0);
+    float vPlus  = min(v + invM1, 1.0);
+    float hxm = displacementHeights.SampleLevel(linearSampler, float2(uMinus, v), 0).r;
+    float hxp = displacementHeights.SampleLevel(linearSampler, float2(uPlus,  v), 0).r;
+    float hzm = displacementHeights.SampleLevel(linearSampler, float2(u, vMinus), 0).r;
+    float hzp = displacementHeights.SampleLevel(linearSampler, float2(u, vPlus),  0).r;
+    // worldZ = lerp(halfSize, -halfSize, v) so dhdz = (hzm - hzp) / (2*dx)
+    float dhdx = (hxp - hxm) / (2.0 * displacementWorldDX);
+    float dhdz = (hzm - hzp) / (2.0 * displacementWorldDX);
+    return normalize(float3(-dhdx, 1.0, -dhdz));
+}
+
+VSOut VSDisplacement(uint vid : SV_VertexID)
+{
+    uint M = (uint)displacementGridResolution;
+    uint x = vid % M;
+    uint z = vid / M;
+    float u = (float)x / (displacementGridResolution - 1.0);
+    float v = (float)z / (displacementGridResolution - 1.0);
+
+    float3 worldPos = SampleDisplacedWorldPos(u, v);
+    float3 worldNor = SampleDisplacedNormal(u, v);
+    float maskVal = displacementMask.SampleLevel(linearSampler, float2(u, v), 0).r;
+
+    float3 view = worldPos - cameraPosition.xyz;
+    float cx = dot(view, cameraRight.xyz);
+    float cy = dot(view, cameraUp.xyz);
+    float d  = dot(view, cameraForward.xyz);
+
+    VSOut o;
+    o.pos = float4(
+        cx * projScaleX + panNdcX * d,
+        cy * projScaleY + panNdcY * d,
+        (d - nearPlane) / (farPlane - nearPlane) * d,
+        d);
+    o.worldNor = worldNor;
+    o.worldPos = worldPos;
+    o.mask = maskVal;
+    return o;
+}
+
+float4 VSDisplacementShadow(uint vid : SV_VertexID) : SV_POSITION
+{
+    uint M = (uint)displacementGridResolution;
+    uint x = vid % M;
+    uint z = vid / M;
+    float u = (float)x / (displacementGridResolution - 1.0);
+    float v = (float)z / (displacementGridResolution - 1.0);
+    float3 worldPos = SampleDisplacedWorldPos(u, v);
+    float3 lightUv = LightSpace01(worldPos);
     return float4(lightUv.x * 2.0 - 1.0, lightUv.y * 2.0 - 1.0, saturate(lightUv.z), 1.0);
 }
 

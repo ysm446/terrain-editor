@@ -357,6 +357,27 @@ struct GpuMeshPreview
     int cloudLightSamples = 0;
     float cloudLightStepMeters = 0.0f;
     float cloudPhaseEccentricity = 0.0f;
+
+    // GPU vertex displacement (Phase 2). Heightfield + mask are uploaded
+    // to textures each evaluation, while the static UV grid mesh (just
+    // index buffers, no vertex data — VS reads SV_VertexID) is built once
+    // per displacementMeshResolution change.
+    int meshBackend = -1;  // cached PreviewSettings::meshBackend
+    ComPtr<ID3D12Resource> displacementHeightTexture;
+    ComPtr<ID3D12Resource> displacementMaskTexture;
+    int displacementTextureResolution = 0;
+    D3D12_CPU_DESCRIPTOR_HANDLE displacementHeightSrvCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE displacementHeightSrvGpu{};
+    D3D12_CPU_DESCRIPTOR_HANDLE displacementMaskSrvCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE displacementMaskSrvGpu{};
+    bool displacementSrvAllocated = false;
+    ComPtr<ID3D12Resource> displacementTriIndexBuffer;
+    ComPtr<ID3D12Resource> displacementEdgeIndexBuffer;
+    int displacementMeshResolution = 0;
+    UINT displacementTriIndexCount = 0;
+    UINT displacementEdgeIndexCount = 0;
+    uint64_t displacementHeightUploadKey = 0;
+
     D3D12_RESOURCE_STATES colorState = D3D12_RESOURCE_STATE_COMMON;
     D3D12_RESOURCE_STATES shadowState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     D3D12_RESOURCE_STATES depthState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
@@ -365,6 +386,13 @@ struct GpuMeshPreview
 ComPtr<ID3D12RootSignature> g_meshPreviewRootSignature;
 ComPtr<ID3D12PipelineState> g_meshPreviewSurfacePso;
 ComPtr<ID3D12PipelineState> g_meshPreviewWirePso;
+ComPtr<ID3D12RootSignature> g_meshPreviewDisplacementRootSignature;
+ComPtr<ID3D12PipelineState> g_meshPreviewDisplacementSurfacePso;
+ComPtr<ID3D12PipelineState> g_meshPreviewDisplacementShadowPso;
+// Persistent CBV upload buffer for the displacement path's mesh
+// constants (the regular CPU mesh path keeps its 32BitConstants binding
+// — it's a separate root signature, less invasive).
+ComPtr<ID3D12Resource> g_meshPreviewDisplacementCbv;
 ComPtr<ID3D12PipelineState> g_meshPreviewGridPso;
 ComPtr<ID3D12PipelineState> g_meshPreviewShadowPso;
 ComPtr<ID3D12RootSignature> g_mseComputeRootSignature;
@@ -761,6 +789,17 @@ void CleanupD3D()
     g_meshPreviewWirePso.Reset();
     g_meshPreviewGridPso.Reset();
     g_meshPreviewRootSignature.Reset();
+    g_meshPreviewDisplacementSurfacePso.Reset();
+    g_meshPreviewDisplacementShadowPso.Reset();
+    g_meshPreviewDisplacementRootSignature.Reset();
+    g_meshPreviewDisplacementCbv.Reset();
+    g_gpuMeshPreview.displacementHeightTexture.Reset();
+    g_gpuMeshPreview.displacementMaskTexture.Reset();
+    g_gpuMeshPreview.displacementTriIndexBuffer.Reset();
+    g_gpuMeshPreview.displacementEdgeIndexBuffer.Reset();
+    g_gpuMeshPreview.displacementSrvAllocated = false;
+    g_gpuMeshPreview.displacementTextureResolution = 0;
+    g_gpuMeshPreview.displacementMeshResolution = 0;
     g_mseStreamPowerPso.Reset();
     g_mseThermalPso.Reset();
     g_mseDepositionPso.Reset();
@@ -1611,6 +1650,7 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
             }},
             {"preview", {
                 {"lightingMode", preview.lightingMode},
+                {"meshBackend", static_cast<int>(preview.meshBackend)},
                 {"showGrid", preview.showGrid},
                 {"gridCellCount", preview.gridCellCount},
                 {"gridCellSizeMeters", preview.gridCellSizeMeters},
@@ -1942,6 +1982,12 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
         if (!previewJson.empty())
         {
             preview.lightingMode = std::clamp(previewJson.value("lightingMode", preview.lightingMode), 0, 1);
+            {
+                const int backendInt = std::clamp(previewJson.value("meshBackend", static_cast<int>(preview.meshBackend)),
+                                                  static_cast<int>(rock::MeshPreviewBackend::CpuMesh),
+                                                  static_cast<int>(rock::MeshPreviewBackend::GpuDisplacement));
+                preview.meshBackend = static_cast<rock::MeshPreviewBackend>(backendInt);
+            }
             preview.showGrid = previewJson.value("showGrid", preview.showGrid);
             preview.gridCellCount = std::clamp(previewJson.value("gridCellCount", preview.gridCellCount), 1, 200);
             preview.gridCellSizeMeters = std::clamp(previewJson.value("gridCellSizeMeters", preview.gridCellSizeMeters), 1.0f, 10000.0f);
@@ -2378,6 +2424,470 @@ bool EnsureMeshPreviewPipeline(std::string* error)
     psoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
     hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewShadowPso));
     if (FAILED(hr)) { if (error) *error = "Create mesh shadow PSO failed"; return false; }
+
+    return true;
+}
+
+// Phase 2 GPU vertex displacement: a separate root signature + 2 PSOs that
+// read the heightfield as a texture from a static UV grid (no vertex
+// buffer, just SV_VertexID + index buffer). The CPU mesh path is left
+// untouched — switching backends just toggles which (rootsig, PSO,
+// indexbuffer, optional vb) combination the render path uses.
+struct DisplacementShaderConstants
+{
+    float gridResolution;
+    float terrainSize;
+    float halfSize;
+    float worldDX;
+};
+static_assert(sizeof(DisplacementShaderConstants) == 4 * sizeof(UINT), "DisplacementShaderConstants must be 4 DWORDs");
+
+bool EnsureMeshPreviewDisplacementPipeline(std::string* error)
+{
+    if (g_meshPreviewDisplacementSurfacePso) return true;
+    if (!g_device) { if (error) *error = "D3D12 device not initialized"; return false; }
+
+    // Persistent CBV upload buffer for mesh constants. Aligned to 256 bytes
+    // (CB requirement) and filled per-draw via memcpy. One instance is
+    // sufficient since the GPU consumes it before the next draw of this
+    // pass; no in-flight overlap to worry about.
+    if (!g_meshPreviewDisplacementCbv)
+    {
+        const UINT64 cbSize = (sizeof(MeshPreviewConstants) + 255u) & ~255u;
+        D3D12_HEAP_PROPERTIES uploadHeap{};
+        uploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        desc.Width = cbSize;
+        desc.Height = 1;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels = 1;
+        desc.Format = DXGI_FORMAT_UNKNOWN;
+        desc.SampleDesc.Count = 1;
+        desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+        HRESULT hr = g_device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE,
+            &desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+            IID_PPV_ARGS(&g_meshPreviewDisplacementCbv));
+        if (FAILED(hr)) { if (error) *error = "Create mesh displacement CBV failed"; return false; }
+    }
+
+    D3D12_DESCRIPTOR_RANGE shadowRange{};
+    shadowRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    shadowRange.NumDescriptors = 1;
+    shadowRange.BaseShaderRegister = 0; // t0
+    shadowRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_DESCRIPTOR_RANGE cloudShadowRange{};
+    cloudShadowRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    cloudShadowRange.NumDescriptors = 1;
+    cloudShadowRange.BaseShaderRegister = 1; // t1
+    cloudShadowRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_DESCRIPTOR_RANGE heightRange{};
+    heightRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    heightRange.NumDescriptors = 1;
+    heightRange.BaseShaderRegister = 2; // t2
+    heightRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_DESCRIPTOR_RANGE maskRange{};
+    maskRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    maskRange.NumDescriptors = 1;
+    maskRange.BaseShaderRegister = 3; // t3
+    maskRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    // Budget: 2 (mesh CBV) + 2 (cloud shadow CBV) + 4 (displacement consts)
+    // + 1*4 (4 SRV tables) = 12 DWORDs of 64.
+    D3D12_ROOT_PARAMETER rootParams[7]{};
+    rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    rootParams[0].Descriptor.ShaderRegister = 0;
+    rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    rootParams[1].Descriptor.ShaderRegister = 1;
+    rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    rootParams[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    rootParams[2].Constants.ShaderRegister = 2;
+    rootParams[2].Constants.Num32BitValues = sizeof(DisplacementShaderConstants) / sizeof(UINT);
+    rootParams[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+    rootParams[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[3].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[3].DescriptorTable.pDescriptorRanges = &shadowRange;
+    rootParams[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    rootParams[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[4].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[4].DescriptorTable.pDescriptorRanges = &cloudShadowRange;
+    rootParams[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    rootParams[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[5].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[5].DescriptorTable.pDescriptorRanges = &heightRange;
+    rootParams[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+    rootParams[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[6].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[6].DescriptorTable.pDescriptorRanges = &maskRange;
+    rootParams[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+
+    D3D12_STATIC_SAMPLER_DESC samplers[2]{};
+    samplers[0].Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
+    samplers[0].AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samplers[0].AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samplers[0].AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samplers[0].ShaderRegister = 0;
+    samplers[0].MaxLOD = D3D12_FLOAT32_MAX;
+    samplers[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    samplers[1].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    samplers[1].AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samplers[1].AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samplers[1].AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samplers[1].ShaderRegister = 1;
+    samplers[1].MaxLOD = D3D12_FLOAT32_MAX;
+    samplers[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    D3D12_ROOT_SIGNATURE_DESC rsDesc{};
+    rsDesc.NumParameters = _countof(rootParams);
+    rsDesc.pParameters = rootParams;
+    rsDesc.NumStaticSamplers = 2;
+    rsDesc.pStaticSamplers = samplers;
+    rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+
+    ComPtr<ID3DBlob> sigBlob, errBlob;
+    HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
+    if (FAILED(hr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Serialize displacement root sig failed"; return false; }
+    hr = g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_meshPreviewDisplacementRootSignature));
+    if (FAILED(hr)) { if (error) *error = "Create displacement root sig failed"; return false; }
+
+    const std::filesystem::path shaderPath = MeshPreviewShaderPath();
+    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
+#if defined(_DEBUG)
+    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+#endif
+    ComPtr<ID3DBlob> vsBlob, psBlob, vsShadowBlob;
+    hr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "VSDisplacement", "vs_5_0", compileFlags, 0, &vsBlob, &errBlob);
+    if (FAILED(hr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile VSDisplacement failed"; return false; }
+    errBlob.Reset();
+    hr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "PSSurface", "ps_5_0", compileFlags, 0, &psBlob, &errBlob);
+    if (FAILED(hr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile PSSurface (displacement) failed"; return false; }
+    errBlob.Reset();
+    hr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "VSDisplacementShadow", "vs_5_0", compileFlags, 0, &vsShadowBlob, &errBlob);
+    if (FAILED(hr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile VSDisplacementShadow failed"; return false; }
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
+    psoDesc.pRootSignature = g_meshPreviewDisplacementRootSignature.Get();
+    psoDesc.VS = {vsBlob->GetBufferPointer(), vsBlob->GetBufferSize()};
+    psoDesc.PS = {psBlob->GetBufferPointer(), psBlob->GetBufferSize()};
+    // No vertex buffer — VS reads SV_VertexID. Empty input layout.
+    psoDesc.InputLayout = {nullptr, 0};
+    psoDesc.SampleMask = UINT_MAX;
+    psoDesc.SampleDesc.Count = 1;
+    psoDesc.NumRenderTargets = 1;
+    psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+    psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+    psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    psoDesc.RasterizerState.FrontCounterClockwise = FALSE;
+    psoDesc.DepthStencilState.DepthEnable = TRUE;
+    psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    psoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
+    psoDesc.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewDisplacementSurfacePso));
+    if (FAILED(hr)) { if (error) *error = "Create displacement surface PSO failed"; return false; }
+
+    // Shadow PSO — same root sig (so the shader can read displacement
+    // constants + height texture), but writes only depth.
+    psoDesc.VS = {vsShadowBlob->GetBufferPointer(), vsShadowBlob->GetBufferSize()};
+    psoDesc.PS = {};
+    psoDesc.NumRenderTargets = 0;
+    psoDesc.RTVFormats[0] = DXGI_FORMAT_UNKNOWN;
+    psoDesc.RasterizerState.DepthBias = 1200;
+    psoDesc.RasterizerState.SlopeScaledDepthBias = 1.5f;
+    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewDisplacementShadowPso));
+    if (FAILED(hr)) { if (error) *error = "Create displacement shadow PSO failed"; return false; }
+
+    return true;
+}
+
+// Build the static index buffers used by the displacement render path.
+// Triangle indices: 6 per cell × M1² cells. Edge indices: 2 × (3 × M*M1)
+// (horizontal + vertical + diagonal). Both regenerate when meshResolution
+// changes. SV_VertexID is implicit, so no vertex buffer is needed.
+bool EnsureDisplacementGridIndexBuffers(int meshResolution, std::string* error)
+{
+    if (g_gpuMeshPreview.displacementMeshResolution == meshResolution &&
+        g_gpuMeshPreview.displacementTriIndexBuffer &&
+        g_gpuMeshPreview.displacementEdgeIndexBuffer)
+    {
+        return true;
+    }
+    if (!g_device) { if (error) *error = "D3D12 device not initialized"; return false; }
+    if (meshResolution < 2) { if (error) *error = "Displacement mesh resolution too low"; return false; }
+
+    const int M = meshResolution;
+    const int M1 = M - 1;
+
+    std::vector<UINT> triIndices;
+    triIndices.reserve(static_cast<size_t>(M1) * static_cast<size_t>(M1) * 6u);
+    for (int z = 0; z < M1; ++z)
+    {
+        for (int x = 0; x < M1; ++x)
+        {
+            const UINT a = static_cast<UINT>(z * M + x);
+            const UINT b = static_cast<UINT>(z * M + x + 1);
+            const UINT c = static_cast<UINT>((z + 1) * M + x + 1);
+            const UINT d = static_cast<UINT>((z + 1) * M + x);
+            triIndices.push_back(a); triIndices.push_back(b); triIndices.push_back(c);
+            triIndices.push_back(a); triIndices.push_back(c); triIndices.push_back(d);
+        }
+    }
+
+    // Edge layout matches BuildMeshFromHeightfield's top surface: horizontal,
+    // vertical, diagonal — emit unique only.
+    std::vector<UINT> edgeIndices;
+    edgeIndices.reserve(static_cast<size_t>(M) * static_cast<size_t>(M1) * 4u + static_cast<size_t>(M1) * static_cast<size_t>(M1) * 2u);
+    for (int z = 0; z < M; ++z)
+    {
+        for (int x = 0; x < M1; ++x)
+        {
+            edgeIndices.push_back(static_cast<UINT>(z * M + x));
+            edgeIndices.push_back(static_cast<UINT>(z * M + x + 1));
+        }
+    }
+    for (int z = 0; z < M1; ++z)
+    {
+        for (int x = 0; x < M; ++x)
+        {
+            edgeIndices.push_back(static_cast<UINT>(z * M + x));
+            edgeIndices.push_back(static_cast<UINT>((z + 1) * M + x));
+        }
+        for (int x = 0; x < M1; ++x)
+        {
+            edgeIndices.push_back(static_cast<UINT>(z * M + x));
+            edgeIndices.push_back(static_cast<UINT>((z + 1) * M + x + 1));
+        }
+    }
+
+    D3D12_HEAP_PROPERTIES uploadHeap{};
+    uploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
+    auto makeBuffer = [&](size_t bytes, ComPtr<ID3D12Resource>& out) -> bool {
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        desc.Width = bytes;
+        desc.Height = 1;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels = 1;
+        desc.Format = DXGI_FORMAT_UNKNOWN;
+        desc.SampleDesc.Count = 1;
+        desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        out.Reset();
+        return SUCCEEDED(g_device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE,
+            &desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+            IID_PPV_ARGS(&out)));
+    };
+    if (!makeBuffer(triIndices.size() * sizeof(UINT), g_gpuMeshPreview.displacementTriIndexBuffer))
+    {
+        if (error) *error = "Create displacement tri IB failed";
+        return false;
+    }
+    if (!makeBuffer(edgeIndices.size() * sizeof(UINT), g_gpuMeshPreview.displacementEdgeIndexBuffer))
+    {
+        if (error) *error = "Create displacement edge IB failed";
+        return false;
+    }
+
+    {
+        void* mapped = nullptr;
+        D3D12_RANGE readRange{0, 0};
+        g_gpuMeshPreview.displacementTriIndexBuffer->Map(0, &readRange, &mapped);
+        std::memcpy(mapped, triIndices.data(), triIndices.size() * sizeof(UINT));
+        g_gpuMeshPreview.displacementTriIndexBuffer->Unmap(0, nullptr);
+    }
+    {
+        void* mapped = nullptr;
+        D3D12_RANGE readRange{0, 0};
+        g_gpuMeshPreview.displacementEdgeIndexBuffer->Map(0, &readRange, &mapped);
+        std::memcpy(mapped, edgeIndices.data(), edgeIndices.size() * sizeof(UINT));
+        g_gpuMeshPreview.displacementEdgeIndexBuffer->Unmap(0, nullptr);
+    }
+
+    g_gpuMeshPreview.displacementTriIndexCount = static_cast<UINT>(triIndices.size());
+    g_gpuMeshPreview.displacementEdgeIndexCount = static_cast<UINT>(edgeIndices.size());
+    g_gpuMeshPreview.displacementMeshResolution = meshResolution;
+    return true;
+}
+
+// Allocate / re-allocate the height + mask textures at the given
+// simulation resolution. Both are sampled in the displacement VS.
+bool EnsureDisplacementHeightTextures(int simulationResolution, std::string* error)
+{
+    if (g_gpuMeshPreview.displacementHeightTexture &&
+        g_gpuMeshPreview.displacementMaskTexture &&
+        g_gpuMeshPreview.displacementTextureResolution == simulationResolution &&
+        g_gpuMeshPreview.displacementSrvAllocated)
+    {
+        return true;
+    }
+    if (!g_device) { if (error) *error = "D3D12 device not initialized"; return false; }
+    if (simulationResolution < 2) { if (error) *error = "Simulation resolution too low"; return false; }
+
+    g_gpuMeshPreview.displacementHeightTexture.Reset();
+    g_gpuMeshPreview.displacementMaskTexture.Reset();
+
+    D3D12_HEAP_PROPERTIES defaultHeap{};
+    defaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+    auto makeTexture = [&](DXGI_FORMAT format, ComPtr<ID3D12Resource>& out) -> bool {
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width = static_cast<UINT64>(simulationResolution);
+        desc.Height = static_cast<UINT>(simulationResolution);
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels = 1;
+        desc.Format = format;
+        desc.SampleDesc.Count = 1;
+        desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        return SUCCEEDED(g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE,
+            &desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+            IID_PPV_ARGS(&out)));
+    };
+    if (!makeTexture(DXGI_FORMAT_R32_FLOAT, g_gpuMeshPreview.displacementHeightTexture))
+    {
+        if (error) *error = "Create displacement height texture failed";
+        return false;
+    }
+    if (!makeTexture(DXGI_FORMAT_R32_FLOAT, g_gpuMeshPreview.displacementMaskTexture))
+    {
+        if (error) *error = "Create displacement mask texture failed";
+        return false;
+    }
+
+    if (!g_gpuMeshPreview.displacementSrvAllocated)
+    {
+        AllocateSrvDescriptor(nullptr, &g_gpuMeshPreview.displacementHeightSrvCpu, &g_gpuMeshPreview.displacementHeightSrvGpu);
+        AllocateSrvDescriptor(nullptr, &g_gpuMeshPreview.displacementMaskSrvCpu, &g_gpuMeshPreview.displacementMaskSrvGpu);
+        g_gpuMeshPreview.displacementSrvAllocated = true;
+    }
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+    srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Texture2D.MipLevels = 1;
+    g_device->CreateShaderResourceView(g_gpuMeshPreview.displacementHeightTexture.Get(), &srvDesc, g_gpuMeshPreview.displacementHeightSrvCpu);
+    g_device->CreateShaderResourceView(g_gpuMeshPreview.displacementMaskTexture.Get(), &srvDesc, g_gpuMeshPreview.displacementMaskSrvCpu);
+
+    g_gpuMeshPreview.displacementTextureResolution = simulationResolution;
+    g_gpuMeshPreview.displacementHeightUploadKey = 0;
+    return true;
+}
+
+// Copy heights and mask from the CPU heightfield into the GPU textures.
+// Uses an upload buffer + CopyTextureRegion. Skipped when the cached key
+// matches (no new evaluation has happened).
+bool UploadDisplacementHeightfield(ID3D12GraphicsCommandList* commandList, const rock::HeightfieldGrid& grid, uint64_t graphVersion, std::string* error)
+{
+    if (!g_gpuMeshPreview.displacementHeightTexture || !g_gpuMeshPreview.displacementMaskTexture)
+    {
+        if (error) *error = "Displacement textures not allocated";
+        return false;
+    }
+    if (g_gpuMeshPreview.displacementHeightUploadKey == graphVersion && graphVersion != 0)
+    {
+        return true; // already up to date
+    }
+    const int n = g_gpuMeshPreview.displacementTextureResolution;
+    if (grid.resolution != n)
+    {
+        // Resolution mismatch — caller should have reallocated. Return ok
+        // without uploading; the texture stays as-is.
+        return true;
+    }
+
+    const UINT64 rowPitch = (static_cast<UINT64>(n) * sizeof(float) + D3D12_TEXTURE_DATA_PITCH_ALIGNMENT - 1) & ~(D3D12_TEXTURE_DATA_PITCH_ALIGNMENT - 1);
+    const UINT64 totalBytes = rowPitch * static_cast<UINT64>(n);
+
+    D3D12_HEAP_PROPERTIES uploadHeap{};
+    uploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    desc.Width = totalBytes * 2; // height + mask in one buffer
+    desc.Height = 1;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.Format = DXGI_FORMAT_UNKNOWN;
+    desc.SampleDesc.Count = 1;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    ComPtr<ID3D12Resource> uploadBuffer;
+    HRESULT hr = g_device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE,
+        &desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+        IID_PPV_ARGS(&uploadBuffer));
+    if (FAILED(hr)) { if (error) *error = "Create displacement upload buffer failed"; return false; }
+
+    void* mapped = nullptr;
+    D3D12_RANGE readRange{0, 0};
+    uploadBuffer->Map(0, &readRange, &mapped);
+    auto writeChannel = [&](const std::vector<float>& src, UINT64 offset) {
+        const float* base = src.empty() ? nullptr : src.data();
+        for (int z = 0; z < n; ++z)
+        {
+            void* row = static_cast<char*>(mapped) + offset + static_cast<UINT64>(z) * rowPitch;
+            if (base) std::memcpy(row, base + static_cast<size_t>(z) * static_cast<size_t>(n), static_cast<size_t>(n) * sizeof(float));
+            else std::memset(row, 0, static_cast<size_t>(n) * sizeof(float));
+        }
+    };
+    writeChannel(grid.heights, 0);
+    writeChannel(grid.mask, totalBytes);
+    uploadBuffer->Unmap(0, nullptr);
+
+    auto copyTo = [&](ComPtr<ID3D12Resource>& tex, UINT64 srcOffset) {
+        D3D12_TEXTURE_COPY_LOCATION dst{};
+        dst.pResource = tex.Get();
+        dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        dst.SubresourceIndex = 0;
+        D3D12_TEXTURE_COPY_LOCATION src{};
+        src.pResource = uploadBuffer.Get();
+        src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        src.PlacedFootprint.Offset = srcOffset;
+        src.PlacedFootprint.Footprint.Format = DXGI_FORMAT_R32_FLOAT;
+        src.PlacedFootprint.Footprint.Width = static_cast<UINT>(n);
+        src.PlacedFootprint.Footprint.Height = static_cast<UINT>(n);
+        src.PlacedFootprint.Footprint.Depth = 1;
+        src.PlacedFootprint.Footprint.RowPitch = static_cast<UINT>(rowPitch);
+        commandList->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    };
+
+    D3D12_RESOURCE_BARRIER barriers[2]{};
+    barriers[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barriers[0].Transition.pResource = g_gpuMeshPreview.displacementHeightTexture.Get();
+    barriers[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+    barriers[1] = barriers[0];
+    barriers[1].Transition.pResource = g_gpuMeshPreview.displacementMaskTexture.Get();
+    // First-time upload: resources are already in COPY_DEST. Skip the
+    // transition then.
+    if (g_gpuMeshPreview.displacementHeightUploadKey != 0)
+    {
+        commandList->ResourceBarrier(2, barriers);
+    }
+
+    copyTo(g_gpuMeshPreview.displacementHeightTexture, 0);
+    copyTo(g_gpuMeshPreview.displacementMaskTexture, totalBytes);
+
+    barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+    barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+    barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    commandList->ResourceBarrier(2, barriers);
+
+    g_gpuMeshPreview.displacementHeightUploadKey = graphVersion;
+    // Defer-release: keep the upload buffer alive until command list completes.
+    // The simplest safe approach in this codebase is to attach to a list of
+    // pending releases; for now, leaking a single ~16MB buffer per
+    // evaluation is unacceptable. Use a static holder keyed to the next
+    // fence wait.
+    // TODO: integrate with a proper resource defer-release list.
+    static ComPtr<ID3D12Resource> s_keepAlive;
+    s_keepAlive = uploadBuffer;
+    (void)s_keepAlive;
 
     return true;
 }

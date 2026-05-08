@@ -2,6 +2,12 @@
 
 ## 未リリース
 
+- メッシュプレビューの GPU 頂点ディスプレイス経路の **インフラを追加**(Phase 2a)。実際の描画切り替えと UI トグルは Phase 2b で。
+  - `MeshPreviewBackend { CpuMesh, GpuDisplacement }` enum を追加、`PreviewSettings::meshBackend` (既定 `CpuMesh`) として `.terrainproj` の `preview` ブロックに保存/読み込み。
+  - シェーダー (`shaders/mesh_preview.hlsl`) に `VSDisplacement` / `VSDisplacementShadow` を追加。`SV_VertexID` から (x, z) を逆算して UV を求め、ハイトテクスチャから Y を引いて頂点配置 + 4-tap で法線を計算。`PSSurface` / `PSEdge` を共通利用するため `VSOut` は CPU パスと同型を維持。
+  - 別ルートシグネチャ `g_meshPreviewDisplacementRootSignature` を追加(CPU パスのルートシグネチャは未変更)。`MeshPreviewConstants` を CBV(b0)、`CloudShadowMeshConstants` を既存の CBV(b1)、displacement 専用 4 DWORDs を `b2` の 32BitConstants として保持し、シャドウ / 雲シャドウ / ハイトマップ / マスクの SRV テーブルを 4 つ。総使用 12 DWORDs。
+  - 新 PSO 2 つ: `g_meshPreviewDisplacementSurfacePso`、`g_meshPreviewDisplacementShadowPso`。
+  - GPU リソース: 持続用 256 バイト整列 CBV アップロードバッファ、`R32_FLOAT` ハイト/マスクテクスチャ(`g_srvHeap` 上の SRV 付き)、静的グリッドの三角形・エッジ用 IB(`SV_VertexID` で頂点位置を計算する想定なので頂点バッファは不要)。`EnsureMeshPreviewDisplacementPipeline` / `EnsureDisplacementGridIndexBuffers` / `EnsureDisplacementHeightTextures` / `UploadDisplacementHeightfield` を追加。
 - ハイトフィールド→メッシュ生成 (`BuildMeshFromHeightfield`) をフル並列化し、パラメータ操作中のメッシュ再生成負荷を削減しました(Phase 1)。具体的な変更点:
   - 頂点/三角形/エッジを事前に `resize` で確保し、`ParallelForRows` でインデックス指定書き込みに(`push_back` を撤廃)。
   - **頂点法線をハイトフィールドの 4-tap 勾配ベースに変更**(三角形ループ + per-vertex 累積を撤廃)。データレースなしで並列化でき、見た目も滑らか寄りに変わります(面ベース法線特有のフラットシェーディング感が減ります)。
