@@ -2,6 +2,12 @@
 
 ## 未リリース
 
+- GPU 頂点ディスプレイスをサーフェス描画に **接続**(Phase 2b)。`表示設定 → Mesh Backend` で `CPU Mesh` ↔ `GPU Displacement` を切り替えられます。GPU モードでは:
+  - 評価ごとにハイトフィールド + マスクが `R32_FLOAT` テクスチャへ `CopyTextureRegion` でアップロード(`UploadDisplacementHeightfield`、~3 ms / 1024²)。
+  - サーフェス描画は新しい `g_meshPreviewDisplacementSurfacePso` + 静的グリッド IB で、頂点シェーダーがハイトテクスチャから Y を引いて配置 + 4-tap 法線。
+  - シャドウ描画・ワイヤフレーム・グリッドは引き続き CPU メッシュ経路を使用(本コミットでは CPU メッシュアップロードはスキップしていません — 純粋な追加経路で、まだ最適化前)。
+  - dirty チェックに `meshBackend` を追加してトグル変更時に再評価を発火。
+  - 既知の制限: シャドウとサーフェスでメッシュ細分が一致しないと細かい段差で自己シャドウが少し外れて見える場合あり。Phase 2c で CPU メッシュアップロードのスキップ + シャドウもディスプレイス経路に切り替える予定。
 - メッシュプレビューの GPU 頂点ディスプレイス経路の **インフラを追加**(Phase 2a)。実際の描画切り替えと UI トグルは Phase 2b で。
   - `MeshPreviewBackend { CpuMesh, GpuDisplacement }` enum を追加、`PreviewSettings::meshBackend` (既定 `CpuMesh`) として `.terrainproj` の `preview` ブロックに保存/読み込み。
   - シェーダー (`shaders/mesh_preview.hlsl`) に `VSDisplacement` / `VSDisplacementShadow` を追加。`SV_VertexID` から (x, z) を逆算して UV を求め、ハイトテクスチャから Y を引いて頂点配置 + 4-tap で法線を計算。`PSSurface` / `PSEdge` を共通利用するため `VSOut` は CPU パスと同型を維持。
