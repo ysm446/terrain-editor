@@ -2340,6 +2340,176 @@ void ReadProjectSettingsJson(const nlohmann::json& root)
     ReadDisplaySettingsJson(settingsJson, preview, sky, clouds);
 }
 
+void ReadSerializedPinsJson(const nlohmann::json& pinsJson,
+                            rock::GraphId nodeId,
+                            rock::PinKind pinKind,
+                            std::vector<rock::Pin>& pins)
+{
+    if (!pinsJson.is_array())
+    {
+        return;
+    }
+
+    for (const nlohmann::json& pinJson : pinsJson)
+    {
+        rock::Pin pin;
+        pin.id = pinJson.value("id", 0);
+        pin.nodeId = nodeId;
+        pin.kind = pinKind;
+        const int serializedValueType = std::clamp(pinJson.value("valueType", static_cast<int>(rock::ValueType::HeightField)), 0, 3);
+        pin.valueType = serializedValueType == static_cast<int>(rock::ValueType::Mask)
+            ? rock::ValueType::Mask
+            : rock::ValueType::HeightField;
+        pin.label = pinJson.value("label", std::string(rock::ToString(pin.valueType)));
+        if (pin.valueType == rock::ValueType::HeightField && pin.kind == rock::PinKind::Output)
+        {
+            pin.label = "Heightmap";
+        }
+        pins.push_back(std::move(pin));
+    }
+}
+
+std::optional<rock::Node> ReadSerializedNodeJson(const nlohmann::json& nodeJson)
+{
+    rock::Node node;
+    node.id = nodeJson.value("id", 0);
+    const std::optional<rock::NodeKind> nodeKind = ReadSerializedNodeKind(nodeJson);
+    if (!nodeKind || node.id == 0)
+    {
+        return std::nullopt;
+    }
+
+    node.kind = *nodeKind;
+    node.title = nodeJson.value("title", std::string(rock::ToString(node.kind)));
+    if (node.kind == rock::NodeKind::HeightmapLoad && node.title == "Load Heightmap")
+    {
+        node.title = std::string(rock::ToString(node.kind));
+    }
+    ReadNodeSettingsJson(nodeJson, node);
+    ReadSerializedPinsJson(nodeJson.value("inputs", nlohmann::json::array()), node.id, rock::PinKind::Input, node.inputs);
+    ReadSerializedPinsJson(nodeJson.value("outputs", nlohmann::json::array()), node.id, rock::PinKind::Output, node.outputs);
+    return node;
+}
+
+void ReadSerializedNodesJson(const nlohmann::json& root)
+{
+    const nlohmann::json nodesJson = root.value("nodes", nlohmann::json::array());
+    if (!nodesJson.is_array() || nodesJson.empty())
+    {
+        return;
+    }
+
+    std::vector<rock::Node> nodes;
+    for (const nlohmann::json& nodeJson : nodesJson)
+    {
+        std::optional<rock::Node> node = ReadSerializedNodeJson(nodeJson);
+        if (node)
+        {
+            nodes.push_back(std::move(*node));
+        }
+    }
+    if (!nodes.empty())
+    {
+        g_graph.ReplaceNodes(std::move(nodes));
+    }
+}
+
+void ReadViewportJson(const nlohmann::json& root)
+{
+    const nlohmann::json viewportJson = root.value("viewport", nlohmann::json::object());
+    g_viewport.yaw = viewportJson.value("yaw", g_viewport.yaw);
+    g_viewport.pitch = viewportJson.value("pitch", g_viewport.pitch);
+    g_viewport.fovDegrees = viewportJson.value("fovDegrees", g_viewport.fovDegrees);
+    g_viewport.orbitDistance = viewportJson.value("orbitDistance", g_viewport.orbitDistance);
+    g_viewport.zoom = viewportJson.value("zoom", g_viewport.zoom);
+    if (viewportJson.contains("pan") && viewportJson["pan"].is_array() && viewportJson["pan"].size() == 2)
+    {
+        g_viewport.pan = ImVec2(viewportJson["pan"][0].get<float>(), viewportJson["pan"][1].get<float>());
+    }
+}
+
+void ReadSerializedLinksJson(const nlohmann::json& root)
+{
+    std::vector<rock::Link> links;
+    if (root.contains("links") && root["links"].is_array())
+    {
+        for (const nlohmann::json& linkJson : root["links"])
+        {
+            rock::Link link;
+            link.id = linkJson.value("id", 0);
+            link.startPin = linkJson.value("startPin", 0);
+            link.endPin = linkJson.value("endPin", 0);
+            if (link.id > 0 && g_graph.CanCreateLink(link.startPin, link.endPin))
+            {
+                links.push_back(link);
+            }
+        }
+    }
+    g_graph.ReplaceLinks(std::move(links));
+}
+
+void ReadSelectedNodesJson(const nlohmann::json& root)
+{
+    g_selectedNodeId = root.value("selectedNodeId", 0);
+    g_pendingSelectedNodeIds.clear();
+    if (root.contains("selectedNodeIds") && root["selectedNodeIds"].is_array())
+    {
+        for (const nlohmann::json& nodeIdJson : root["selectedNodeIds"])
+        {
+            if (!nodeIdJson.is_number_integer())
+            {
+                continue;
+            }
+            const rock::GraphId nodeId = nodeIdJson.get<rock::GraphId>();
+            if (g_graph.FindNode(nodeId) != nullptr)
+            {
+                g_pendingSelectedNodeIds.push_back(nodeId);
+            }
+        }
+    }
+    else if (g_graph.FindNode(g_selectedNodeId) != nullptr)
+    {
+        g_pendingSelectedNodeIds.push_back(g_selectedNodeId);
+    }
+}
+
+void ReadPreviewSelectionJson(const nlohmann::json& root)
+{
+    g_graph.SetPreviewStage(ReadSerializedPreviewStage(root).value_or(rock::PreviewStage::Graph));
+    const rock::GraphId previewPinId = root.value("previewPinId", 0);
+    if (previewPinId != 0 && g_graph.FindPin(previewPinId) != nullptr)
+    {
+        g_graph.SetPreviewPin(previewPinId);
+    }
+}
+
+void ReadNodePositionsJson(const nlohmann::json& root)
+{
+    g_pendingNodePositions.clear();
+    g_nodePositionCache.clear();
+    if (root.contains("nodePositions") && root["nodePositions"].is_object())
+    {
+        for (const rock::Node& node : g_graph.Nodes())
+        {
+            const std::string key = std::to_string(node.id);
+            if (!root["nodePositions"].contains(key))
+            {
+                continue;
+            }
+
+            const nlohmann::json& positionJson = root["nodePositions"][key];
+            if (positionJson.is_array() && positionJson.size() == 2)
+            {
+                const ImVec2 position(positionJson[0].get<float>(), positionJson[1].get<float>());
+                g_pendingNodePositions.push_back({node.id, position});
+                g_nodePositionCache.push_back({node.id, position});
+            }
+        }
+    }
+    g_nodePositionsInitialized = false;
+    g_nodeGraphNavigatedToContent = false;
+}
+
 bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
 {
     try
@@ -2361,141 +2531,12 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
         }
 
         ReadProjectSettingsJson(root);
-
-        const nlohmann::json nodesJson = root.value("nodes", nlohmann::json::array());
-        if (nodesJson.is_array() && !nodesJson.empty())
-        {
-            std::vector<rock::Node> nodes;
-            for (const nlohmann::json& nodeJson : nodesJson)
-            {
-                rock::Node node;
-                node.id = nodeJson.value("id", 0);
-                const std::optional<rock::NodeKind> nodeKind = ReadSerializedNodeKind(nodeJson);
-                if (!nodeKind)
-                {
-                    continue;
-                }
-                node.kind = *nodeKind;
-                node.title = nodeJson.value("title", std::string(rock::ToString(node.kind)));
-                if (node.kind == rock::NodeKind::HeightmapLoad && node.title == "Load Heightmap")
-                {
-                    node.title = std::string(rock::ToString(node.kind));
-                }
-                ReadNodeSettingsJson(nodeJson, node);
-
-                const auto readPins = [&](const nlohmann::json& pinsJson, rock::PinKind pinKind, std::vector<rock::Pin>& pins) {
-                    if (!pinsJson.is_array())
-                    {
-                        return;
-                    }
-                    for (const nlohmann::json& pinJson : pinsJson)
-                    {
-                        rock::Pin pin;
-                        pin.id = pinJson.value("id", 0);
-                        pin.nodeId = node.id;
-                        pin.kind = pinKind;
-                        const int serializedValueType = std::clamp(pinJson.value("valueType", static_cast<int>(rock::ValueType::HeightField)), 0, 3);
-                        pin.valueType = serializedValueType == static_cast<int>(rock::ValueType::Mask)
-                            ? rock::ValueType::Mask
-                            : rock::ValueType::HeightField;
-                        pin.label = pinJson.value("label", std::string(rock::ToString(pin.valueType)));
-                        if (pin.valueType == rock::ValueType::HeightField && pin.kind == rock::PinKind::Output)
-                        {
-                            pin.label = "Heightmap";
-                        }
-                        pins.push_back(std::move(pin));
-                    }
-                };
-                readPins(nodeJson.value("inputs", nlohmann::json::array()), rock::PinKind::Input, node.inputs);
-                readPins(nodeJson.value("outputs", nlohmann::json::array()), rock::PinKind::Output, node.outputs);
-                if (node.id != 0)
-                {
-                    nodes.push_back(std::move(node));
-                }
-            }
-            if (!nodes.empty())
-            {
-                g_graph.ReplaceNodes(std::move(nodes));
-            }
-        }
-        const nlohmann::json viewportJson = root.value("viewport", nlohmann::json::object());
-        g_viewport.yaw = viewportJson.value("yaw", g_viewport.yaw);
-        g_viewport.pitch = viewportJson.value("pitch", g_viewport.pitch);
-        g_viewport.fovDegrees = viewportJson.value("fovDegrees", g_viewport.fovDegrees);
-        g_viewport.orbitDistance = viewportJson.value("orbitDistance", g_viewport.orbitDistance);
-        g_viewport.zoom = viewportJson.value("zoom", g_viewport.zoom);
-        if (viewportJson.contains("pan") && viewportJson["pan"].is_array() && viewportJson["pan"].size() == 2)
-        {
-            g_viewport.pan = ImVec2(viewportJson["pan"][0].get<float>(), viewportJson["pan"][1].get<float>());
-        }
-
-        std::vector<rock::Link> links;
-        if (root.contains("links") && root["links"].is_array())
-        {
-            for (const nlohmann::json& linkJson : root["links"])
-            {
-                rock::Link link;
-                link.id = linkJson.value("id", 0);
-                link.startPin = linkJson.value("startPin", 0);
-                link.endPin = linkJson.value("endPin", 0);
-                if (link.id > 0 && g_graph.CanCreateLink(link.startPin, link.endPin))
-                {
-                    links.push_back(link);
-                }
-            }
-        }
-        g_graph.ReplaceLinks(std::move(links));
-        g_selectedNodeId = root.value("selectedNodeId", 0);
-        g_pendingSelectedNodeIds.clear();
-        if (root.contains("selectedNodeIds") && root["selectedNodeIds"].is_array())
-        {
-            for (const nlohmann::json& nodeIdJson : root["selectedNodeIds"])
-            {
-                if (!nodeIdJson.is_number_integer())
-                {
-                    continue;
-                }
-                const rock::GraphId nodeId = nodeIdJson.get<rock::GraphId>();
-                if (g_graph.FindNode(nodeId) != nullptr)
-                {
-                    g_pendingSelectedNodeIds.push_back(nodeId);
-                }
-            }
-        }
-        else if (g_graph.FindNode(g_selectedNodeId) != nullptr)
-        {
-            g_pendingSelectedNodeIds.push_back(g_selectedNodeId);
-        }
-        g_graph.SetPreviewStage(ReadSerializedPreviewStage(root).value_or(rock::PreviewStage::Graph));
-        const rock::GraphId previewPinId = root.value("previewPinId", 0);
-        if (previewPinId != 0 && g_graph.FindPin(previewPinId) != nullptr)
-        {
-            g_graph.SetPreviewPin(previewPinId);
-        }
-
-        g_pendingNodePositions.clear();
-        g_nodePositionCache.clear();
-        if (root.contains("nodePositions") && root["nodePositions"].is_object())
-        {
-            for (const rock::Node& node : g_graph.Nodes())
-            {
-                const std::string key = std::to_string(node.id);
-                if (!root["nodePositions"].contains(key))
-                {
-                    continue;
-                }
-
-                const nlohmann::json& positionJson = root["nodePositions"][key];
-                if (positionJson.is_array() && positionJson.size() == 2)
-                {
-                    const ImVec2 position(positionJson[0].get<float>(), positionJson[1].get<float>());
-                    g_pendingNodePositions.push_back({node.id, position});
-                    g_nodePositionCache.push_back({node.id, position});
-                }
-            }
-        }
-        g_nodePositionsInitialized = false;
-        g_nodeGraphNavigatedToContent = false;
+        ReadSerializedNodesJson(root);
+        ReadViewportJson(root);
+        ReadSerializedLinksJson(root);
+        ReadSelectedNodesJson(root);
+        ReadPreviewSelectionJson(root);
+        ReadNodePositionsJson(root);
 
         g_projectPath = path;
         UpdateWindowTitle();
