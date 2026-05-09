@@ -52,8 +52,8 @@ namespace
 constexpr int kFrameCount = 2;
 constexpr int kSrvDescriptorCount = 64;
 constexpr float kFullFrameSensorHeightMm = 24.0f;
-constexpr int kMaxSerializedNodeKind = static_cast<int>(rock::NodeKind::Rock);
-constexpr int kMaxSerializedPreviewStage = static_cast<int>(rock::PreviewStage::MaskBlend);
+constexpr int kMaxSerializedNodeKind = static_cast<int>(rock::NodeKind::Sediment);
+constexpr int kMaxSerializedPreviewStage = static_cast<int>(rock::PreviewStage::Sediment);
 constexpr std::array<int, 5> kResolutionPresets = {128, 256, 512, 1024, 2048};
 
 int NearestResolutionPreset(int value)
@@ -1796,6 +1796,22 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
                     {"facetSharpness", node.rock.facetSharpness},
                     {"facetScale", node.rock.facetScale},
                 }},
+                {"sediment", {
+                    {"iterations", node.sediment.iterations},
+                    {"initialSedimentM", node.sediment.initialSedimentM},
+                    {"maskContrast", node.sediment.maskContrast},
+                    {"particleCount", node.sediment.particleCount},
+                    {"particleLifetime", node.sediment.particleLifetime},
+                    {"particleGradientRadiusM", node.sediment.particleGradientRadiusM},
+                    {"particleInertia", node.sediment.particleInertia},
+                    {"particleFriction", node.sediment.particleFriction},
+                    {"particleCapacity", node.sediment.particleCapacity},
+                    {"particleErosion", node.sediment.particleErosion},
+                    {"particleDeposition", node.sediment.particleDeposition},
+                    {"particleEvaporation", node.sediment.particleEvaporation},
+                    {"particleEmissionTime", node.sediment.particleEmissionTime},
+                    {"particleSeed", node.sediment.particleSeed},
+                }},
                 {"maskBlend", {
                     {"mode", static_cast<int>(node.maskBlend.mode)},
                     {"intensity", node.maskBlend.intensity},
@@ -2058,6 +2074,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 const nlohmann::json nodeMaskBlendJson = nodeJson.value("maskBlend", nlohmann::json::object());
                 const nlohmann::json nodeMaskFluvialJson = nodeJson.value("maskFluvial", nlohmann::json::object());
                 const nlohmann::json nodeRockJson = nodeJson.value("rock", nlohmann::json::object());
+                const nlohmann::json nodeSedimentJson = nodeJson.value("sediment", nlohmann::json::object());
                 node.heightmap.path = nodeHeightmapJson.value("path", node.heightmap.path);
                 node.heightmap.scaleMeters = std::clamp(nodeHeightmapJson.value("scaleMeters", node.heightmap.scaleMeters), 1.0f, 1000000.0f);
                 node.heightmap.relativeVerticalScalePercent = std::clamp(nodeHeightmapJson.value("relativeVerticalScalePercent", node.heightmap.relativeVerticalScalePercent), 0.0f, 10000.0f);
@@ -2185,6 +2202,20 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 node.rock.bumpiness = std::clamp(nodeRockJson.value("bumpiness", node.rock.bumpiness), 0.0f, 1.0f);
                 node.rock.facetSharpness = std::clamp(nodeRockJson.value("facetSharpness", node.rock.facetSharpness), 0.0f, 1.0f);
                 node.rock.facetScale = std::clamp(nodeRockJson.value("facetScale", node.rock.facetScale), 0.5f, 8.0f);
+                node.sediment.iterations = std::clamp(nodeSedimentJson.value("iterations", node.sediment.iterations), 0, 4096);
+                node.sediment.initialSedimentM = std::clamp(nodeSedimentJson.value("initialSedimentM", node.sediment.initialSedimentM), 0.0f, 1000.0f);
+                node.sediment.maskContrast = std::clamp(nodeSedimentJson.value("maskContrast", node.sediment.maskContrast), 0.0f, 1.0f);
+                node.sediment.particleCount = std::clamp(nodeSedimentJson.value("particleCount", node.sediment.particleCount), 0, 4'000'000);
+                node.sediment.particleLifetime = std::clamp(nodeSedimentJson.value("particleLifetime", node.sediment.particleLifetime), 1, 1024);
+                node.sediment.particleGradientRadiusM = std::clamp(nodeSedimentJson.value("particleGradientRadiusM", node.sediment.particleGradientRadiusM), 0.5f, 500.0f);
+                node.sediment.particleInertia = std::clamp(nodeSedimentJson.value("particleInertia", node.sediment.particleInertia), 0.0f, 0.99f);
+                node.sediment.particleFriction = std::clamp(nodeSedimentJson.value("particleFriction", node.sediment.particleFriction), 0.0f, 0.95f);
+                node.sediment.particleCapacity = std::clamp(nodeSedimentJson.value("particleCapacity", node.sediment.particleCapacity), 0.0f, 32.0f);
+                node.sediment.particleErosion = std::clamp(nodeSedimentJson.value("particleErosion", node.sediment.particleErosion), 0.0f, 1.0f);
+                node.sediment.particleDeposition = std::clamp(nodeSedimentJson.value("particleDeposition", node.sediment.particleDeposition), 0.0f, 1.0f);
+                node.sediment.particleEvaporation = std::clamp(nodeSedimentJson.value("particleEvaporation", node.sediment.particleEvaporation), 0.0f, 1.0f);
+                node.sediment.particleEmissionTime = std::clamp(nodeSedimentJson.value("particleEmissionTime", node.sediment.particleEmissionTime), 0.0f, 1.0f);
+                node.sediment.particleSeed = std::clamp(nodeSedimentJson.value("particleSeed", node.sediment.particleSeed), 0, 999999);
 
                 const auto readPins = [&](const nlohmann::json& pinsJson, rock::PinKind pinKind, std::vector<rock::Pin>& pins) {
                     if (!pinsJson.is_array())
@@ -4921,7 +4952,8 @@ bool IsTerrainNodeKind(rock::NodeKind kind)
         kind == rock::NodeKind::MaskNoise ||
         kind == rock::NodeKind::MaskBlend ||
         kind == rock::NodeKind::MaskFluvial ||
-        kind == rock::NodeKind::Rock;
+        kind == rock::NodeKind::Rock ||
+        kind == rock::NodeKind::Sediment;
 }
 
 int CurrentPreviewMeshResolution()
@@ -6740,6 +6772,7 @@ ImVec4 NodeAccentColor(rock::NodeKind kind)
     case rock::NodeKind::ErosionNoise:
     case rock::NodeKind::MultiScaleErosion:
     case rock::NodeKind::Rock:
+    case rock::NodeKind::Sediment:
         return heightfieldGreen;
     case rock::NodeKind::MaskNoise:
     case rock::NodeKind::MaskBlend:
@@ -6772,6 +6805,8 @@ ImVec2 InitialNodePosition(rock::NodeKind kind)
         return ImVec2(880.0f, 240.0f);
     case rock::NodeKind::Rock:
         return ImVec2(880.0f, 380.0f);
+    case rock::NodeKind::Sediment:
+        return ImVec2(880.0f, 520.0f);
     default:
         return ImVec2(40.0f, 64.0f);
     }
@@ -7460,6 +7495,7 @@ void DrawNodeGraph()
             addNodeMenuItem(rock::NodeKind::ErosionNoise);
             addNodeMenuItem(rock::NodeKind::MultiScaleErosion);
             addNodeMenuItem(rock::NodeKind::Rock);
+            addNodeMenuItem(rock::NodeKind::Sediment);
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("マスク"))
@@ -8454,6 +8490,87 @@ void DrawPropertiesPanel()
             EvaluateGraph();
         }
         if (DrawPropertyFloatRow("Facet Scale", "RockFacetScale", &rk.facetScale, 0.5f, 8.0f, rock::RockSettings{}.facetScale, "Rock facet scale changed", true, "1 つの岩に乗る面の細かさです。大きいほど面が小さく細かくなり、小さいほど大きな面が少数現れます。", "%.2f"))
+        {
+            EvaluateGraph();
+        }
+
+        ImGui::EndTable();
+        return;
+    }
+
+    if (selectedNode->kind == rock::NodeKind::Sediment && ImGui::BeginTable("SedimentRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 210.0f);
+        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+        rock::SedimentSettings& sd = editableNode->sediment;
+        sd.iterations = std::clamp(sd.iterations, 0, 4096);
+        sd.initialSedimentM = std::clamp(sd.initialSedimentM, 0.0f, 1000.0f);
+        sd.maskContrast = std::clamp(sd.maskContrast, 0.0f, 1.0f);
+        sd.particleCount = std::clamp(sd.particleCount, 0, 4'000'000);
+        sd.particleLifetime = std::clamp(sd.particleLifetime, 1, 1024);
+        sd.particleGradientRadiusM = std::clamp(sd.particleGradientRadiusM, 0.5f, 500.0f);
+        sd.particleInertia = std::clamp(sd.particleInertia, 0.0f, 0.99f);
+        sd.particleFriction = std::clamp(sd.particleFriction, 0.0f, 0.95f);
+        sd.particleCapacity = std::clamp(sd.particleCapacity, 0.0f, 32.0f);
+        sd.particleErosion = std::clamp(sd.particleErosion, 0.0f, 1.0f);
+        sd.particleDeposition = std::clamp(sd.particleDeposition, 0.0f, 1.0f);
+        sd.particleEvaporation = std::clamp(sd.particleEvaporation, 0.0f, 1.0f);
+        sd.particleEmissionTime = std::clamp(sd.particleEmissionTime, 0.0f, 1.0f);
+        sd.particleSeed = std::clamp(sd.particleSeed, 0, 999999);
+        if (DrawPropertyFloatRow("Initial Sediment (m)", "SedimentInitial", &sd.initialSedimentM, 0.0f, 50.0f, rock::SedimentSettings{}.initialSedimentM, "Sediment initial changed", true, "全セルに最初に積む土砂の厚み (m)。多いほど侵食/堆積で動かせる量が増えます。", "%.2f"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyPercentRow("Mask Contrast (%)", "SedimentMaskContrast", &sd.maskContrast, 0.0f, 1.0f, rock::SedimentSettings{}.maskContrast, "Sediment mask contrast changed", "Mask 出力のコントラスト。0 で連続グラデーション(中間グレーが多い)、1 でほぼバイナリ(黒/白のみ)。GeoGen ライクなくっきり dendritic を出すには 0.7+ が目安。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyIntRow("Iterations", "SedimentIterations", &sd.iterations, 1, 1000, rock::SedimentSettings{}.iterations, "Sediment iterations changed", true, "粒子を投入する回数(波数)。各 wave 後に sediment が更新されるので、後の wave は侵食された地形を見て更にチャンネルを彫る。総粒子数 = Iterations × Particle Count。"))
+        {
+            EvaluateGraph();
+        }
+
+        if (DrawPropertyIntRow("Particle Count", "SedimentParticleCount", &sd.particleCount, 0, 1'000'000, rock::SedimentSettings{}.particleCount, "Sediment particle count changed", true, "1 wave で発射する粒子数。Iterations と組み合わせて総量が決まる。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyIntRow("Particle Lifetime", "SedimentParticleLifetime", &sd.particleLifetime, 1, 512, rock::SedimentSettings{}.particleLifetime, "Sediment particle lifetime changed", true, "1 粒子あたりの最大移動ステップ数。多いほど遠くまで運ばれる。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Gradient Distance (m)", "SedimentGradientDistanceM", &sd.particleGradientRadiusM, 0.5f, 200.0f, rock::SedimentSettings{}.particleGradientRadiusM, "Sediment gradient distance changed", true, "勾配サンプリングの距離 (m)。粒子はこの半径の中央差分で進路を決めるので、大きいほど地形の高周波ノイズが平滑化されて主要 drainage に粒子が収束 → 河道が太く少なくなる。GeoGen の Largest Detail Level (8/16/32m) 相当。解像度非依存。", "%.1f"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyPercentRow("Inertia (%)", "SedimentInertia", &sd.particleInertia, 0.0f, 0.99f, rock::SedimentSettings{}.particleInertia, "Sediment inertia changed", "粒子が前ステップの方向をどれだけ引き継ぐか。高いほど直線的、低いほど真っ直ぐ最急降下。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyPercentRow("Friction (%)", "SedimentFriction", &sd.particleFriction, 0.0f, 0.95f, rock::SedimentSettings{}.particleFriction, "Sediment friction changed", "1 ステップごとに失われる速度の割合。0 だと長い斜面で速度が無制限に増え、容量も増えて経路で堆積されず終端で大量 dump → スパイク発生。10-20% が安定範囲。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Capacity", "SedimentCapacity", &sd.particleCapacity, 0.0f, 16.0f, rock::SedimentSettings{}.particleCapacity, "Sediment capacity changed", true, "粒子の運搬容量係数 (capacity = max(slope, 0.01) × |v| × water × Kc)。大きいほど多く運ぶ → 侵食が強い。", "%.2f"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyPercentRow("Erosion (%)", "SedimentErosion", &sd.particleErosion, 0.0f, 1.0f, rock::SedimentSettings{}.particleErosion, "Sediment erosion changed", "容量に対する侵食レート。1 で 1 ステップで全容量分削る。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyPercentRow("Deposition (%)", "SedimentDeposition", &sd.particleDeposition, 0.0f, 1.0f, rock::SedimentSettings{}.particleDeposition, "Sediment deposition changed", "過剰運搬量の堆積レート。1 で過剰分を 1 ステップで全堆積。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyPercentRow("Evaporation (%)", "SedimentEvaporation", &sd.particleEvaporation, 0.0f, 0.5f, rock::SedimentSettings{}.particleEvaporation, "Sediment evaporation changed", "1 ステップあたりに失われる水の割合。粒子の運搬容量を時間で減衰させ、終端で堆積させる。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyPercentRow("Emission Time (%)", "SedimentEmissionTime", &sd.particleEmissionTime, 0.0f, 1.0f, rock::SedimentSettings{}.particleEmissionTime, "Sediment emission time changed", "総粒子予算 (Iterations × Particle Count) を先頭何割の wave に集中させるか。0% は全粒子を 1 wave で初期地形に投入し wave 間 merge なし(樹枝状がシャープ)、100% は毎 wave に Particle Count ずつ均等(progressive な彫り込みと平滑化)。総仕事量は変わりません。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyIntRow("Seed", "SedimentSeed", &sd.particleSeed, 0, 999999, rock::SedimentSettings{}.particleSeed, "Sediment seed changed", true, "粒子位置の乱数シード。"))
         {
             EvaluateGraph();
         }

@@ -2,6 +2,79 @@
 
 ## 未リリース
 
+- 保存済みプロジェクトの `previewStage` が `Sediment` / `Rock` / `Mask Fluvial` などを指している場合に、読み込み時に古い上限値で `Mask Blend` へ丸められる問題を修正しました(3.10.12)。
+- ハイトフィールド操作の適用処理とキャッシュ用ハッシュ計算を共通関数へ整理し、新しいハイトフィールドノードを追加したときの更新漏れを起こしにくくしました(3.10.12)。
+- Sediment ノードから **Fluid モードを削除し、Particle 専用ノードに変更**(3.10.11)。
+  - 削除内容: `SedimentMode` enum、`mode` 設定、`fluidDt` / `fluidInitialWaterM` / `fluidRainPerIter` / `fluidCapacity` / `fluidErosion` / `fluidDeposition` / `fluidEvaporation` の 7 設定、`ApplySediment_Fluid` 実装と `sediment_fluid` namespace、Mode 切替コンボと Fluid 専用プロパティ行 7 つ。
+  - プロパティパネルから `Mode` コンボが消え、Particle 系設定のみが直接表示されるようになった(クリック数が 1 減る)。
+  - `.terrainproj` の `sediment.mode` および `fluid*` キーは保存・読み込みともに無視されるようになった。古いプロジェクトを開いてもエラーにはならず、Fluid モードで保存されていたものは Particle として読み込まれる(粒子系の設定はそのまま残るので、見た目はリセットされて Particle の既定値で評価される)。
+  - 評価パイプラインの dispatcher (`ApplySediment`) は `ApplySediment_Particle` をそのままリネームして 1 関数に統合した。呼び出し側 (`EvaluateHeightPipelineCached` など) は変更不要。
+- Sediment Particle の `Emission Time (%)` の意味を **「総粒子予算の集中度」へ再定義**(3.10.10)。
+  - 旧仕様: `iter >= ceil(iterations × emissionTime)` で iteration ループを早期終了するだけ。`Iterations` を直接下げるのと完全に等価で、Emission Time に固有の視覚効果が無い問題があった。
+  - 新仕様: 総粒子数 `iterations × particleCount` を不変に保ったまま、先頭 `emissionIterations = max(1, ceil(iterations × emissionTime))` 個の wave に均等再配分。
+    - **0%** → 全粒子を 1 wave で初期地形に投入(wave 間 merge 0 回)。樹枝状の侵食パターンが平滑化されず、シャープな dendritic carving。
+    - **100%** → 毎 wave に `particleCount` ずつ(従来挙動)。wave 間 merge ごとに次 wave が侵食済み地形を見るため、河道が深くなる代わりに反復による平滑化が入る。
+    - 中間 → 前半の `emissionIterations` 波に集中し、後半 wave は実行しない(粒子 0 のため意味なし)。余りは最終 wave に加算して総数を厳密に一致させる。
+  - これで Emission Time が「wave 間 merge の許容度」スライダーとして機能し、`Iterations` と独立した視覚効果(シャープな初期侵食 ↔ progressive な彫り込み)を持つようになった。総仕事量は変わらないので、評価コストはほぼ同等。
+- Sediment Particle で `Gradient Distance 16m` 既定により **大量のスパイク(柱状の堆積)が出る問題を修正**(3.10.9)。
+  - 原因: 16m ステンシルで地形が強くスムージングされ、smooth-topology の極小値の数が地形の小さいスケールより大幅に減る → 何百もの粒子が同じ basin の中心に集中 → 寿命到達時に bilinear 4 セル分散しても 1 セルあたり数十〜数百 m の堆積で柱になる。
+  - 修正:
+    - **既定値 16m → 8m**(集約感は維持しつつ、極小値の収束密度が下がる)
+    - **end-of-life の堆積を 5×5 Gaussian 分散**(σ ≈ 1)。bilinear 4 セル → 約 25 セルに広げて、1 セルへの集中を ~6× 抑制。
+  - 16m 以上(GeoGen の 16/32m 設定相当)を使うと依然スパイクが出やすいので注意 — その場合は別途 talus pass を追加するなどの対策が将来必要。
+- Sediment Particle の `Gradient Radius` をセル単位 → **メートル単位に変更**(3.10.8)。GeoGen の "Largest Detail Level (8m / 16m / 32m)" と同じ感覚で扱えるように。
+  - 旧: `Gradient Radius`(int、セル数)。1024² と 512² で同じ値でも実質的なサンプリング距離が変わる解像度依存パラメータだった。
+  - 新: `Gradient Distance (m)`(float、既定 16m)。kernel 内で `gridResolution × terrainSize` から自動的にセル数へ換算するので、解像度を変えても同じ視覚効果が得られる。
+  - GeoGen の使い方: 8m で粒子がほぼ局所地形に追従(細かい筋状)、16m でほどよく集約、32m で主要谷だけ強調。同じ感覚で操作可能。
+  - JSON キー: `particleGradientRadius` → `particleGradientRadiusM`。古い key は無視されデフォルト 16m が入ります(=細かい筋状から集約された見た目に変わるので、保存済みプロジェクトを開いたら一度値を確認してください)。
+- Sediment Particle で **「凸凹斜面に粒子が張り付く / 河道が細い筋状にバラける」を改善**(3.10.7)。
+  - 原因: 勾配サンプリングが 1 セルの bilinear セル内だけだったため、地形の高周波ノイズに毎ステップ反応して粒子の進行方向がジグザグ。隣り合う粒子も微妙に違う local gradient を見るので、本来 1 本の谷に集まるべき粒子群が **多数の細い並行筋** に分散していた。
+  - 修正: 新規 `Gradient Radius`(セル単位、既定 2)パラメータを追加し、**±N セルの中央差分** で勾配を計算。粒子は地形の大きいトポロジーだけを navigate するので、近接する粒子群が同じ主要 drainage に収束 → 河道が太く本数が減る。寿命中の dh(高低差)計算は従来通りの bilinear で精度維持。
+  - 副次調整: `Inertia 25% → 40%`(小さな尾根を貫通する momentum を強化、`Gradient Radius` と組み合わせて長距離の流れに)。
+  - コスト: 1 step あたり bilinear sample が +4 増えるので、Particle 評価が ~30-50% 重くなります。`Gradient Radius` を 1 にすれば従来同等の細かいパターン+速度に戻せます。
+- Sediment ノードに **`Mask Contrast` パラメータ** を追加(3.10.6)。GeoGen 風の白黒くっきりした dendritic マスクが出せるように。
+  - `mask = smoothstep(lo, hi, sediment / (initial × 2))` で smoothstep の遷移帯幅を制御。`Mask Contrast 0` で `[0, 1]` 全範囲の S 字(従来同等の連続グラデーション)、`1` で `[≈0.5, ≈0.5]` のほぼバイナリ。
+  - 既定値 `0.7` で **遷移帯 ±15%**(`sediment ∈ [0.7×initial, 1.3×initial]` の外は完全に黒/白)、GeoGen 参考画像のようなくっきり感がデフォルトに。連続グラデーションが好みなら 0 に。
+  - Particle / Fluid 両モード共通。
+- Sediment Particle の **「引っ掛かって流れない」感を解消**(3.10.5)。
+  - 原因: `Friction 10%` が強すぎて velocity が ~0.92 で頭打ち → capacity が低く遠くまで運べない。`Inertia 5%` がほぼゼロで純粋に local gradient に従うため、地形の小さな揺らぎに毎回引っ掛かって粒子が早期停止。
+  - 修正:
+    - `Friction 10% → 5%`(velocity 上限 ~1.36 に倍増、重力で加速していく感覚)
+    - `Inertia 5% → 25%`(進路の慣性が出来て、小さな pit やノイズを貫通して長く流れる)
+    - `Particle Lifetime 96 → 128`(遠距離移動の余地を確保)
+    - `Deposition 50% → 30%`(到達点で急激に吐かず、流れる長さに渡って徐々に堆積させる)
+  - 結果: GeoGen のように **重力で全体から下に向かって流れて、谷で堆積していく** 動きになるはず。スパイクは Friction 5% でも制御範囲内(velocity 上限と end-of-life bilinear で抑制)。
+- Sediment ノードの **可視性向上 + 既定値の軽量化**(3.10.4)。
+  - **可視性**:
+    - `Initial Sediment` 既定値 0.5 → **2.0m**(再分配で動かせる絶対量を増やして、入力地形の起伏に埋もれないように)。
+    - Mask 正規化を **max ベース → 初期量基準の固定スケール** に変更。`mask = clamp(sediment / (initialSediment × 2), 0, 1)` で、`0 = 岩盤露出 / 0.5 = 初期と同じ / 1 = 2× 蓄積` の線形マッピング。1 セルでも極端に高い値があると全体が暗くなる max 正規化の弱点を解消、谷の溜まりと尾根の侵食が同じ画面で確認できるように。両モード共通。
+  - **軽量化**(現状の 1024² で 2-4 秒 → 1-2 秒目安):
+    - `Iterations` 50 → **30**、`Particle Count` 8000 → **5000** で総粒子数を約 1/3 に。GeoGen の Iter 200 ライクな見た目が欲しい場合は手動で増やしてください。
+    - 各 wave 開始時の per-thread delta リセットを `ParallelForRows` で並列化。
+  - **CPU 並列化の確認**: Particle は `std::thread` × `hardware_concurrency` で粒子をスレッドに分配(各スレッド private delta マップ、レース回避)。Fluid は各パスを `ParallelForRows`(`std::execution::par`)で行並列化。両モード可能な限り CPU 並列。重い場合はプレビュー解像度(設定パネルの Resolution)を下げるとほぼ線形に高速化。
+- Sediment Particle モードの **「ヒルから棒(スパイク)が立つ」バグを修正**(3.10.3)。
+  - 原因: `velocity = sqrt(v² + dh × 4)` に摩擦項がなく、長い斜面で速度が無制限に増加 → capacity も増加 → carried が常に capacity 以下で経路途中に堆積されず、寿命到達時に **未堆積の数 m を 1 セルに丸ごと dump**。これが 50 iteration 繰り返されて hotspot で数百 m の塔ができていた。
+  - 修正:
+    - **velocity 摩擦項** `velocity *= (1 - friction)` を追加(`Friction (%)` パラメータ、既定 10%)。長い斜面でも速度・容量が物理的な上限に収束。
+    - **end-of-life deposit を bilinear 分配**(1 セル → 4 セル)。1 ピクセルへの集中が緩和。
+  - 既定値再調整: `Capacity 8 → 4`(容量自体を抑制)、`Deposition 30% → 50%`(到達時にきっちり吐く)、`Evaporation 1% → 2%`(水減衰を早めて経路後半で deposit を促す)。
+- Sediment Particle モードに **`Iterations`(時間軸)パラメータ** を追加(3.10.2)。GeoGen の Iter X と同じ「シミュレーション進行度」感覚で使えます。
+  - 各 iteration で `Particle Count` 個の粒子を投入し、wave 終了ごとに per-thread delta を master sediment にマージ → 次 wave は **侵食済みの地形を見る** ので、繰り返しチャンネルが彫られて dendritic な水路が深まります。総粒子数 = `Iterations × Particle Count`。
+  - 旧: 全粒子が初期状態だけを見て独立に走るので、繰り返しによる侵食の連鎖が起きなかった。
+  - 既定値再調整: `Iterations 50 / Particle Count 8000`(総 400k 粒子)。Fluid と同じ `iterations` フィールドを共有(モードによって意味が変わる)。
+  - UI: `Iterations` を mode 切替前の共通行に移動。Particle と Fluid どちらでも見える位置に。
+- Sediment ノードの **「土砂が流れない / その場に留まる」問題を修正**(3.10.1)。
+  - **Particle bug**: `erode > dh` で侵食を頭打ちにしていたため、緩斜面では capacity に対して 1/100 程度しか実際に侵食されず、粒子が空荷で滑るだけになっていた。岩盤侵食モデル(地形を直接掘る)では妥当だが、bedrock 固定の sediment-only モデルでは不要。**`dh` cap を撤廃** し、available sediment による cap だけ残した。
+  - **Fluid 既定値**: rain × dt / evaporation で定常水深 ~0.16m と浅すぎたため流速が出なかった。`fluidInitialWaterM = 1.0` を新規追加して開始時から水を満たす + `Rain 0.012 → 0.05` / `Capacity 1.0 → 4.0` / `Evaporation 1.5% → 1.0%`。
+  - **Particle 既定値**: `Capacity 4.0 → 8.0` / `Particle Count 100k → 200k` / `Lifetime 64 → 96` / `Initial Sediment 1.0m → 0.5m`(同じ侵食量で相対的な変化が大きく見える)。
+  - **共通既定値**: `Iterations 100 → 200`(Fluid 用)。
+  - 結果: 粒子モードで dendritic な堆積、流体モードで連続的な流れが見えるように。GeoGen の Iter 200 に近い見た目が初期パラメータで出るはず。
+- **Sediment ノード**を追加(3.10.0)。入力ハイトフィールドを岩盤(bedrock)とみなし、上に積んだ均一な土砂レイヤーを「粒子」または「流体」のシミュレーションで再分配します。GeoGen の Sediment ノード相当。
+  - **Particle モード**(既定): 確率的水力侵食。粒子が `(pos, dir, velocity, water, carried)` を持って斜面を滑り、容量 `c = max(slope, 0.01) × |v| × water × Kc` を超えれば堆積、下回れば侵食する古典的なアルゴリズム。GeoGen 参考画像のような **dendritic な流路堆積** が出ます。CPU 並列化はスレッドごとの delta マップ方式(レース回避、O(1)-locked スケール)。
+  - **Fluid モード**: 簡略化した Mei-Decaudin-Hu 2007 パイプモデル。各セルに水柱・懸濁土砂・4 方向 pipe flux を持たせ、雨 → 流量計算 → 水更新 → 侵食/堆積 → semi-Lagrangian 移流 → 蒸発の 6 パスを `Iterations` 回ステンシル演算で回します。**滑らかなシート流による堆積分布**になります。決定論的。
+  - 出力: `Heightmap = bedrock + 残った土砂`、`Mask = 土砂厚みを max 値で正規化した 0..1`。
+  - すべて `ParallelForRows` または `std::thread` で CPU 並列化。1024² で Particle (100k 粒子 × 64 step) ~500ms、Fluid (100 iter) ~1-2 秒程度の体感。
+  - 既存 enum (`NodeKind` / `PreviewStage`)、`HeightfieldOperation::Kind`、`PipelineToNode`、`PipelineFor`、`ToString`、save/load JSON、AddNode メニュー、プロパティパネル(Mode 切替で粒子・流体それぞれの設定行が出る)に統合。
 - Rock の多面体周辺に出ていた **「ハロー(柔らかな円形ドームの漏れ)」を解消** しました(3.9.1)。
   - 旧式: `t = (1 - edgeSharpness) × radialT + edgeSharpness × polyhedralT`(線形ブレンド)で、`edgeSharpness < 1` のとき多角形の外側にも radial 成分の `(1 - edgeSharpness)` 倍が漏れて、多角形の周りに柔らかな円形の起伏が残っていました。
   - 新式: `edgeSharpness > 0` のとき多角形 SDF で **ハードクリップ**(多角形外は `continue`、この岩の寄与なし)。`edgeSharpness` の値は **クリップ内部の高さ形状** を radial / polyhedral でブレンドする役割に変更。シルエットは常に多角形のクリーンな縁になります。
@@ -72,6 +145,8 @@
 - `Mask Fluvial` ノードの簡易ドキュメントを追加し、`Mask Noise` / `Mask Blend` の説明をアルゴリズム・用途・キャッシュ挙動まで含めて拡充しました。
 - ノードグラフの右クリック追加メニューを `ハイトフィールド` と `マスク` のカテゴリに分け、ノード数が増えても探しやすい構成にしました。
 - グリッド表示設定をアプリ設定ではなくプロジェクト設定として保存するように変更しました。起動直後の新規プロジェクトでは既定どおりグリッドが表示されます。
+- `Sediment` ノードの Particle モードで、複数スレッドが同じセルから過剰に土砂を削ったときに質量が増えてスパイク化する問題を抑えるため、wave マージ時に負の土砂量を補正し、上り方向では侵食せず堆積へ回すようにしました。粒子速度とセルごとの最大土砂厚みにも上限を設け、終端で大量に土砂を吐く挙動を抑えています。
+- `Sediment` ノードの Particle モードに `Emission Time (%)` を追加しました。`Iterations` の先頭何割だけ新しい粒子を発生させるかを指定し、0% では最初の wave のみ、100% では従来どおり全 wave で発生します。
 - ノードグラフ上のノードアイコン色を、ハイトフィールド系は緑、マスク系はオレンジに統一しました。
 - ハイトフィールドから川筋マスクを抽出する `Mask Fluvial` ノードを追加しました。入力ハイトフィールドにフロー累積を流し、`Output Curve` に応じて連続的なドレナージマップ(Log)、二値の川筋(Threshold)、線形マップ(Linear)としてマスク出力します。GIS 標準の D8(最急降下、細い線)と MFD(複数方向重み付き分配、面的)を切り替え可能。
   - 既定は **Log カーブ + D8 + 閾値 0%** で、樹枝状の川筋ネットワーク全体が見える GIS 標準のドレナージマップ表示。`Gamma` (既定 0.5) で細い支流の明度を調整、小さいほどコントラストが上がり全枝が見えます。`Threshold` モードに切り替えると従来の閾値ベースの二値川筋抽出になり、`Softness` / `Edge Power` で川縁を整えられます。`Pit Fill Iterations` (既定 8) で局所窪みを埋め、0 にすると湖が残ります。

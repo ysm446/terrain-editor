@@ -24,6 +24,7 @@ enum class NodeKind
     MaskBlend = 10,
     MaskFluvial = 11,
     Rock = 12,
+    Sediment = 13,
 };
 
 enum class PinKind
@@ -109,6 +110,7 @@ enum class PreviewStage
     MaskBlend = 9,
     MaskFluvial = 10,
     Rock = 11,
+    Sediment = 12,
 };
 
 enum class HeightfieldPreviewField
@@ -206,6 +208,30 @@ struct RockSettings
     float facetScale = 2.5f;         // Sub-cell Voronoi frequency in the rock-local frame (higher = more, smaller facets per rock).
 };
 
+// Heightfield + mask. Lays a uniform sediment layer of `initialSedimentM`
+// on the input bedrock and redistributes it with a stochastic
+// hydraulic-erosion particle simulation. Output heights =
+// bedrock + remaining sediment; output mask = sediment thickness scaled
+// around the initial layer depth, with an optional contrast curve.
+struct SedimentSettings
+{
+    int iterations = 30;             // Number of waves of particles (sediment is updated between waves).
+    float initialSedimentM = 2.0f;   // Initial sediment thickness on every cell (m). Determines how much there is to redistribute and the mask scale.
+    float maskContrast = 0.7f;       // 0 = linear gradient (smooth grey transitions), 1 = hard binary at 50% of (initial × 2). Higher → more GeoGen-like crisp dendritic mask.
+
+    int particleCount = 5000;        // Particles per wave (× iterations = total particles).
+    int particleLifetime = 128;      // Max steps per particle.
+    float particleGradientRadiusM = 8.0f; // Metres. Distance at which the wider central-difference gradient is sampled. Resolution-independent: 8m on a 1024m / 1024² grid is 8 cells, on a 512² grid is 4 cells. Larger → smoother flow that follows large-scale topology (matches GeoGen's "Largest Detail Level" setting). 16m+ may produce noticeable spikes at convergence points.
+    float particleInertia = 0.40f;   // 0..1, blend with previous direction (carries particles past tiny pits/noise so they don't get stuck mid-slope).
+    float particleFriction = 0.05f;  // 0..1, fraction of velocity lost per step (low enough to feel gravity-driven, high enough to bound velocity).
+    float particleCapacity = 4.0f;   // Multiplier on slope × |v| × water for carrying capacity.
+    float particleErosion = 0.3f;    // 0..1, fraction of (capacity - carried) eroded per step.
+    float particleDeposition = 0.3f; // 0..1, fraction of (carried - capacity) deposited per step (lower → particles travel further before dumping, more streak-like).
+    float particleEvaporation = 0.02f; // 0..1, water lost per step.
+    float particleEmissionTime = 0.0f; // 0..1, fraction of iterations that emit new particles. 0 = first wave only, 1 = every wave.
+    int particleSeed = 0;
+};
+
 // Heightfield -> mask. Performs D8 (or MFD) flow accumulation on the
 // input heights and emits a mask. The default Log curve produces the
 // classic continuous dendritic drainage tree (every cell visible, fine
@@ -280,6 +306,7 @@ struct Node
     MaskBlendSettings maskBlend;
     MaskFluvialSettings maskFluvial;
     RockSettings rock;
+    SedimentSettings sediment;
 };
 
 struct Link
@@ -431,6 +458,7 @@ struct HeightfieldPipeline
             MultiScaleErosion,
             MaskFluvial,
             Rock,
+            Sediment,
         };
 
         Kind kind = Kind::HeightmapBlur;
@@ -440,6 +468,7 @@ struct HeightfieldPipeline
         MultiScaleErosionSettings multiScaleErosion;
         MaskFluvialSettings maskFluvial;
         RockSettings rock;
+        SedimentSettings sediment;
     };
 
     bool hasSource = false;
