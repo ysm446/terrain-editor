@@ -7282,6 +7282,40 @@ void DrawNodeEvaluationBadge(const rock::Node& node, float nodeWidth, const ImVe
     drawList->AddText(ImVec2(badgeMin.x + padding.x, badgeMin.y + padding.y - 1.0f), ColorToU32(ImVec4(0.96f, 0.80f, 0.38f, 1.0f)), text);
 }
 
+void DrawRockNodeShadows()
+{
+    ed::Suspend();
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    for (const rock::Node& node : g_graph.Nodes())
+    {
+        const ImVec2 nodeSize = ed::GetNodeSize(ed::NodeId(node.id));
+        if (nodeSize.x <= 1.0f || nodeSize.y <= 1.0f)
+        {
+            continue;
+        }
+
+        const ImVec2 nodePos = ed::GetNodePosition(ed::NodeId(node.id));
+        const ImVec2 screenMin = ed::CanvasToScreen(nodePos);
+        const ImVec2 screenMax = ed::CanvasToScreen(ImVec2(nodePos.x + nodeSize.x, nodePos.y + nodeSize.y));
+        constexpr float rounding = 8.0f;
+        constexpr std::array<std::pair<float, int>, 4> shadowLayers = {{
+            {10.0f, 3},
+            {7.0f, 5},
+            {4.0f, 7},
+            {2.0f, 10},
+        }};
+        for (const auto& [spread, alpha] : shadowLayers)
+        {
+            drawList->AddRectFilled(
+                ImVec2(screenMin.x - spread, screenMin.y - spread),
+                ImVec2(screenMax.x + spread, screenMax.y + spread),
+                IM_COL32(0, 0, 0, alpha),
+                rounding + spread);
+        }
+    }
+    ed::Resume();
+}
+
 void DrawRockNode(const rock::Node& node)
 {
     constexpr float nodeWidth = 250.0f;
@@ -7560,6 +7594,7 @@ void DrawNodeGraph()
     ed::PushStyleColor(ed::StyleColor_SelNodeBorder, activeNodeBorderColor);
     ed::Begin("Rock Node Graph", ImGui::GetContentRegionAvail());
     DrawNodeGraphDots(canvasMin, canvasMax);
+    DrawRockNodeShadows();
 
     const bool hasPendingNodePositions = !g_pendingNodePositions.empty();
     for (const rock::Node& node : g_graph.Nodes())
@@ -9447,21 +9482,6 @@ void DrawUi()
                     }
                 }
             }
-            if (ImGui::MenuItem("保存", "Ctrl+S"))
-            {
-                SaveCurrentProject();
-            }
-            if (ImGui::MenuItem("名前を付けて保存"))
-            {
-                if (const std::optional<std::filesystem::path> path = ShowProjectFileDialog(true))
-                {
-                    std::string error;
-                    if (!SaveProjectToFile(*path, &error))
-                    {
-                        g_projectStatus = "Save failed: " + error;
-                    }
-                }
-            }
             if (PruneMissingRecentProjectPaths())
             {
                 SaveAppSettingsSilently();
@@ -9493,6 +9513,21 @@ void DrawUi()
                     SaveAppSettingsSilently();
                 }
                 ImGui::EndMenu();
+            }
+            if (ImGui::MenuItem("保存", "Ctrl+S"))
+            {
+                SaveCurrentProject();
+            }
+            if (ImGui::MenuItem("名前を付けて保存"))
+            {
+                if (const std::optional<std::filesystem::path> path = ShowProjectFileDialog(true))
+                {
+                    std::string error;
+                    if (!SaveProjectToFile(*path, &error))
+                    {
+                        g_projectStatus = "Save failed: " + error;
+                    }
+                }
             }
             ImGui::Separator();
             if (ImGui::MenuItem("終了"))
