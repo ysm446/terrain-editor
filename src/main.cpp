@@ -1793,18 +1793,12 @@ std::optional<rock::PreviewStage> ReadSerializedPreviewStage(const nlohmann::jso
     }
 }
 
-void ReadNodeSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
+void ReadBasicHeightfieldSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
 {
     const nlohmann::json nodeHeightmapJson = nodeJson.value("heightmap", nlohmann::json::object());
     const nlohmann::json nodeShapeJson = nodeJson.value("shape", nlohmann::json::object());
     const nlohmann::json nodeBlurJson = nodeJson.value("heightmapBlur", nlohmann::json::object());
     const nlohmann::json nodeErosionNoiseJson = nodeJson.value("erosionNoise", nlohmann::json::object());
-    const nlohmann::json nodeMultiScaleErosionJson = nodeJson.value("multiScaleErosion", nlohmann::json::object());
-    const nlohmann::json nodeMaskNoiseJson = nodeJson.value("maskNoise", nlohmann::json::object());
-    const nlohmann::json nodeMaskBlendJson = nodeJson.value("maskBlend", nlohmann::json::object());
-    const nlohmann::json nodeMaskFluvialJson = nodeJson.value("maskFluvial", nlohmann::json::object());
-    const nlohmann::json nodeRockJson = nodeJson.value("rock", nlohmann::json::object());
-    const nlohmann::json nodeSedimentJson = nodeJson.value("sediment", nlohmann::json::object());
 
     node.heightmap.path = nodeHeightmapJson.value("path", node.heightmap.path);
     node.heightmap.scaleMeters = std::clamp(nodeHeightmapJson.value("scaleMeters", node.heightmap.scaleMeters), 1.0f, 1000000.0f);
@@ -1825,6 +1819,12 @@ void ReadNodeSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     node.erosionNoise.valleyLow = std::clamp(nodeErosionNoiseJson.value("valleyLow", node.erosionNoise.valleyLow), 0.0f, 1.0f);
     node.erosionNoise.valleyHigh = std::clamp(nodeErosionNoiseJson.value("valleyHigh", node.erosionNoise.valleyHigh), 0.0f, 1.0f);
     node.erosionNoise.seed = std::clamp(nodeErosionNoiseJson.value("seed", node.erosionNoise.seed), 0, 999999);
+}
+
+void ReadMultiScaleErosionSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
+{
+    const nlohmann::json nodeMultiScaleErosionJson = nodeJson.value("multiScaleErosion", nlohmann::json::object());
+
     node.multiScaleErosion.iterations = std::clamp(nodeMultiScaleErosionJson.value("iterations", node.multiScaleErosion.iterations), 0, 500);
     node.multiScaleErosion.enableStreamPower = nodeMultiScaleErosionJson.value("enableStreamPower", node.multiScaleErosion.enableStreamPower);
     node.multiScaleErosion.enableThermal = nodeMultiScaleErosionJson.value("enableThermal", node.multiScaleErosion.enableThermal);
@@ -1850,6 +1850,14 @@ void ReadNodeSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
                                            static_cast<int>(rock::MultiScaleErosionBackend::GpuCompute));
         node.multiScaleErosion.backend = static_cast<rock::MultiScaleErosionBackend>(backendInt);
     }
+}
+
+void ReadMaskSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
+{
+    const nlohmann::json nodeMaskNoiseJson = nodeJson.value("maskNoise", nlohmann::json::object());
+    const nlohmann::json nodeMaskBlendJson = nodeJson.value("maskBlend", nlohmann::json::object());
+    const nlohmann::json nodeMaskFluvialJson = nodeJson.value("maskFluvial", nlohmann::json::object());
+
     node.maskNoise.seed = std::clamp(nodeMaskNoiseJson.value("seed", node.maskNoise.seed), 0, 999999);
     node.maskNoise.octaves = std::clamp(nodeMaskNoiseJson.value("octaves", node.maskNoise.octaves), 1, 12);
     node.maskNoise.frequency = std::clamp(nodeMaskNoiseJson.value("frequency", node.maskNoise.frequency), 0.0f, 256.0f);
@@ -1887,6 +1895,12 @@ void ReadNodeSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     node.maskFluvial.power = std::clamp(nodeMaskFluvialJson.value("power", node.maskFluvial.power), 0.1f, 8.0f);
     node.maskFluvial.pitFillIterations = std::clamp(nodeMaskFluvialJson.value("pitFillIterations", node.maskFluvial.pitFillIterations), 0, 64);
     node.maskFluvial.mfdExponent = std::clamp(nodeMaskFluvialJson.value("mfdExponent", node.maskFluvial.mfdExponent), 0.1f, 16.0f);
+}
+
+void ReadRockSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
+{
+    const nlohmann::json nodeRockJson = nodeJson.value("rock", nlohmann::json::object());
+
     node.rock.seed = std::clamp(nodeRockJson.value("seed", node.rock.seed), 0, 999999);
     node.rock.density = std::clamp(nodeRockJson.value("density", node.rock.density), 0.5f, 1000.0f);
     node.rock.coverage = std::clamp(nodeRockJson.value("coverage", node.rock.coverage), 0.0f, 1.0f);
@@ -1927,6 +1941,12 @@ void ReadNodeSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     node.rock.bumpiness = std::clamp(nodeRockJson.value("bumpiness", node.rock.bumpiness), 0.0f, 1.0f);
     node.rock.facetSharpness = std::clamp(nodeRockJson.value("facetSharpness", node.rock.facetSharpness), 0.0f, 1.0f);
     node.rock.facetScale = std::clamp(nodeRockJson.value("facetScale", node.rock.facetScale), 0.5f, 8.0f);
+}
+
+void ReadSedimentSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
+{
+    const nlohmann::json nodeSedimentJson = nodeJson.value("sediment", nlohmann::json::object());
+
     node.sediment.iterations = std::clamp(nodeSedimentJson.value("iterations", node.sediment.iterations), 0, 4096);
     node.sediment.initialSedimentM = std::clamp(nodeSedimentJson.value("initialSedimentM", node.sediment.initialSedimentM), 0.0f, 1000.0f);
     node.sediment.maskContrast = std::clamp(nodeSedimentJson.value("maskContrast", node.sediment.maskContrast), 0.0f, 1.0f);
@@ -1941,6 +1961,15 @@ void ReadNodeSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     node.sediment.particleEvaporation = std::clamp(nodeSedimentJson.value("particleEvaporation", node.sediment.particleEvaporation), 0.0f, 1.0f);
     node.sediment.particleEmissionTime = std::clamp(nodeSedimentJson.value("particleEmissionTime", node.sediment.particleEmissionTime), 0.0f, 1.0f);
     node.sediment.particleSeed = std::clamp(nodeSedimentJson.value("particleSeed", node.sediment.particleSeed), 0, 999999);
+}
+
+void ReadNodeSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
+{
+    ReadBasicHeightfieldSettingsJson(nodeJson, node);
+    ReadMultiScaleErosionSettingsJson(nodeJson, node);
+    ReadMaskSettingsJson(nodeJson, node);
+    ReadRockSettingsJson(nodeJson, node);
+    ReadSedimentSettingsJson(nodeJson, node);
 }
 
 bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
