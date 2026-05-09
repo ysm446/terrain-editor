@@ -1623,6 +1623,295 @@ void NewProject()
     EvaluateGraph();
 }
 
+nlohmann::json MakeNodeSettingsJson(const rock::Node& node)
+{
+    return {
+        {"heightmap", {
+            {"path", node.heightmap.path},
+            {"scaleMeters", node.heightmap.scaleMeters},
+            {"relativeVerticalScalePercent", node.heightmap.relativeVerticalScalePercent},
+            {"verticalOffsetMeters", node.heightmap.verticalOffsetMeters},
+            {"simulationResolution", node.heightmap.simulationResolution},
+        }},
+        {"shape", {
+            {"kind", static_cast<int>(node.shape.kind)},
+            {"scaleMeters", node.shape.scaleMeters},
+            {"relativeHeightPercent", node.shape.relativeHeightPercent},
+            {"simulationResolution", node.shape.simulationResolution},
+        }},
+        {"heightmapBlur", {
+            {"radius", node.heightmapBlur.radius},
+            {"strength", node.heightmapBlur.strength},
+            {"iterations", node.heightmapBlur.iterations},
+        }},
+        {"multiScaleErosion", {
+            {"iterations", node.multiScaleErosion.iterations},
+            {"enableStreamPower", node.multiScaleErosion.enableStreamPower},
+            {"enableThermal", node.multiScaleErosion.enableThermal},
+            {"enableDeposition", node.multiScaleErosion.enableDeposition},
+            {"speStrength", node.multiScaleErosion.speStrength},
+            {"streamExponent", node.multiScaleErosion.streamExponent},
+            {"slopeExponent", node.multiScaleErosion.slopeExponent},
+            {"maxStreamPower", node.multiScaleErosion.maxStreamPower},
+            {"flowExponent", node.multiScaleErosion.flowExponent},
+            {"speTimeStep", node.multiScaleErosion.speTimeStep},
+            {"thermalAngleDegrees", node.multiScaleErosion.thermalAngleDegrees},
+            {"thermalStrength", node.multiScaleErosion.thermalStrength},
+            {"thermalNoisifyAngle", node.multiScaleErosion.thermalNoisifyAngle},
+            {"thermalNoiseMin", node.multiScaleErosion.thermalNoiseMin},
+            {"thermalNoiseMax", node.multiScaleErosion.thermalNoiseMax},
+            {"thermalNoiseWavelength", node.multiScaleErosion.thermalNoiseWavelength},
+            {"depositionStrength", node.multiScaleErosion.depositionStrength},
+            {"rain", node.multiScaleErosion.rain},
+            {"useMultigrid", node.multiScaleErosion.useMultigrid},
+            {"backend", static_cast<int>(node.multiScaleErosion.backend)},
+        }},
+        {"erosionNoise", {
+            {"frequency", node.erosionNoise.frequency},
+            {"octaves", node.erosionNoise.octaves},
+            {"erosionStrength", node.erosionNoise.erosionStrength},
+            {"directionInfluence", node.erosionNoise.directionInfluence},
+            {"valleyLow", node.erosionNoise.valleyLow},
+            {"valleyHigh", node.erosionNoise.valleyHigh},
+            {"seed", node.erosionNoise.seed},
+        }},
+        {"maskNoise", {
+            {"seed", node.maskNoise.seed},
+            {"octaves", node.maskNoise.octaves},
+            {"frequency", node.maskNoise.frequency},
+            {"lacunarity", node.maskNoise.lacunarity},
+            {"persistence", node.maskNoise.persistence},
+            {"simulationResolution", node.maskNoise.simulationResolution},
+            {"backend", static_cast<int>(node.maskNoise.backend)},
+        }},
+        {"maskFluvial", {
+            {"algorithm", static_cast<int>(node.maskFluvial.algorithm)},
+            {"outputCurve", static_cast<int>(node.maskFluvial.outputCurve)},
+            {"accumulationThreshold", node.maskFluvial.accumulationThreshold},
+            {"gamma", node.maskFluvial.gamma},
+            {"softness", node.maskFluvial.softness},
+            {"power", node.maskFluvial.power},
+            {"pitFillIterations", node.maskFluvial.pitFillIterations},
+            {"mfdExponent", node.maskFluvial.mfdExponent},
+        }},
+        {"rock", {
+            {"seed", node.rock.seed},
+            {"density", node.rock.density},
+            {"coverage", node.rock.coverage},
+            {"rockSizeMinM", node.rock.rockSizeMinM},
+            {"rockSizeMaxM", node.rock.rockSizeMaxM},
+            {"rockHeight", node.rock.rockHeight},
+            {"heightJitter", node.rock.heightJitter},
+            {"rotationVariation", node.rock.rotationVariation},
+            {"aspectVariation", node.rock.aspectVariation},
+            {"edgeSharpness", node.rock.edgeSharpness},
+            {"bumpiness", node.rock.bumpiness},
+            {"facetSharpness", node.rock.facetSharpness},
+            {"facetScale", node.rock.facetScale},
+        }},
+        {"sediment", {
+            {"iterations", node.sediment.iterations},
+            {"initialSedimentM", node.sediment.initialSedimentM},
+            {"maskContrast", node.sediment.maskContrast},
+            {"particleCount", node.sediment.particleCount},
+            {"particleLifetime", node.sediment.particleLifetime},
+            {"particleGradientRadiusM", node.sediment.particleGradientRadiusM},
+            {"particleInertia", node.sediment.particleInertia},
+            {"particleFriction", node.sediment.particleFriction},
+            {"particleCapacity", node.sediment.particleCapacity},
+            {"particleErosion", node.sediment.particleErosion},
+            {"particleDeposition", node.sediment.particleDeposition},
+            {"particleEvaporation", node.sediment.particleEvaporation},
+            {"particleEmissionTime", node.sediment.particleEmissionTime},
+            {"particleSeed", node.sediment.particleSeed},
+        }},
+        {"maskBlend", {
+            {"mode", static_cast<int>(node.maskBlend.mode)},
+            {"intensity", node.maskBlend.intensity},
+        }},
+    };
+}
+
+nlohmann::json MakeSerializedNodeJson(const rock::Node& node)
+{
+    nlohmann::json nodeJson = {
+        {"id", node.id},
+        {"kind", static_cast<int>(node.kind)},
+        {"title", node.title},
+        {"inputs", nlohmann::json::array()},
+        {"outputs", nlohmann::json::array()},
+    };
+    nodeJson.update(MakeNodeSettingsJson(node));
+
+    for (const rock::Pin& pin : node.inputs)
+    {
+        nodeJson["inputs"].push_back({
+            {"id", pin.id},
+            {"valueType", static_cast<int>(pin.valueType)},
+            {"label", pin.label},
+        });
+    }
+    for (const rock::Pin& pin : node.outputs)
+    {
+        nodeJson["outputs"].push_back({
+            {"id", pin.id},
+            {"valueType", static_cast<int>(pin.valueType)},
+            {"label", pin.label},
+        });
+    }
+    return nodeJson;
+}
+
+void ReadNodeSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
+{
+    const nlohmann::json nodeHeightmapJson = nodeJson.value("heightmap", nlohmann::json::object());
+    const nlohmann::json nodeShapeJson = nodeJson.value("shape", nlohmann::json::object());
+    const nlohmann::json nodeBlurJson = nodeJson.value("heightmapBlur", nlohmann::json::object());
+    const nlohmann::json nodeErosionNoiseJson = nodeJson.value("erosionNoise", nlohmann::json::object());
+    const nlohmann::json nodeMultiScaleErosionJson = nodeJson.value("multiScaleErosion", nlohmann::json::object());
+    const nlohmann::json nodeMaskNoiseJson = nodeJson.value("maskNoise", nlohmann::json::object());
+    const nlohmann::json nodeMaskBlendJson = nodeJson.value("maskBlend", nlohmann::json::object());
+    const nlohmann::json nodeMaskFluvialJson = nodeJson.value("maskFluvial", nlohmann::json::object());
+    const nlohmann::json nodeRockJson = nodeJson.value("rock", nlohmann::json::object());
+    const nlohmann::json nodeSedimentJson = nodeJson.value("sediment", nlohmann::json::object());
+
+    node.heightmap.path = nodeHeightmapJson.value("path", node.heightmap.path);
+    node.heightmap.scaleMeters = std::clamp(nodeHeightmapJson.value("scaleMeters", node.heightmap.scaleMeters), 1.0f, 1000000.0f);
+    node.heightmap.relativeVerticalScalePercent = std::clamp(nodeHeightmapJson.value("relativeVerticalScalePercent", node.heightmap.relativeVerticalScalePercent), 0.0f, 10000.0f);
+    node.heightmap.verticalOffsetMeters = std::clamp(nodeHeightmapJson.value("verticalOffsetMeters", node.heightmap.verticalOffsetMeters), -1000000.0f, 1000000.0f);
+    node.heightmap.simulationResolution = NearestResolutionPreset(nodeHeightmapJson.value("simulationResolution", node.heightmap.simulationResolution));
+    node.shape.kind = static_cast<rock::ShapeKind>(std::clamp(nodeShapeJson.value("kind", static_cast<int>(node.shape.kind)), 0, 1));
+    node.shape.scaleMeters = std::clamp(nodeShapeJson.value("scaleMeters", node.shape.scaleMeters), 1.0f, 1000000.0f);
+    node.shape.relativeHeightPercent = std::clamp(nodeShapeJson.value("relativeHeightPercent", node.shape.relativeHeightPercent), 0.0f, 10000.0f);
+    node.shape.simulationResolution = NearestResolutionPreset(nodeShapeJson.value("simulationResolution", node.shape.simulationResolution));
+    node.heightmapBlur.radius = std::clamp(nodeBlurJson.value("radius", node.heightmapBlur.radius), 0.0f, 128.0f);
+    node.heightmapBlur.strength = std::clamp(nodeBlurJson.value("strength", node.heightmapBlur.strength), 0.0f, 1.0f);
+    node.heightmapBlur.iterations = std::clamp(nodeBlurJson.value("iterations", node.heightmapBlur.iterations), 0, 64);
+    node.erosionNoise.frequency = std::clamp(nodeErosionNoiseJson.value("frequency", node.erosionNoise.frequency), 0.0f, 256.0f);
+    node.erosionNoise.octaves = std::clamp(nodeErosionNoiseJson.value("octaves", node.erosionNoise.octaves), 0, 8);
+    node.erosionNoise.erosionStrength = std::clamp(nodeErosionNoiseJson.value("erosionStrength", node.erosionNoise.erosionStrength), 0.0f, 1.0f);
+    node.erosionNoise.directionInfluence = std::clamp(nodeErosionNoiseJson.value("directionInfluence", node.erosionNoise.directionInfluence), 0.0f, 8.0f);
+    node.erosionNoise.valleyLow = std::clamp(nodeErosionNoiseJson.value("valleyLow", node.erosionNoise.valleyLow), 0.0f, 1.0f);
+    node.erosionNoise.valleyHigh = std::clamp(nodeErosionNoiseJson.value("valleyHigh", node.erosionNoise.valleyHigh), 0.0f, 1.0f);
+    node.erosionNoise.seed = std::clamp(nodeErosionNoiseJson.value("seed", node.erosionNoise.seed), 0, 999999);
+    node.multiScaleErosion.iterations = std::clamp(nodeMultiScaleErosionJson.value("iterations", node.multiScaleErosion.iterations), 0, 500);
+    node.multiScaleErosion.enableStreamPower = nodeMultiScaleErosionJson.value("enableStreamPower", node.multiScaleErosion.enableStreamPower);
+    node.multiScaleErosion.enableThermal = nodeMultiScaleErosionJson.value("enableThermal", node.multiScaleErosion.enableThermal);
+    node.multiScaleErosion.enableDeposition = nodeMultiScaleErosionJson.value("enableDeposition", node.multiScaleErosion.enableDeposition);
+    node.multiScaleErosion.speStrength = std::clamp(nodeMultiScaleErosionJson.value("speStrength", node.multiScaleErosion.speStrength), 0.0f, 0.01f);
+    node.multiScaleErosion.streamExponent = std::clamp(nodeMultiScaleErosionJson.value("streamExponent", node.multiScaleErosion.streamExponent), 0.0f, 2.0f);
+    node.multiScaleErosion.slopeExponent = std::clamp(nodeMultiScaleErosionJson.value("slopeExponent", node.multiScaleErosion.slopeExponent), 0.0f, 4.0f);
+    node.multiScaleErosion.maxStreamPower = std::clamp(nodeMultiScaleErosionJson.value("maxStreamPower", node.multiScaleErosion.maxStreamPower), 1.0f, 1000000.0f);
+    node.multiScaleErosion.flowExponent = std::clamp(nodeMultiScaleErosionJson.value("flowExponent", node.multiScaleErosion.flowExponent), 0.5f, 4.0f);
+    node.multiScaleErosion.speTimeStep = std::clamp(nodeMultiScaleErosionJson.value("speTimeStep", node.multiScaleErosion.speTimeStep), 0.0f, 4.0f);
+    node.multiScaleErosion.thermalAngleDegrees = std::clamp(nodeMultiScaleErosionJson.value("thermalAngleDegrees", node.multiScaleErosion.thermalAngleDegrees), 0.0f, 60.0f);
+    node.multiScaleErosion.thermalStrength = std::clamp(nodeMultiScaleErosionJson.value("thermalStrength", node.multiScaleErosion.thermalStrength), 0.0f, 0.01f);
+    node.multiScaleErosion.thermalNoisifyAngle = nodeMultiScaleErosionJson.value("thermalNoisifyAngle", node.multiScaleErosion.thermalNoisifyAngle);
+    node.multiScaleErosion.thermalNoiseMin = std::clamp(nodeMultiScaleErosionJson.value("thermalNoiseMin", node.multiScaleErosion.thermalNoiseMin), 0.0f, 4.0f);
+    node.multiScaleErosion.thermalNoiseMax = std::clamp(nodeMultiScaleErosionJson.value("thermalNoiseMax", node.multiScaleErosion.thermalNoiseMax), 0.0f, 4.0f);
+    node.multiScaleErosion.thermalNoiseWavelength = std::clamp(nodeMultiScaleErosionJson.value("thermalNoiseWavelength", node.multiScaleErosion.thermalNoiseWavelength), 0.0f, 0.05f);
+    node.multiScaleErosion.depositionStrength = std::clamp(nodeMultiScaleErosionJson.value("depositionStrength", node.multiScaleErosion.depositionStrength), 0.0f, 8.0f);
+    node.multiScaleErosion.rain = std::clamp(nodeMultiScaleErosionJson.value("rain", node.multiScaleErosion.rain), 0.0f, 10.0f);
+    node.multiScaleErosion.useMultigrid = nodeMultiScaleErosionJson.value("useMultigrid", node.multiScaleErosion.useMultigrid);
+    {
+        const int backendInt = std::clamp(nodeMultiScaleErosionJson.value("backend", static_cast<int>(node.multiScaleErosion.backend)),
+                                           static_cast<int>(rock::MultiScaleErosionBackend::CpuReference),
+                                           static_cast<int>(rock::MultiScaleErosionBackend::GpuCompute));
+        node.multiScaleErosion.backend = static_cast<rock::MultiScaleErosionBackend>(backendInt);
+    }
+    node.maskNoise.seed = std::clamp(nodeMaskNoiseJson.value("seed", node.maskNoise.seed), 0, 999999);
+    node.maskNoise.octaves = std::clamp(nodeMaskNoiseJson.value("octaves", node.maskNoise.octaves), 1, 12);
+    node.maskNoise.frequency = std::clamp(nodeMaskNoiseJson.value("frequency", node.maskNoise.frequency), 0.0f, 256.0f);
+    node.maskNoise.lacunarity = std::clamp(nodeMaskNoiseJson.value("lacunarity", node.maskNoise.lacunarity), 0.0f, 8.0f);
+    node.maskNoise.persistence = std::clamp(nodeMaskNoiseJson.value("persistence", node.maskNoise.persistence), 0.0f, 1.0f);
+    node.maskNoise.simulationResolution = NearestResolutionPreset(nodeMaskNoiseJson.value("simulationResolution", node.maskNoise.simulationResolution));
+    {
+        const int maskNoiseBackendInt = std::clamp(nodeMaskNoiseJson.value("backend", static_cast<int>(node.maskNoise.backend)),
+                                                    static_cast<int>(rock::MaskNoiseBackend::CpuParallel),
+                                                    static_cast<int>(rock::MaskNoiseBackend::GpuCompute));
+        node.maskNoise.backend = static_cast<rock::MaskNoiseBackend>(maskNoiseBackendInt);
+    }
+    {
+        const int modeInt = std::clamp(nodeMaskBlendJson.value("mode", static_cast<int>(node.maskBlend.mode)),
+                                        static_cast<int>(rock::MaskBlendMode::Add),
+                                        static_cast<int>(rock::MaskBlendMode::Max));
+        node.maskBlend.mode = static_cast<rock::MaskBlendMode>(modeInt);
+    }
+    node.maskBlend.intensity = std::clamp(nodeMaskBlendJson.value("intensity", node.maskBlend.intensity), 0.0f, 1.0f);
+    {
+        const int algoInt = std::clamp(nodeMaskFluvialJson.value("algorithm", static_cast<int>(node.maskFluvial.algorithm)),
+                                        static_cast<int>(rock::FlowAccumulationAlgorithm::D8),
+                                        static_cast<int>(rock::FlowAccumulationAlgorithm::MFD));
+        node.maskFluvial.algorithm = static_cast<rock::FlowAccumulationAlgorithm>(algoInt);
+    }
+    {
+        const int curveInt = std::clamp(nodeMaskFluvialJson.value("outputCurve", static_cast<int>(node.maskFluvial.outputCurve)),
+                                         static_cast<int>(rock::MaskFluvialOutputCurve::Log),
+                                         static_cast<int>(rock::MaskFluvialOutputCurve::Linear));
+        node.maskFluvial.outputCurve = static_cast<rock::MaskFluvialOutputCurve>(curveInt);
+    }
+    node.maskFluvial.accumulationThreshold = std::clamp(nodeMaskFluvialJson.value("accumulationThreshold", node.maskFluvial.accumulationThreshold), 0.0f, 1.0f);
+    node.maskFluvial.gamma = std::clamp(nodeMaskFluvialJson.value("gamma", node.maskFluvial.gamma), 0.05f, 8.0f);
+    node.maskFluvial.softness = std::clamp(nodeMaskFluvialJson.value("softness", node.maskFluvial.softness), 0.001f, 4.0f);
+    node.maskFluvial.power = std::clamp(nodeMaskFluvialJson.value("power", node.maskFluvial.power), 0.1f, 8.0f);
+    node.maskFluvial.pitFillIterations = std::clamp(nodeMaskFluvialJson.value("pitFillIterations", node.maskFluvial.pitFillIterations), 0, 64);
+    node.maskFluvial.mfdExponent = std::clamp(nodeMaskFluvialJson.value("mfdExponent", node.maskFluvial.mfdExponent), 0.1f, 16.0f);
+    node.rock.seed = std::clamp(nodeRockJson.value("seed", node.rock.seed), 0, 999999);
+    node.rock.density = std::clamp(nodeRockJson.value("density", node.rock.density), 0.5f, 1000.0f);
+    node.rock.coverage = std::clamp(nodeRockJson.value("coverage", node.rock.coverage), 0.0f, 1.0f);
+    const float density = node.rock.density;
+    const float legacyRockFill = nodeRockJson.value("rockFill", -1.0f);
+    const float legacyRockSize = nodeRockJson.value("rockSize", -1.0f);
+    const float legacyMinRatio = nodeRockJson.value("rockSizeMin", -1.0f);
+    const float legacyMaxRatio = nodeRockJson.value("rockSizeMax", -1.0f);
+    if (legacyRockFill > 0.0f)
+    {
+        node.rock.rockSizeMinM = legacyRockFill * density;
+        node.rock.rockSizeMaxM = node.rock.rockSizeMinM;
+    }
+    else if (legacyRockSize > 0.0f)
+    {
+        node.rock.rockSizeMinM = legacyRockSize * density;
+        node.rock.rockSizeMaxM = node.rock.rockSizeMinM;
+    }
+    else if (legacyMinRatio > 0.0f || legacyMaxRatio > 0.0f)
+    {
+        const float minR = (legacyMinRatio > 0.0f) ? legacyMinRatio : 0.7f;
+        const float maxR = (legacyMaxRatio > 0.0f) ? legacyMaxRatio : 1.2f;
+        node.rock.rockSizeMinM = minR * density;
+        node.rock.rockSizeMaxM = maxR * density;
+    }
+    else
+    {
+        node.rock.rockSizeMinM = nodeRockJson.value("rockSizeMinM", node.rock.rockSizeMinM);
+        node.rock.rockSizeMaxM = nodeRockJson.value("rockSizeMaxM", node.rock.rockSizeMaxM);
+    }
+    node.rock.rockSizeMinM = std::clamp(node.rock.rockSizeMinM, 0.1f, 200.0f);
+    node.rock.rockSizeMaxM = std::clamp(std::max(node.rock.rockSizeMaxM, node.rock.rockSizeMinM), 0.1f, 200.0f);
+    node.rock.rockHeight = std::clamp(nodeRockJson.value("rockHeight", node.rock.rockHeight), 0.0f, 100.0f);
+    node.rock.heightJitter = std::clamp(nodeRockJson.value("heightJitter", node.rock.heightJitter), 0.0f, 1.0f);
+    node.rock.rotationVariation = std::clamp(nodeRockJson.value("rotationVariation", node.rock.rotationVariation), 0.0f, 1.0f);
+    node.rock.aspectVariation = std::clamp(nodeRockJson.value("aspectVariation", node.rock.aspectVariation), 0.0f, 1.0f);
+    node.rock.edgeSharpness = std::clamp(nodeRockJson.value("edgeSharpness", node.rock.edgeSharpness), 0.0f, 1.0f);
+    node.rock.bumpiness = std::clamp(nodeRockJson.value("bumpiness", node.rock.bumpiness), 0.0f, 1.0f);
+    node.rock.facetSharpness = std::clamp(nodeRockJson.value("facetSharpness", node.rock.facetSharpness), 0.0f, 1.0f);
+    node.rock.facetScale = std::clamp(nodeRockJson.value("facetScale", node.rock.facetScale), 0.5f, 8.0f);
+    node.sediment.iterations = std::clamp(nodeSedimentJson.value("iterations", node.sediment.iterations), 0, 4096);
+    node.sediment.initialSedimentM = std::clamp(nodeSedimentJson.value("initialSedimentM", node.sediment.initialSedimentM), 0.0f, 1000.0f);
+    node.sediment.maskContrast = std::clamp(nodeSedimentJson.value("maskContrast", node.sediment.maskContrast), 0.0f, 1.0f);
+    node.sediment.particleCount = std::clamp(nodeSedimentJson.value("particleCount", node.sediment.particleCount), 0, 4'000'000);
+    node.sediment.particleLifetime = std::clamp(nodeSedimentJson.value("particleLifetime", node.sediment.particleLifetime), 1, 1024);
+    node.sediment.particleGradientRadiusM = std::clamp(nodeSedimentJson.value("particleGradientRadiusM", node.sediment.particleGradientRadiusM), 0.5f, 500.0f);
+    node.sediment.particleInertia = std::clamp(nodeSedimentJson.value("particleInertia", node.sediment.particleInertia), 0.0f, 0.99f);
+    node.sediment.particleFriction = std::clamp(nodeSedimentJson.value("particleFriction", node.sediment.particleFriction), 0.0f, 0.95f);
+    node.sediment.particleCapacity = std::clamp(nodeSedimentJson.value("particleCapacity", node.sediment.particleCapacity), 0.0f, 32.0f);
+    node.sediment.particleErosion = std::clamp(nodeSedimentJson.value("particleErosion", node.sediment.particleErosion), 0.0f, 1.0f);
+    node.sediment.particleDeposition = std::clamp(nodeSedimentJson.value("particleDeposition", node.sediment.particleDeposition), 0.0f, 1.0f);
+    node.sediment.particleEvaporation = std::clamp(nodeSedimentJson.value("particleEvaporation", node.sediment.particleEvaporation), 0.0f, 1.0f);
+    node.sediment.particleEmissionTime = std::clamp(nodeSedimentJson.value("particleEmissionTime", node.sediment.particleEmissionTime), 0.0f, 1.0f);
+    node.sediment.particleSeed = std::clamp(nodeSedimentJson.value("particleSeed", node.sediment.particleSeed), 0, 999999);
+}
+
 bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
 {
     try
@@ -1707,133 +1996,7 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
         root["nodes"] = nlohmann::json::array();
         for (const rock::Node& node : g_graph.Nodes())
         {
-            nlohmann::json nodeJson = {
-                {"id", node.id},
-                {"kind", static_cast<int>(node.kind)},
-                {"title", node.title},
-                {"inputs", nlohmann::json::array()},
-                {"outputs", nlohmann::json::array()},
-                {"heightmap", {
-                    {"path", node.heightmap.path},
-                    {"scaleMeters", node.heightmap.scaleMeters},
-                    {"relativeVerticalScalePercent", node.heightmap.relativeVerticalScalePercent},
-                    {"verticalOffsetMeters", node.heightmap.verticalOffsetMeters},
-                    {"simulationResolution", node.heightmap.simulationResolution},
-                }},
-                {"shape", {
-                    {"kind", static_cast<int>(node.shape.kind)},
-                    {"scaleMeters", node.shape.scaleMeters},
-                    {"relativeHeightPercent", node.shape.relativeHeightPercent},
-                    {"simulationResolution", node.shape.simulationResolution},
-                }},
-                {"heightmapBlur", {
-                    {"radius", node.heightmapBlur.radius},
-                    {"strength", node.heightmapBlur.strength},
-                    {"iterations", node.heightmapBlur.iterations},
-                }},
-                {"multiScaleErosion", {
-                    {"iterations", node.multiScaleErosion.iterations},
-                    {"enableStreamPower", node.multiScaleErosion.enableStreamPower},
-                    {"enableThermal", node.multiScaleErosion.enableThermal},
-                    {"enableDeposition", node.multiScaleErosion.enableDeposition},
-                    {"speStrength", node.multiScaleErosion.speStrength},
-                    {"streamExponent", node.multiScaleErosion.streamExponent},
-                    {"slopeExponent", node.multiScaleErosion.slopeExponent},
-                    {"maxStreamPower", node.multiScaleErosion.maxStreamPower},
-                    {"flowExponent", node.multiScaleErosion.flowExponent},
-                    {"speTimeStep", node.multiScaleErosion.speTimeStep},
-                    {"thermalAngleDegrees", node.multiScaleErosion.thermalAngleDegrees},
-                    {"thermalStrength", node.multiScaleErosion.thermalStrength},
-                    {"thermalNoisifyAngle", node.multiScaleErosion.thermalNoisifyAngle},
-                    {"thermalNoiseMin", node.multiScaleErosion.thermalNoiseMin},
-                    {"thermalNoiseMax", node.multiScaleErosion.thermalNoiseMax},
-                    {"thermalNoiseWavelength", node.multiScaleErosion.thermalNoiseWavelength},
-                    {"depositionStrength", node.multiScaleErosion.depositionStrength},
-                    {"rain", node.multiScaleErosion.rain},
-                    {"useMultigrid", node.multiScaleErosion.useMultigrid},
-                    {"backend", static_cast<int>(node.multiScaleErosion.backend)},
-                }},
-                {"erosionNoise", {
-                    {"frequency", node.erosionNoise.frequency},
-                    {"octaves", node.erosionNoise.octaves},
-                    {"erosionStrength", node.erosionNoise.erosionStrength},
-                    {"directionInfluence", node.erosionNoise.directionInfluence},
-                    {"valleyLow", node.erosionNoise.valleyLow},
-                    {"valleyHigh", node.erosionNoise.valleyHigh},
-                    {"seed", node.erosionNoise.seed},
-                }},
-                {"maskNoise", {
-                    {"seed", node.maskNoise.seed},
-                    {"octaves", node.maskNoise.octaves},
-                    {"frequency", node.maskNoise.frequency},
-                    {"lacunarity", node.maskNoise.lacunarity},
-                    {"persistence", node.maskNoise.persistence},
-                    {"simulationResolution", node.maskNoise.simulationResolution},
-                    {"backend", static_cast<int>(node.maskNoise.backend)},
-                }},
-                {"maskFluvial", {
-                    {"algorithm", static_cast<int>(node.maskFluvial.algorithm)},
-                    {"outputCurve", static_cast<int>(node.maskFluvial.outputCurve)},
-                    {"accumulationThreshold", node.maskFluvial.accumulationThreshold},
-                    {"gamma", node.maskFluvial.gamma},
-                    {"softness", node.maskFluvial.softness},
-                    {"power", node.maskFluvial.power},
-                    {"pitFillIterations", node.maskFluvial.pitFillIterations},
-                    {"mfdExponent", node.maskFluvial.mfdExponent},
-                }},
-                {"rock", {
-                    {"seed", node.rock.seed},
-                    {"density", node.rock.density},
-                    {"coverage", node.rock.coverage},
-                    {"rockSizeMinM", node.rock.rockSizeMinM},
-                    {"rockSizeMaxM", node.rock.rockSizeMaxM},
-                    {"rockHeight", node.rock.rockHeight},
-                    {"heightJitter", node.rock.heightJitter},
-                    {"rotationVariation", node.rock.rotationVariation},
-                    {"aspectVariation", node.rock.aspectVariation},
-                    {"edgeSharpness", node.rock.edgeSharpness},
-                    {"bumpiness", node.rock.bumpiness},
-                    {"facetSharpness", node.rock.facetSharpness},
-                    {"facetScale", node.rock.facetScale},
-                }},
-                {"sediment", {
-                    {"iterations", node.sediment.iterations},
-                    {"initialSedimentM", node.sediment.initialSedimentM},
-                    {"maskContrast", node.sediment.maskContrast},
-                    {"particleCount", node.sediment.particleCount},
-                    {"particleLifetime", node.sediment.particleLifetime},
-                    {"particleGradientRadiusM", node.sediment.particleGradientRadiusM},
-                    {"particleInertia", node.sediment.particleInertia},
-                    {"particleFriction", node.sediment.particleFriction},
-                    {"particleCapacity", node.sediment.particleCapacity},
-                    {"particleErosion", node.sediment.particleErosion},
-                    {"particleDeposition", node.sediment.particleDeposition},
-                    {"particleEvaporation", node.sediment.particleEvaporation},
-                    {"particleEmissionTime", node.sediment.particleEmissionTime},
-                    {"particleSeed", node.sediment.particleSeed},
-                }},
-                {"maskBlend", {
-                    {"mode", static_cast<int>(node.maskBlend.mode)},
-                    {"intensity", node.maskBlend.intensity},
-                }},
-            };
-            for (const rock::Pin& pin : node.inputs)
-            {
-                nodeJson["inputs"].push_back({
-                    {"id", pin.id},
-                    {"valueType", static_cast<int>(pin.valueType)},
-                    {"label", pin.label},
-                });
-            }
-            for (const rock::Pin& pin : node.outputs)
-            {
-                nodeJson["outputs"].push_back({
-                    {"id", pin.id},
-                    {"valueType", static_cast<int>(pin.valueType)},
-                    {"label", pin.label},
-                });
-            }
-            root["nodes"].push_back(std::move(nodeJson));
+            root["nodes"].push_back(MakeSerializedNodeJson(node));
         }
 
         root["links"] = nlohmann::json::array();
@@ -2065,157 +2228,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
                 {
                     node.title = std::string(rock::ToString(node.kind));
                 }
-                const nlohmann::json nodeHeightmapJson = nodeJson.value("heightmap", nlohmann::json::object());
-                const nlohmann::json nodeShapeJson = nodeJson.value("shape", nlohmann::json::object());
-                const nlohmann::json nodeBlurJson = nodeJson.value("heightmapBlur", nlohmann::json::object());
-                const nlohmann::json nodeErosionNoiseJson = nodeJson.value("erosionNoise", nlohmann::json::object());
-                const nlohmann::json nodeMultiScaleErosionJson = nodeJson.value("multiScaleErosion", nlohmann::json::object());
-                const nlohmann::json nodeMaskNoiseJson = nodeJson.value("maskNoise", nlohmann::json::object());
-                const nlohmann::json nodeMaskBlendJson = nodeJson.value("maskBlend", nlohmann::json::object());
-                const nlohmann::json nodeMaskFluvialJson = nodeJson.value("maskFluvial", nlohmann::json::object());
-                const nlohmann::json nodeRockJson = nodeJson.value("rock", nlohmann::json::object());
-                const nlohmann::json nodeSedimentJson = nodeJson.value("sediment", nlohmann::json::object());
-                node.heightmap.path = nodeHeightmapJson.value("path", node.heightmap.path);
-                node.heightmap.scaleMeters = std::clamp(nodeHeightmapJson.value("scaleMeters", node.heightmap.scaleMeters), 1.0f, 1000000.0f);
-                node.heightmap.relativeVerticalScalePercent = std::clamp(nodeHeightmapJson.value("relativeVerticalScalePercent", node.heightmap.relativeVerticalScalePercent), 0.0f, 10000.0f);
-                node.heightmap.verticalOffsetMeters = std::clamp(nodeHeightmapJson.value("verticalOffsetMeters", node.heightmap.verticalOffsetMeters), -1000000.0f, 1000000.0f);
-                node.heightmap.simulationResolution = NearestResolutionPreset(nodeHeightmapJson.value("simulationResolution", node.heightmap.simulationResolution));
-                node.shape.kind = static_cast<rock::ShapeKind>(std::clamp(nodeShapeJson.value("kind", static_cast<int>(node.shape.kind)), 0, 1));
-                node.shape.scaleMeters = std::clamp(nodeShapeJson.value("scaleMeters", node.shape.scaleMeters), 1.0f, 1000000.0f);
-                node.shape.relativeHeightPercent = std::clamp(nodeShapeJson.value("relativeHeightPercent", node.shape.relativeHeightPercent), 0.0f, 10000.0f);
-                node.shape.simulationResolution = NearestResolutionPreset(nodeShapeJson.value("simulationResolution", node.shape.simulationResolution));
-                node.heightmapBlur.radius = std::clamp(nodeBlurJson.value("radius", node.heightmapBlur.radius), 0.0f, 128.0f);
-                node.heightmapBlur.strength = std::clamp(nodeBlurJson.value("strength", node.heightmapBlur.strength), 0.0f, 1.0f);
-                node.heightmapBlur.iterations = std::clamp(nodeBlurJson.value("iterations", node.heightmapBlur.iterations), 0, 64);
-                node.erosionNoise.frequency = std::clamp(nodeErosionNoiseJson.value("frequency", node.erosionNoise.frequency), 0.0f, 256.0f);
-                node.erosionNoise.octaves = std::clamp(nodeErosionNoiseJson.value("octaves", node.erosionNoise.octaves), 0, 8);
-                node.erosionNoise.erosionStrength = std::clamp(nodeErosionNoiseJson.value("erosionStrength", node.erosionNoise.erosionStrength), 0.0f, 1.0f);
-                node.erosionNoise.directionInfluence = std::clamp(nodeErosionNoiseJson.value("directionInfluence", node.erosionNoise.directionInfluence), 0.0f, 8.0f);
-                node.erosionNoise.valleyLow = std::clamp(nodeErosionNoiseJson.value("valleyLow", node.erosionNoise.valleyLow), 0.0f, 1.0f);
-                node.erosionNoise.valleyHigh = std::clamp(nodeErosionNoiseJson.value("valleyHigh", node.erosionNoise.valleyHigh), 0.0f, 1.0f);
-                node.erosionNoise.seed = std::clamp(nodeErosionNoiseJson.value("seed", node.erosionNoise.seed), 0, 999999);
-                node.multiScaleErosion.iterations = std::clamp(nodeMultiScaleErosionJson.value("iterations", node.multiScaleErosion.iterations), 0, 500);
-                node.multiScaleErosion.enableStreamPower = nodeMultiScaleErosionJson.value("enableStreamPower", node.multiScaleErosion.enableStreamPower);
-                node.multiScaleErosion.enableThermal = nodeMultiScaleErosionJson.value("enableThermal", node.multiScaleErosion.enableThermal);
-                node.multiScaleErosion.enableDeposition = nodeMultiScaleErosionJson.value("enableDeposition", node.multiScaleErosion.enableDeposition);
-                node.multiScaleErosion.speStrength = std::clamp(nodeMultiScaleErosionJson.value("speStrength", node.multiScaleErosion.speStrength), 0.0f, 0.01f);
-                node.multiScaleErosion.streamExponent = std::clamp(nodeMultiScaleErosionJson.value("streamExponent", node.multiScaleErosion.streamExponent), 0.0f, 2.0f);
-                node.multiScaleErosion.slopeExponent = std::clamp(nodeMultiScaleErosionJson.value("slopeExponent", node.multiScaleErosion.slopeExponent), 0.0f, 4.0f);
-                node.multiScaleErosion.maxStreamPower = std::clamp(nodeMultiScaleErosionJson.value("maxStreamPower", node.multiScaleErosion.maxStreamPower), 1.0f, 1000000.0f);
-                node.multiScaleErosion.flowExponent = std::clamp(nodeMultiScaleErosionJson.value("flowExponent", node.multiScaleErosion.flowExponent), 0.5f, 4.0f);
-                node.multiScaleErosion.speTimeStep = std::clamp(nodeMultiScaleErosionJson.value("speTimeStep", node.multiScaleErosion.speTimeStep), 0.0f, 4.0f);
-                node.multiScaleErosion.thermalAngleDegrees = std::clamp(nodeMultiScaleErosionJson.value("thermalAngleDegrees", node.multiScaleErosion.thermalAngleDegrees), 0.0f, 60.0f);
-                node.multiScaleErosion.thermalStrength = std::clamp(nodeMultiScaleErosionJson.value("thermalStrength", node.multiScaleErosion.thermalStrength), 0.0f, 0.01f);
-                node.multiScaleErosion.thermalNoisifyAngle = nodeMultiScaleErosionJson.value("thermalNoisifyAngle", node.multiScaleErosion.thermalNoisifyAngle);
-                node.multiScaleErosion.thermalNoiseMin = std::clamp(nodeMultiScaleErosionJson.value("thermalNoiseMin", node.multiScaleErosion.thermalNoiseMin), 0.0f, 4.0f);
-                node.multiScaleErosion.thermalNoiseMax = std::clamp(nodeMultiScaleErosionJson.value("thermalNoiseMax", node.multiScaleErosion.thermalNoiseMax), 0.0f, 4.0f);
-                node.multiScaleErosion.thermalNoiseWavelength = std::clamp(nodeMultiScaleErosionJson.value("thermalNoiseWavelength", node.multiScaleErosion.thermalNoiseWavelength), 0.0f, 0.05f);
-                node.multiScaleErosion.depositionStrength = std::clamp(nodeMultiScaleErosionJson.value("depositionStrength", node.multiScaleErosion.depositionStrength), 0.0f, 8.0f);
-                node.multiScaleErosion.rain = std::clamp(nodeMultiScaleErosionJson.value("rain", node.multiScaleErosion.rain), 0.0f, 10.0f);
-                node.multiScaleErosion.useMultigrid = nodeMultiScaleErosionJson.value("useMultigrid", node.multiScaleErosion.useMultigrid);
-                {
-                    const int backendInt = std::clamp(nodeMultiScaleErosionJson.value("backend", static_cast<int>(node.multiScaleErosion.backend)),
-                                                       static_cast<int>(rock::MultiScaleErosionBackend::CpuReference),
-                                                       static_cast<int>(rock::MultiScaleErosionBackend::GpuCompute));
-                    node.multiScaleErosion.backend = static_cast<rock::MultiScaleErosionBackend>(backendInt);
-                }
-                node.maskNoise.seed = std::clamp(nodeMaskNoiseJson.value("seed", node.maskNoise.seed), 0, 999999);
-                node.maskNoise.octaves = std::clamp(nodeMaskNoiseJson.value("octaves", node.maskNoise.octaves), 1, 12);
-                node.maskNoise.frequency = std::clamp(nodeMaskNoiseJson.value("frequency", node.maskNoise.frequency), 0.0f, 256.0f);
-                node.maskNoise.lacunarity = std::clamp(nodeMaskNoiseJson.value("lacunarity", node.maskNoise.lacunarity), 0.0f, 8.0f);
-                node.maskNoise.persistence = std::clamp(nodeMaskNoiseJson.value("persistence", node.maskNoise.persistence), 0.0f, 1.0f);
-                node.maskNoise.simulationResolution = NearestResolutionPreset(nodeMaskNoiseJson.value("simulationResolution", node.maskNoise.simulationResolution));
-                {
-                    const int maskNoiseBackendInt = std::clamp(nodeMaskNoiseJson.value("backend", static_cast<int>(node.maskNoise.backend)),
-                                                                static_cast<int>(rock::MaskNoiseBackend::CpuParallel),
-                                                                static_cast<int>(rock::MaskNoiseBackend::GpuCompute));
-                    node.maskNoise.backend = static_cast<rock::MaskNoiseBackend>(maskNoiseBackendInt);
-                }
-                {
-                    const int modeInt = std::clamp(nodeMaskBlendJson.value("mode", static_cast<int>(node.maskBlend.mode)),
-                                                    static_cast<int>(rock::MaskBlendMode::Add),
-                                                    static_cast<int>(rock::MaskBlendMode::Max));
-                    node.maskBlend.mode = static_cast<rock::MaskBlendMode>(modeInt);
-                }
-                node.maskBlend.intensity = std::clamp(nodeMaskBlendJson.value("intensity", node.maskBlend.intensity), 0.0f, 1.0f);
-                {
-                    const int algoInt = std::clamp(nodeMaskFluvialJson.value("algorithm", static_cast<int>(node.maskFluvial.algorithm)),
-                                                    static_cast<int>(rock::FlowAccumulationAlgorithm::D8),
-                                                    static_cast<int>(rock::FlowAccumulationAlgorithm::MFD));
-                    node.maskFluvial.algorithm = static_cast<rock::FlowAccumulationAlgorithm>(algoInt);
-                }
-                {
-                    const int curveInt = std::clamp(nodeMaskFluvialJson.value("outputCurve", static_cast<int>(node.maskFluvial.outputCurve)),
-                                                     static_cast<int>(rock::MaskFluvialOutputCurve::Log),
-                                                     static_cast<int>(rock::MaskFluvialOutputCurve::Linear));
-                    node.maskFluvial.outputCurve = static_cast<rock::MaskFluvialOutputCurve>(curveInt);
-                }
-                node.maskFluvial.accumulationThreshold = std::clamp(nodeMaskFluvialJson.value("accumulationThreshold", node.maskFluvial.accumulationThreshold), 0.0f, 1.0f);
-                node.maskFluvial.gamma = std::clamp(nodeMaskFluvialJson.value("gamma", node.maskFluvial.gamma), 0.05f, 8.0f);
-                node.maskFluvial.softness = std::clamp(nodeMaskFluvialJson.value("softness", node.maskFluvial.softness), 0.001f, 4.0f);
-                node.maskFluvial.power = std::clamp(nodeMaskFluvialJson.value("power", node.maskFluvial.power), 0.1f, 8.0f);
-                node.maskFluvial.pitFillIterations = std::clamp(nodeMaskFluvialJson.value("pitFillIterations", node.maskFluvial.pitFillIterations), 0, 64);
-                node.maskFluvial.mfdExponent = std::clamp(nodeMaskFluvialJson.value("mfdExponent", node.maskFluvial.mfdExponent), 0.1f, 16.0f);
-                node.rock.seed = std::clamp(nodeRockJson.value("seed", node.rock.seed), 0, 999999);
-                node.rock.density = std::clamp(nodeRockJson.value("density", node.rock.density), 0.5f, 1000.0f);
-                node.rock.coverage = std::clamp(nodeRockJson.value("coverage", node.rock.coverage), 0.0f, 1.0f);
-                // サイズはバージョンごとにキー名と単位が変わってきた:
-                //   3.5.x: rockFill (ratio)        — 単一値、セルの何割を岩が埋めるか
-                //   3.6.0: rockSize (ratio)        — 単一値、リネームのみ
-                //   3.7.0: rockSizeMin/Max (ratio) — Min/Max レンジ
-                //   3.8.0: rockSizeMinM/MaxM (m)   — 単位をメートルに変更(現行)
-                // ratio → m への換算は ratio × density なので、density は先に読む(済)。
-                const float density = node.rock.density;
-                const float legacyRockFill = nodeRockJson.value("rockFill", -1.0f);
-                const float legacyRockSize = nodeRockJson.value("rockSize", -1.0f);
-                const float legacyMinRatio = nodeRockJson.value("rockSizeMin", -1.0f);
-                const float legacyMaxRatio = nodeRockJson.value("rockSizeMax", -1.0f);
-                if (legacyRockFill > 0.0f)
-                {
-                    node.rock.rockSizeMinM = legacyRockFill * density;
-                    node.rock.rockSizeMaxM = node.rock.rockSizeMinM;
-                }
-                else if (legacyRockSize > 0.0f)
-                {
-                    node.rock.rockSizeMinM = legacyRockSize * density;
-                    node.rock.rockSizeMaxM = node.rock.rockSizeMinM;
-                }
-                else if (legacyMinRatio > 0.0f || legacyMaxRatio > 0.0f)
-                {
-                    const float minR = (legacyMinRatio > 0.0f) ? legacyMinRatio : 0.7f;
-                    const float maxR = (legacyMaxRatio > 0.0f) ? legacyMaxRatio : 1.2f;
-                    node.rock.rockSizeMinM = minR * density;
-                    node.rock.rockSizeMaxM = maxR * density;
-                }
-                else
-                {
-                    node.rock.rockSizeMinM = nodeRockJson.value("rockSizeMinM", node.rock.rockSizeMinM);
-                    node.rock.rockSizeMaxM = nodeRockJson.value("rockSizeMaxM", node.rock.rockSizeMaxM);
-                }
-                node.rock.rockSizeMinM = std::clamp(node.rock.rockSizeMinM, 0.1f, 200.0f);
-                node.rock.rockSizeMaxM = std::clamp(std::max(node.rock.rockSizeMaxM, node.rock.rockSizeMinM), 0.1f, 200.0f);
-                node.rock.rockHeight = std::clamp(nodeRockJson.value("rockHeight", node.rock.rockHeight), 0.0f, 100.0f);
-                node.rock.heightJitter = std::clamp(nodeRockJson.value("heightJitter", node.rock.heightJitter), 0.0f, 1.0f);
-                node.rock.rotationVariation = std::clamp(nodeRockJson.value("rotationVariation", node.rock.rotationVariation), 0.0f, 1.0f);
-                node.rock.aspectVariation = std::clamp(nodeRockJson.value("aspectVariation", node.rock.aspectVariation), 0.0f, 1.0f);
-                node.rock.edgeSharpness = std::clamp(nodeRockJson.value("edgeSharpness", node.rock.edgeSharpness), 0.0f, 1.0f);
-                node.rock.bumpiness = std::clamp(nodeRockJson.value("bumpiness", node.rock.bumpiness), 0.0f, 1.0f);
-                node.rock.facetSharpness = std::clamp(nodeRockJson.value("facetSharpness", node.rock.facetSharpness), 0.0f, 1.0f);
-                node.rock.facetScale = std::clamp(nodeRockJson.value("facetScale", node.rock.facetScale), 0.5f, 8.0f);
-                node.sediment.iterations = std::clamp(nodeSedimentJson.value("iterations", node.sediment.iterations), 0, 4096);
-                node.sediment.initialSedimentM = std::clamp(nodeSedimentJson.value("initialSedimentM", node.sediment.initialSedimentM), 0.0f, 1000.0f);
-                node.sediment.maskContrast = std::clamp(nodeSedimentJson.value("maskContrast", node.sediment.maskContrast), 0.0f, 1.0f);
-                node.sediment.particleCount = std::clamp(nodeSedimentJson.value("particleCount", node.sediment.particleCount), 0, 4'000'000);
-                node.sediment.particleLifetime = std::clamp(nodeSedimentJson.value("particleLifetime", node.sediment.particleLifetime), 1, 1024);
-                node.sediment.particleGradientRadiusM = std::clamp(nodeSedimentJson.value("particleGradientRadiusM", node.sediment.particleGradientRadiusM), 0.5f, 500.0f);
-                node.sediment.particleInertia = std::clamp(nodeSedimentJson.value("particleInertia", node.sediment.particleInertia), 0.0f, 0.99f);
-                node.sediment.particleFriction = std::clamp(nodeSedimentJson.value("particleFriction", node.sediment.particleFriction), 0.0f, 0.95f);
-                node.sediment.particleCapacity = std::clamp(nodeSedimentJson.value("particleCapacity", node.sediment.particleCapacity), 0.0f, 32.0f);
-                node.sediment.particleErosion = std::clamp(nodeSedimentJson.value("particleErosion", node.sediment.particleErosion), 0.0f, 1.0f);
-                node.sediment.particleDeposition = std::clamp(nodeSedimentJson.value("particleDeposition", node.sediment.particleDeposition), 0.0f, 1.0f);
-                node.sediment.particleEvaporation = std::clamp(nodeSedimentJson.value("particleEvaporation", node.sediment.particleEvaporation), 0.0f, 1.0f);
-                node.sediment.particleEmissionTime = std::clamp(nodeSedimentJson.value("particleEmissionTime", node.sediment.particleEmissionTime), 0.0f, 1.0f);
-                node.sediment.particleSeed = std::clamp(nodeSedimentJson.value("particleSeed", node.sediment.particleSeed), 0, 999999);
+                ReadNodeSettingsJson(nodeJson, node);
 
                 const auto readPins = [&](const nlohmann::json& pinsJson, rock::PinKind pinKind, std::vector<rock::Pin>& pins) {
                     if (!pinsJson.is_array())
@@ -7991,6 +8004,92 @@ bool DrawCameraFloatRow(const char* label, const char* id, float* value, float m
     return changed;
 }
 
+bool DrawSedimentProperties(rock::Node& editableNode)
+{
+    if (!ImGui::BeginTable("SedimentRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        return false;
+    }
+
+    ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 210.0f);
+    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+    rock::SedimentSettings& sd = editableNode.sediment;
+    sd.iterations = std::clamp(sd.iterations, 0, 4096);
+    sd.initialSedimentM = std::clamp(sd.initialSedimentM, 0.0f, 1000.0f);
+    sd.maskContrast = std::clamp(sd.maskContrast, 0.0f, 1.0f);
+    sd.particleCount = std::clamp(sd.particleCount, 0, 4'000'000);
+    sd.particleLifetime = std::clamp(sd.particleLifetime, 1, 1024);
+    sd.particleGradientRadiusM = std::clamp(sd.particleGradientRadiusM, 0.5f, 500.0f);
+    sd.particleInertia = std::clamp(sd.particleInertia, 0.0f, 0.99f);
+    sd.particleFriction = std::clamp(sd.particleFriction, 0.0f, 0.95f);
+    sd.particleCapacity = std::clamp(sd.particleCapacity, 0.0f, 32.0f);
+    sd.particleErosion = std::clamp(sd.particleErosion, 0.0f, 1.0f);
+    sd.particleDeposition = std::clamp(sd.particleDeposition, 0.0f, 1.0f);
+    sd.particleEvaporation = std::clamp(sd.particleEvaporation, 0.0f, 1.0f);
+    sd.particleEmissionTime = std::clamp(sd.particleEmissionTime, 0.0f, 1.0f);
+    sd.particleSeed = std::clamp(sd.particleSeed, 0, 999999);
+    if (DrawPropertyFloatRow("Initial Sediment (m)", "SedimentInitial", &sd.initialSedimentM, 0.0f, 50.0f, rock::SedimentSettings{}.initialSedimentM, "Sediment initial changed", true, "全セルに最初に積む土砂の厚み (m)。多いほど侵食/堆積で動かせる量が増えます。", "%.2f"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyPercentRow("Mask Contrast (%)", "SedimentMaskContrast", &sd.maskContrast, 0.0f, 1.0f, rock::SedimentSettings{}.maskContrast, "Sediment mask contrast changed", "Mask 出力のコントラスト。0 で連続グラデーション(中間グレーが多い)、1 でほぼバイナリ(黒/白のみ)。GeoGen ライクなくっきり dendritic を出すには 0.7+ が目安。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyIntRow("Iterations", "SedimentIterations", &sd.iterations, 1, 1000, rock::SedimentSettings{}.iterations, "Sediment iterations changed", true, "粒子を投入する回数(波数)。各 wave 後に sediment が更新されるので、後の wave は侵食された地形を見て更にチャンネルを彫る。総粒子数 = Iterations × Particle Count。"))
+    {
+        EvaluateGraph();
+    }
+
+    if (DrawPropertyIntRow("Particle Count", "SedimentParticleCount", &sd.particleCount, 0, 1'000'000, rock::SedimentSettings{}.particleCount, "Sediment particle count changed", true, "1 wave で発射する粒子数。Iterations と組み合わせて総量が決まる。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyIntRow("Particle Lifetime", "SedimentParticleLifetime", &sd.particleLifetime, 1, 512, rock::SedimentSettings{}.particleLifetime, "Sediment particle lifetime changed", true, "1 粒子あたりの最大移動ステップ数。多いほど遠くまで運ばれる。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Gradient Distance (m)", "SedimentGradientDistanceM", &sd.particleGradientRadiusM, 0.5f, 200.0f, rock::SedimentSettings{}.particleGradientRadiusM, "Sediment gradient distance changed", true, "勾配サンプリングの距離 (m)。粒子はこの半径の中央差分で進路を決めるので、大きいほど地形の高周波ノイズが平滑化されて主要 drainage に粒子が収束 → 河道が太く少なくなる。GeoGen の Largest Detail Level (8/16/32m) 相当。解像度非依存。", "%.1f"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyPercentRow("Inertia (%)", "SedimentInertia", &sd.particleInertia, 0.0f, 0.99f, rock::SedimentSettings{}.particleInertia, "Sediment inertia changed", "粒子が前ステップの方向をどれだけ引き継ぐか。高いほど直線的、低いほど真っ直ぐ最急降下。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyPercentRow("Friction (%)", "SedimentFriction", &sd.particleFriction, 0.0f, 0.95f, rock::SedimentSettings{}.particleFriction, "Sediment friction changed", "1 ステップごとに失われる速度の割合。0 だと長い斜面で速度が無制限に増え、容量も増えて経路で堆積されず終端で大量 dump → スパイク発生。10-20% が安定範囲。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Capacity", "SedimentCapacity", &sd.particleCapacity, 0.0f, 16.0f, rock::SedimentSettings{}.particleCapacity, "Sediment capacity changed", true, "粒子の運搬容量係数 (capacity = max(slope, 0.01) × |v| × water × Kc)。大きいほど多く運ぶ → 侵食が強い。", "%.2f"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyPercentRow("Erosion (%)", "SedimentErosion", &sd.particleErosion, 0.0f, 1.0f, rock::SedimentSettings{}.particleErosion, "Sediment erosion changed", "容量に対する侵食レート。1 で 1 ステップで全容量分削る。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyPercentRow("Deposition (%)", "SedimentDeposition", &sd.particleDeposition, 0.0f, 1.0f, rock::SedimentSettings{}.particleDeposition, "Sediment deposition changed", "過剰運搬量の堆積レート。1 で過剰分を 1 ステップで全堆積。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyPercentRow("Evaporation (%)", "SedimentEvaporation", &sd.particleEvaporation, 0.0f, 0.5f, rock::SedimentSettings{}.particleEvaporation, "Sediment evaporation changed", "1 ステップあたりに失われる水の割合。粒子の運搬容量を時間で減衰させ、終端で堆積させる。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyPercentRow("Emission Time (%)", "SedimentEmissionTime", &sd.particleEmissionTime, 0.0f, 1.0f, rock::SedimentSettings{}.particleEmissionTime, "Sediment emission time changed", "総粒子予算 (Iterations × Particle Count) を先頭何割の wave に集中させるか。0% は全粒子を 1 wave で初期地形に投入し wave 間 merge なし(樹枝状がシャープ)、100% は毎 wave に Particle Count ずつ均等(progressive な彫り込みと平滑化)。総仕事量は変わりません。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyIntRow("Seed", "SedimentSeed", &sd.particleSeed, 0, 999999, rock::SedimentSettings{}.particleSeed, "Sediment seed changed", true, "粒子位置の乱数シード。"))
+    {
+        EvaluateGraph();
+    }
+
+    ImGui::EndTable();
+    return true;
+}
+
 void DrawPropertiesPanel()
 {
     const rock::Node* selectedNode = g_graph.FindNode(g_selectedNodeId);
@@ -8498,84 +8597,8 @@ void DrawPropertiesPanel()
         return;
     }
 
-    if (selectedNode->kind == rock::NodeKind::Sediment && ImGui::BeginTable("SedimentRows", 2, ImGuiTableFlags_SizingStretchProp))
+    if (selectedNode->kind == rock::NodeKind::Sediment && DrawSedimentProperties(*editableNode))
     {
-        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 210.0f);
-        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-        rock::SedimentSettings& sd = editableNode->sediment;
-        sd.iterations = std::clamp(sd.iterations, 0, 4096);
-        sd.initialSedimentM = std::clamp(sd.initialSedimentM, 0.0f, 1000.0f);
-        sd.maskContrast = std::clamp(sd.maskContrast, 0.0f, 1.0f);
-        sd.particleCount = std::clamp(sd.particleCount, 0, 4'000'000);
-        sd.particleLifetime = std::clamp(sd.particleLifetime, 1, 1024);
-        sd.particleGradientRadiusM = std::clamp(sd.particleGradientRadiusM, 0.5f, 500.0f);
-        sd.particleInertia = std::clamp(sd.particleInertia, 0.0f, 0.99f);
-        sd.particleFriction = std::clamp(sd.particleFriction, 0.0f, 0.95f);
-        sd.particleCapacity = std::clamp(sd.particleCapacity, 0.0f, 32.0f);
-        sd.particleErosion = std::clamp(sd.particleErosion, 0.0f, 1.0f);
-        sd.particleDeposition = std::clamp(sd.particleDeposition, 0.0f, 1.0f);
-        sd.particleEvaporation = std::clamp(sd.particleEvaporation, 0.0f, 1.0f);
-        sd.particleEmissionTime = std::clamp(sd.particleEmissionTime, 0.0f, 1.0f);
-        sd.particleSeed = std::clamp(sd.particleSeed, 0, 999999);
-        if (DrawPropertyFloatRow("Initial Sediment (m)", "SedimentInitial", &sd.initialSedimentM, 0.0f, 50.0f, rock::SedimentSettings{}.initialSedimentM, "Sediment initial changed", true, "全セルに最初に積む土砂の厚み (m)。多いほど侵食/堆積で動かせる量が増えます。", "%.2f"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyPercentRow("Mask Contrast (%)", "SedimentMaskContrast", &sd.maskContrast, 0.0f, 1.0f, rock::SedimentSettings{}.maskContrast, "Sediment mask contrast changed", "Mask 出力のコントラスト。0 で連続グラデーション(中間グレーが多い)、1 でほぼバイナリ(黒/白のみ)。GeoGen ライクなくっきり dendritic を出すには 0.7+ が目安。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyIntRow("Iterations", "SedimentIterations", &sd.iterations, 1, 1000, rock::SedimentSettings{}.iterations, "Sediment iterations changed", true, "粒子を投入する回数(波数)。各 wave 後に sediment が更新されるので、後の wave は侵食された地形を見て更にチャンネルを彫る。総粒子数 = Iterations × Particle Count。"))
-        {
-            EvaluateGraph();
-        }
-
-        if (DrawPropertyIntRow("Particle Count", "SedimentParticleCount", &sd.particleCount, 0, 1'000'000, rock::SedimentSettings{}.particleCount, "Sediment particle count changed", true, "1 wave で発射する粒子数。Iterations と組み合わせて総量が決まる。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyIntRow("Particle Lifetime", "SedimentParticleLifetime", &sd.particleLifetime, 1, 512, rock::SedimentSettings{}.particleLifetime, "Sediment particle lifetime changed", true, "1 粒子あたりの最大移動ステップ数。多いほど遠くまで運ばれる。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Gradient Distance (m)", "SedimentGradientDistanceM", &sd.particleGradientRadiusM, 0.5f, 200.0f, rock::SedimentSettings{}.particleGradientRadiusM, "Sediment gradient distance changed", true, "勾配サンプリングの距離 (m)。粒子はこの半径の中央差分で進路を決めるので、大きいほど地形の高周波ノイズが平滑化されて主要 drainage に粒子が収束 → 河道が太く少なくなる。GeoGen の Largest Detail Level (8/16/32m) 相当。解像度非依存。", "%.1f"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyPercentRow("Inertia (%)", "SedimentInertia", &sd.particleInertia, 0.0f, 0.99f, rock::SedimentSettings{}.particleInertia, "Sediment inertia changed", "粒子が前ステップの方向をどれだけ引き継ぐか。高いほど直線的、低いほど真っ直ぐ最急降下。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyPercentRow("Friction (%)", "SedimentFriction", &sd.particleFriction, 0.0f, 0.95f, rock::SedimentSettings{}.particleFriction, "Sediment friction changed", "1 ステップごとに失われる速度の割合。0 だと長い斜面で速度が無制限に増え、容量も増えて経路で堆積されず終端で大量 dump → スパイク発生。10-20% が安定範囲。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Capacity", "SedimentCapacity", &sd.particleCapacity, 0.0f, 16.0f, rock::SedimentSettings{}.particleCapacity, "Sediment capacity changed", true, "粒子の運搬容量係数 (capacity = max(slope, 0.01) × |v| × water × Kc)。大きいほど多く運ぶ → 侵食が強い。", "%.2f"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyPercentRow("Erosion (%)", "SedimentErosion", &sd.particleErosion, 0.0f, 1.0f, rock::SedimentSettings{}.particleErosion, "Sediment erosion changed", "容量に対する侵食レート。1 で 1 ステップで全容量分削る。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyPercentRow("Deposition (%)", "SedimentDeposition", &sd.particleDeposition, 0.0f, 1.0f, rock::SedimentSettings{}.particleDeposition, "Sediment deposition changed", "過剰運搬量の堆積レート。1 で過剰分を 1 ステップで全堆積。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyPercentRow("Evaporation (%)", "SedimentEvaporation", &sd.particleEvaporation, 0.0f, 0.5f, rock::SedimentSettings{}.particleEvaporation, "Sediment evaporation changed", "1 ステップあたりに失われる水の割合。粒子の運搬容量を時間で減衰させ、終端で堆積させる。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyPercentRow("Emission Time (%)", "SedimentEmissionTime", &sd.particleEmissionTime, 0.0f, 1.0f, rock::SedimentSettings{}.particleEmissionTime, "Sediment emission time changed", "総粒子予算 (Iterations × Particle Count) を先頭何割の wave に集中させるか。0% は全粒子を 1 wave で初期地形に投入し wave 間 merge なし(樹枝状がシャープ)、100% は毎 wave に Particle Count ずつ均等(progressive な彫り込みと平滑化)。総仕事量は変わりません。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyIntRow("Seed", "SedimentSeed", &sd.particleSeed, 0, 999999, rock::SedimentSettings{}.particleSeed, "Sediment seed changed", true, "粒子位置の乱数シード。"))
-        {
-            EvaluateGraph();
-        }
-
-        ImGui::EndTable();
         return;
     }
 

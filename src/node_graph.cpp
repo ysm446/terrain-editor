@@ -2831,6 +2831,59 @@ uint64_t HashHeightfieldOperation(const HeightfieldPipeline::HeightfieldOperatio
     return 0;
 }
 
+HeightfieldPipeline::HeightfieldOperation MakeHeightfieldOperation(const Node& node)
+{
+    HeightfieldPipeline::HeightfieldOperation operation;
+    operation.nodeId = node.id;
+    switch (node.kind)
+    {
+    case NodeKind::HeightmapBlur:
+        operation.kind = HeightfieldPipeline::HeightfieldOperation::Kind::HeightmapBlur;
+        operation.heightmapBlur = node.heightmapBlur;
+        break;
+    case NodeKind::ErosionNoise:
+        operation.kind = HeightfieldPipeline::HeightfieldOperation::Kind::ErosionNoise;
+        operation.erosionNoise = node.erosionNoise;
+        break;
+    case NodeKind::MultiScaleErosion:
+        operation.kind = HeightfieldPipeline::HeightfieldOperation::Kind::MultiScaleErosion;
+        operation.multiScaleErosion = node.multiScaleErosion;
+        break;
+    case NodeKind::MaskFluvial:
+        operation.kind = HeightfieldPipeline::HeightfieldOperation::Kind::MaskFluvial;
+        operation.maskFluvial = node.maskFluvial;
+        break;
+    case NodeKind::Rock:
+        operation.kind = HeightfieldPipeline::HeightfieldOperation::Kind::Rock;
+        operation.rock = node.rock;
+        break;
+    case NodeKind::Sediment:
+        operation.kind = HeightfieldPipeline::HeightfieldOperation::Kind::Sediment;
+        operation.sediment = node.sediment;
+        break;
+    default:
+        operation.nodeId = 0;
+        break;
+    }
+    return operation;
+}
+
+bool IsHeightfieldOperationNode(NodeKind kind)
+{
+    switch (kind)
+    {
+    case NodeKind::HeightmapBlur:
+    case NodeKind::ErosionNoise:
+    case NodeKind::MultiScaleErosion:
+    case NodeKind::MaskFluvial:
+    case NodeKind::Rock:
+    case NodeKind::Sediment:
+        return true;
+    default:
+        return false;
+    }
+}
+
 MeshData BuildMeshFromHeightPipeline(const HeightfieldPipeline& pipeline, int resolution, std::string* message, HeightfieldPreviewField previewField = HeightfieldPreviewField::Heightmap, HeightfieldGrid* previewGrid = nullptr)
 {
     HeightfieldGrid grid = pipeline.useShape
@@ -3571,83 +3624,9 @@ HeightfieldPipeline NodeGraph::PipelineToNode(const Node& targetNode) const
     int guard = 0;
     while (node != nullptr && guard++ < 16)
     {
-        if (node->kind == NodeKind::HeightmapBlur)
+        if (IsHeightfieldOperationNode(node->kind))
         {
-            pipeline.heightfieldOperations.push_back({
-                HeightfieldPipeline::HeightfieldOperation::Kind::HeightmapBlur,
-                node->id,
-                node->heightmapBlur,
-                {},
-                {},
-                {},
-                {},
-                {},
-            });
-        }
-        else if (node->kind == NodeKind::ErosionNoise)
-        {
-            pipeline.heightfieldOperations.push_back({
-                HeightfieldPipeline::HeightfieldOperation::Kind::ErosionNoise,
-                node->id,
-                {},
-                node->erosionNoise,
-                {},
-                {},
-                {},
-                {},
-            });
-        }
-        else if (node->kind == NodeKind::MultiScaleErosion)
-        {
-            pipeline.heightfieldOperations.push_back({
-                HeightfieldPipeline::HeightfieldOperation::Kind::MultiScaleErosion,
-                node->id,
-                {},
-                {},
-                node->multiScaleErosion,
-                {},
-                {},
-                {},
-            });
-        }
-        else if (node->kind == NodeKind::MaskFluvial)
-        {
-            pipeline.heightfieldOperations.push_back({
-                HeightfieldPipeline::HeightfieldOperation::Kind::MaskFluvial,
-                node->id,
-                {},
-                {},
-                {},
-                node->maskFluvial,
-                {},
-                {},
-            });
-        }
-        else if (node->kind == NodeKind::Rock)
-        {
-            pipeline.heightfieldOperations.push_back({
-                HeightfieldPipeline::HeightfieldOperation::Kind::Rock,
-                node->id,
-                {},
-                {},
-                {},
-                {},
-                node->rock,
-                {},
-            });
-        }
-        else if (node->kind == NodeKind::Sediment)
-        {
-            pipeline.heightfieldOperations.push_back({
-                HeightfieldPipeline::HeightfieldOperation::Kind::Sediment,
-                node->id,
-                {},
-                {},
-                {},
-                {},
-                {},
-                node->sediment,
-            });
+            pipeline.heightfieldOperations.push_back(MakeHeightfieldOperation(*node));
         }
         else if (node->kind == NodeKind::HeightmapLoad)
         {
