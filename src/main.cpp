@@ -8032,6 +8032,137 @@ bool DrawCameraFloatRow(const char* label, const char* id, float* value, float m
     return changed;
 }
 
+bool DrawMultiScaleErosionProperties(rock::Node& editableNode)
+{
+    if (!ImGui::BeginTable("MultiScaleErosionRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        return false;
+    }
+
+    ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 210.0f);
+    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+    rock::MultiScaleErosionSettings& mse = editableNode.multiScaleErosion;
+    mse.iterations = std::clamp(mse.iterations, 0, 500);
+    mse.speStrength = std::clamp(mse.speStrength, 0.0f, 0.01f);
+    mse.streamExponent = std::clamp(mse.streamExponent, 0.0f, 2.0f);
+    mse.slopeExponent = std::clamp(mse.slopeExponent, 0.0f, 4.0f);
+    mse.maxStreamPower = std::clamp(mse.maxStreamPower, 1.0f, 1000000.0f);
+    mse.flowExponent = std::clamp(mse.flowExponent, 0.5f, 4.0f);
+    mse.speTimeStep = std::clamp(mse.speTimeStep, 0.0f, 4.0f);
+    mse.thermalAngleDegrees = std::clamp(mse.thermalAngleDegrees, 0.0f, 60.0f);
+    mse.thermalStrength = std::clamp(mse.thermalStrength, 0.0f, 0.01f);
+    mse.thermalNoiseMin = std::clamp(mse.thermalNoiseMin, 0.0f, 4.0f);
+    mse.thermalNoiseMax = std::clamp(mse.thermalNoiseMax, 0.0f, 4.0f);
+    mse.thermalNoiseWavelength = std::clamp(mse.thermalNoiseWavelength, 0.0f, 0.05f);
+    mse.depositionStrength = std::clamp(mse.depositionStrength, 0.0f, 8.0f);
+    mse.rain = std::clamp(mse.rain, 0.0f, 10.0f);
+
+    {
+        int backendInt = static_cast<int>(mse.backend);
+        if (DrawPropertyComboRow("Backend", "MseBackend", &backendInt, "CPU Reference\0GPU Compute\0\0", "CPU 並列実装と GPU compute (D3D12 + HLSL) を切り替えます。GPU は反復回数が多いほど速くなりますが、結果が CPU と微小にずれることがあります (浮動小数の累積順序)。\nGPU が初期化に失敗したり実行時エラーになると自動的に CPU 版にフォールバックします。", static_cast<int>(rock::MultiScaleErosionSettings{}.backend)))
+        {
+            mse.backend = static_cast<rock::MultiScaleErosionBackend>(std::clamp(backendInt,
+                static_cast<int>(rock::MultiScaleErosionBackend::CpuReference),
+                static_cast<int>(rock::MultiScaleErosionBackend::GpuCompute)));
+            EvaluateGraph();
+        }
+    }
+    if (DrawPropertyIntRow("Iterations", "MseIterations", &mse.iterations, 0, 500, rock::MultiScaleErosionSettings{}.iterations, "Multi-scale erosion iterations changed", true, "SPE → Thermal → Deposition の 3 パスを繰り返す回数です。Multigrid 有効時は各レベルで個別に反復します (粗→細の各段で同じ回数)。多いほど浸食が進みますが計算時間も増えます。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyBoolRow("Use Multigrid", "MseUseMultigrid", &mse.useMultigrid, "Multi-scale erosion multigrid toggled", "粗い解像度から目標解像度へ x2 アップサンプルしながら段階的に浸食を適用するピラミッド処理を有効にします。解像度を変えても結果が安定しやすくなります (Schott et al. 論文の本来の構成)。OFF にすると入力解像度で 1 段階のみの単純処理になります。", rock::MultiScaleErosionSettings{}.useMultigrid))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyBoolRow("Enable Stream Power", "MseEnableSpe", &mse.enableStreamPower, "Multi-scale erosion SPE toggled", "河川浸食 (Stream Power Erosion) パスの ON/OFF。", rock::MultiScaleErosionSettings{}.enableStreamPower))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyBoolRow("Enable Thermal", "MseEnableThermal", &mse.enableThermal, "Multi-scale erosion thermal toggled", "タラス崩壊 (角度しきい値による斜面安定化) パスの ON/OFF。", rock::MultiScaleErosionSettings{}.enableThermal))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyBoolRow("Enable Deposition", "MseEnableDeposition", &mse.enableDeposition, "Multi-scale erosion deposition toggled", "土砂堆積パスの ON/OFF。流量と搬送能の差から谷底や合流部に土砂を残します。", rock::MultiScaleErosionSettings{}.enableDeposition))
+    {
+        EvaluateGraph();
+    }
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    ImGui::TextDisabled("Stream Power");
+    ImGui::TableSetColumnIndex(1);
+    ImGui::SeparatorText("Stream Power");
+    if (DrawPropertyFloatRow("SPE Strength", "MseSpeStrength", &mse.speStrength, 0.0f, 0.01f, rock::MultiScaleErosionSettings{}.speStrength, "Multi-scale erosion SPE strength changed", true, "SPE シェーダーの k 係数。1 反復あたりの削り量倍率です。", "%.5f", ImGuiSliderFlags_Logarithmic))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Stream Exponent", "MseStreamExp", &mse.streamExponent, 0.0f, 2.0f, rock::MultiScaleErosionSettings{}.streamExponent, "Multi-scale erosion stream exponent changed", true, "SPE の p_sa。流量に対する非線形性です。大きいほど流量集中部で削れが強くなります。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Slope Exponent", "MseSlopeExp", &mse.slopeExponent, 0.0f, 4.0f, rock::MultiScaleErosionSettings{}.slopeExponent, "Multi-scale erosion slope exponent changed", true, "SPE の p_sl。勾配に対する非線形性です。大きいほど急斜面でのみ削ります。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Max Stream Power", "MseMaxSpe", &mse.maxStreamPower, 1.0f, 1000000.0f, rock::MultiScaleErosionSettings{}.maxStreamPower, "Multi-scale erosion max SPE changed", true, "SPE シェーダーの max_spe 上限。極端な削れの暴走を防ぎます。", "%.0f", ImGuiSliderFlags_Logarithmic))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Flow Exponent", "MseFlowExp", &mse.flowExponent, 0.5f, 4.0f, rock::MultiScaleErosionSettings{}.flowExponent, "Multi-scale erosion flow exponent changed", true, "D8 重み付きフローの集中度 (flow_p)。大きいほど最急方向に流量が集まります。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Time Step", "MseTimeStep", &mse.speTimeStep, 0.0f, 4.0f, rock::MultiScaleErosionSettings{}.speTimeStep, "Multi-scale erosion time step changed", true, "SPE の dt。1 反復あたりの時間刻みです。大きいほど速いが不安定になります。"))
+    {
+        EvaluateGraph();
+    }
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    ImGui::TextDisabled("Thermal");
+    ImGui::TableSetColumnIndex(1);
+    ImGui::SeparatorText("Thermal");
+    if (DrawPropertyFloatRow("Threshold Angle (deg)", "MseThermalAngle", &mse.thermalAngleDegrees, 0.0f, 60.0f, rock::MultiScaleErosionSettings{}.thermalAngleDegrees, "Multi-scale erosion thermal angle changed", true, "タラス崩壊の安息角。これを超える勾配は崩落します。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Thermal Strength", "MseThermalStrength", &mse.thermalStrength, 0.0f, 0.01f, rock::MultiScaleErosionSettings{}.thermalStrength, "Multi-scale erosion thermal strength changed", true, "タラスシェーダーの ε。1 反復あたりに移動する土砂量です。", "%.6f", ImGuiSliderFlags_Logarithmic))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyBoolRow("Noisify Angle", "MseThermalNoisify", &mse.thermalNoisifyAngle, "Multi-scale erosion noisify angle toggled", "安息角を空間ノイズで揺らし、岩質の不均一を表現します。", rock::MultiScaleErosionSettings{}.thermalNoisifyAngle))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Noise Min", "MseThermalNoiseMin", &mse.thermalNoiseMin, 0.0f, 4.0f, rock::MultiScaleErosionSettings{}.thermalNoiseMin, "Multi-scale erosion thermal noise min changed", true, "tan(角度) 倍率の下限。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Noise Max", "MseThermalNoiseMax", &mse.thermalNoiseMax, 0.0f, 4.0f, rock::MultiScaleErosionSettings{}.thermalNoiseMax, "Multi-scale erosion thermal noise max changed", true, "tan(角度) 倍率の上限。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Noise Wavelength", "MseThermalNoiseWavelength", &mse.thermalNoiseWavelength, 0.0f, 0.05f, rock::MultiScaleErosionSettings{}.thermalNoiseWavelength, "Multi-scale erosion thermal noise wavelength changed", true, "角度ノイズの空間周波数。小さいほど広い範囲で同じ角度になります。", "%.4f"))
+    {
+        EvaluateGraph();
+    }
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    ImGui::TextDisabled("Deposition");
+    ImGui::TableSetColumnIndex(1);
+    ImGui::SeparatorText("Deposition");
+    if (DrawPropertyFloatRow("Deposition Strength", "MseDepositionStrength", &mse.depositionStrength, 0.0f, 8.0f, rock::MultiScaleErosionSettings{}.depositionStrength, "Multi-scale erosion deposition strength changed", true, "搬送能を超えた分の堆積率。大きいほど土砂が早く落ちます。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Rain", "MseRain", &mse.rain, 0.0f, 10.0f, rock::MultiScaleErosionSettings{}.rain, "Multi-scale erosion rain changed", true, "セルあたりに降る水量。大きいほど流量が増え、堆積も活発になります。"))
+    {
+        EvaluateGraph();
+    }
+
+    ImGui::EndTable();
+    return true;
+}
+
 bool DrawMaskFluvialProperties(rock::Node& editableNode)
 {
     if (!ImGui::BeginTable("MaskFluvialRows", 2, ImGuiTableFlags_SizingStretchProp))
@@ -8434,129 +8565,8 @@ void DrawPropertiesPanel()
         return;
     }
 
-    if (selectedNode->kind == rock::NodeKind::MultiScaleErosion && ImGui::BeginTable("MultiScaleErosionRows", 2, ImGuiTableFlags_SizingStretchProp))
+    if (selectedNode->kind == rock::NodeKind::MultiScaleErosion && DrawMultiScaleErosionProperties(*editableNode))
     {
-        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 210.0f);
-        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-        rock::MultiScaleErosionSettings& mse = editableNode->multiScaleErosion;
-        mse.iterations = std::clamp(mse.iterations, 0, 500);
-        mse.speStrength = std::clamp(mse.speStrength, 0.0f, 0.01f);
-        mse.streamExponent = std::clamp(mse.streamExponent, 0.0f, 2.0f);
-        mse.slopeExponent = std::clamp(mse.slopeExponent, 0.0f, 4.0f);
-        mse.maxStreamPower = std::clamp(mse.maxStreamPower, 1.0f, 1000000.0f);
-        mse.flowExponent = std::clamp(mse.flowExponent, 0.5f, 4.0f);
-        mse.speTimeStep = std::clamp(mse.speTimeStep, 0.0f, 4.0f);
-        mse.thermalAngleDegrees = std::clamp(mse.thermalAngleDegrees, 0.0f, 60.0f);
-        mse.thermalStrength = std::clamp(mse.thermalStrength, 0.0f, 0.01f);
-        mse.thermalNoiseMin = std::clamp(mse.thermalNoiseMin, 0.0f, 4.0f);
-        mse.thermalNoiseMax = std::clamp(mse.thermalNoiseMax, 0.0f, 4.0f);
-        mse.thermalNoiseWavelength = std::clamp(mse.thermalNoiseWavelength, 0.0f, 0.05f);
-        mse.depositionStrength = std::clamp(mse.depositionStrength, 0.0f, 8.0f);
-        mse.rain = std::clamp(mse.rain, 0.0f, 10.0f);
-
-        {
-            int backendInt = static_cast<int>(mse.backend);
-            if (DrawPropertyComboRow("Backend", "MseBackend", &backendInt, "CPU Reference\0GPU Compute\0\0", "CPU 並列実装と GPU compute (D3D12 + HLSL) を切り替えます。GPU は反復回数が多いほど速くなりますが、結果が CPU と微小にずれることがあります (浮動小数の累積順序)。\nGPU が初期化に失敗したり実行時エラーになると自動的に CPU 版にフォールバックします。", static_cast<int>(rock::MultiScaleErosionSettings{}.backend)))
-            {
-                mse.backend = static_cast<rock::MultiScaleErosionBackend>(std::clamp(backendInt,
-                    static_cast<int>(rock::MultiScaleErosionBackend::CpuReference),
-                    static_cast<int>(rock::MultiScaleErosionBackend::GpuCompute)));
-                EvaluateGraph();
-            }
-        }
-        if (DrawPropertyIntRow("Iterations", "MseIterations", &mse.iterations, 0, 500, rock::MultiScaleErosionSettings{}.iterations, "Multi-scale erosion iterations changed", true, "SPE → Thermal → Deposition の 3 パスを繰り返す回数です。Multigrid 有効時は各レベルで個別に反復します (粗→細の各段で同じ回数)。多いほど浸食が進みますが計算時間も増えます。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyBoolRow("Use Multigrid", "MseUseMultigrid", &mse.useMultigrid, "Multi-scale erosion multigrid toggled", "粗い解像度から目標解像度へ x2 アップサンプルしながら段階的に浸食を適用するピラミッド処理を有効にします。解像度を変えても結果が安定しやすくなります (Schott et al. 論文の本来の構成)。OFF にすると入力解像度で 1 段階のみの単純処理になります。", rock::MultiScaleErosionSettings{}.useMultigrid))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyBoolRow("Enable Stream Power", "MseEnableSpe", &mse.enableStreamPower, "Multi-scale erosion SPE toggled", "河川浸食 (Stream Power Erosion) パスの ON/OFF。", rock::MultiScaleErosionSettings{}.enableStreamPower))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyBoolRow("Enable Thermal", "MseEnableThermal", &mse.enableThermal, "Multi-scale erosion thermal toggled", "タラス崩壊 (角度しきい値による斜面安定化) パスの ON/OFF。", rock::MultiScaleErosionSettings{}.enableThermal))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyBoolRow("Enable Deposition", "MseEnableDeposition", &mse.enableDeposition, "Multi-scale erosion deposition toggled", "土砂堆積パスの ON/OFF。流量と搬送能の差から谷底や合流部に土砂を残します。", rock::MultiScaleErosionSettings{}.enableDeposition))
-        {
-            EvaluateGraph();
-        }
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        ImGui::TextDisabled("Stream Power");
-        ImGui::TableSetColumnIndex(1);
-        ImGui::SeparatorText("Stream Power");
-        if (DrawPropertyFloatRow("SPE Strength", "MseSpeStrength", &mse.speStrength, 0.0f, 0.01f, rock::MultiScaleErosionSettings{}.speStrength, "Multi-scale erosion SPE strength changed", true, "SPE シェーダーの k 係数。1 反復あたりの削り量倍率です。", "%.5f", ImGuiSliderFlags_Logarithmic))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Stream Exponent", "MseStreamExp", &mse.streamExponent, 0.0f, 2.0f, rock::MultiScaleErosionSettings{}.streamExponent, "Multi-scale erosion stream exponent changed", true, "SPE の p_sa。流量に対する非線形性です。大きいほど流量集中部で削れが強くなります。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Slope Exponent", "MseSlopeExp", &mse.slopeExponent, 0.0f, 4.0f, rock::MultiScaleErosionSettings{}.slopeExponent, "Multi-scale erosion slope exponent changed", true, "SPE の p_sl。勾配に対する非線形性です。大きいほど急斜面でのみ削ります。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Max Stream Power", "MseMaxSpe", &mse.maxStreamPower, 1.0f, 1000000.0f, rock::MultiScaleErosionSettings{}.maxStreamPower, "Multi-scale erosion max SPE changed", true, "SPE シェーダーの max_spe 上限。極端な削れの暴走を防ぎます。", "%.0f", ImGuiSliderFlags_Logarithmic))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Flow Exponent", "MseFlowExp", &mse.flowExponent, 0.5f, 4.0f, rock::MultiScaleErosionSettings{}.flowExponent, "Multi-scale erosion flow exponent changed", true, "D8 重み付きフローの集中度 (flow_p)。大きいほど最急方向に流量が集まります。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Time Step", "MseTimeStep", &mse.speTimeStep, 0.0f, 4.0f, rock::MultiScaleErosionSettings{}.speTimeStep, "Multi-scale erosion time step changed", true, "SPE の dt。1 反復あたりの時間刻みです。大きいほど速いが不安定になります。"))
-        {
-            EvaluateGraph();
-        }
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        ImGui::TextDisabled("Thermal");
-        ImGui::TableSetColumnIndex(1);
-        ImGui::SeparatorText("Thermal");
-        if (DrawPropertyFloatRow("Threshold Angle (deg)", "MseThermalAngle", &mse.thermalAngleDegrees, 0.0f, 60.0f, rock::MultiScaleErosionSettings{}.thermalAngleDegrees, "Multi-scale erosion thermal angle changed", true, "タラス崩壊の安息角。これを超える勾配は崩落します。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Thermal Strength", "MseThermalStrength", &mse.thermalStrength, 0.0f, 0.01f, rock::MultiScaleErosionSettings{}.thermalStrength, "Multi-scale erosion thermal strength changed", true, "タラスシェーダーの ε。1 反復あたりに移動する土砂量です。", "%.6f", ImGuiSliderFlags_Logarithmic))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyBoolRow("Noisify Angle", "MseThermalNoisify", &mse.thermalNoisifyAngle, "Multi-scale erosion noisify angle toggled", "安息角を空間ノイズで揺らし、岩質の不均一を表現します。", rock::MultiScaleErosionSettings{}.thermalNoisifyAngle))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Noise Min", "MseThermalNoiseMin", &mse.thermalNoiseMin, 0.0f, 4.0f, rock::MultiScaleErosionSettings{}.thermalNoiseMin, "Multi-scale erosion thermal noise min changed", true, "tan(角度) 倍率の下限。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Noise Max", "MseThermalNoiseMax", &mse.thermalNoiseMax, 0.0f, 4.0f, rock::MultiScaleErosionSettings{}.thermalNoiseMax, "Multi-scale erosion thermal noise max changed", true, "tan(角度) 倍率の上限。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Noise Wavelength", "MseThermalNoiseWavelength", &mse.thermalNoiseWavelength, 0.0f, 0.05f, rock::MultiScaleErosionSettings{}.thermalNoiseWavelength, "Multi-scale erosion thermal noise wavelength changed", true, "角度ノイズの空間周波数。小さいほど広い範囲で同じ角度になります。", "%.4f"))
-        {
-            EvaluateGraph();
-        }
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        ImGui::TextDisabled("Deposition");
-        ImGui::TableSetColumnIndex(1);
-        ImGui::SeparatorText("Deposition");
-        if (DrawPropertyFloatRow("Deposition Strength", "MseDepositionStrength", &mse.depositionStrength, 0.0f, 8.0f, rock::MultiScaleErosionSettings{}.depositionStrength, "Multi-scale erosion deposition strength changed", true, "搬送能を超えた分の堆積率。大きいほど土砂が早く落ちます。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Rain", "MseRain", &mse.rain, 0.0f, 10.0f, rock::MultiScaleErosionSettings{}.rain, "Multi-scale erosion rain changed", true, "セルあたりに降る水量。大きいほど流量が増え、堆積も活発になります。"))
-        {
-            EvaluateGraph();
-        }
-
-        ImGui::EndTable();
         return;
     }
 
