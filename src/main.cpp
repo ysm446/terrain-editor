@@ -1621,7 +1621,7 @@ void NewProject()
     EvaluateGraph();
 }
 
-nlohmann::json MakeNodeSettingsJson(const rock::Node& node)
+nlohmann::json MakeBasicHeightfieldSettingsJson(const rock::Node& node)
 {
     return {
         {"heightmap", {
@@ -1642,6 +1642,21 @@ nlohmann::json MakeNodeSettingsJson(const rock::Node& node)
             {"strength", node.heightmapBlur.strength},
             {"iterations", node.heightmapBlur.iterations},
         }},
+        {"erosionNoise", {
+            {"frequency", node.erosionNoise.frequency},
+            {"octaves", node.erosionNoise.octaves},
+            {"erosionStrength", node.erosionNoise.erosionStrength},
+            {"directionInfluence", node.erosionNoise.directionInfluence},
+            {"valleyLow", node.erosionNoise.valleyLow},
+            {"valleyHigh", node.erosionNoise.valleyHigh},
+            {"seed", node.erosionNoise.seed},
+        }},
+    };
+}
+
+nlohmann::json MakeMultiScaleErosionSettingsJson(const rock::Node& node)
+{
+    return {
         {"multiScaleErosion", {
             {"iterations", node.multiScaleErosion.iterations},
             {"enableStreamPower", node.multiScaleErosion.enableStreamPower},
@@ -1664,15 +1679,12 @@ nlohmann::json MakeNodeSettingsJson(const rock::Node& node)
             {"useMultigrid", node.multiScaleErosion.useMultigrid},
             {"backend", static_cast<int>(node.multiScaleErosion.backend)},
         }},
-        {"erosionNoise", {
-            {"frequency", node.erosionNoise.frequency},
-            {"octaves", node.erosionNoise.octaves},
-            {"erosionStrength", node.erosionNoise.erosionStrength},
-            {"directionInfluence", node.erosionNoise.directionInfluence},
-            {"valleyLow", node.erosionNoise.valleyLow},
-            {"valleyHigh", node.erosionNoise.valleyHigh},
-            {"seed", node.erosionNoise.seed},
-        }},
+    };
+}
+
+nlohmann::json MakeMaskSettingsJson(const rock::Node& node)
+{
+    return {
         {"maskNoise", {
             {"seed", node.maskNoise.seed},
             {"octaves", node.maskNoise.octaves},
@@ -1692,6 +1704,16 @@ nlohmann::json MakeNodeSettingsJson(const rock::Node& node)
             {"pitFillIterations", node.maskFluvial.pitFillIterations},
             {"mfdExponent", node.maskFluvial.mfdExponent},
         }},
+        {"maskBlend", {
+            {"mode", static_cast<int>(node.maskBlend.mode)},
+            {"intensity", node.maskBlend.intensity},
+        }},
+    };
+}
+
+nlohmann::json MakeRockSettingsJson(const rock::Node& node)
+{
+    return {
         {"rock", {
             {"seed", node.rock.seed},
             {"density", node.rock.density},
@@ -1707,6 +1729,12 @@ nlohmann::json MakeNodeSettingsJson(const rock::Node& node)
             {"facetSharpness", node.rock.facetSharpness},
             {"facetScale", node.rock.facetScale},
         }},
+    };
+}
+
+nlohmann::json MakeSedimentSettingsJson(const rock::Node& node)
+{
+    return {
         {"sediment", {
             {"iterations", node.sediment.iterations},
             {"initialSedimentM", node.sediment.initialSedimentM},
@@ -1723,11 +1751,18 @@ nlohmann::json MakeNodeSettingsJson(const rock::Node& node)
             {"particleEmissionTime", node.sediment.particleEmissionTime},
             {"particleSeed", node.sediment.particleSeed},
         }},
-        {"maskBlend", {
-            {"mode", static_cast<int>(node.maskBlend.mode)},
-            {"intensity", node.maskBlend.intensity},
-        }},
     };
+}
+
+nlohmann::json MakeNodeSettingsJson(const rock::Node& node)
+{
+    nlohmann::json nodeJson;
+    nodeJson.update(MakeBasicHeightfieldSettingsJson(node));
+    nodeJson.update(MakeMultiScaleErosionSettingsJson(node));
+    nodeJson.update(MakeMaskSettingsJson(node));
+    nodeJson.update(MakeRockSettingsJson(node));
+    nodeJson.update(MakeSedimentSettingsJson(node));
+    return nodeJson;
 }
 
 nlohmann::json MakeSerializedNodeJson(const rock::Node& node)
