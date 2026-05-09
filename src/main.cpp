@@ -8004,6 +8004,163 @@ bool DrawCameraFloatRow(const char* label, const char* id, float* value, float m
     return changed;
 }
 
+bool DrawMaskFluvialProperties(rock::Node& editableNode)
+{
+    if (!ImGui::BeginTable("MaskFluvialRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        return false;
+    }
+
+    ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 210.0f);
+    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+    rock::MaskFluvialSettings& mf = editableNode.maskFluvial;
+    mf.accumulationThreshold = std::clamp(mf.accumulationThreshold, 0.0f, 1.0f);
+    mf.gamma = std::clamp(mf.gamma, 0.05f, 8.0f);
+    mf.softness = std::clamp(mf.softness, 0.001f, 4.0f);
+    mf.power = std::clamp(mf.power, 0.1f, 8.0f);
+    mf.pitFillIterations = std::clamp(mf.pitFillIterations, 0, 64);
+    mf.mfdExponent = std::clamp(mf.mfdExponent, 0.1f, 16.0f);
+
+    int algoInt = static_cast<int>(mf.algorithm);
+    if (DrawPropertyComboRow("Algorithm", "MaskFluvialAlgorithm", &algoInt, "D8\0MFD\0\0", "流れ累積アルゴリズムです。D8 は最急降下方向のみに流す(細い線)、MFD は複数方向に重み付き分配(太い面)。", static_cast<int>(rock::MaskFluvialSettings{}.algorithm)))
+    {
+        mf.algorithm = static_cast<rock::FlowAccumulationAlgorithm>(std::clamp(algoInt,
+            static_cast<int>(rock::FlowAccumulationAlgorithm::D8),
+            static_cast<int>(rock::FlowAccumulationAlgorithm::MFD)));
+        EvaluateGraph();
+    }
+    int curveInt = static_cast<int>(mf.outputCurve);
+    if (DrawPropertyComboRow("Output Curve", "MaskFluvialCurve", &curveInt, "Log\0Threshold\0Linear\0\0", "累積値をマスクへ写すカーブです。Log は連続的な樹枝状ドレナージマップ(既定、参考画像の見た目)、Threshold は閾値ベースの二値川筋抽出、Linear は非対数の連続マップ(主流偏重)。", static_cast<int>(rock::MaskFluvialSettings{}.outputCurve)))
+    {
+        mf.outputCurve = static_cast<rock::MaskFluvialOutputCurve>(std::clamp(curveInt,
+            static_cast<int>(rock::MaskFluvialOutputCurve::Log),
+            static_cast<int>(rock::MaskFluvialOutputCurve::Linear)));
+        EvaluateGraph();
+    }
+    const char* thresholdTooltip = (mf.outputCurve == rock::MaskFluvialOutputCurve::Threshold)
+        ? "全セル数に対する割合で、これ以上の上流寄与があるセルが川として現れます。下げるほど支流が増え、上げるほど太い本流のみ残ります。Threshold モード時の主要パラメータです。"
+        : "ノイズフロアです。これ未満の上流寄与しか持たないセルはマスク 0 にクリップされます。0 で全セルを描画(参考画像の見た目)。";
+    if (DrawPropertyPercentRow("Threshold (%)", "MaskFluvialThreshold", &mf.accumulationThreshold, 0.0f, 1.0f, rock::MaskFluvialSettings{}.accumulationThreshold, "Mask fluvial threshold changed", thresholdTooltip))
+    {
+        EvaluateGraph();
+    }
+    if (mf.outputCurve != rock::MaskFluvialOutputCurve::Threshold)
+    {
+        if (DrawPropertyFloatRow("Gamma", "MaskFluvialGamma", &mf.gamma, 0.05f, 8.0f, rock::MaskFluvialSettings{}.gamma, "Mask fluvial gamma changed", true, "Log/Linear カーブの最後にかける pow 指数です。小さいほど細い支流が明るくなり、大きいほど主流のみが残ってコントラストが上がります。"))
+        {
+            EvaluateGraph();
+        }
+    }
+    if (mf.outputCurve == rock::MaskFluvialOutputCurve::Threshold)
+    {
+        if (DrawPropertyFloatRow("Softness", "MaskFluvialSoftness", &mf.softness, 0.001f, 4.0f, rock::MaskFluvialSettings{}.softness, "Mask fluvial softness changed", true, "閾値前後の smoothstep 幅です。小さいほどシャープな川筋、大きいほど湿地帯のような広がり。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Edge Power", "MaskFluvialPower", &mf.power, 0.1f, 8.0f, rock::MaskFluvialSettings{}.power, "Mask fluvial power changed", true, "pow(mask, power) で川縁をテーパーします。1 を超えると細く、1 未満で太く見えます。"))
+        {
+            EvaluateGraph();
+        }
+    }
+    if (DrawPropertyIntRow("Pit Fill Iterations", "MaskFluvialPitFill", &mf.pitFillIterations, 0, 64, rock::MaskFluvialSettings{}.pitFillIterations, "Mask fluvial pit fill changed", true, "局所窪みを埋める反復回数です。0 で湖を残し、増やすほど排水経路が確実につながります。"))
+    {
+        EvaluateGraph();
+    }
+    if (mf.algorithm == rock::FlowAccumulationAlgorithm::MFD)
+    {
+        if (DrawPropertyFloatRow("MFD Exponent", "MaskFluvialMfdExponent", &mf.mfdExponent, 0.1f, 16.0f, rock::MaskFluvialSettings{}.mfdExponent, "Mask fluvial MFD exponent changed", true, "MFD 時の下流分配の鋭さです。大きいほど D8 寄り(主流に集中)、小さいほど面的に広がります。"))
+        {
+            EvaluateGraph();
+        }
+    }
+
+    ImGui::EndTable();
+    return true;
+}
+
+bool DrawRockProperties(rock::Node& editableNode)
+{
+    if (!ImGui::BeginTable("RockRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        return false;
+    }
+
+    ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 210.0f);
+    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+    rock::RockSettings& rk = editableNode.rock;
+    rk.density = std::clamp(rk.density, 0.5f, 1000.0f);
+    rk.coverage = std::clamp(rk.coverage, 0.0f, 1.0f);
+    rk.rockSizeMinM = std::clamp(rk.rockSizeMinM, 0.1f, 200.0f);
+    rk.rockSizeMaxM = std::clamp(std::max(rk.rockSizeMaxM, rk.rockSizeMinM), 0.1f, 200.0f);
+    rk.rockHeight = std::clamp(rk.rockHeight, 0.0f, 100.0f);
+    rk.heightJitter = std::clamp(rk.heightJitter, 0.0f, 1.0f);
+    rk.rotationVariation = std::clamp(rk.rotationVariation, 0.0f, 1.0f);
+    rk.aspectVariation = std::clamp(rk.aspectVariation, 0.0f, 1.0f);
+    rk.edgeSharpness = std::clamp(rk.edgeSharpness, 0.0f, 1.0f);
+    rk.bumpiness = std::clamp(rk.bumpiness, 0.0f, 1.0f);
+    rk.facetSharpness = std::clamp(rk.facetSharpness, 0.0f, 1.0f);
+    rk.facetScale = std::clamp(rk.facetScale, 0.5f, 8.0f);
+    rk.seed = std::clamp(rk.seed, 0, 999999);
+
+    if (DrawPropertyIntRow("Seed", "RockSeed", &rk.seed, 0, 999999, rock::RockSettings{}.seed, "Rock seed changed", true, "ハッシュのオフセットです。同じパラメータでも異なる岩配置を得るために使います。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Density (m)", "RockDensity", &rk.density, 0.5f, 200.0f, rock::RockSettings{}.density, "Rock density changed", true, "岩中心のばらまき間隔 (m)。岩同士の中心間距離を決めます。岩サイズとは独立。", "%.2f"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyPercentRow("Coverage (%)", "RockCoverage", &rk.coverage, 0.0f, 1.0f, rock::RockSettings{}.coverage, "Rock coverage changed", "scatter 点が岩になる確率です。1.0 で全点、下げると元の地形が見える隙間が増えます。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Rock Size Min (m)", "RockSizeMinM", &rk.rockSizeMinM, 0.1f, 200.0f, rock::RockSettings{}.rockSizeMinM, "Rock size min changed", true, "岩の最小直径 (m)。各岩は [Min, Max] の範囲からランダムに選ばれます。Density より大きいと岩が重なり、小さいと隙間ができます。", "%.2f"))
+    {
+        if (rk.rockSizeMaxM < rk.rockSizeMinM) rk.rockSizeMaxM = rk.rockSizeMinM;
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Rock Size Max (m)", "RockSizeMaxM", &rk.rockSizeMaxM, 0.1f, 200.0f, rock::RockSettings{}.rockSizeMaxM, "Rock size max changed", true, "岩の最大直径 (m)。Min < Max で自動補正。重なる岩同士は max 合成され、接合線で自然な折れ線が出ます。", "%.2f"))
+    {
+        if (rk.rockSizeMaxM < rk.rockSizeMinM) rk.rockSizeMinM = rk.rockSizeMaxM;
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Rock Height (m)", "RockHeight", &rk.rockHeight, 0.0f, 50.0f, rock::RockSettings{}.rockHeight, "Rock height changed", true, "岩塊の最大盛り上がり (m)。地形の起伏スケールに対して大きすぎると岩肌が浮き上がりすぎるので、地形の標高変化の数% 程度が目安。", "%.2f"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyPercentRow("Height Jitter (%)", "RockHeightJitter", &rk.heightJitter, 0.0f, 1.0f, rock::RockSettings{}.heightJitter, "Rock height jitter changed", "岩ごとの高さ振れ幅です。0 で全部同じ高さ、1 で 0 倍〜2 倍の範囲でランダム。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyPercentRow("Rotation Variation (%)", "RockRotationVariation", &rk.rotationVariation, 0.0f, 1.0f, rock::RockSettings{}.rotationVariation, "Rock rotation variation changed", "各岩のランダム回転量です。0 で全岩が同じ向き、1 で完全ランダム回転。表面の面の向きが岩ごとに変わるので散らばり感が出ます。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyPercentRow("Aspect Variation (%)", "RockAspectVariation", &rk.aspectVariation, 0.0f, 1.0f, rock::RockSettings{}.aspectVariation, "Rock aspect variation changed", "各岩の細長さの振れ幅です。0 で円形、1 で最大 2:1 まで細長い岩が混ざります。回転と組み合わせて GeoGen のような不揃いな配置になります。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyPercentRow("Edge Sharpness (%)", "RockEdgeSharpness", &rk.edgeSharpness, 0.0f, 1.0f, rock::RockSettings{}.edgeSharpness, "Rock edge sharpness changed", "岩のシルエット形状です。0 で滑らかな円形ドーム、1 で 4–7 角形のダイヤモンドカット風シルエット。岩ごとに辺数・角度・半径がランダムに揺らぎます。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyPercentRow("Bumpiness (%)", "RockBumpiness", &rk.bumpiness, 0.0f, 1.0f, rock::RockSettings{}.bumpiness, "Rock bumpiness changed", "表面ディテールの振幅です。0 で滑らかなドーム、上げるほど岩肌の凹凸が強くなります。Facet Sharpness と組み合わせて多面体感を調整します。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyPercentRow("Facet Sharpness (%)", "RockFacetSharpness", &rk.facetSharpness, 0.0f, 1.0f, rock::RockSettings{}.facetSharpness, "Rock facet sharpness changed", "表面ディテールの形状です。0 で滑らかな丸み、1 で多面体状の平らな面 + 鋭いエッジ。岩肌に角を立てたいときに上げます。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Facet Scale", "RockFacetScale", &rk.facetScale, 0.5f, 8.0f, rock::RockSettings{}.facetScale, "Rock facet scale changed", true, "1 つの岩に乗る面の細かさです。大きいほど面が小さく細かくなり、小さいほど大きな面が少数現れます。", "%.2f"))
+    {
+        EvaluateGraph();
+    }
+
+    ImGui::EndTable();
+    return true;
+}
+
 bool DrawSedimentProperties(rock::Node& editableNode)
 {
     if (!ImGui::BeginTable("SedimentRows", 2, ImGuiTableFlags_SizingStretchProp))
@@ -8450,150 +8607,13 @@ void DrawPropertiesPanel()
         return;
     }
 
-    if (selectedNode->kind == rock::NodeKind::MaskFluvial && ImGui::BeginTable("MaskFluvialRows", 2, ImGuiTableFlags_SizingStretchProp))
+    if (selectedNode->kind == rock::NodeKind::MaskFluvial && DrawMaskFluvialProperties(*editableNode))
     {
-        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 210.0f);
-        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-        rock::MaskFluvialSettings& mf = editableNode->maskFluvial;
-        mf.accumulationThreshold = std::clamp(mf.accumulationThreshold, 0.0f, 1.0f);
-        mf.gamma = std::clamp(mf.gamma, 0.05f, 8.0f);
-        mf.softness = std::clamp(mf.softness, 0.001f, 4.0f);
-        mf.power = std::clamp(mf.power, 0.1f, 8.0f);
-        mf.pitFillIterations = std::clamp(mf.pitFillIterations, 0, 64);
-        mf.mfdExponent = std::clamp(mf.mfdExponent, 0.1f, 16.0f);
-
-        int algoInt = static_cast<int>(mf.algorithm);
-        if (DrawPropertyComboRow("Algorithm", "MaskFluvialAlgorithm", &algoInt, "D8\0MFD\0\0", "流れ累積アルゴリズムです。D8 は最急降下方向のみに流す(細い線)、MFD は複数方向に重み付き分配(太い面)。", static_cast<int>(rock::MaskFluvialSettings{}.algorithm)))
-        {
-            mf.algorithm = static_cast<rock::FlowAccumulationAlgorithm>(std::clamp(algoInt,
-                static_cast<int>(rock::FlowAccumulationAlgorithm::D8),
-                static_cast<int>(rock::FlowAccumulationAlgorithm::MFD)));
-            EvaluateGraph();
-        }
-        int curveInt = static_cast<int>(mf.outputCurve);
-        if (DrawPropertyComboRow("Output Curve", "MaskFluvialCurve", &curveInt, "Log\0Threshold\0Linear\0\0", "累積値をマスクへ写すカーブです。Log は連続的な樹枝状ドレナージマップ(既定、参考画像の見た目)、Threshold は閾値ベースの二値川筋抽出、Linear は非対数の連続マップ(主流偏重)。", static_cast<int>(rock::MaskFluvialSettings{}.outputCurve)))
-        {
-            mf.outputCurve = static_cast<rock::MaskFluvialOutputCurve>(std::clamp(curveInt,
-                static_cast<int>(rock::MaskFluvialOutputCurve::Log),
-                static_cast<int>(rock::MaskFluvialOutputCurve::Linear)));
-            EvaluateGraph();
-        }
-        const char* thresholdTooltip = (mf.outputCurve == rock::MaskFluvialOutputCurve::Threshold)
-            ? "全セル数に対する割合で、これ以上の上流寄与があるセルが川として現れます。下げるほど支流が増え、上げるほど太い本流のみ残ります。Threshold モード時の主要パラメータです。"
-            : "ノイズフロアです。これ未満の上流寄与しか持たないセルはマスク 0 にクリップされます。0 で全セルを描画(参考画像の見た目)。";
-        if (DrawPropertyPercentRow("Threshold (%)", "MaskFluvialThreshold", &mf.accumulationThreshold, 0.0f, 1.0f, rock::MaskFluvialSettings{}.accumulationThreshold, "Mask fluvial threshold changed", thresholdTooltip))
-        {
-            EvaluateGraph();
-        }
-        if (mf.outputCurve != rock::MaskFluvialOutputCurve::Threshold)
-        {
-            if (DrawPropertyFloatRow("Gamma", "MaskFluvialGamma", &mf.gamma, 0.05f, 8.0f, rock::MaskFluvialSettings{}.gamma, "Mask fluvial gamma changed", true, "Log/Linear カーブの最後にかける pow 指数です。小さいほど細い支流が明るくなり、大きいほど主流のみが残ってコントラストが上がります。"))
-            {
-                EvaluateGraph();
-            }
-        }
-        if (mf.outputCurve == rock::MaskFluvialOutputCurve::Threshold)
-        {
-            if (DrawPropertyFloatRow("Softness", "MaskFluvialSoftness", &mf.softness, 0.001f, 4.0f, rock::MaskFluvialSettings{}.softness, "Mask fluvial softness changed", true, "閾値前後の smoothstep 幅です。小さいほどシャープな川筋、大きいほど湿地帯のような広がり。"))
-            {
-                EvaluateGraph();
-            }
-            if (DrawPropertyFloatRow("Edge Power", "MaskFluvialPower", &mf.power, 0.1f, 8.0f, rock::MaskFluvialSettings{}.power, "Mask fluvial power changed", true, "pow(mask, power) で川縁をテーパーします。1 を超えると細く、1 未満で太く見えます。"))
-            {
-                EvaluateGraph();
-            }
-        }
-        if (DrawPropertyIntRow("Pit Fill Iterations", "MaskFluvialPitFill", &mf.pitFillIterations, 0, 64, rock::MaskFluvialSettings{}.pitFillIterations, "Mask fluvial pit fill changed", true, "局所窪みを埋める反復回数です。0 で湖を残し、増やすほど排水経路が確実につながります。"))
-        {
-            EvaluateGraph();
-        }
-        if (mf.algorithm == rock::FlowAccumulationAlgorithm::MFD)
-        {
-            if (DrawPropertyFloatRow("MFD Exponent", "MaskFluvialMfdExponent", &mf.mfdExponent, 0.1f, 16.0f, rock::MaskFluvialSettings{}.mfdExponent, "Mask fluvial MFD exponent changed", true, "MFD 時の下流分配の鋭さです。大きいほど D8 寄り(主流に集中)、小さいほど面的に広がります。"))
-            {
-                EvaluateGraph();
-            }
-        }
-
-        ImGui::EndTable();
         return;
     }
 
-    if (selectedNode->kind == rock::NodeKind::Rock && ImGui::BeginTable("RockRows", 2, ImGuiTableFlags_SizingStretchProp))
+    if (selectedNode->kind == rock::NodeKind::Rock && DrawRockProperties(*editableNode))
     {
-        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 210.0f);
-        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-        rock::RockSettings& rk = editableNode->rock;
-        rk.density = std::clamp(rk.density, 0.5f, 1000.0f);
-        rk.coverage = std::clamp(rk.coverage, 0.0f, 1.0f);
-        rk.rockSizeMinM = std::clamp(rk.rockSizeMinM, 0.1f, 200.0f);
-        rk.rockSizeMaxM = std::clamp(std::max(rk.rockSizeMaxM, rk.rockSizeMinM), 0.1f, 200.0f);
-        rk.rockHeight = std::clamp(rk.rockHeight, 0.0f, 100.0f);
-        rk.heightJitter = std::clamp(rk.heightJitter, 0.0f, 1.0f);
-        rk.rotationVariation = std::clamp(rk.rotationVariation, 0.0f, 1.0f);
-        rk.aspectVariation = std::clamp(rk.aspectVariation, 0.0f, 1.0f);
-        rk.edgeSharpness = std::clamp(rk.edgeSharpness, 0.0f, 1.0f);
-        rk.bumpiness = std::clamp(rk.bumpiness, 0.0f, 1.0f);
-        rk.facetSharpness = std::clamp(rk.facetSharpness, 0.0f, 1.0f);
-        rk.facetScale = std::clamp(rk.facetScale, 0.5f, 8.0f);
-        rk.seed = std::clamp(rk.seed, 0, 999999);
-
-        if (DrawPropertyIntRow("Seed", "RockSeed", &rk.seed, 0, 999999, rock::RockSettings{}.seed, "Rock seed changed", true, "ハッシュのオフセットです。同じパラメータでも異なる岩配置を得るために使います。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Density (m)", "RockDensity", &rk.density, 0.5f, 200.0f, rock::RockSettings{}.density, "Rock density changed", true, "岩中心のばらまき間隔 (m)。岩同士の中心間距離を決めます。岩サイズとは独立。", "%.2f"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyPercentRow("Coverage (%)", "RockCoverage", &rk.coverage, 0.0f, 1.0f, rock::RockSettings{}.coverage, "Rock coverage changed", "scatter 点が岩になる確率です。1.0 で全点、下げると元の地形が見える隙間が増えます。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Rock Size Min (m)", "RockSizeMinM", &rk.rockSizeMinM, 0.1f, 200.0f, rock::RockSettings{}.rockSizeMinM, "Rock size min changed", true, "岩の最小直径 (m)。各岩は [Min, Max] の範囲からランダムに選ばれます。Density より大きいと岩が重なり、小さいと隙間ができます。", "%.2f"))
-        {
-            if (rk.rockSizeMaxM < rk.rockSizeMinM) rk.rockSizeMaxM = rk.rockSizeMinM;
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Rock Size Max (m)", "RockSizeMaxM", &rk.rockSizeMaxM, 0.1f, 200.0f, rock::RockSettings{}.rockSizeMaxM, "Rock size max changed", true, "岩の最大直径 (m)。Min < Max で自動補正。重なる岩同士は max 合成され、接合線で自然な折れ線が出ます。", "%.2f"))
-        {
-            if (rk.rockSizeMaxM < rk.rockSizeMinM) rk.rockSizeMinM = rk.rockSizeMaxM;
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Rock Height (m)", "RockHeight", &rk.rockHeight, 0.0f, 50.0f, rock::RockSettings{}.rockHeight, "Rock height changed", true, "岩塊の最大盛り上がり (m)。地形の起伏スケールに対して大きすぎると岩肌が浮き上がりすぎるので、地形の標高変化の数% 程度が目安。", "%.2f"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyPercentRow("Height Jitter (%)", "RockHeightJitter", &rk.heightJitter, 0.0f, 1.0f, rock::RockSettings{}.heightJitter, "Rock height jitter changed", "岩ごとの高さ振れ幅です。0 で全部同じ高さ、1 で 0 倍〜2 倍の範囲でランダム。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyPercentRow("Rotation Variation (%)", "RockRotationVariation", &rk.rotationVariation, 0.0f, 1.0f, rock::RockSettings{}.rotationVariation, "Rock rotation variation changed", "各岩のランダム回転量です。0 で全岩が同じ向き、1 で完全ランダム回転。表面の面の向きが岩ごとに変わるので散らばり感が出ます。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyPercentRow("Aspect Variation (%)", "RockAspectVariation", &rk.aspectVariation, 0.0f, 1.0f, rock::RockSettings{}.aspectVariation, "Rock aspect variation changed", "各岩の細長さの振れ幅です。0 で円形、1 で最大 2:1 まで細長い岩が混ざります。回転と組み合わせて GeoGen のような不揃いな配置になります。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyPercentRow("Edge Sharpness (%)", "RockEdgeSharpness", &rk.edgeSharpness, 0.0f, 1.0f, rock::RockSettings{}.edgeSharpness, "Rock edge sharpness changed", "岩のシルエット形状です。0 で滑らかな円形ドーム、1 で 4–7 角形のダイヤモンドカット風シルエット。岩ごとに辺数・角度・半径がランダムに揺らぎます。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyPercentRow("Bumpiness (%)", "RockBumpiness", &rk.bumpiness, 0.0f, 1.0f, rock::RockSettings{}.bumpiness, "Rock bumpiness changed", "表面ディテールの振幅です。0 で滑らかなドーム、上げるほど岩肌の凹凸が強くなります。Facet Sharpness と組み合わせて多面体感を調整します。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyPercentRow("Facet Sharpness (%)", "RockFacetSharpness", &rk.facetSharpness, 0.0f, 1.0f, rock::RockSettings{}.facetSharpness, "Rock facet sharpness changed", "表面ディテールの形状です。0 で滑らかな丸み、1 で多面体状の平らな面 + 鋭いエッジ。岩肌に角を立てたいときに上げます。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Facet Scale", "RockFacetScale", &rk.facetScale, 0.5f, 8.0f, rock::RockSettings{}.facetScale, "Rock facet scale changed", true, "1 つの岩に乗る面の細かさです。大きいほど面が小さく細かくなり、小さいほど大きな面が少数現れます。", "%.2f"))
-        {
-            EvaluateGraph();
-        }
-
-        ImGui::EndTable();
         return;
     }
 
