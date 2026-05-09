@@ -505,7 +505,7 @@ HeightfieldGrid BuildHeightfieldFromHeightmap(const HeightmapLoadSettings& setti
     grid.age.assign(static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution), 0.0f);
     for (int z = 0; z < grid.resolution; ++z)
     {
-        const float v = grid.resolution > 1 ? static_cast<float>(z) / static_cast<float>(grid.resolution - 1) : 0.0f;
+        const float v = grid.resolution > 1 ? 1.0f - (static_cast<float>(z) / static_cast<float>(grid.resolution - 1)) : 0.0f;
         for (int x = 0; x < grid.resolution; ++x)
         {
             const float u = grid.resolution > 1 ? static_cast<float>(x) / static_cast<float>(grid.resolution - 1) : 0.0f;

@@ -6960,7 +6960,8 @@ void DrawHeightfieldMapPreview(const ImVec2& min, const ImVec2& max)
     const float cellSize = mapSize / static_cast<float>(samples);
     for (int z = 0; z < samples; ++z)
     {
-        const int srcZ = samples > 1 ? static_cast<int>(std::lround(static_cast<float>(z) * static_cast<float>(gridResolution - 1) / static_cast<float>(samples - 1))) : 0;
+        const int sampleZ = samples > 1 ? static_cast<int>(std::lround(static_cast<float>(z) * static_cast<float>(gridResolution - 1) / static_cast<float>(samples - 1))) : 0;
+        const int srcZ = gridResolution - 1 - sampleZ;
         for (int x = 0; x < samples; ++x)
         {
             const int srcX = samples > 1 ? static_cast<int>(std::lround(static_cast<float>(x) * static_cast<float>(gridResolution - 1) / static_cast<float>(samples - 1))) : 0;
