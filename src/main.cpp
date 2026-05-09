@@ -2080,6 +2080,75 @@ nlohmann::json MakeViewportJson()
     };
 }
 
+nlohmann::json MakeSerializedNodesJson()
+{
+    nlohmann::json nodesJson = nlohmann::json::array();
+    for (const rock::Node& node : g_graph.Nodes())
+    {
+        nodesJson.push_back(MakeSerializedNodeJson(node));
+    }
+    return nodesJson;
+}
+
+nlohmann::json MakeSerializedLinksJson()
+{
+    nlohmann::json linksJson = nlohmann::json::array();
+    for (const rock::Link& link : g_graph.Links())
+    {
+        linksJson.push_back({
+            {"id", link.id},
+            {"startPin", link.startPin},
+            {"endPin", link.endPin},
+        });
+    }
+    return linksJson;
+}
+
+void WriteSelectedNodesJson(nlohmann::json& root)
+{
+    root["selectedNodeId"] = g_selectedNodeId;
+    root["selectedNodeIds"] = nlohmann::json::array();
+    if (g_nodeEditor == nullptr)
+    {
+        return;
+    }
+
+    ed::SetCurrentEditor(g_nodeEditor);
+    std::vector<ed::NodeId> selectedNodes(g_graph.Nodes().size());
+    const int selectedCount = ed::GetSelectedNodes(selectedNodes.data(), static_cast<int>(selectedNodes.size()));
+    g_selectedNodeId = selectedCount > 0 ? static_cast<rock::GraphId>(selectedNodes.front().Get()) : 0;
+    root["selectedNodeId"] = g_selectedNodeId;
+    for (int i = 0; i < selectedCount; ++i)
+    {
+        root["selectedNodeIds"].push_back(static_cast<rock::GraphId>(selectedNodes[static_cast<size_t>(i)].Get()));
+    }
+    ed::SetCurrentEditor(nullptr);
+}
+
+nlohmann::json MakeNodePositionsJson()
+{
+    nlohmann::json nodePositionsJson = nlohmann::json::object();
+    for (const rock::Node& node : g_graph.Nodes())
+    {
+        ImVec2 position = InitialNodePosition(node.kind);
+        const auto cached = std::ranges::find_if(g_nodePositionCache, [&](const auto& entry) {
+            return entry.first == node.id;
+        });
+        if (cached != g_nodePositionCache.end())
+        {
+            position = cached->second;
+        }
+        else if (g_nodeEditor != nullptr)
+        {
+            ed::SetCurrentEditor(g_nodeEditor);
+            position = ed::GetNodePosition(ed::NodeId(node.id));
+            ed::SetCurrentEditor(nullptr);
+        }
+        nodePositionsJson[std::to_string(node.id)] = {position.x, position.y};
+    }
+    return nodePositionsJson;
+}
+
 bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
 {
     try
@@ -2088,63 +2157,16 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
         root["format"] = "terrain_editor_project";
         root["formatVersion"] = 1;
         root["appVersion"] = TERRAIN_EDITOR_VERSION_STRING;
-        root["selectedNodeId"] = g_selectedNodeId;
-        root["selectedNodeIds"] = nlohmann::json::array();
+        WriteSelectedNodesJson(root);
         root["previewStage"] = static_cast<int>(g_graph.Preview());
         root["previewPinId"] = g_graph.Evaluation().previewPinId;
         root["settings"] = MakeProjectSettingsJson();
 
         root["nodeSettings"] = nlohmann::json::object();
         root["viewport"] = MakeViewportJson();
-
-        root["nodes"] = nlohmann::json::array();
-        for (const rock::Node& node : g_graph.Nodes())
-        {
-            root["nodes"].push_back(MakeSerializedNodeJson(node));
-        }
-
-        root["links"] = nlohmann::json::array();
-        for (const rock::Link& link : g_graph.Links())
-        {
-            root["links"].push_back({
-                {"id", link.id},
-                {"startPin", link.startPin},
-                {"endPin", link.endPin},
-            });
-        }
-
-        root["nodePositions"] = nlohmann::json::object();
-        if (g_nodeEditor != nullptr)
-        {
-            ed::SetCurrentEditor(g_nodeEditor);
-            std::vector<ed::NodeId> selectedNodes(g_graph.Nodes().size());
-            const int selectedCount = ed::GetSelectedNodes(selectedNodes.data(), static_cast<int>(selectedNodes.size()));
-            g_selectedNodeId = selectedCount > 0 ? static_cast<rock::GraphId>(selectedNodes.front().Get()) : 0;
-            root["selectedNodeId"] = g_selectedNodeId;
-            for (int i = 0; i < selectedCount; ++i)
-            {
-                root["selectedNodeIds"].push_back(static_cast<rock::GraphId>(selectedNodes[static_cast<size_t>(i)].Get()));
-            }
-            ed::SetCurrentEditor(nullptr);
-        }
-        for (const rock::Node& node : g_graph.Nodes())
-        {
-            ImVec2 position = InitialNodePosition(node.kind);
-            const auto cached = std::ranges::find_if(g_nodePositionCache, [&](const auto& entry) {
-                return entry.first == node.id;
-            });
-            if (cached != g_nodePositionCache.end())
-            {
-                position = cached->second;
-            }
-            else if (g_nodeEditor != nullptr)
-            {
-                ed::SetCurrentEditor(g_nodeEditor);
-                position = ed::GetNodePosition(ed::NodeId(node.id));
-                ed::SetCurrentEditor(nullptr);
-            }
-            root["nodePositions"][std::to_string(node.id)] = {position.x, position.y};
-        }
+        root["nodes"] = MakeSerializedNodesJson();
+        root["links"] = MakeSerializedLinksJson();
+        root["nodePositions"] = MakeNodePositionsJson();
 
         if (path.has_parent_path())
         {
