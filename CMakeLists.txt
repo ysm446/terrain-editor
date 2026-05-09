@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(TerrainEditor VERSION 3.10.12 LANGUAGES CXX RC)
+project(TerrainEditor VERSION 3.10.13 LANGUAGES CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -54,11 +54,10 @@ endif()
 
 add_custom_command(TARGET terrain_editor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E rm -rf
-        $<TARGET_FILE_DIR:terrain_editor>/data/ui_themes
+        $<TARGET_FILE_DIR:terrain_editor>/data
     COMMAND ${CMAKE_COMMAND} -E rm -rf
         $<TARGET_FILE_DIR:terrain_editor>/assets
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_SOURCE_DIR}/data
+    COMMAND ${CMAKE_COMMAND} -E make_directory
         $<TARGET_FILE_DIR:terrain_editor>/data
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_SOURCE_DIR}/assets

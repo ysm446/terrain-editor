@@ -1,7 +1,9 @@
 build/
+build-vcpkg/
 out/
 .vs/
 .vscode/
+.vcpkg/
 CMakeUserPresets.json
 data/
 *.user
