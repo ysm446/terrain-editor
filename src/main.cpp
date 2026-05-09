@@ -2007,6 +2007,79 @@ void ReadNodeSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     ReadSedimentSettingsJson(nodeJson, node);
 }
 
+nlohmann::json MakeProjectSettingsJson()
+{
+    const rock::GraphSettings& graphSettings = g_graph.Settings();
+    const rock::PreviewSettings& preview = graphSettings.preview;
+    const rock::SkySettings& sky = graphSettings.sky;
+    const rock::CloudSettings& clouds = graphSettings.clouds;
+    const int displayMode = sky.mode == rock::SkyMode::Atmospheric
+        ? 2
+        : (preview.lightingMode >= 1 ? 1 : 0);
+
+    return {
+        {"display", {
+            {"mode", displayMode},
+            {"showFps", g_ui.showFps},
+        }},
+        {"preview", {
+            {"lightingMode", preview.lightingMode},
+            {"meshBackend", static_cast<int>(preview.meshBackend)},
+            {"showGrid", preview.showGrid},
+            {"gridCellCount", preview.gridCellCount},
+            {"gridCellSizeMeters", preview.gridCellSizeMeters},
+            {"gridColor", {
+                preview.gridColor[0],
+                preview.gridColor[1],
+                preview.gridColor[2],
+            }},
+        }},
+        {"sky", {
+            {"mode", static_cast<int>(sky.mode)},
+            {"atmosphereDensity", sky.atmosphereDensity},
+            {"mieStrength", sky.mieStrength},
+            {"mieEccentricity", sky.mieEccentricity},
+            {"groundAlbedo", {sky.groundAlbedo[0], sky.groundAlbedo[1], sky.groundAlbedo[2]}},
+            {"sunSizeDegrees", sky.sunSizeDegrees},
+            {"sunGlowStrength", sky.sunGlowStrength},
+        }},
+        {"clouds", {
+            {"enabled", clouds.enabled},
+            {"seed", clouds.seed},
+            {"coverage", clouds.coverage},
+            {"densityMultiplier", clouds.densityMultiplier},
+            {"altitudeMin", clouds.altitudeMin},
+            {"altitudeMax", clouds.altitudeMax},
+            {"horizontalScale", clouds.horizontalScale},
+            {"absorption", clouds.absorption},
+            {"color", {clouds.color[0], clouds.color[1], clouds.color[2]}},
+            {"windDirectionDegrees", clouds.windDirectionDegrees},
+            {"windSpeedMetersPerSec", clouds.windSpeedMetersPerSec},
+            {"qualitySamples", clouds.qualitySamples},
+            {"shadowStrength", clouds.shadowStrength},
+            {"shadowResolution", clouds.shadowResolution},
+            {"shadowSamples", clouds.shadowSamples},
+            {"fieldRadius", clouds.fieldRadius},
+            {"fieldFalloff", clouds.fieldFalloff},
+            {"lightSamples", clouds.lightSamples},
+            {"lightStepMeters", clouds.lightStepMeters},
+            {"phaseEccentricity", clouds.phaseEccentricity},
+        }},
+    };
+}
+
+nlohmann::json MakeViewportJson()
+{
+    return {
+        {"yaw", g_viewport.yaw},
+        {"pitch", g_viewport.pitch},
+        {"fovDegrees", g_viewport.fovDegrees},
+        {"orbitDistance", g_viewport.orbitDistance},
+        {"zoom", g_viewport.zoom},
+        {"pan", {g_viewport.pan.x, g_viewport.pan.y}},
+    };
+}
+
 bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
 {
     try
@@ -2019,74 +2092,10 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
         root["selectedNodeIds"] = nlohmann::json::array();
         root["previewStage"] = static_cast<int>(g_graph.Preview());
         root["previewPinId"] = g_graph.Evaluation().previewPinId;
-
-        const rock::GraphSettings& graphSettings = g_graph.Settings();
-        const rock::PreviewSettings& preview = graphSettings.preview;
-        const rock::SkySettings& sky = graphSettings.sky;
-        const rock::CloudSettings& clouds = graphSettings.clouds;
-        const int displayMode = sky.mode == rock::SkyMode::Atmospheric
-            ? 2
-            : (preview.lightingMode >= 1 ? 1 : 0);
-        root["settings"] = {
-            {"display", {
-                {"mode", displayMode},
-                {"showFps", g_ui.showFps},
-            }},
-            {"preview", {
-                {"lightingMode", preview.lightingMode},
-                {"meshBackend", static_cast<int>(preview.meshBackend)},
-                {"showGrid", preview.showGrid},
-                {"gridCellCount", preview.gridCellCount},
-                {"gridCellSizeMeters", preview.gridCellSizeMeters},
-                {"gridColor", {
-                    preview.gridColor[0],
-                    preview.gridColor[1],
-                    preview.gridColor[2],
-                }},
-            }},
-            {"sky", {
-                {"mode", static_cast<int>(sky.mode)},
-                {"atmosphereDensity", sky.atmosphereDensity},
-                {"mieStrength", sky.mieStrength},
-                {"mieEccentricity", sky.mieEccentricity},
-                {"groundAlbedo", {sky.groundAlbedo[0], sky.groundAlbedo[1], sky.groundAlbedo[2]}},
-                {"sunSizeDegrees", sky.sunSizeDegrees},
-                {"sunGlowStrength", sky.sunGlowStrength},
-            }},
-            {"clouds", {
-                {"enabled", clouds.enabled},
-                {"seed", clouds.seed},
-                {"coverage", clouds.coverage},
-                {"densityMultiplier", clouds.densityMultiplier},
-                {"altitudeMin", clouds.altitudeMin},
-                {"altitudeMax", clouds.altitudeMax},
-                {"horizontalScale", clouds.horizontalScale},
-                {"absorption", clouds.absorption},
-                {"color", {clouds.color[0], clouds.color[1], clouds.color[2]}},
-                {"windDirectionDegrees", clouds.windDirectionDegrees},
-                {"windSpeedMetersPerSec", clouds.windSpeedMetersPerSec},
-                {"qualitySamples", clouds.qualitySamples},
-                {"shadowStrength", clouds.shadowStrength},
-                {"shadowResolution", clouds.shadowResolution},
-                {"shadowSamples", clouds.shadowSamples},
-                {"fieldRadius", clouds.fieldRadius},
-                {"fieldFalloff", clouds.fieldFalloff},
-                {"lightSamples", clouds.lightSamples},
-                {"lightStepMeters", clouds.lightStepMeters},
-                {"phaseEccentricity", clouds.phaseEccentricity},
-            }},
-        };
+        root["settings"] = MakeProjectSettingsJson();
 
         root["nodeSettings"] = nlohmann::json::object();
-
-        root["viewport"] = {
-            {"yaw", g_viewport.yaw},
-            {"pitch", g_viewport.pitch},
-            {"fovDegrees", g_viewport.fovDegrees},
-            {"orbitDistance", g_viewport.orbitDistance},
-            {"zoom", g_viewport.zoom},
-            {"pan", {g_viewport.pan.x, g_viewport.pan.y}},
-        };
+        root["viewport"] = MakeViewportJson();
 
         root["nodes"] = nlohmann::json::array();
         for (const rock::Node& node : g_graph.Nodes())
