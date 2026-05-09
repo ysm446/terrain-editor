@@ -2209,6 +2209,137 @@ void SaveCurrentProject()
     }
 }
 
+void ReadColor3Json(const nlohmann::json& ownerJson, const char* key, std::array<float, 3>& target, float maxValue)
+{
+    if (ownerJson.contains(key) && ownerJson[key].is_array() && ownerJson[key].size() == 3)
+    {
+        target[0] = std::clamp(ownerJson[key][0].get<float>(), 0.0f, maxValue);
+        target[1] = std::clamp(ownerJson[key][1].get<float>(), 0.0f, maxValue);
+        target[2] = std::clamp(ownerJson[key][2].get<float>(), 0.0f, maxValue);
+    }
+}
+
+void ReadSkySettingsJson(const nlohmann::json& settingsJson, rock::SkySettings& sky)
+{
+    const nlohmann::json skyJson = settingsJson.value("sky", nlohmann::json::object());
+    sky = rock::SkySettings{};
+    if (skyJson.empty())
+    {
+        return;
+    }
+
+    const int skyModeInt = std::clamp(skyJson.value("mode", static_cast<int>(sky.mode)),
+                                      static_cast<int>(rock::SkyMode::SolidColor),
+                                      static_cast<int>(rock::SkyMode::Atmospheric));
+    sky.mode = static_cast<rock::SkyMode>(skyModeInt);
+    sky.atmosphereDensity = std::clamp(skyJson.value("atmosphereDensity", sky.atmosphereDensity), 0.05f, 8.0f);
+    sky.mieStrength = std::clamp(skyJson.value("mieStrength", sky.mieStrength), 0.0f, 8.0f);
+    sky.mieEccentricity = std::clamp(skyJson.value("mieEccentricity", sky.mieEccentricity), -0.99f, 0.99f);
+    ReadColor3Json(skyJson, "groundAlbedo", sky.groundAlbedo, 8.0f);
+    sky.sunSizeDegrees = std::clamp(skyJson.value("sunSizeDegrees", sky.sunSizeDegrees), 0.1f, 30.0f);
+    sky.sunGlowStrength = std::clamp(skyJson.value("sunGlowStrength", sky.sunGlowStrength), 0.0f, 4.0f);
+}
+
+void ReadCloudSettingsJson(const nlohmann::json& settingsJson, rock::CloudSettings& clouds)
+{
+    const nlohmann::json cloudsJson = settingsJson.value("clouds", nlohmann::json::object());
+    clouds = rock::CloudSettings{};
+    if (cloudsJson.empty())
+    {
+        return;
+    }
+
+    clouds.enabled = cloudsJson.value("enabled", clouds.enabled);
+    clouds.seed = std::clamp(cloudsJson.value("seed", clouds.seed), 0, 999999);
+    clouds.coverage = std::clamp(cloudsJson.value("coverage", clouds.coverage), 0.0f, 1.0f);
+    clouds.densityMultiplier = std::clamp(cloudsJson.value("densityMultiplier", clouds.densityMultiplier), 0.0f, 8.0f);
+    clouds.altitudeMin = std::clamp(cloudsJson.value("altitudeMin", clouds.altitudeMin), 0.0f, 30000.0f);
+    clouds.altitudeMax = std::clamp(cloudsJson.value("altitudeMax", clouds.altitudeMax), 0.0f, 30000.0f);
+    clouds.horizontalScale = std::clamp(cloudsJson.value("horizontalScale", clouds.horizontalScale), 50.0f, 100000.0f);
+    clouds.absorption = std::clamp(cloudsJson.value("absorption", clouds.absorption), 0.0f, 2.0f);
+    ReadColor3Json(cloudsJson, "color", clouds.color, 8.0f);
+    clouds.windDirectionDegrees = std::clamp(cloudsJson.value("windDirectionDegrees", clouds.windDirectionDegrees), 0.0f, 360.0f);
+    clouds.windSpeedMetersPerSec = std::clamp(cloudsJson.value("windSpeedMetersPerSec", clouds.windSpeedMetersPerSec), 0.0f, 500.0f);
+    clouds.qualitySamples = std::clamp(cloudsJson.value("qualitySamples", clouds.qualitySamples), 8, 128);
+    clouds.shadowStrength = std::clamp(cloudsJson.value("shadowStrength", clouds.shadowStrength), 0.0f, 1.0f);
+    clouds.shadowResolution = std::clamp(cloudsJson.value("shadowResolution", clouds.shadowResolution), 256, 4096);
+    clouds.shadowSamples = std::clamp(cloudsJson.value("shadowSamples", clouds.shadowSamples), 4, 64);
+    clouds.fieldRadius = std::clamp(cloudsJson.value("fieldRadius", clouds.fieldRadius), 100.0f, 200000.0f);
+    clouds.fieldFalloff = std::clamp(cloudsJson.value("fieldFalloff", clouds.fieldFalloff), 1.0f, 50000.0f);
+    clouds.lightSamples = std::clamp(cloudsJson.value("lightSamples", clouds.lightSamples), 0, 16);
+    clouds.lightStepMeters = std::clamp(cloudsJson.value("lightStepMeters", clouds.lightStepMeters), 1.0f, 2000.0f);
+    clouds.phaseEccentricity = std::clamp(cloudsJson.value("phaseEccentricity", clouds.phaseEccentricity), -0.99f, 0.99f);
+}
+
+void ReadPreviewSettingsJson(const nlohmann::json& settingsJson, rock::PreviewSettings& preview, const rock::SkySettings& sky)
+{
+    const nlohmann::json previewJson = settingsJson.value("preview", nlohmann::json::object());
+    if (previewJson.empty())
+    {
+        if (sky.mode == rock::SkyMode::Atmospheric)
+        {
+            preview.lightingMode = 1;
+        }
+        return;
+    }
+
+    preview.lightingMode = std::clamp(previewJson.value("lightingMode", preview.lightingMode), 0, 1);
+    const int backendInt = std::clamp(previewJson.value("meshBackend", static_cast<int>(preview.meshBackend)),
+                                      static_cast<int>(rock::MeshPreviewBackend::CpuMesh),
+                                      static_cast<int>(rock::MeshPreviewBackend::GpuDisplacement));
+    preview.meshBackend = static_cast<rock::MeshPreviewBackend>(backendInt);
+    preview.showGrid = previewJson.value("showGrid", preview.showGrid);
+    preview.gridCellCount = std::clamp(previewJson.value("gridCellCount", preview.gridCellCount), 1, 200);
+    preview.gridCellSizeMeters = std::clamp(previewJson.value("gridCellSizeMeters", preview.gridCellSizeMeters), 1.0f, 10000.0f);
+    ReadColor3Json(previewJson, "gridColor", preview.gridColor, 1.0f);
+}
+
+void ReadDisplaySettingsJson(const nlohmann::json& settingsJson,
+                             rock::PreviewSettings& preview,
+                             rock::SkySettings& sky,
+                             rock::CloudSettings& clouds)
+{
+    const nlohmann::json displayJson = settingsJson.value("display", nlohmann::json::object());
+    if (displayJson.empty())
+    {
+        return;
+    }
+
+    g_ui.showFps = displayJson.value("showFps", g_ui.showFps);
+    const int displayMode = std::clamp(displayJson.value("mode", -1), -1, 2);
+    if (displayMode == 0)
+    {
+        preview.lightingMode = 0;
+        sky.mode = rock::SkyMode::SolidColor;
+        clouds.enabled = false;
+    }
+    else if (displayMode == 1)
+    {
+        preview.lightingMode = 1;
+        sky.mode = rock::SkyMode::SolidColor;
+        clouds.enabled = false;
+    }
+    else if (displayMode == 2)
+    {
+        preview.lightingMode = 1;
+        sky.mode = rock::SkyMode::Atmospheric;
+    }
+}
+
+void ReadProjectSettingsJson(const nlohmann::json& root)
+{
+    const nlohmann::json settingsJson = root.value("settings", nlohmann::json::object());
+    rock::GraphSettings& graphSettings = g_graph.Settings();
+    rock::PreviewSettings& preview = graphSettings.preview;
+    rock::SkySettings& sky = graphSettings.sky;
+    rock::CloudSettings& clouds = graphSettings.clouds;
+
+    ReadSkySettingsJson(settingsJson, sky);
+    ReadCloudSettingsJson(settingsJson, clouds);
+    ReadPreviewSettingsJson(settingsJson, preview, sky);
+    ReadDisplaySettingsJson(settingsJson, preview, sky, clouds);
+}
+
 bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
 {
     try
@@ -2229,112 +2360,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
             return false;
         }
 
-        const nlohmann::json settingsJson = root.value("settings", nlohmann::json::object());
-        rock::GraphSettings& graphSettings = g_graph.Settings();
-        rock::PreviewSettings& preview = graphSettings.preview;
-        const nlohmann::json skyJson = settingsJson.value("sky", nlohmann::json::object());
-        rock::SkySettings& sky = graphSettings.sky;
-        sky = rock::SkySettings{};
-        if (!skyJson.empty())
-        {
-            const int skyModeInt = std::clamp(skyJson.value("mode", static_cast<int>(sky.mode)),
-                                              static_cast<int>(rock::SkyMode::SolidColor),
-                                              static_cast<int>(rock::SkyMode::Atmospheric));
-            sky.mode = static_cast<rock::SkyMode>(skyModeInt);
-            const auto readColor = [&](const char* key, std::array<float, 3>& target) {
-                if (skyJson.contains(key) && skyJson[key].is_array() && skyJson[key].size() == 3)
-                {
-                    target[0] = std::clamp(skyJson[key][0].get<float>(), 0.0f, 8.0f);
-                    target[1] = std::clamp(skyJson[key][1].get<float>(), 0.0f, 8.0f);
-                    target[2] = std::clamp(skyJson[key][2].get<float>(), 0.0f, 8.0f);
-                }
-            };
-            sky.atmosphereDensity = std::clamp(skyJson.value("atmosphereDensity", sky.atmosphereDensity), 0.05f, 8.0f);
-            sky.mieStrength = std::clamp(skyJson.value("mieStrength", sky.mieStrength), 0.0f, 8.0f);
-            sky.mieEccentricity = std::clamp(skyJson.value("mieEccentricity", sky.mieEccentricity), -0.99f, 0.99f);
-            readColor("groundAlbedo", sky.groundAlbedo);
-            sky.sunSizeDegrees = std::clamp(skyJson.value("sunSizeDegrees", sky.sunSizeDegrees), 0.1f, 30.0f);
-            sky.sunGlowStrength = std::clamp(skyJson.value("sunGlowStrength", sky.sunGlowStrength), 0.0f, 4.0f);
-        }
-
-        const nlohmann::json cloudsJson = settingsJson.value("clouds", nlohmann::json::object());
-        rock::CloudSettings& clouds = graphSettings.clouds;
-        clouds = rock::CloudSettings{};
-        if (!cloudsJson.empty())
-        {
-            clouds.enabled = cloudsJson.value("enabled", clouds.enabled);
-            clouds.seed = std::clamp(cloudsJson.value("seed", clouds.seed), 0, 999999);
-            clouds.coverage = std::clamp(cloudsJson.value("coverage", clouds.coverage), 0.0f, 1.0f);
-            clouds.densityMultiplier = std::clamp(cloudsJson.value("densityMultiplier", clouds.densityMultiplier), 0.0f, 8.0f);
-            clouds.altitudeMin = std::clamp(cloudsJson.value("altitudeMin", clouds.altitudeMin), 0.0f, 30000.0f);
-            clouds.altitudeMax = std::clamp(cloudsJson.value("altitudeMax", clouds.altitudeMax), 0.0f, 30000.0f);
-            clouds.horizontalScale = std::clamp(cloudsJson.value("horizontalScale", clouds.horizontalScale), 50.0f, 100000.0f);
-            clouds.absorption = std::clamp(cloudsJson.value("absorption", clouds.absorption), 0.0f, 2.0f);
-            if (cloudsJson.contains("color") && cloudsJson["color"].is_array() && cloudsJson["color"].size() == 3)
-            {
-                clouds.color[0] = std::clamp(cloudsJson["color"][0].get<float>(), 0.0f, 8.0f);
-                clouds.color[1] = std::clamp(cloudsJson["color"][1].get<float>(), 0.0f, 8.0f);
-                clouds.color[2] = std::clamp(cloudsJson["color"][2].get<float>(), 0.0f, 8.0f);
-            }
-            clouds.windDirectionDegrees = std::clamp(cloudsJson.value("windDirectionDegrees", clouds.windDirectionDegrees), 0.0f, 360.0f);
-            clouds.windSpeedMetersPerSec = std::clamp(cloudsJson.value("windSpeedMetersPerSec", clouds.windSpeedMetersPerSec), 0.0f, 500.0f);
-            clouds.qualitySamples = std::clamp(cloudsJson.value("qualitySamples", clouds.qualitySamples), 8, 128);
-            clouds.shadowStrength = std::clamp(cloudsJson.value("shadowStrength", clouds.shadowStrength), 0.0f, 1.0f);
-            clouds.shadowResolution = std::clamp(cloudsJson.value("shadowResolution", clouds.shadowResolution), 256, 4096);
-            clouds.shadowSamples = std::clamp(cloudsJson.value("shadowSamples", clouds.shadowSamples), 4, 64);
-            clouds.fieldRadius = std::clamp(cloudsJson.value("fieldRadius", clouds.fieldRadius), 100.0f, 200000.0f);
-            clouds.fieldFalloff = std::clamp(cloudsJson.value("fieldFalloff", clouds.fieldFalloff), 1.0f, 50000.0f);
-            clouds.lightSamples = std::clamp(cloudsJson.value("lightSamples", clouds.lightSamples), 0, 16);
-            clouds.lightStepMeters = std::clamp(cloudsJson.value("lightStepMeters", clouds.lightStepMeters), 1.0f, 2000.0f);
-            clouds.phaseEccentricity = std::clamp(cloudsJson.value("phaseEccentricity", clouds.phaseEccentricity), -0.99f, 0.99f);
-        }
-        const nlohmann::json previewJson = settingsJson.value("preview", nlohmann::json::object());
-        if (!previewJson.empty())
-        {
-            preview.lightingMode = std::clamp(previewJson.value("lightingMode", preview.lightingMode), 0, 1);
-            {
-                const int backendInt = std::clamp(previewJson.value("meshBackend", static_cast<int>(preview.meshBackend)),
-                                                  static_cast<int>(rock::MeshPreviewBackend::CpuMesh),
-                                                  static_cast<int>(rock::MeshPreviewBackend::GpuDisplacement));
-                preview.meshBackend = static_cast<rock::MeshPreviewBackend>(backendInt);
-            }
-            preview.showGrid = previewJson.value("showGrid", preview.showGrid);
-            preview.gridCellCount = std::clamp(previewJson.value("gridCellCount", preview.gridCellCount), 1, 200);
-            preview.gridCellSizeMeters = std::clamp(previewJson.value("gridCellSizeMeters", preview.gridCellSizeMeters), 1.0f, 10000.0f);
-            if (previewJson.contains("gridColor") && previewJson["gridColor"].is_array() && previewJson["gridColor"].size() == 3)
-            {
-                preview.gridColor[0] = std::clamp(previewJson["gridColor"][0].get<float>(), 0.0f, 1.0f);
-                preview.gridColor[1] = std::clamp(previewJson["gridColor"][1].get<float>(), 0.0f, 1.0f);
-                preview.gridColor[2] = std::clamp(previewJson["gridColor"][2].get<float>(), 0.0f, 1.0f);
-            }
-        }
-        else if (sky.mode == rock::SkyMode::Atmospheric)
-        {
-            preview.lightingMode = 1;
-        }
-        const nlohmann::json displayJson = settingsJson.value("display", nlohmann::json::object());
-        if (!displayJson.empty())
-        {
-            g_ui.showFps = displayJson.value("showFps", g_ui.showFps);
-            const int displayMode = std::clamp(displayJson.value("mode", -1), -1, 2);
-            if (displayMode == 0)
-            {
-                preview.lightingMode = 0;
-                sky.mode = rock::SkyMode::SolidColor;
-                clouds.enabled = false;
-            }
-            else if (displayMode == 1)
-            {
-                preview.lightingMode = 1;
-                sky.mode = rock::SkyMode::SolidColor;
-                clouds.enabled = false;
-            }
-            else if (displayMode == 2)
-            {
-                preview.lightingMode = 1;
-                sky.mode = rock::SkyMode::Atmospheric;
-            }
-        }
+        ReadProjectSettingsJson(root);
 
         const nlohmann::json nodesJson = root.value("nodes", nlohmann::json::array());
         if (nodesJson.is_array() && !nodesJson.empty())
