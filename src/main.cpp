@@ -8032,6 +8032,165 @@ bool DrawCameraFloatRow(const char* label, const char* id, float* value, float m
     return changed;
 }
 
+bool DrawHeightmapLoadProperties(rock::Node& editableNode)
+{
+    if (!ImGui::BeginTable("HeightmapPropertyRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        return false;
+    }
+
+    ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 184.0f);
+    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+    editableNode.heightmap.scaleMeters = std::clamp(editableNode.heightmap.scaleMeters, 1.0f, 8096.0f);
+    editableNode.heightmap.relativeVerticalScalePercent = std::clamp(editableNode.heightmap.relativeVerticalScalePercent, 0.0f, 100.0f);
+    editableNode.heightmap.verticalOffsetMeters = std::clamp(editableNode.heightmap.verticalOffsetMeters, -4096.0f, 4096.0f);
+    editableNode.heightmap.simulationResolution = NearestResolutionPreset(editableNode.heightmap.simulationResolution);
+
+    if (DrawPropertyPathRow("File", "HeightmapFile", &editableNode.heightmap.path, "Heightmap file changed", "読み込むハイトマップ画像です。明るいピクセルほど高い地形として扱います。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Scale (m)", "HeightmapScaleMeters", &editableNode.heightmap.scaleMeters, 1.0f, 8096.0f, rock::HeightmapLoadSettings{}.scaleMeters, "Heightmap scale changed", true, "地形の横幅と奥行きです。1 unit = 1 m として描画します。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Relative Vertical (%)", "HeightmapRelativeVerticalScale", &editableNode.heightmap.relativeVerticalScalePercent, 0.0f, 100.0f, rock::HeightmapLoadSettings{}.relativeVerticalScalePercent, "Heightmap vertical scale changed", true, "高さ方向の相対倍率です。実際の高さ範囲は Scale (m) x この値 / 100 になります。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Offset (m)", "HeightmapVerticalOffset", &editableNode.heightmap.verticalOffsetMeters, -4096.0f, 4096.0f, rock::HeightmapLoadSettings{}.verticalOffsetMeters, "Heightmap vertical offset changed", true, "地形全体を上下に移動する高さオフセットです。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawResolutionPresetRow("Simulation Resolution", "HeightmapSimulationResolution", &editableNode.heightmap.simulationResolution, rock::HeightmapLoadSettings{}.simulationResolution, "Heightmap simulation resolution changed", true, "侵食や地形処理に使う内部ハイトフィールド解像度です。表示設定の Resolution はメッシュ表示の細かさだけを変更します。"))
+    {
+        EvaluateGraph();
+    }
+
+    ImGui::EndTable();
+    return true;
+}
+
+bool DrawShapeProperties(rock::Node& editableNode)
+{
+    if (!ImGui::BeginTable("ShapePropertyRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        return false;
+    }
+
+    ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 184.0f);
+    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+    rock::ShapeSettings& shape = editableNode.shape;
+    shape.scaleMeters = std::clamp(shape.scaleMeters, 1.0f, 8096.0f);
+    shape.relativeHeightPercent = std::clamp(shape.relativeHeightPercent, 0.0f, 100.0f);
+    shape.simulationResolution = NearestResolutionPreset(shape.simulationResolution);
+
+    int shapeKind = static_cast<int>(shape.kind);
+    if (DrawPropertyComboRow("Shape Type", "ShapeType", &shapeKind, "Hemisphere\0Pyramid\0", "デバッグ用の基本ハイトフィールド形状です。", static_cast<int>(rock::ShapeSettings{}.kind)))
+    {
+        shape.kind = static_cast<rock::ShapeKind>(std::clamp(shapeKind, 0, 1));
+        g_graph.MarkDirty("Shape type changed");
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Scale (m)", "ShapeScaleMeters", &shape.scaleMeters, 1.0f, 8096.0f, rock::ShapeSettings{}.scaleMeters, "Shape scale changed", true, "シェープの横幅と奥行きです。1 unit = 1 m として描画します。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Relative Height (%)", "ShapeRelativeHeight", &shape.relativeHeightPercent, 0.0f, 100.0f, rock::ShapeSettings{}.relativeHeightPercent, "Shape height changed", true, "最大高さです。実際の高さは Scale (m) x この値 / 100 になります。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawResolutionPresetRow("Simulation Resolution", "ShapeSimulationResolution", &shape.simulationResolution, rock::ShapeSettings{}.simulationResolution, "Shape simulation resolution changed", true, "侵食や地形処理に使う内部ハイトフィールド解像度です。表示設定の Resolution はメッシュ表示の細かさだけを変更します。"))
+    {
+        EvaluateGraph();
+    }
+
+    ImGui::EndTable();
+    return true;
+}
+
+bool DrawHeightmapBlurProperties(rock::Node& editableNode)
+{
+    if (!ImGui::BeginTable("HeightmapBlurRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        return false;
+    }
+
+    ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 184.0f);
+    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+    rock::HeightmapBlurSettings& blur = editableNode.heightmapBlur;
+    blur.radius = std::clamp(blur.radius, 0.0f, 128.0f);
+    blur.strength = std::clamp(blur.strength, 0.0f, 1.0f);
+    blur.iterations = std::clamp(blur.iterations, 0, 64);
+
+    if (DrawPropertyFloatRow("Radius (cells)", "HeightmapBlurRadius", &blur.radius, 0.0f, 128.0f, rock::HeightmapBlurSettings{}.radius, "Heightmap blur radius changed", true, "ぼかしに使うセル半径です。大きいほど広い範囲の起伏をならします。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyPercentRow("Strength (%)", "HeightmapBlurStrength", &blur.strength, 0.0f, 1.0f, rock::HeightmapBlurSettings{}.strength, "Heightmap blur strength changed", "元の高さとぼかし後の高さを混ぜる量です。低いほど元の形を残します。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyIntRow("Iterations", "HeightmapBlurIterations", &blur.iterations, 0, 64, rock::HeightmapBlurSettings{}.iterations, "Heightmap blur iterations changed", true, "ぼかし処理を繰り返す回数です。増やすほど滑らかになりますが計算時間も増えます。"))
+    {
+        EvaluateGraph();
+    }
+
+    ImGui::EndTable();
+    return true;
+}
+
+bool DrawErosionNoiseProperties(rock::Node& editableNode)
+{
+    if (!ImGui::BeginTable("ErosionNoiseRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        return false;
+    }
+
+    ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 200.0f);
+    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+    rock::ErosionNoiseSettings& en = editableNode.erosionNoise;
+    en.frequency = std::clamp(en.frequency, 0.0f, 256.0f);
+    en.octaves = std::clamp(en.octaves, 0, 8);
+    en.erosionStrength = std::clamp(en.erosionStrength, 0.0f, 1.0f);
+    en.directionInfluence = std::clamp(en.directionInfluence, 0.0f, 8.0f);
+    en.valleyLow = std::clamp(en.valleyLow, 0.0f, 1.0f);
+    en.valleyHigh = std::clamp(en.valleyHigh, 0.0f, 1.0f);
+    en.seed = std::clamp(en.seed, 0, 999999);
+
+    if (DrawPropertyFloatRow("Frequency", "ErosionNoiseFrequency", &en.frequency, 0.0f, 256.0f, rock::ErosionNoiseSettings{}.frequency, "Erosion noise frequency changed", true, "地形範囲に対するノイズの周波数です。大きいほど細かい谷筋になります。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyIntRow("Octaves", "ErosionNoiseOctaves", &en.octaves, 0, 8, rock::ErosionNoiseSettings{}.octaves, "Erosion noise octaves changed", true, "重ねる方向性ノイズのオクターブ数です。多いほど階層的なディテールが増えますが計算時間も増えます。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyPercentRow("Strength (%)", "ErosionNoiseStrength", &en.erosionStrength, 0.0f, 1.0f, rock::ErosionNoiseSettings{}.erosionStrength, "Erosion noise strength changed", "ノイズで足し合わせる高さ寄与です。元地形の高さレンジに対する割合として扱います。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Direction Influence", "ErosionNoiseDirectionInfluence", &en.directionInfluence, 0.0f, 8.0f, rock::ErosionNoiseSettings{}.directionInfluence, "Erosion noise direction influence changed", true, "入力ハイトフィールドの勾配が谷筋方向に効く強さです。0 でランダム方向、大きいほど等高線に沿います。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Valley Low", "ErosionNoiseValleyLow", &en.valleyLow, 0.0f, 1.0f, rock::ErosionNoiseSettings{}.valleyLow, "Erosion noise valley low changed", true, "谷を滑らかに保つ smoothstep の下端しきい値です(正規化高度)。これより低い場所はノイズの寄与が抑えられます。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Valley High", "ErosionNoiseValleyHigh", &en.valleyHigh, 0.0f, 1.0f, rock::ErosionNoiseSettings{}.valleyHigh, "Erosion noise valley high changed", true, "谷を滑らかに保つ smoothstep の上端しきい値です(正規化高度)。これより高い場所でノイズが完全に効きます。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyIntRow("Seed", "ErosionNoiseSeed", &en.seed, 0, 999999, rock::ErosionNoiseSettings{}.seed, "Erosion noise seed changed", true, "ハッシュのオフセットです。同じパラメータでも異なるパターンを得るために使います。"))
+    {
+        EvaluateGraph();
+    }
+
+    ImGui::EndTable();
+    return true;
+}
+
 bool DrawMultiScaleErosionProperties(rock::Node& editableNode)
 {
     if (!ImGui::BeginTable("MultiScaleErosionRows", 2, ImGuiTableFlags_SizingStretchProp))
@@ -8511,142 +8670,23 @@ void DrawPropertiesPanel()
     {
         return;
     }
-    if (selectedNode->kind == rock::NodeKind::HeightmapLoad && ImGui::BeginTable("HeightmapPropertyRows", 2, ImGuiTableFlags_SizingStretchProp))
+    if (selectedNode->kind == rock::NodeKind::HeightmapLoad && DrawHeightmapLoadProperties(*editableNode))
     {
-        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 184.0f);
-        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-        editableNode->heightmap.scaleMeters = std::clamp(editableNode->heightmap.scaleMeters, 1.0f, 8096.0f);
-        editableNode->heightmap.relativeVerticalScalePercent = std::clamp(editableNode->heightmap.relativeVerticalScalePercent, 0.0f, 100.0f);
-        editableNode->heightmap.verticalOffsetMeters = std::clamp(editableNode->heightmap.verticalOffsetMeters, -4096.0f, 4096.0f);
-        editableNode->heightmap.simulationResolution = NearestResolutionPreset(editableNode->heightmap.simulationResolution);
-
-        if (DrawPropertyPathRow("File", "HeightmapFile", &editableNode->heightmap.path, "Heightmap file changed", "読み込むハイトマップ画像です。明るいピクセルほど高い地形として扱います。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Scale (m)", "HeightmapScaleMeters", &editableNode->heightmap.scaleMeters, 1.0f, 8096.0f, rock::HeightmapLoadSettings{}.scaleMeters, "Heightmap scale changed", true, "地形の横幅と奥行きです。1 unit = 1 m として描画します。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Relative Vertical (%)", "HeightmapRelativeVerticalScale", &editableNode->heightmap.relativeVerticalScalePercent, 0.0f, 100.0f, rock::HeightmapLoadSettings{}.relativeVerticalScalePercent, "Heightmap vertical scale changed", true, "高さ方向の相対倍率です。実際の高さ範囲は Scale (m) x この値 / 100 になります。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Offset (m)", "HeightmapVerticalOffset", &editableNode->heightmap.verticalOffsetMeters, -4096.0f, 4096.0f, rock::HeightmapLoadSettings{}.verticalOffsetMeters, "Heightmap vertical offset changed", true, "地形全体を上下に移動する高さオフセットです。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawResolutionPresetRow("Simulation Resolution", "HeightmapSimulationResolution", &editableNode->heightmap.simulationResolution, rock::HeightmapLoadSettings{}.simulationResolution, "Heightmap simulation resolution changed", true, "侵食や地形処理に使う内部ハイトフィールド解像度です。表示設定の Resolution はメッシュ表示の細かさだけを変更します。"))
-        {
-            EvaluateGraph();
-        }
-
-        ImGui::EndTable();
         return;
     }
 
-    if (selectedNode->kind == rock::NodeKind::Shape && ImGui::BeginTable("ShapePropertyRows", 2, ImGuiTableFlags_SizingStretchProp))
+    if (selectedNode->kind == rock::NodeKind::Shape && DrawShapeProperties(*editableNode))
     {
-        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 184.0f);
-        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-        rock::ShapeSettings& shape = editableNode->shape;
-        shape.scaleMeters = std::clamp(shape.scaleMeters, 1.0f, 8096.0f);
-        shape.relativeHeightPercent = std::clamp(shape.relativeHeightPercent, 0.0f, 100.0f);
-        shape.simulationResolution = NearestResolutionPreset(shape.simulationResolution);
-
-        int shapeKind = static_cast<int>(shape.kind);
-        if (DrawPropertyComboRow("Shape Type", "ShapeType", &shapeKind, "Hemisphere\0Pyramid\0", "デバッグ用の基本ハイトフィールド形状です。", static_cast<int>(rock::ShapeSettings{}.kind)))
-        {
-            shape.kind = static_cast<rock::ShapeKind>(std::clamp(shapeKind, 0, 1));
-            g_graph.MarkDirty("Shape type changed");
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Scale (m)", "ShapeScaleMeters", &shape.scaleMeters, 1.0f, 8096.0f, rock::ShapeSettings{}.scaleMeters, "Shape scale changed", true, "シェープの横幅と奥行きです。1 unit = 1 m として描画します。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Relative Height (%)", "ShapeRelativeHeight", &shape.relativeHeightPercent, 0.0f, 100.0f, rock::ShapeSettings{}.relativeHeightPercent, "Shape height changed", true, "最大高さです。実際の高さは Scale (m) x この値 / 100 になります。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawResolutionPresetRow("Simulation Resolution", "ShapeSimulationResolution", &shape.simulationResolution, rock::ShapeSettings{}.simulationResolution, "Shape simulation resolution changed", true, "侵食や地形処理に使う内部ハイトフィールド解像度です。表示設定の Resolution はメッシュ表示の細かさだけを変更します。"))
-        {
-            EvaluateGraph();
-        }
-
-        ImGui::EndTable();
         return;
     }
 
-    if (selectedNode->kind == rock::NodeKind::HeightmapBlur && ImGui::BeginTable("HeightmapBlurRows", 2, ImGuiTableFlags_SizingStretchProp))
+    if (selectedNode->kind == rock::NodeKind::HeightmapBlur && DrawHeightmapBlurProperties(*editableNode))
     {
-        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 184.0f);
-        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-        rock::HeightmapBlurSettings& blur = editableNode->heightmapBlur;
-        blur.radius = std::clamp(blur.radius, 0.0f, 128.0f);
-        blur.strength = std::clamp(blur.strength, 0.0f, 1.0f);
-        blur.iterations = std::clamp(blur.iterations, 0, 64);
-
-        if (DrawPropertyFloatRow("Radius (cells)", "HeightmapBlurRadius", &blur.radius, 0.0f, 128.0f, rock::HeightmapBlurSettings{}.radius, "Heightmap blur radius changed", true, "ぼかしに使うセル半径です。大きいほど広い範囲の起伏をならします。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyPercentRow("Strength (%)", "HeightmapBlurStrength", &blur.strength, 0.0f, 1.0f, rock::HeightmapBlurSettings{}.strength, "Heightmap blur strength changed", "元の高さとぼかし後の高さを混ぜる量です。低いほど元の形を残します。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyIntRow("Iterations", "HeightmapBlurIterations", &blur.iterations, 0, 64, rock::HeightmapBlurSettings{}.iterations, "Heightmap blur iterations changed", true, "ぼかし処理を繰り返す回数です。増やすほど滑らかになりますが計算時間も増えます。"))
-        {
-            EvaluateGraph();
-        }
-
-        ImGui::EndTable();
         return;
     }
 
-    if (selectedNode->kind == rock::NodeKind::ErosionNoise && ImGui::BeginTable("ErosionNoiseRows", 2, ImGuiTableFlags_SizingStretchProp))
+    if (selectedNode->kind == rock::NodeKind::ErosionNoise && DrawErosionNoiseProperties(*editableNode))
     {
-        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 200.0f);
-        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-        rock::ErosionNoiseSettings& en = editableNode->erosionNoise;
-        en.frequency = std::clamp(en.frequency, 0.0f, 256.0f);
-        en.octaves = std::clamp(en.octaves, 0, 8);
-        en.erosionStrength = std::clamp(en.erosionStrength, 0.0f, 1.0f);
-        en.directionInfluence = std::clamp(en.directionInfluence, 0.0f, 8.0f);
-        en.valleyLow = std::clamp(en.valleyLow, 0.0f, 1.0f);
-        en.valleyHigh = std::clamp(en.valleyHigh, 0.0f, 1.0f);
-        en.seed = std::clamp(en.seed, 0, 999999);
-
-        if (DrawPropertyFloatRow("Frequency", "ErosionNoiseFrequency", &en.frequency, 0.0f, 256.0f, rock::ErosionNoiseSettings{}.frequency, "Erosion noise frequency changed", true, "地形範囲に対するノイズの周波数です。大きいほど細かい谷筋になります。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyIntRow("Octaves", "ErosionNoiseOctaves", &en.octaves, 0, 8, rock::ErosionNoiseSettings{}.octaves, "Erosion noise octaves changed", true, "重ねる方向性ノイズのオクターブ数です。多いほど階層的なディテールが増えますが計算時間も増えます。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyPercentRow("Strength (%)", "ErosionNoiseStrength", &en.erosionStrength, 0.0f, 1.0f, rock::ErosionNoiseSettings{}.erosionStrength, "Erosion noise strength changed", "ノイズで足し合わせる高さ寄与です。元地形の高さレンジに対する割合として扱います。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Direction Influence", "ErosionNoiseDirectionInfluence", &en.directionInfluence, 0.0f, 8.0f, rock::ErosionNoiseSettings{}.directionInfluence, "Erosion noise direction influence changed", true, "入力ハイトフィールドの勾配が谷筋方向に効く強さです。0 でランダム方向、大きいほど等高線に沿います。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Valley Low", "ErosionNoiseValleyLow", &en.valleyLow, 0.0f, 1.0f, rock::ErosionNoiseSettings{}.valleyLow, "Erosion noise valley low changed", true, "谷を滑らかに保つ smoothstep の下端しきい値です(正規化高度)。これより低い場所はノイズの寄与が抑えられます。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Valley High", "ErosionNoiseValleyHigh", &en.valleyHigh, 0.0f, 1.0f, rock::ErosionNoiseSettings{}.valleyHigh, "Erosion noise valley high changed", true, "谷を滑らかに保つ smoothstep の上端しきい値です(正規化高度)。これより高い場所でノイズが完全に効きます。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyIntRow("Seed", "ErosionNoiseSeed", &en.seed, 0, 999999, rock::ErosionNoiseSettings{}.seed, "Erosion noise seed changed", true, "ハッシュのオフセットです。同じパラメータでも異なるパターンを得るために使います。"))
-        {
-            EvaluateGraph();
-        }
-
-        ImGui::EndTable();
         return;
     }
 
