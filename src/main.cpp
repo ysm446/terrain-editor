@@ -52,8 +52,6 @@ namespace
 constexpr int kFrameCount = 2;
 constexpr int kSrvDescriptorCount = 64;
 constexpr float kFullFrameSensorHeightMm = 24.0f;
-constexpr int kMaxSerializedNodeKind = static_cast<int>(rock::NodeKind::Sediment);
-constexpr int kMaxSerializedPreviewStage = static_cast<int>(rock::PreviewStage::Sediment);
 constexpr std::array<int, 5> kResolutionPresets = {128, 256, 512, 1024, 2048};
 
 int NearestResolutionPreset(int value)
@@ -1762,6 +1760,39 @@ nlohmann::json MakeSerializedNodeJson(const rock::Node& node)
     return nodeJson;
 }
 
+std::optional<rock::NodeKind> ReadSerializedNodeKind(const nlohmann::json& nodeJson)
+{
+    const int kindInt = nodeJson.value("kind", 0);
+    const rock::NodeKind kind = static_cast<rock::NodeKind>(kindInt);
+    if (!IsTerrainNodeKind(kind))
+    {
+        return std::nullopt;
+    }
+    return kind;
+}
+
+std::optional<rock::PreviewStage> ReadSerializedPreviewStage(const nlohmann::json& root)
+{
+    const int stageInt = root.value("previewStage", static_cast<int>(g_graph.Preview()));
+    const rock::PreviewStage stage = static_cast<rock::PreviewStage>(stageInt);
+    switch (stage)
+    {
+    case rock::PreviewStage::Graph:
+    case rock::PreviewStage::HeightmapBlur:
+    case rock::PreviewStage::Shape:
+    case rock::PreviewStage::ErosionNoise:
+    case rock::PreviewStage::MultiScaleErosion:
+    case rock::PreviewStage::MaskNoise:
+    case rock::PreviewStage::MaskBlend:
+    case rock::PreviewStage::MaskFluvial:
+    case rock::PreviewStage::Rock:
+    case rock::PreviewStage::Sediment:
+        return stage;
+    default:
+        return std::nullopt;
+    }
+}
+
 void ReadNodeSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
 {
     const nlohmann::json nodeHeightmapJson = nodeJson.value("heightmap", nlohmann::json::object());
@@ -2218,11 +2249,12 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
             {
                 rock::Node node;
                 node.id = nodeJson.value("id", 0);
-                node.kind = static_cast<rock::NodeKind>(std::clamp(nodeJson.value("kind", 0), 0, kMaxSerializedNodeKind));
-                if (!IsTerrainNodeKind(node.kind))
+                const std::optional<rock::NodeKind> nodeKind = ReadSerializedNodeKind(nodeJson);
+                if (!nodeKind)
                 {
                     continue;
                 }
+                node.kind = *nodeKind;
                 node.title = nodeJson.value("title", std::string(rock::ToString(node.kind)));
                 if (node.kind == rock::NodeKind::HeightmapLoad && node.title == "Load Heightmap")
                 {
@@ -2313,11 +2345,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
         {
             g_pendingSelectedNodeIds.push_back(g_selectedNodeId);
         }
-        const int serializedPreviewStage = std::clamp(root.value("previewStage", static_cast<int>(g_graph.Preview())), 0, kMaxSerializedPreviewStage);
-        const rock::PreviewStage previewStage = serializedPreviewStage >= static_cast<int>(rock::PreviewStage::Graph)
-            ? static_cast<rock::PreviewStage>(serializedPreviewStage)
-            : rock::PreviewStage::Graph;
-        g_graph.SetPreviewStage(previewStage);
+        g_graph.SetPreviewStage(ReadSerializedPreviewStage(root).value_or(rock::PreviewStage::Graph));
         const rock::GraphId previewPinId = root.value("previewPinId", 0);
         if (previewPinId != 0 && g_graph.FindPin(previewPinId) != nullptr)
         {
