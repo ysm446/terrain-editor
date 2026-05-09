@@ -68,6 +68,32 @@ struct FrameContext
     UINT64 fenceValue = 0;
 };
 
+struct NodeEditorContextScope
+{
+    explicit NodeEditorContextScope(ed::EditorContext* editor)
+        : active(editor != nullptr)
+    {
+        if (active)
+        {
+            ed::SetCurrentEditor(editor);
+        }
+    }
+
+    ~NodeEditorContextScope()
+    {
+        if (active)
+        {
+            ed::SetCurrentEditor(nullptr);
+        }
+    }
+
+    NodeEditorContextScope(const NodeEditorContextScope&) = delete;
+    NodeEditorContextScope& operator=(const NodeEditorContextScope&) = delete;
+
+private:
+    bool active = false;
+};
+
 HWND g_hwnd = nullptr;
 UINT g_width = 1600;
 UINT g_height = 900;
@@ -1370,7 +1396,7 @@ void ResetNodeEditorViewToDefault()
     g_pendingSelectedNodeIds.clear();
     if (g_nodeEditor != nullptr)
     {
-        ed::SetCurrentEditor(g_nodeEditor);
+        NodeEditorContextScope editorScope(g_nodeEditor);
         ed::ClearSelection();
         for (const rock::Node& node : g_graph.Nodes())
         {
@@ -1379,7 +1405,6 @@ void ResetNodeEditorViewToDefault()
             g_nodePositionCache.push_back({node.id, position});
         }
         ed::NavigateToContent(0.0f);
-        ed::SetCurrentEditor(nullptr);
         g_nodePositionsInitialized = true;
         g_nodeGraphNavigatedToContent = true;
     }
@@ -1411,26 +1436,10 @@ std::vector<std::pair<rock::GraphId, ImVec2>> CachedNodePositions()
     return positions;
 }
 
-std::vector<rock::GraphId> CurrentSelectedNodeIds()
+std::vector<rock::GraphId> SelectedNodeIdsFromEditor()
 {
-    if (g_nodeEditor == nullptr)
-    {
-        return g_pendingSelectedNodeIds.empty() && g_selectedNodeId != 0
-            ? std::vector<rock::GraphId>{g_selectedNodeId}
-            : g_pendingSelectedNodeIds;
-    }
-
-    if (!g_nodeEditorFrameActive)
-    {
-        ed::SetCurrentEditor(g_nodeEditor);
-    }
     std::vector<ed::NodeId> selectedNodes(g_graph.Nodes().size());
     const int selectedCount = ed::GetSelectedNodes(selectedNodes.data(), static_cast<int>(selectedNodes.size()));
-    if (!g_nodeEditorFrameActive)
-    {
-        ed::SetCurrentEditor(nullptr);
-    }
-
     std::vector<rock::GraphId> selectedNodeIds;
     selectedNodeIds.reserve(static_cast<size_t>(selectedCount));
     for (int index = 0; index < selectedCount; ++index)
@@ -1446,6 +1455,23 @@ std::vector<rock::GraphId> CurrentSelectedNodeIds()
         selectedNodeIds.push_back(g_selectedNodeId);
     }
     return selectedNodeIds;
+}
+
+std::vector<rock::GraphId> CurrentSelectedNodeIds()
+{
+    if (g_nodeEditor == nullptr)
+    {
+        return g_pendingSelectedNodeIds.empty() && g_selectedNodeId != 0
+            ? std::vector<rock::GraphId>{g_selectedNodeId}
+            : g_pendingSelectedNodeIds;
+    }
+
+    if (!g_nodeEditorFrameActive)
+    {
+        NodeEditorContextScope editorScope(g_nodeEditor);
+        return SelectedNodeIdsFromEditor();
+    }
+    return SelectedNodeIdsFromEditor();
 }
 
 void ApplyNodeSelection(const std::vector<rock::GraphId>& nodeIds)
@@ -2113,7 +2139,7 @@ void WriteSelectedNodesJson(nlohmann::json& root)
         return;
     }
 
-    ed::SetCurrentEditor(g_nodeEditor);
+    NodeEditorContextScope editorScope(g_nodeEditor);
     std::vector<ed::NodeId> selectedNodes(g_graph.Nodes().size());
     const int selectedCount = ed::GetSelectedNodes(selectedNodes.data(), static_cast<int>(selectedNodes.size()));
     g_selectedNodeId = selectedCount > 0 ? static_cast<rock::GraphId>(selectedNodes.front().Get()) : 0;
@@ -2122,7 +2148,6 @@ void WriteSelectedNodesJson(nlohmann::json& root)
     {
         root["selectedNodeIds"].push_back(static_cast<rock::GraphId>(selectedNodes[static_cast<size_t>(i)].Get()));
     }
-    ed::SetCurrentEditor(nullptr);
 }
 
 nlohmann::json MakeNodePositionsJson()
@@ -2140,9 +2165,8 @@ nlohmann::json MakeNodePositionsJson()
         }
         else if (g_nodeEditor != nullptr)
         {
-            ed::SetCurrentEditor(g_nodeEditor);
+            NodeEditorContextScope editorScope(g_nodeEditor);
             position = ed::GetNodePosition(ed::NodeId(node.id));
-            ed::SetCurrentEditor(nullptr);
         }
         nodePositionsJson[std::to_string(node.id)] = {position.x, position.y};
     }
@@ -7510,7 +7534,7 @@ void PasteNodesFromClipboard(const ImVec2& pasteCenter)
 void DrawNodeGraph()
 {
     static ImVec2 addNodePosition(0.0f, 0.0f);
-    ed::SetCurrentEditor(g_nodeEditor);
+    NodeEditorContextScope editorScope(g_nodeEditor);
     g_nodeEditorFrameActive = true;
     const ImVec2 canvasMin = ImGui::GetCursorScreenPos();
     const ImVec2 canvasMax(canvasMin.x + ImGui::GetContentRegionAvail().x, canvasMin.y + ImGui::GetContentRegionAvail().y);
@@ -7771,7 +7795,6 @@ void DrawNodeGraph()
     g_skipNodeMoveUndoThisFrame = false;
     ed::PopStyleColor(4);
     g_nodeEditorFrameActive = false;
-    ed::SetCurrentEditor(nullptr);
 }
 
 bool FloatDiffersFromDefault(float value, float defaultValue)
