@@ -8163,6 +8163,91 @@ bool DrawMultiScaleErosionProperties(rock::Node& editableNode)
     return true;
 }
 
+bool DrawMaskNoiseProperties(rock::Node& editableNode)
+{
+    if (!ImGui::BeginTable("MaskNoiseRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        return false;
+    }
+
+    ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 200.0f);
+    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+    rock::MaskNoiseSettings& mn = editableNode.maskNoise;
+    mn.seed = std::clamp(mn.seed, 0, 999999);
+    mn.octaves = std::clamp(mn.octaves, 1, 12);
+    mn.frequency = std::clamp(mn.frequency, 0.0f, 256.0f);
+    mn.lacunarity = std::clamp(mn.lacunarity, 0.0f, 8.0f);
+    mn.persistence = std::clamp(mn.persistence, 0.0f, 1.0f);
+    mn.simulationResolution = NearestResolutionPreset(mn.simulationResolution);
+
+    {
+        int backendInt = static_cast<int>(mn.backend);
+        if (DrawPropertyComboRow("Backend", "MaskNoiseBackend", &backendInt, "CPU Parallel\0GPU Compute\0\0", "CPU 並列実装と GPU compute (D3D12 + HLSL) を切り替えます。GPU は解像度が高いほど速くなります (1024² 以上で顕著)。\nGPU が初期化に失敗したり実行時エラーになると自動的に CPU 版にフォールバックします。", static_cast<int>(rock::MaskNoiseSettings{}.backend)))
+        {
+            mn.backend = static_cast<rock::MaskNoiseBackend>(std::clamp(backendInt,
+                static_cast<int>(rock::MaskNoiseBackend::CpuParallel),
+                static_cast<int>(rock::MaskNoiseBackend::GpuCompute)));
+            EvaluateGraph();
+        }
+    }
+    if (DrawPropertyIntRow("Seed", "MaskNoiseSeed", &mn.seed, 0, 999999, rock::MaskNoiseSettings{}.seed, "Mask noise seed changed", true, "ハッシュのオフセットです。同じパラメータでも異なるパターンを得るために使います。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyIntRow("Octaves", "MaskNoiseOctaves", &mn.octaves, 1, 12, rock::MaskNoiseSettings{}.octaves, "Mask noise octaves changed", true, "重ねる Perlin ノイズのオクターブ数です。多いほど細かい階層が増えますが計算時間も増えます。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Frequency", "MaskNoiseFrequency", &mn.frequency, 0.0f, 256.0f, rock::MaskNoiseSettings{}.frequency, "Mask noise frequency changed", true, "地形範囲に対する基本周波数です。大きいほど細かい模様になります。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Lacunarity", "MaskNoiseLacunarity", &mn.lacunarity, 0.0f, 8.0f, rock::MaskNoiseSettings{}.lacunarity, "Mask noise lacunarity changed", true, "オクターブごとに周波数を何倍にするかです。標準は 2.0。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Persistence", "MaskNoisePersistence", &mn.persistence, 0.0f, 1.0f, rock::MaskNoiseSettings{}.persistence, "Mask noise persistence changed", true, "オクターブごとに振幅を何倍にするかです。標準は 0.5。大きいほど高オクターブが目立ちます。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawResolutionPresetRow("Simulation Resolution", "MaskNoiseSimulationResolution", &mn.simulationResolution, rock::MaskNoiseSettings{}.simulationResolution, "Mask noise simulation resolution changed", true, "Mask の評価解像度です。高いほど細かい模様を解像できます。"))
+    {
+        EvaluateGraph();
+    }
+
+    ImGui::EndTable();
+    return true;
+}
+
+bool DrawMaskBlendProperties(rock::Node& editableNode)
+{
+    if (!ImGui::BeginTable("MaskBlendRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        return false;
+    }
+
+    ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 200.0f);
+    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+    rock::MaskBlendSettings& mb = editableNode.maskBlend;
+    mb.intensity = std::clamp(mb.intensity, 0.0f, 1.0f);
+
+    int modeInt = static_cast<int>(mb.mode);
+    if (DrawPropertyComboRow("Blend Mode", "MaskBlendMode", &modeInt, "Add\0Multiply\0Min\0Max\0\0", "A と B を合成する方式です。Add は加算、Multiply は乗算、Min / Max はチャンネルごとの最小値・最大値です。", static_cast<int>(rock::MaskBlendSettings{}.mode)))
+    {
+        mb.mode = static_cast<rock::MaskBlendMode>(std::clamp(modeInt,
+            static_cast<int>(rock::MaskBlendMode::Add),
+            static_cast<int>(rock::MaskBlendMode::Max)));
+        EvaluateGraph();
+    }
+    if (DrawPropertyPercentRow("Blend Intensity (%)", "MaskBlendIntensity", &mb.intensity, 0.0f, 1.0f, rock::MaskBlendSettings{}.intensity, "Mask blend intensity changed", "A をベースに、A と Blend(A, B) の間を補間する強さです。0 で A のみ、1 で完全に合成結果を使います。"))
+    {
+        EvaluateGraph();
+    }
+
+    ImGui::EndTable();
+    return true;
+}
+
 bool DrawMaskFluvialProperties(rock::Node& editableNode)
 {
     if (!ImGui::BeginTable("MaskFluvialRows", 2, ImGuiTableFlags_SizingStretchProp))
@@ -8570,78 +8655,13 @@ void DrawPropertiesPanel()
         return;
     }
 
-    if (selectedNode->kind == rock::NodeKind::MaskNoise && ImGui::BeginTable("MaskNoiseRows", 2, ImGuiTableFlags_SizingStretchProp))
+    if (selectedNode->kind == rock::NodeKind::MaskNoise && DrawMaskNoiseProperties(*editableNode))
     {
-        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 200.0f);
-        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-        rock::MaskNoiseSettings& mn = editableNode->maskNoise;
-        mn.seed = std::clamp(mn.seed, 0, 999999);
-        mn.octaves = std::clamp(mn.octaves, 1, 12);
-        mn.frequency = std::clamp(mn.frequency, 0.0f, 256.0f);
-        mn.lacunarity = std::clamp(mn.lacunarity, 0.0f, 8.0f);
-        mn.persistence = std::clamp(mn.persistence, 0.0f, 1.0f);
-        mn.simulationResolution = NearestResolutionPreset(mn.simulationResolution);
-
-        {
-            int backendInt = static_cast<int>(mn.backend);
-            if (DrawPropertyComboRow("Backend", "MaskNoiseBackend", &backendInt, "CPU Parallel\0GPU Compute\0\0", "CPU 並列実装と GPU compute (D3D12 + HLSL) を切り替えます。GPU は解像度が高いほど速くなります (1024² 以上で顕著)。\nGPU が初期化に失敗したり実行時エラーになると自動的に CPU 版にフォールバックします。", static_cast<int>(rock::MaskNoiseSettings{}.backend)))
-            {
-                mn.backend = static_cast<rock::MaskNoiseBackend>(std::clamp(backendInt,
-                    static_cast<int>(rock::MaskNoiseBackend::CpuParallel),
-                    static_cast<int>(rock::MaskNoiseBackend::GpuCompute)));
-                EvaluateGraph();
-            }
-        }
-        if (DrawPropertyIntRow("Seed", "MaskNoiseSeed", &mn.seed, 0, 999999, rock::MaskNoiseSettings{}.seed, "Mask noise seed changed", true, "ハッシュのオフセットです。同じパラメータでも異なるパターンを得るために使います。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyIntRow("Octaves", "MaskNoiseOctaves", &mn.octaves, 1, 12, rock::MaskNoiseSettings{}.octaves, "Mask noise octaves changed", true, "重ねる Perlin ノイズのオクターブ数です。多いほど細かい階層が増えますが計算時間も増えます。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Frequency", "MaskNoiseFrequency", &mn.frequency, 0.0f, 256.0f, rock::MaskNoiseSettings{}.frequency, "Mask noise frequency changed", true, "地形範囲に対する基本周波数です。大きいほど細かい模様になります。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Lacunarity", "MaskNoiseLacunarity", &mn.lacunarity, 0.0f, 8.0f, rock::MaskNoiseSettings{}.lacunarity, "Mask noise lacunarity changed", true, "オクターブごとに周波数を何倍にするかです。標準は 2.0。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawPropertyFloatRow("Persistence", "MaskNoisePersistence", &mn.persistence, 0.0f, 1.0f, rock::MaskNoiseSettings{}.persistence, "Mask noise persistence changed", true, "オクターブごとに振幅を何倍にするかです。標準は 0.5。大きいほど高オクターブが目立ちます。"))
-        {
-            EvaluateGraph();
-        }
-        if (DrawResolutionPresetRow("Simulation Resolution", "MaskNoiseSimulationResolution", &mn.simulationResolution, rock::MaskNoiseSettings{}.simulationResolution, "Mask noise simulation resolution changed", true, "Mask の評価解像度です。高いほど細かい模様を解像できます。"))
-        {
-            EvaluateGraph();
-        }
-
-        ImGui::EndTable();
         return;
     }
 
-    if (selectedNode->kind == rock::NodeKind::MaskBlend && ImGui::BeginTable("MaskBlendRows", 2, ImGuiTableFlags_SizingStretchProp))
+    if (selectedNode->kind == rock::NodeKind::MaskBlend && DrawMaskBlendProperties(*editableNode))
     {
-        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 200.0f);
-        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-        rock::MaskBlendSettings& mb = editableNode->maskBlend;
-        mb.intensity = std::clamp(mb.intensity, 0.0f, 1.0f);
-
-        int modeInt = static_cast<int>(mb.mode);
-        if (DrawPropertyComboRow("Blend Mode", "MaskBlendMode", &modeInt, "Add\0Multiply\0Min\0Max\0\0", "A と B を合成する方式です。Add は加算、Multiply は乗算、Min / Max はチャンネルごとの最小値・最大値です。", static_cast<int>(rock::MaskBlendSettings{}.mode)))
-        {
-            mb.mode = static_cast<rock::MaskBlendMode>(std::clamp(modeInt,
-                static_cast<int>(rock::MaskBlendMode::Add),
-                static_cast<int>(rock::MaskBlendMode::Max)));
-            EvaluateGraph();
-        }
-        if (DrawPropertyPercentRow("Blend Intensity (%)", "MaskBlendIntensity", &mb.intensity, 0.0f, 1.0f, rock::MaskBlendSettings{}.intensity, "Mask blend intensity changed", "A をベースに、A と Blend(A, B) の間を補間する強さです。0 で A のみ、1 で完全に合成結果を使います。"))
-        {
-            EvaluateGraph();
-        }
-
-        ImGui::EndTable();
         return;
     }
 
