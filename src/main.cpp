@@ -52,6 +52,10 @@ namespace
 constexpr int kFrameCount = 2;
 constexpr int kSrvDescriptorCount = 64;
 constexpr float kFullFrameSensorHeightMm = 24.0f;
+constexpr float kDefaultViewportPitch = 0.72f;
+constexpr float kDefaultViewportFovDegrees = 45.0f;
+constexpr float kDefaultViewportOrbitDistance = 1800.0f;
+constexpr float kDefaultViewportZoom = 1.0f;
 constexpr std::array<int, 5> kResolutionPresets = {128, 256, 512, 1024, 2048};
 
 int NearestResolutionPreset(int value)
@@ -199,14 +203,28 @@ enum class ViewportDisplayMode
 struct ViewportState
 {
     float yaw = 0.0f;
-    float pitch = 0.0f;
-    float fovDegrees = 45.0f;
-    float orbitDistance = 8.0f;
-    float zoom = 1.0f;
+    float pitch = kDefaultViewportPitch;
+    float fovDegrees = kDefaultViewportFovDegrees;
+    float orbitDistance = kDefaultViewportOrbitDistance;
+    float zoom = kDefaultViewportZoom;
     ImVec2 pan = ImVec2(0.0f, 0.0f);
 };
 
 ViewportState g_viewport;
+
+void NormalizeLoadedViewport(bool migrateCloseOrbitDistance)
+{
+    g_viewport.pitch = std::clamp(g_viewport.pitch, -1.25f, 1.25f);
+    g_viewport.fovDegrees = std::clamp(g_viewport.fovDegrees, 15.0f, 90.0f);
+    g_viewport.orbitDistance = std::clamp(g_viewport.orbitDistance, 1.0f, 10000.0f);
+    g_viewport.zoom = std::clamp(g_viewport.zoom, 0.05f, 20.0f);
+    if (migrateCloseOrbitDistance && g_viewport.orbitDistance <= 40.0f)
+    {
+        g_viewport.pitch = kDefaultViewportPitch;
+        g_viewport.orbitDistance = kDefaultViewportOrbitDistance;
+        g_viewport.zoom = kDefaultViewportZoom;
+    }
+}
 
 struct MapViewportState
 {
@@ -1352,18 +1370,12 @@ bool LoadAppSettings(std::string* error = nullptr)
 
         const nlohmann::json viewportJson = root.value("viewport", nlohmann::json::object());
         g_viewport.yaw = viewportJson.value("yaw", g_viewport.yaw);
-        g_viewport.pitch = std::clamp(viewportJson.value("pitch", g_viewport.pitch), -1.25f, 1.25f);
-        g_viewport.fovDegrees = std::clamp(viewportJson.value("fovDegrees", g_viewport.fovDegrees), 15.0f, 90.0f);
-        g_viewport.orbitDistance = std::clamp(viewportJson.value("orbitDistance", g_viewport.orbitDistance), 1.0f, 10000.0f);
-        g_viewport.zoom = std::clamp(viewportJson.value("zoom", g_viewport.zoom), 0.05f, 20.0f);
+        g_viewport.pitch = viewportJson.value("pitch", g_viewport.pitch);
+        g_viewport.fovDegrees = viewportJson.value("fovDegrees", g_viewport.fovDegrees);
+        g_viewport.orbitDistance = viewportJson.value("orbitDistance", g_viewport.orbitDistance);
+        g_viewport.zoom = viewportJson.value("zoom", g_viewport.zoom);
         const std::string savedAppVersion = root.value("appVersion", std::string());
-        if ((savedAppVersion.empty() || savedAppVersion.rfind("0.1.", 0) == 0 || savedAppVersion.rfind("0.2.", 0) == 0) &&
-            g_viewport.orbitDistance <= 40.0f)
-        {
-            g_viewport.pitch = 0.72f;
-            g_viewport.orbitDistance = 1800.0f;
-            g_viewport.zoom = 1.0f;
-        }
+        NormalizeLoadedViewport(savedAppVersion != TERRAIN_EDITOR_VERSION_STRING);
         if (viewportJson.contains("pan") && viewportJson["pan"].is_array() && viewportJson["pan"].size() == 2)
         {
             g_viewport.pan = ImVec2(viewportJson["pan"][0].get<float>(), viewportJson["pan"][1].get<float>());
@@ -2446,6 +2458,8 @@ void ReadViewportJson(const nlohmann::json& root)
     g_viewport.fovDegrees = viewportJson.value("fovDegrees", g_viewport.fovDegrees);
     g_viewport.orbitDistance = viewportJson.value("orbitDistance", g_viewport.orbitDistance);
     g_viewport.zoom = viewportJson.value("zoom", g_viewport.zoom);
+    const std::string savedAppVersion = root.value("appVersion", std::string());
+    NormalizeLoadedViewport(savedAppVersion != TERRAIN_EDITOR_VERSION_STRING);
     if (viewportJson.contains("pan") && viewportJson["pan"].is_array() && viewportJson["pan"].size() == 2)
     {
         g_viewport.pan = ImVec2(viewportJson["pan"][0].get<float>(), viewportJson["pan"][1].get<float>());
@@ -5319,10 +5333,10 @@ void ResetViewport()
 {
     g_viewport = {};
     g_viewport.yaw = 0.0f;
-    g_viewport.pitch = 0.72f;
-    g_viewport.fovDegrees = 45.0f;
-    g_viewport.orbitDistance = 1800.0f;
-    g_viewport.zoom = 1.0f;
+    g_viewport.pitch = kDefaultViewportPitch;
+    g_viewport.fovDegrees = kDefaultViewportFovDegrees;
+    g_viewport.orbitDistance = kDefaultViewportOrbitDistance;
+    g_viewport.zoom = kDefaultViewportZoom;
 }
 
 float CameraFocalLengthMmFromFovYDegrees(float fovYDegrees)
@@ -9092,16 +9106,16 @@ void DrawCameraPanel()
         ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 112.0f);
         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
 
-        DrawCameraFloatRow("FOV", "FovDegrees", &g_viewport.fovDegrees, 15.0f, 90.0f, 45.0f, "%.1f");
+        DrawCameraFloatRow("FOV", "FovDegrees", &g_viewport.fovDegrees, 15.0f, 90.0f, kDefaultViewportFovDegrees, "%.1f");
         float focalLengthMm = CameraFocalLengthMmFromFovYDegrees(g_viewport.fovDegrees);
-        if (DrawCameraFloatRow("焦点距離 (mm)", "FocalLengthMm", &focalLengthMm, 1.0f, 200.0f, CameraFocalLengthMmFromFovYDegrees(45.0f), "%.1f"))
+        if (DrawCameraFloatRow("焦点距離 (mm)", "FocalLengthMm", &focalLengthMm, 1.0f, 200.0f, CameraFocalLengthMmFromFovYDegrees(kDefaultViewportFovDegrees), "%.1f"))
         {
             g_viewport.fovDegrees = CameraFovYDegreesFromFocalLengthMm(focalLengthMm);
         }
-        DrawCameraFloatRow("Distance", "OrbitDistance", &g_viewport.orbitDistance, 1.0f, 10000.0f, 1800.0f, "%.1f");
-        DrawCameraFloatRow("Zoom", "ViewportZoom", &g_viewport.zoom, 0.05f, 20.0f, 1.0f, "%.2f");
+        DrawCameraFloatRow("Distance", "OrbitDistance", &g_viewport.orbitDistance, 1.0f, 10000.0f, kDefaultViewportOrbitDistance, "%.1f");
+        DrawCameraFloatRow("Zoom", "ViewportZoom", &g_viewport.zoom, 0.05f, 20.0f, kDefaultViewportZoom, "%.2f");
         DrawCameraFloatRow("Yaw", "ViewportYaw", &g_viewport.yaw, -3.14159f, 3.14159f, 0.0f, "%.3f");
-        DrawCameraFloatRow("Pitch", "ViewportPitch", &g_viewport.pitch, -1.25f, 1.25f, 0.0f, "%.3f");
+        DrawCameraFloatRow("Pitch", "ViewportPitch", &g_viewport.pitch, -1.25f, 1.25f, kDefaultViewportPitch, "%.3f");
 
         ImGui::EndTable();
     }
