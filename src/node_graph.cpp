@@ -28,6 +28,7 @@ using Microsoft::WRL::ComPtr;
 
 MultiScaleErosionGpuEvaluator g_mseGpuEvaluator = nullptr;
 MaskNoiseGpuEvaluator g_maskNoiseGpuEvaluator = nullptr;
+SedimentGpuEvaluator g_sedimentGpuEvaluator = nullptr;
 std::atomic<GraphId> g_currentlyEvaluatingNodeId{0};
 
 struct HeightmapImage
@@ -126,19 +127,14 @@ uint64_t HashSedimentSettings(const SedimentSettings& settings, int resolution)
 {
     uint64_t hash = 1099511628211ull;
     HashCombine(hash, static_cast<uint64_t>(settings.iterations));
-    HashCombine(hash, HashFloat(settings.initialSedimentM));
+    HashCombine(hash, static_cast<uint64_t>(settings.stabilizationIterations));
+    HashCombine(hash, HashFloat(settings.largestDetailLevelM));
+    HashCombine(hash, HashFloat(settings.emissionAmountM));
+    HashCombine(hash, HashFloat(settings.emissionTime));
+    HashCombine(hash, HashFloat(settings.sedimentViscosity));
+    HashCombine(hash, static_cast<uint64_t>(settings.convertTerrainToSediment ? 1 : 0));
     HashCombine(hash, HashFloat(settings.maskContrast));
-    HashCombine(hash, static_cast<uint64_t>(settings.particleCount));
-    HashCombine(hash, static_cast<uint64_t>(settings.particleLifetime));
-    HashCombine(hash, HashFloat(settings.particleGradientRadiusM));
-    HashCombine(hash, HashFloat(settings.particleInertia));
-    HashCombine(hash, HashFloat(settings.particleFriction));
-    HashCombine(hash, HashFloat(settings.particleCapacity));
-    HashCombine(hash, HashFloat(settings.particleErosion));
-    HashCombine(hash, HashFloat(settings.particleDeposition));
-    HashCombine(hash, HashFloat(settings.particleEvaporation));
-    HashCombine(hash, HashFloat(settings.particleEmissionTime));
-    HashCombine(hash, static_cast<uint64_t>(settings.particleSeed));
+    HashCombine(hash, static_cast<uint64_t>(settings.backend));
     HashCombine(hash, static_cast<uint64_t>(resolution));
     return hash;
 }
@@ -1854,27 +1850,95 @@ inline float ApplyMaskContrast(float t, float contrast)
 }
 } // namespace sediment_shared
 
-namespace sediment_particle
+namespace sediment_geogen
 {
-inline float SampleBilinear(const std::vector<float>& field, int n, float x, float z)
+// One thermal-slide pass at unit stride (4-connected neighbours).
+// Sediment flows from each cell to neighbours whose total height is
+// lower by more than the talus drop `talusH`. Per-neighbour flow uses
+// the (n+1) divisor: with n active lower neighbours, each receives
+// `drops[k] / (n+1)` and the cell loses `totalDrop / (n+1)`. This is
+// the unique amount that makes every post-flow slope equal exactly
+// `talusH` in one step (no overshoot, no oscillation), regardless of
+// how many neighbours are active or how unevenly the drops are
+// distributed. Race-free: first sweep snapshots outgoing shares to a
+// scratch buffer, second sweep applies (own-out − sum of neighbours'
+// shares aimed back at this cell). Memory: 4 × n² floats for
+// `outgoing`, allocated once by the caller and reused.
+inline void ThermalSlideUnitStride(
+    std::vector<float>& sediment,
+    const std::vector<float>& bedrock,
+    std::vector<float>& outgoing,
+    int n,
+    float talusH)
 {
-    if (x < 0.0f) x = 0.0f; if (x > static_cast<float>(n - 1)) x = static_cast<float>(n - 1);
-    if (z < 0.0f) z = 0.0f; if (z > static_cast<float>(n - 1)) z = static_cast<float>(n - 1);
-    const int x0 = std::min(n - 2, static_cast<int>(std::floor(x)));
-    const int z0 = std::min(n - 2, static_cast<int>(std::floor(z)));
-    const float fx = x - static_cast<float>(x0);
-    const float fz = z - static_cast<float>(z0);
-    const size_t s = static_cast<size_t>(n);
-    const float h00 = field[static_cast<size_t>(z0) * s + static_cast<size_t>(x0)];
-    const float h10 = field[static_cast<size_t>(z0) * s + static_cast<size_t>(x0 + 1)];
-    const float h01 = field[static_cast<size_t>(z0 + 1) * s + static_cast<size_t>(x0)];
-    const float h11 = field[static_cast<size_t>(z0 + 1) * s + static_cast<size_t>(x0 + 1)];
-    return (1.0f - fx) * (1.0f - fz) * h00
-         + fx * (1.0f - fz) * h10
-         + (1.0f - fx) * fz * h01
-         + fx * fz * h11;
+    static constexpr int dxs[4] = {+1, -1, 0, 0};
+    static constexpr int dzs[4] = {0, 0, +1, -1};
+    static constexpr int oppositeK[4] = {1, 0, 3, 2};
+
+    ParallelForRows(n, [&](int z) {
+        for (int x = 0; x < n; ++x)
+        {
+            const size_t i = static_cast<size_t>(z) * static_cast<size_t>(n) + static_cast<size_t>(x);
+            const float h = bedrock[i] + sediment[i];
+
+            float drops[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+            float totalDrop = 0.0f;
+            int activeCount = 0;
+            for (int k = 0; k < 4; ++k)
+            {
+                const int nx = x + dxs[k];
+                const int nz = z + dzs[k];
+                if (nx < 0 || nx >= n || nz < 0 || nz >= n) continue;
+                const size_t j = static_cast<size_t>(nz) * static_cast<size_t>(n) + static_cast<size_t>(nx);
+                const float diff = h - bedrock[j] - sediment[j];
+                if (diff > talusH)
+                {
+                    drops[k] = diff - talusH;
+                    totalDrop += drops[k];
+                    ++activeCount;
+                }
+            }
+
+            const size_t base = i * 4u;
+            outgoing[base + 0] = 0.0f;
+            outgoing[base + 1] = 0.0f;
+            outgoing[base + 2] = 0.0f;
+            outgoing[base + 3] = 0.0f;
+            if (activeCount == 0 || totalDrop <= 0.0f) continue;
+
+            // (n+1)-divisor flow. Ideal per-neighbour: drops[k] / (n+1).
+            // Cap by available sediment and scale all shares uniformly.
+            const float divisor = static_cast<float>(activeCount + 1);
+            const float idealOut = totalDrop / divisor;
+            const float actualOut = std::min(sediment[i], idealOut);
+            const float scale = (idealOut > 0.0f) ? (actualOut / idealOut) : 0.0f;
+            for (int k = 0; k < 4; ++k)
+            {
+                if (drops[k] > 0.0f) outgoing[base + static_cast<size_t>(k)] = (drops[k] / divisor) * scale;
+            }
+        }
+    });
+
+    ParallelForRows(n, [&](int z) {
+        for (int x = 0; x < n; ++x)
+        {
+            const size_t i = static_cast<size_t>(z) * static_cast<size_t>(n) + static_cast<size_t>(x);
+            const size_t base = i * 4u;
+            const float totalOut = outgoing[base + 0] + outgoing[base + 1] + outgoing[base + 2] + outgoing[base + 3];
+            float incoming = 0.0f;
+            for (int k = 0; k < 4; ++k)
+            {
+                const int nx = x + dxs[k];
+                const int nz = z + dzs[k];
+                if (nx < 0 || nx >= n || nz < 0 || nz >= n) continue;
+                const size_t j = static_cast<size_t>(nz) * static_cast<size_t>(n) + static_cast<size_t>(nx);
+                incoming += outgoing[j * 4u + static_cast<size_t>(oppositeK[k])];
+            }
+            sediment[i] = std::max(0.0f, sediment[i] - totalOut + incoming);
+        }
+    });
 }
-} // namespace sediment_particle
+} // namespace sediment_geogen
 
 void ApplySediment(HeightfieldGrid& grid, const SedimentSettings& settings)
 {
@@ -1882,374 +1946,125 @@ void ApplySediment(HeightfieldGrid& grid, const SedimentSettings& settings)
     const size_t cellCount = static_cast<size_t>(n) * static_cast<size_t>(n);
     if (n < 2 || grid.heights.size() < cellCount) return;
 
-    // Bedrock = the input heights (snapshot, never modified). Sediment is the
-    // mobile layer initialised uniformly. Total height (= bedrock + sediment)
-    // is recomputed on demand via SampleBilinear over (bedrock + sediment).
-    std::vector<float> bedrock(grid.heights.begin(), grid.heights.begin() + cellCount);
-    std::vector<float> sediment(cellCount, std::max(0.0f, settings.initialSedimentM));
-
-    const int particleCount = std::max(0, settings.particleCount);
-    if (particleCount == 0)
+    // GPU compute path. Falls back to the CPU body below if the
+    // evaluator hasn't been registered (no D3D12 device) or returns
+    // failure (e.g. shader compile error). The evaluator fills
+    // grid.heights and grid.mask in the same way the CPU branch does.
+    if (settings.backend == SedimentBackend::GpuCompute && g_sedimentGpuEvaluator != nullptr)
     {
-        ParallelForRows(n, [&](int z) {
-            for (int x = 0; x < n; ++x) {
-                const size_t idx = static_cast<size_t>(z) * static_cast<size_t>(n) + static_cast<size_t>(x);
-                grid.heights[idx] = bedrock[idx] + sediment[idx];
-                grid.mask[idx] = sediment[idx] / std::max(settings.initialSedimentM, 1e-4f);
-            }
-        });
-        return;
+        std::string ignoredError;
+        if (g_sedimentGpuEvaluator(grid, settings, &ignoredError))
+        {
+            return;
+        }
+        // Fall through to CPU on failure.
     }
 
-    const int lifetime = std::clamp(settings.particleLifetime, 1, 1024);
-    // Convert the metric gradient radius to cell units based on the grid's
-    // physical size, so this parameter is resolution-independent.
     const float terrainSizeM = std::max(grid.terrainSizeMeters, 1.0f);
     const float cellSizeM = terrainSizeM / std::max(1.0f, static_cast<float>(n - 1));
-    const float radiusM = std::clamp(settings.particleGradientRadiusM, 0.5f, 500.0f);
-    const int gradRadius = std::clamp(static_cast<int>(std::round(radiusM / cellSizeM)), 1, n / 4);
-    const float gradRadiusF = static_cast<float>(gradRadius);
-    const float inertia = std::clamp(settings.particleInertia, 0.0f, 0.99f);
-    const float frictionRetained = 1.0f - std::clamp(settings.particleFriction, 0.0f, 0.95f);
-    const float capacityK = std::max(settings.particleCapacity, 0.0f);
-    const float erosionK = std::clamp(settings.particleErosion, 0.0f, 1.0f);
-    const float depositK = std::clamp(settings.particleDeposition, 0.0f, 1.0f);
-    const float evapK = std::clamp(settings.particleEvaporation, 0.0f, 1.0f);
-    const float minCapSlope = 0.01f;
-    const float maxVelocity = 8.0f;
-    const float maxSedimentThickness = std::max(settings.initialSedimentM * 4.0f, settings.initialSedimentM + 2.0f);
-    const int seed = settings.particleSeed;
-    const int iterations = std::max(1, settings.iterations);
-    const float emissionTime = std::clamp(settings.particleEmissionTime, 0.0f, 1.0f);
-    // Emission Time concentrates the total particle budget into the first
-    // `emissionIterations` waves. Total work is preserved (= iterations ×
-    // particleCount); only the wave-merge granularity changes:
-    //   0%  → all particles in 1 wave on the unmodified initial terrain
-    //         (sharp dendritic carving, no inter-wave smoothing).
-    //   100% → particleCount per wave for every iteration (current behaviour:
-    //          progressive deepening + smoothing as channels are recut).
-    // Without this redistribution the parameter just early-terminates the
-    // iteration loop, making it equivalent to lowering `Iterations` directly.
-    const int emissionIterations = std::clamp(
-        static_cast<int>(std::ceil(static_cast<float>(iterations) * emissionTime)),
-        1,
-        iterations);
-    const int64_t totalParticleBudget =
-        static_cast<int64_t>(particleCount) * static_cast<int64_t>(iterations);
-    const int64_t baseWaveParticles = totalParticleBudget / emissionIterations;
-    const int64_t lastWaveExtra =
-        totalParticleBudget - baseWaveParticles * static_cast<int64_t>(emissionIterations);
 
-    const unsigned threadCountHw = std::max(1u, std::thread::hardware_concurrency());
-    const int threadCount = static_cast<int>(std::min(threadCountHw, 32u));
-    std::vector<std::vector<float>> threadDeltas(static_cast<size_t>(threadCount), std::vector<float>(cellCount, 0.0f));
-    std::vector<float> mergedSediment(cellCount, 0.0f);
-
-    // Run up to `emissionIterations` waves of particles. Between waves, merge
-    // the per-thread deltas into the master sediment array so the next wave
-    // sees the eroded / accumulated terrain (allows river channels to deepen
-    // as particles repeatedly carve the same paths). Iterations beyond
-    // `emissionIterations` would emit zero particles, so we stop there.
-    for (int iter = 0; iter < emissionIterations; ++iter)
+    // Bedrock = static base, sediment = movable layer. "Convert terrain
+    // to sediment" treats the input height itself as sediment over a flat
+    // bedrock = 0, so the entire mountain can be reshaped by gravity.
+    // Otherwise the input is fixed bedrock and we start with no sediment
+    // (only what `Emission amount` adds is movable).
+    std::vector<float> bedrock(cellCount);
+    std::vector<float> sediment(cellCount);
+    if (settings.convertTerrainToSediment)
     {
-        // Per-wave particle count: total / emissionIterations, with the
-        // remainder folded into the last wave so the budget is exact.
-        int64_t waveBudget = baseWaveParticles;
-        if (iter == emissionIterations - 1) waveBudget += lastWaveExtra;
-        const int waveParticleCount = static_cast<int>(std::min<int64_t>(
-            waveBudget, std::numeric_limits<int>::max()));
-        if (waveParticleCount <= 0) continue;
-        const int particlesPerThread = (waveParticleCount + threadCount - 1) / threadCount;
-
-        // Reset per-thread delta maps for this wave (parallelised across threads
-        // — std::fill is memory-bandwidth-bound, but spreading the writes
-        // across cores still helps).
-        ParallelForRows(threadCount, [&](int t) {
-            std::fill(threadDeltas[static_cast<size_t>(t)].begin(),
-                      threadDeltas[static_cast<size_t>(t)].end(), 0.0f);
-        });
-
-        std::vector<std::thread> workers;
-        workers.reserve(static_cast<size_t>(threadCount));
-
-        for (int t = 0; t < threadCount; ++t)
-        {
-            const int startIdx = t * particlesPerThread;
-            const int endIdx = std::min(startIdx + particlesPerThread, waveParticleCount);
-            if (startIdx >= endIdx) continue;
-
-            workers.emplace_back([&, t, startIdx, endIdx, iter]() {
-                std::mt19937 rng(static_cast<uint32_t>(
-                    static_cast<uint32_t>(seed) * 2654435761u
-                    + static_cast<uint32_t>(t) * 0x9e3779b9u
-                    + static_cast<uint32_t>(iter) * 0xc1c6e8c5u
-                    + 1u));
-                std::uniform_real_distribution<float> dist01(0.0f, 1.0f);
-                std::vector<float>& deltas = threadDeltas[static_cast<size_t>(t)];
-
-            for (int p = startIdx; p < endIdx; ++p)
-            {
-                float px = dist01(rng) * static_cast<float>(n - 1);
-                float pz = dist01(rng) * static_cast<float>(n - 1);
-                float dx = 0.0f;
-                float dz = 0.0f;
-                float velocity = 1.0f;
-                float water = 1.0f;
-                float carried = 0.0f;
-
-                for (int step = 0; step < lifetime; ++step)
-                {
-                    const int x0 = std::clamp(static_cast<int>(std::floor(px)), 0, n - 2);
-                    const int z0 = std::clamp(static_cast<int>(std::floor(pz)), 0, n - 2);
-                    const float fx = px - static_cast<float>(x0);
-                    const float fz = pz - static_cast<float>(z0);
-                    const size_t s = static_cast<size_t>(n);
-                    const size_t i00 = static_cast<size_t>(z0) * s + static_cast<size_t>(x0);
-                    const size_t i10 = static_cast<size_t>(z0) * s + static_cast<size_t>(x0 + 1);
-                    const size_t i01 = static_cast<size_t>(z0 + 1) * s + static_cast<size_t>(x0);
-                    const size_t i11 = static_cast<size_t>(z0 + 1) * s + static_cast<size_t>(x0 + 1);
-                    // Total height read uses (bedrock + sediment + ownDeltas);
-                    // other threads' deltas are invisible (the accuracy/race
-                    // trade-off documented above).
-                    const float h00 = bedrock[i00] + sediment[i00] + deltas[i00];
-                    const float h10 = bedrock[i10] + sediment[i10] + deltas[i10];
-                    const float h01 = bedrock[i01] + sediment[i01] + deltas[i01];
-                    const float h11 = bedrock[i11] + sediment[i11] + deltas[i11];
-                    const float oldHeight = (1.0f - fx) * (1.0f - fz) * h00
-                                          + fx * (1.0f - fz) * h10
-                                          + (1.0f - fx) * fz * h01
-                                          + fx * fz * h11;
-
-                    // Gradient via wider central differences. Sampling at ±gradRadius
-                    // cells smooths high-frequency terrain noise so the particle
-                    // navigates by large-scale topology instead of zig-zagging on
-                    // every micro-ridge — adjacent particles converge into shared
-                    // major drainages rather than each tracing its own thin streak.
-                    auto sampleCombined = [&](float sx, float sz) -> float {
-                        const float cx = std::clamp(sx, 0.0f, static_cast<float>(n - 1));
-                        const float cz = std::clamp(sz, 0.0f, static_cast<float>(n - 1));
-                        const int sx0 = std::min(n - 2, static_cast<int>(std::floor(cx)));
-                        const int sz0 = std::min(n - 2, static_cast<int>(std::floor(cz)));
-                        const float ffx = cx - static_cast<float>(sx0);
-                        const float ffz = cz - static_cast<float>(sz0);
-                        const size_t ki00 = static_cast<size_t>(sz0) * s + static_cast<size_t>(sx0);
-                        const size_t ki10 = static_cast<size_t>(sz0) * s + static_cast<size_t>(sx0 + 1);
-                        const size_t ki01 = static_cast<size_t>(sz0 + 1) * s + static_cast<size_t>(sx0);
-                        const size_t ki11 = static_cast<size_t>(sz0 + 1) * s + static_cast<size_t>(sx0 + 1);
-                        return (1.0f - ffx) * (1.0f - ffz) * (bedrock[ki00] + sediment[ki00] + deltas[ki00])
-                             + ffx * (1.0f - ffz) * (bedrock[ki10] + sediment[ki10] + deltas[ki10])
-                             + (1.0f - ffx) * ffz * (bedrock[ki01] + sediment[ki01] + deltas[ki01])
-                             + ffx * ffz * (bedrock[ki11] + sediment[ki11] + deltas[ki11]);
-                    };
-                    const float h_xp = sampleCombined(px + gradRadiusF, pz);
-                    const float h_xm = sampleCombined(px - gradRadiusF, pz);
-                    const float h_zp = sampleCombined(px, pz + gradRadiusF);
-                    const float h_zm = sampleCombined(px, pz - gradRadiusF);
-                    const float invSpan = 1.0f / (2.0f * gradRadiusF);
-                    const float gx = (h_xp - h_xm) * invSpan;
-                    const float gz = (h_zp - h_zm) * invSpan;
-
-                    // Update direction: inertial blend with downhill direction.
-                    dx = dx * inertia - gx * (1.0f - inertia);
-                    dz = dz * inertia - gz * (1.0f - inertia);
-                    const float dirLen = std::sqrt(dx * dx + dz * dz);
-                    if (dirLen < 1e-6f) break;
-                    dx /= dirLen;
-                    dz /= dirLen;
-
-                    const float newX = px + dx;
-                    const float newZ = pz + dz;
-                    if (newX < 0.0f || newX > static_cast<float>(n - 1) ||
-                        newZ < 0.0f || newZ > static_cast<float>(n - 1))
-                    {
-                        break;
-                    }
-
-                    const int nx0 = std::clamp(static_cast<int>(std::floor(newX)), 0, n - 2);
-                    const int nz0 = std::clamp(static_cast<int>(std::floor(newZ)), 0, n - 2);
-                    const float nfx = newX - static_cast<float>(nx0);
-                    const float nfz = newZ - static_cast<float>(nz0);
-                    const size_t j00 = static_cast<size_t>(nz0) * s + static_cast<size_t>(nx0);
-                    const size_t j10 = static_cast<size_t>(nz0) * s + static_cast<size_t>(nx0 + 1);
-                    const size_t j01 = static_cast<size_t>(nz0 + 1) * s + static_cast<size_t>(nx0);
-                    const size_t j11 = static_cast<size_t>(nz0 + 1) * s + static_cast<size_t>(nx0 + 1);
-                    const float nh00 = bedrock[j00] + sediment[j00] + deltas[j00];
-                    const float nh10 = bedrock[j10] + sediment[j10] + deltas[j10];
-                    const float nh01 = bedrock[j01] + sediment[j01] + deltas[j01];
-                    const float nh11 = bedrock[j11] + sediment[j11] + deltas[j11];
-                    const float newHeight = (1.0f - nfx) * (1.0f - nfz) * nh00
-                                          + nfx * (1.0f - nfz) * nh10
-                                          + (1.0f - nfx) * nfz * nh01
-                                          + nfx * nfz * nh11;
-                    const float dh = oldHeight - newHeight; // positive when going down
-
-                    // Carrying capacity: classic c = max(slope, minCap) × |v| × water × Kc.
-                    // If inertia carries a particle uphill, force it into
-                    // deposition mode instead of letting minCap erode sediment
-                    // on an ascent.
-                    const float capacity = dh > 0.0f
-                        ? std::max(dh, minCapSlope) * velocity * water * capacityK
-                        : 0.0f;
-
-                    // Bilinear weights for distributing erosion / deposit at the OLD position.
-                    const float w00 = (1.0f - fx) * (1.0f - fz);
-                    const float w10 = fx * (1.0f - fz);
-                    const float w01 = (1.0f - fx) * fz;
-                    const float w11 = fx * fz;
-
-                    if (carried < capacity)
-                    {
-                        // Under-saturated → erode. We're moving sediment ONLY
-                        // (bedrock is fixed), so cap by what's actually
-                        // available at each footprint corner — no `dh` clamp.
-                        // Clamping by dh as in classic hydraulic erosion (which
-                        // also erodes bedrock) would starve the simulation on
-                        // gentle slopes here, since sediment can be much thicker
-                        // than the per-step height drop.
-                        float erode = (capacity - carried) * erosionK;
-                        if (erode > 0.0f)
-                        {
-                            const float available00 = std::max(0.0f, sediment[i00] + deltas[i00]);
-                            const float available10 = std::max(0.0f, sediment[i10] + deltas[i10]);
-                            const float available01 = std::max(0.0f, sediment[i01] + deltas[i01]);
-                            const float available11 = std::max(0.0f, sediment[i11] + deltas[i11]);
-                            const float e00 = std::min(erode * w00, available00);
-                            const float e10 = std::min(erode * w10, available10);
-                            const float e01 = std::min(erode * w01, available01);
-                            const float e11 = std::min(erode * w11, available11);
-                            deltas[i00] -= e00;
-                            deltas[i10] -= e10;
-                            deltas[i01] -= e01;
-                            deltas[i11] -= e11;
-                            carried += (e00 + e10 + e01 + e11);
-                        }
-                    }
-                    else
-                    {
-                        // Over-saturated → deposit. Excess goes back to the OLD cell
-                        // (under the particle's current footprint).
-                        const float deposit = (carried - capacity) * depositK;
-                        deltas[i00] += deposit * w00;
-                        deltas[i10] += deposit * w10;
-                        deltas[i01] += deposit * w01;
-                        deltas[i11] += deposit * w11;
-                        carried -= deposit;
-                    }
-
-                    // Velocity update: gain from gravity, then apply friction
-                    // so velocity can't grow unbounded over a long descent
-                    // (without this, carrying capacity → ∞ over the path and
-                    // the particle dumps a huge end-of-life payload at one cell,
-                    // creating tall spikes).
-                    velocity = std::min(
-                        maxVelocity,
-                        std::sqrt(std::max(0.0f, velocity * velocity + dh * 4.0f)) * frictionRetained);
-                    water *= (1.0f - evapK);
-                    if (water < 0.001f) break;
-                    px = newX;
-                    pz = newZ;
-                }
-
-                // Spread any remaining carried sediment over a 5×5 Gaussian
-                // footprint at the particle's final position. With wide
-                // gradient stencils many particles converge into the same
-                // smoothed-topology basin minimum, so a 4-cell bilinear
-                // distribution still produces visible single-cell spikes.
-                // The 5×5 Gaussian (σ ≈ 1) spreads the dump over ~25 cells
-                // and brings the per-cell rate down by ~6×, removing the
-                // forest-of-pillars artefact at convergence points.
-                if (carried > 0.0f)
-                {
-                    static constexpr float gw[5][5] = {
-                        {0.00296902f, 0.01330621f, 0.02193823f, 0.01330621f, 0.00296902f},
-                        {0.01330621f, 0.05963429f, 0.09832033f, 0.05963429f, 0.01330621f},
-                        {0.02193823f, 0.09832033f, 0.16210283f, 0.09832033f, 0.02193823f},
-                        {0.01330621f, 0.05963429f, 0.09832033f, 0.05963429f, 0.01330621f},
-                        {0.00296902f, 0.01330621f, 0.02193823f, 0.01330621f, 0.00296902f},
-                    };
-                    const int x0 = std::clamp(static_cast<int>(std::round(px)), 0, n - 1);
-                    const int z0 = std::clamp(static_cast<int>(std::round(pz)), 0, n - 1);
-                    float totalW = 0.0f;
-                    for (int gdz = -2; gdz <= 2; ++gdz)
-                    {
-                        const int nz = z0 + gdz;
-                        if (nz < 0 || nz >= n) continue;
-                        for (int gdx = -2; gdx <= 2; ++gdx)
-                        {
-                            const int nx = x0 + gdx;
-                            if (nx < 0 || nx >= n) continue;
-                            totalW += gw[gdz + 2][gdx + 2];
-                        }
-                    }
-                    if (totalW > 0.0f)
-                    {
-                        const float carriedNorm = carried / totalW;
-                        for (int gdz = -2; gdz <= 2; ++gdz)
-                        {
-                            const int nz = z0 + gdz;
-                            if (nz < 0 || nz >= n) continue;
-                            for (int gdx = -2; gdx <= 2; ++gdx)
-                            {
-                                const int nx = x0 + gdx;
-                                if (nx < 0 || nx >= n) continue;
-                                deltas[static_cast<size_t>(nz) * static_cast<size_t>(n) + static_cast<size_t>(nx)]
-                                    += carriedNorm * gw[gdz + 2][gdx + 2];
-                            }
-                        }
-                    }
-                }
-            }
-        });
-    }
-
-        for (auto& w : workers) w.join();
-
-        // Merge this wave's per-thread deltas into the master sediment map.
-        // Threads can all decide that the same source cell has available
-        // sediment, so the raw merged value may go negative. Clamping those
-        // cells directly to zero would create mass out of nowhere: particles
-        // already carried/deposited the over-eroded amount elsewhere, while the
-        // source cell stops at zero. Instead, measure the negative deficit and
-        // remove the same amount proportionally from positive sediment cells.
-        double deficit = 0.0;
-        double positiveMass = 0.0;
-        for (size_t idx = 0; idx < cellCount; ++idx)
-        {
-            float total = sediment[idx];
-            for (int t = 0; t < threadCount; ++t)
-            {
-                total += threadDeltas[static_cast<size_t>(t)][idx];
-            }
-            if (total < 0.0f)
-            {
-                deficit += static_cast<double>(-total);
-                mergedSediment[idx] = 0.0f;
-            }
-            else
-            {
-                mergedSediment[idx] = total;
-                positiveMass += static_cast<double>(total);
-            }
-        }
-
-        const float massScale = (deficit > 0.0 && positiveMass > 1e-8)
-            ? static_cast<float>(std::max(0.0, positiveMass - deficit) / positiveMass)
-            : 1.0f;
         ParallelForRows(n, [&](int z) {
             for (int x = 0; x < n; ++x)
             {
                 const size_t idx = static_cast<size_t>(z) * static_cast<size_t>(n) + static_cast<size_t>(x);
-                sediment[idx] = std::min(mergedSediment[idx] * massScale, maxSedimentThickness);
+                bedrock[idx] = 0.0f;
+                sediment[idx] = grid.heights[idx];
+            }
+        });
+    }
+    else
+    {
+        ParallelForRows(n, [&](int z) {
+            for (int x = 0; x < n; ++x)
+            {
+                const size_t idx = static_cast<size_t>(z) * static_cast<size_t>(n) + static_cast<size_t>(x);
+                bedrock[idx] = grid.heights[idx];
+                sediment[idx] = 0.0f;
             }
         });
     }
 
-    // Mask scale: 2× initial sediment makes 0 = bedrock exposed (depleted),
-    // 0.5 = untouched (initial level), 1 = 2×+ accumulation. Both depletion
-    // and accumulation are visible. Fixed scale (independent of max) means
-    // a single tall hotspot can't wash out the rest of the map.
-    const float maskNorm = std::max(settings.initialSedimentM * 2.0f, 1e-4f);
-    const float contrast = settings.maskContrast;
+    // Talus angle from viscosity, with a quadratic curve so low viscosity
+    // produces near-flat lakes (sediment levels out in basins like a
+    // fluid). 0% → 0°, 20% → 3.2°, 50% → 20°, 100% → 80°. The default
+    // 20% gives nearly horizontal accumulation surfaces in valleys
+    // (matching GeoGen's behaviour where deposited areas read as flat
+    // pools), while high values still allow steep talus piles.
+    const float viscosity = std::clamp(settings.sedimentViscosity, 0.0f, 1.0f);
+    const float talusAngleDeg = viscosity * viscosity * 80.0f;
+    const float talusTan = std::tan(talusAngleDeg * 3.14159265358979323846f / 180.0f);
+
+    // Talus drop threshold for the unit-stride slide. Information moves
+    // 1 cell per pass, so we need many passes for sediment to relax over
+    // long distances. `Largest Detail Level` says how far (in metres)
+    // we want sediment to be able to travel before stopping at the talus
+    // angle — convert to a per-iteration "macro-pass" multiplier so the
+    // total work scales with the desired settling extent.
+    const float talusH = talusTan * cellSizeM;
+
+    const float largestM = std::clamp(settings.largestDetailLevelM, cellSizeM, terrainSizeM * 0.5f);
+    const int macroPasses = std::max(1, static_cast<int>(std::ceil(largestM / cellSizeM)));
+
+    // Emission timing: total `emissionAmountM` is split across the first
+    // `emissionEnd` outer iterations. emissionTime=0 → all up-front
+    // (loose layer settles freely from the start); emissionTime=1 →
+    // spread evenly across every iteration (each thin layer settles
+    // into the channels carved by the previous one — sharper detail).
+    const int iterations = std::max(1, settings.iterations);
+    const int stabIter = std::max(1, settings.stabilizationIterations);
+    const float emissionAmount = std::max(0.0f, settings.emissionAmountM);
+    const float emissionTime = std::clamp(settings.emissionTime, 0.0f, 1.0f);
+    const int emissionEnd = std::max(1,
+        static_cast<int>(std::ceil(static_cast<float>(iterations) * emissionTime)));
+    const float emissionPerIter = emissionAmount / static_cast<float>(emissionEnd);
+
+    std::vector<float> outgoing(cellCount * 4u, 0.0f);
+
+    for (int iter = 0; iter < iterations; ++iter)
+    {
+        if (iter < emissionEnd && emissionPerIter > 0.0f)
+        {
+            ParallelForRows(n, [&](int z) {
+                for (int x = 0; x < n; ++x)
+                {
+                    sediment[static_cast<size_t>(z) * static_cast<size_t>(n) + static_cast<size_t>(x)] += emissionPerIter;
+                }
+            });
+        }
+
+        // Each iteration runs `macroPasses × stabIter` unit-stride slide
+        // passes. macroPasses scales with `Largest Detail Level` so
+        // sediment can relax over the desired distance per iteration;
+        // stabIter is the user-controlled inner refinement count.
+        const int passes = macroPasses * stabIter;
+        for (int p = 0; p < passes; ++p)
+        {
+            sediment_geogen::ThermalSlideUnitStride(sediment, bedrock, outgoing, n, talusH);
+        }
+    }
+
+    // Mask normalisation: a single deep basin can carry 10-100× the
+    // sediment thickness of typical deposit areas, so dividing by the
+    // raw max would compress 99% of the map into the dim end of the
+    // scale (only the deepest spike reads bright). Normalise by the
+    // 95th percentile instead — the brightest 5% saturate to white and
+    // the remaining 95% spread across the full [0, 1] range, matching
+    // what the eye sees in the 3D view.
+    std::vector<float> sortedSediment(sediment.begin(), sediment.begin() + cellCount);
+    const size_t pIndex = std::min(cellCount - 1, (cellCount * 95u) / 100u);
+    std::nth_element(sortedSediment.begin(), sortedSediment.begin() + pIndex, sortedSediment.end());
+    const float maskNorm = std::max(sortedSediment[pIndex], 1e-4f);
+    const float contrast = std::clamp(settings.maskContrast, 0.0f, 1.0f);
+
     ParallelForRows(n, [&](int z) {
         for (int x = 0; x < n; ++x)
         {
@@ -3742,6 +3557,11 @@ void SetMultiScaleErosionGpuEvaluator(MultiScaleErosionGpuEvaluator evaluator)
 void SetMaskNoiseGpuEvaluator(MaskNoiseGpuEvaluator evaluator)
 {
     g_maskNoiseGpuEvaluator = evaluator;
+}
+
+void SetSedimentGpuEvaluator(SedimentGpuEvaluator evaluator)
+{
+    g_sedimentGpuEvaluator = evaluator;
 }
 
 std::atomic<GraphId>& CurrentlyEvaluatingNodeId()

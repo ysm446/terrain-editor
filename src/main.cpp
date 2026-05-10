@@ -456,6 +456,11 @@ ComPtr<ID3D12PipelineState> g_mseThermalPso;
 ComPtr<ID3D12PipelineState> g_mseDepositionPso;
 ComPtr<ID3D12RootSignature> g_maskNoiseComputeRootSignature;
 ComPtr<ID3D12PipelineState> g_maskNoisePso;
+ComPtr<ID3D12RootSignature> g_sedimentComputeRootSignature;
+ComPtr<ID3D12PipelineState> g_sedimentSetupPso;
+ComPtr<ID3D12PipelineState> g_sedimentEmitPso;
+ComPtr<ID3D12PipelineState> g_sedimentSweep1Pso;
+ComPtr<ID3D12PipelineState> g_sedimentSweep2Pso;
 ComPtr<ID3D12RootSignature> g_skyRootSignature;
 ComPtr<ID3D12PipelineState> g_skyPso;
 bool g_skyPipelineReady = false;
@@ -514,6 +519,10 @@ std::string g_maskNoiseComputeStatus = "Mask Noise GPU Compute not initialized";
 bool g_maskNoiseComputeReady = false;
 std::mutex g_maskNoiseComputeMutex;
 std::mutex g_maskNoiseGpuRequestMutex;
+std::string g_sedimentComputeStatus = "Sediment GPU Compute not initialized";
+bool g_sedimentComputeReady = false;
+std::mutex g_sedimentComputeMutex;
+std::mutex g_sedimentGpuRequestMutex;
 std::thread::id g_mainThreadId;
 
 struct MseGpuRequestResult
@@ -538,6 +547,22 @@ struct MaskNoiseGpuRequestResult
     rock::MaskGrid grid;
     std::string error;
 };
+
+struct SedimentGpuRequestResult
+{
+    bool success = false;
+    rock::HeightfieldGrid grid;
+    std::string error;
+};
+
+struct SedimentGpuRequest
+{
+    rock::HeightfieldGrid grid;
+    rock::SedimentSettings settings;
+    std::promise<SedimentGpuRequestResult> promise;
+};
+
+std::vector<std::shared_ptr<SedimentGpuRequest>> g_pendingSedimentGpuRequests;
 
 struct MaskNoiseGpuRequest
 {
@@ -863,6 +888,12 @@ void CleanupD3D()
     g_maskNoisePso.Reset();
     g_maskNoiseComputeRootSignature.Reset();
     g_maskNoiseComputeReady = false;
+    g_sedimentSetupPso.Reset();
+    g_sedimentEmitPso.Reset();
+    g_sedimentSweep1Pso.Reset();
+    g_sedimentSweep2Pso.Reset();
+    g_sedimentComputeRootSignature.Reset();
+    g_sedimentComputeReady = false;
     g_skyPso.Reset();
     g_skyRootSignature.Reset();
     g_skyPipelineReady = false;
@@ -940,6 +971,11 @@ std::filesystem::path MaskNoiseShaderPath()
     return ShaderPath("mask_noise_compute.hlsl");
 }
 
+std::filesystem::path SedimentComputeShaderPath()
+{
+    return ShaderPath("sediment_compute.hlsl");
+}
+
 std::filesystem::path SkyShaderPath()
 {
     return ShaderPath("sky.hlsl");
@@ -968,6 +1004,7 @@ std::filesystem::path CloudShadowShaderPath()
 void EvaluateGraph();
 void ProcessPendingMseGpuRequests();
 void ProcessPendingMaskNoiseGpuRequests();
+void ProcessPendingSedimentGpuRequests();
 void EnsurePreviewMesh();
 int CurrentPreviewMeshResolution();
 bool IsTerrainNodeKind(rock::NodeKind kind);
@@ -1786,19 +1823,14 @@ nlohmann::json MakeSedimentSettingsJson(const rock::Node& node)
     return {
         {"sediment", {
             {"iterations", node.sediment.iterations},
-            {"initialSedimentM", node.sediment.initialSedimentM},
+            {"stabilizationIterations", node.sediment.stabilizationIterations},
+            {"largestDetailLevelM", node.sediment.largestDetailLevelM},
+            {"emissionAmountM", node.sediment.emissionAmountM},
+            {"emissionTime", node.sediment.emissionTime},
+            {"sedimentViscosity", node.sediment.sedimentViscosity},
+            {"convertTerrainToSediment", node.sediment.convertTerrainToSediment},
             {"maskContrast", node.sediment.maskContrast},
-            {"particleCount", node.sediment.particleCount},
-            {"particleLifetime", node.sediment.particleLifetime},
-            {"particleGradientRadiusM", node.sediment.particleGradientRadiusM},
-            {"particleInertia", node.sediment.particleInertia},
-            {"particleFriction", node.sediment.particleFriction},
-            {"particleCapacity", node.sediment.particleCapacity},
-            {"particleErosion", node.sediment.particleErosion},
-            {"particleDeposition", node.sediment.particleDeposition},
-            {"particleEvaporation", node.sediment.particleEvaporation},
-            {"particleEmissionTime", node.sediment.particleEmissionTime},
-            {"particleSeed", node.sediment.particleSeed},
+            {"backend", static_cast<int>(node.sediment.backend)},
         }},
     };
 }
@@ -2021,20 +2053,20 @@ void ReadSedimentSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
 {
     const nlohmann::json nodeSedimentJson = nodeJson.value("sediment", nlohmann::json::object());
 
-    node.sediment.iterations = std::clamp(nodeSedimentJson.value("iterations", node.sediment.iterations), 0, 4096);
-    node.sediment.initialSedimentM = std::clamp(nodeSedimentJson.value("initialSedimentM", node.sediment.initialSedimentM), 0.0f, 1000.0f);
+    node.sediment.iterations = std::clamp(nodeSedimentJson.value("iterations", node.sediment.iterations), 1, 1000);
+    node.sediment.stabilizationIterations = std::clamp(nodeSedimentJson.value("stabilizationIterations", node.sediment.stabilizationIterations), 1, 32);
+    node.sediment.largestDetailLevelM = std::clamp(nodeSedimentJson.value("largestDetailLevelM", node.sediment.largestDetailLevelM), 1.0f, 1024.0f);
+    node.sediment.emissionAmountM = std::clamp(nodeSedimentJson.value("emissionAmountM", node.sediment.emissionAmountM), 0.0f, 1000.0f);
+    node.sediment.emissionTime = std::clamp(nodeSedimentJson.value("emissionTime", node.sediment.emissionTime), 0.0f, 1.0f);
+    node.sediment.sedimentViscosity = std::clamp(nodeSedimentJson.value("sedimentViscosity", node.sediment.sedimentViscosity), 0.0f, 1.0f);
+    node.sediment.convertTerrainToSediment = nodeSedimentJson.value("convertTerrainToSediment", node.sediment.convertTerrainToSediment);
     node.sediment.maskContrast = std::clamp(nodeSedimentJson.value("maskContrast", node.sediment.maskContrast), 0.0f, 1.0f);
-    node.sediment.particleCount = std::clamp(nodeSedimentJson.value("particleCount", node.sediment.particleCount), 0, 4'000'000);
-    node.sediment.particleLifetime = std::clamp(nodeSedimentJson.value("particleLifetime", node.sediment.particleLifetime), 1, 1024);
-    node.sediment.particleGradientRadiusM = std::clamp(nodeSedimentJson.value("particleGradientRadiusM", node.sediment.particleGradientRadiusM), 0.5f, 500.0f);
-    node.sediment.particleInertia = std::clamp(nodeSedimentJson.value("particleInertia", node.sediment.particleInertia), 0.0f, 0.99f);
-    node.sediment.particleFriction = std::clamp(nodeSedimentJson.value("particleFriction", node.sediment.particleFriction), 0.0f, 0.95f);
-    node.sediment.particleCapacity = std::clamp(nodeSedimentJson.value("particleCapacity", node.sediment.particleCapacity), 0.0f, 32.0f);
-    node.sediment.particleErosion = std::clamp(nodeSedimentJson.value("particleErosion", node.sediment.particleErosion), 0.0f, 1.0f);
-    node.sediment.particleDeposition = std::clamp(nodeSedimentJson.value("particleDeposition", node.sediment.particleDeposition), 0.0f, 1.0f);
-    node.sediment.particleEvaporation = std::clamp(nodeSedimentJson.value("particleEvaporation", node.sediment.particleEvaporation), 0.0f, 1.0f);
-    node.sediment.particleEmissionTime = std::clamp(nodeSedimentJson.value("particleEmissionTime", node.sediment.particleEmissionTime), 0.0f, 1.0f);
-    node.sediment.particleSeed = std::clamp(nodeSedimentJson.value("particleSeed", node.sediment.particleSeed), 0, 999999);
+    {
+        const int backendInt = nodeSedimentJson.value("backend", static_cast<int>(node.sediment.backend));
+        node.sediment.backend = static_cast<rock::SedimentBackend>(std::clamp(backendInt,
+            static_cast<int>(rock::SedimentBackend::CpuReference),
+            static_cast<int>(rock::SedimentBackend::GpuCompute)));
+    }
 }
 
 void ReadNodeSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
@@ -3911,6 +3943,401 @@ void ProcessPendingMaskNoiseGpuRequests()
     }
 }
 
+// Mirrors the cbuffer in shaders/sediment_compute.hlsl. Re-bound for
+// every dispatch (the emit / sweep / setup passes share the same root
+// signature and only change `talusH` / `emissionPerIter` / `convertTerrainToSediment`).
+struct SedimentShaderConstants
+{
+    UINT  resolution;
+    float talusH;
+    float emissionPerIter;
+    UINT  convertTerrainToSediment;
+};
+static_assert(sizeof(SedimentShaderConstants) == 4 * sizeof(UINT), "SedimentShaderConstants must be 4 DWORDs");
+
+bool EnsureSedimentComputePipeline(std::string* error)
+{
+    if (g_sedimentComputeReady && g_sedimentComputeRootSignature
+        && g_sedimentSetupPso && g_sedimentEmitPso
+        && g_sedimentSweep1Pso && g_sedimentSweep2Pso)
+    {
+        return true;
+    }
+    if (!g_device)
+    {
+        if (error) *error = "D3D12 device is not available";
+        g_sedimentComputeStatus = "Sediment GPU Compute unavailable";
+        return false;
+    }
+
+    // 4 UAVs (bedrock, sediment, outgoing, inputHeights) bound as one
+    // descriptor table at u0..u3.
+    D3D12_DESCRIPTOR_RANGE uavRange{};
+    uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    uavRange.NumDescriptors = 4;
+    uavRange.BaseShaderRegister = 0;
+    uavRange.RegisterSpace = 0;
+    uavRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_ROOT_PARAMETER rootParams[2]{};
+    rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    rootParams[0].Constants.ShaderRegister = 0;
+    rootParams[0].Constants.RegisterSpace = 0;
+    rootParams[0].Constants.Num32BitValues = 4;
+    rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[1].DescriptorTable.pDescriptorRanges = &uavRange;
+    rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    D3D12_ROOT_SIGNATURE_DESC rsDesc{};
+    rsDesc.NumParameters = 2;
+    rsDesc.pParameters = rootParams;
+    rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+    ComPtr<ID3DBlob> sigBlob, errBlob;
+    HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
+    if (FAILED(hr))
+    {
+        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Serialize Sediment root sig failed";
+        g_sedimentComputeStatus = "Sediment GPU Compute root signature failed";
+        return false;
+    }
+    hr = g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_sedimentComputeRootSignature));
+    if (FAILED(hr))
+    {
+        if (error) *error = "Create Sediment root sig failed";
+        g_sedimentComputeStatus = "Sediment GPU Compute root signature failed";
+        return false;
+    }
+
+    const std::filesystem::path shaderPath = SedimentComputeShaderPath();
+    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
+#if defined(_DEBUG)
+    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+#endif
+
+    auto compileEntry = [&](const char* entryPoint, ComPtr<ID3DBlob>& outBlob) -> bool {
+        errBlob.Reset();
+        const HRESULT compileHr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE,
+                                                     entryPoint, "cs_5_0", compileFlags, 0, &outBlob, &errBlob);
+        if (FAILED(compileHr))
+        {
+            if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile Sediment shader failed";
+            return false;
+        }
+        return true;
+    };
+
+    ComPtr<ID3DBlob> setupBlob, emitBlob, sw1Blob, sw2Blob;
+    if (!compileEntry("CSSetup",       setupBlob)) { g_sedimentComputeStatus = "Sediment Setup shader compile failed"; return false; }
+    if (!compileEntry("CSEmit",        emitBlob))  { g_sedimentComputeStatus = "Sediment Emit shader compile failed"; return false; }
+    if (!compileEntry("CSSlideSweep1", sw1Blob))   { g_sedimentComputeStatus = "Sediment Sweep1 shader compile failed"; return false; }
+    if (!compileEntry("CSSlideSweep2", sw2Blob))   { g_sedimentComputeStatus = "Sediment Sweep2 shader compile failed"; return false; }
+
+    auto buildPso = [&](ID3DBlob* csBlob, ComPtr<ID3D12PipelineState>& outPso) -> bool {
+        D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{};
+        psoDesc.pRootSignature = g_sedimentComputeRootSignature.Get();
+        psoDesc.CS = {csBlob->GetBufferPointer(), csBlob->GetBufferSize()};
+        const HRESULT psoHr = g_device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&outPso));
+        if (FAILED(psoHr))
+        {
+            if (error) *error = "Create Sediment PSO failed";
+            return false;
+        }
+        return true;
+    };
+    if (!buildPso(setupBlob.Get(), g_sedimentSetupPso))  { g_sedimentComputeStatus = "Sediment Setup PSO failed"; return false; }
+    if (!buildPso(emitBlob.Get(),  g_sedimentEmitPso))   { g_sedimentComputeStatus = "Sediment Emit PSO failed"; return false; }
+    if (!buildPso(sw1Blob.Get(),   g_sedimentSweep1Pso)) { g_sedimentComputeStatus = "Sediment Sweep1 PSO failed"; return false; }
+    if (!buildPso(sw2Blob.Get(),   g_sedimentSweep2Pso)) { g_sedimentComputeStatus = "Sediment Sweep2 PSO failed"; return false; }
+
+    g_sedimentComputeReady = true;
+    g_sedimentComputeStatus = "Sediment GPU Compute dispatch ready";
+    return true;
+}
+
+bool RunSedimentComputeImmediate(rock::HeightfieldGrid& grid, const rock::SedimentSettings& settings, std::string* error)
+{
+    std::lock_guard<std::mutex> lock(g_sedimentComputeMutex);
+    if (!EnsureSedimentComputePipeline(error))
+    {
+        return false;
+    }
+
+    const UINT resolution = static_cast<UINT>(std::clamp(grid.resolution, 0, 4096));
+    const UINT64 cellCount = static_cast<UINT64>(resolution) * static_cast<UINT64>(resolution);
+    if (resolution < 2 || grid.heights.size() < cellCount)
+    {
+        if (error) *error = "Invalid heightfield for Sediment GPU Compute";
+        return false;
+    }
+
+    const UINT64 fieldByteSize = cellCount * sizeof(float);
+    const UINT64 outgoingByteSize = cellCount * 4ull * sizeof(float);
+
+    const D3D12_HEAP_PROPERTIES defaultHeap = HeapProperties(D3D12_HEAP_TYPE_DEFAULT);
+    const D3D12_HEAP_PROPERTIES uploadHeap = HeapProperties(D3D12_HEAP_TYPE_UPLOAD);
+    const D3D12_HEAP_PROPERTIES readbackHeap = HeapProperties(D3D12_HEAP_TYPE_READBACK);
+    const D3D12_RESOURCE_DESC fieldGpuDesc = BufferResourceDesc(fieldByteSize, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    const D3D12_RESOURCE_DESC outgoingGpuDesc = BufferResourceDesc(outgoingByteSize, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    const D3D12_RESOURCE_DESC fieldCpuDesc = BufferResourceDesc(fieldByteSize);
+
+    ComPtr<ID3D12Resource> bedrockBuf, sedimentBuf, outgoingBuf, inputHeightsBuf;
+    ComPtr<ID3D12Resource> uploadHeights;
+    ComPtr<ID3D12Resource> readbackSediment, readbackBedrock;
+
+    auto createDefault = [&](ComPtr<ID3D12Resource>& out, const D3D12_RESOURCE_DESC& desc, const char* name) -> bool {
+        const HRESULT hrLocal = g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&out));
+        if (FAILED(hrLocal)) { if (error) *error = std::string("Create ") + name + " failed"; return false; }
+        return true;
+    };
+    auto createUpload = [&](ComPtr<ID3D12Resource>& out, const char* name) -> bool {
+        const HRESULT hrLocal = g_device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &fieldCpuDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&out));
+        if (FAILED(hrLocal)) { if (error) *error = std::string("Create ") + name + " failed"; return false; }
+        return true;
+    };
+    auto createReadback = [&](ComPtr<ID3D12Resource>& out, const char* name) -> bool {
+        const HRESULT hrLocal = g_device->CreateCommittedResource(&readbackHeap, D3D12_HEAP_FLAG_NONE, &fieldCpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&out));
+        if (FAILED(hrLocal)) { if (error) *error = std::string("Create ") + name + " failed"; return false; }
+        return true;
+    };
+
+    if (!createDefault(bedrockBuf,      fieldGpuDesc,    "Sediment bedrock buffer"))      return false;
+    if (!createDefault(sedimentBuf,     fieldGpuDesc,    "Sediment sediment buffer"))     return false;
+    if (!createDefault(outgoingBuf,     outgoingGpuDesc, "Sediment outgoing buffer"))     return false;
+    if (!createDefault(inputHeightsBuf, fieldGpuDesc,    "Sediment input-heights buffer"))return false;
+    if (!createUpload(uploadHeights,    "Sediment upload heights"))                       return false;
+    if (!createReadback(readbackSediment, "Sediment readback sediment"))                  return false;
+    if (!createReadback(readbackBedrock,  "Sediment readback bedrock"))                   return false;
+
+    void* mapped = nullptr;
+    const D3D12_RANGE emptyReadRange{0, 0};
+    ThrowIfFailed(uploadHeights->Map(0, &emptyReadRange, &mapped), "Map Sediment heights upload failed");
+    std::memcpy(mapped, grid.heights.data(), fieldByteSize);
+    uploadHeights->Unmap(0, nullptr);
+
+    // Descriptor heap: 4 UAVs in one block (bedrock, sediment, outgoing, inputHeights).
+    constexpr UINT kDescriptorCount = 4;
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    heapDesc.NumDescriptors = kDescriptorCount;
+    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    ComPtr<ID3D12DescriptorHeap> descriptorHeap;
+    HRESULT hr = g_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&descriptorHeap));
+    if (FAILED(hr)) { if (error) *error = "Create Sediment descriptor heap failed"; return false; }
+
+    auto createUav = [&](ID3D12Resource* res, UINT numElements, UINT slot) {
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+        uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+        uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+        uavDesc.Buffer.NumElements = numElements;
+        uavDesc.Buffer.StructureByteStride = sizeof(float);
+        D3D12_CPU_DESCRIPTOR_HANDLE handle = descriptorHeap->GetCPUDescriptorHandleForHeapStart();
+        handle.ptr += static_cast<SIZE_T>(slot) * g_srvDescriptorSize;
+        g_device->CreateUnorderedAccessView(res, nullptr, &uavDesc, handle);
+    };
+    createUav(bedrockBuf.Get(),      static_cast<UINT>(cellCount),       0);
+    createUav(sedimentBuf.Get(),     static_cast<UINT>(cellCount),       1);
+    createUav(outgoingBuf.Get(),     static_cast<UINT>(cellCount * 4u),  2);
+    createUav(inputHeightsBuf.Get(), static_cast<UINT>(cellCount),       3);
+
+    ComPtr<ID3D12CommandAllocator> allocator;
+    ComPtr<ID3D12GraphicsCommandList> commandList;
+    ThrowIfFailed(g_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)), "Create Sediment command allocator failed");
+    ThrowIfFailed(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&commandList)), "Create Sediment command list failed");
+
+    // Stage input heights into the GPU buffer through one upload.
+    D3D12_RESOURCE_BARRIER toCopyDest{};
+    toCopyDest.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    toCopyDest.Transition.pResource = inputHeightsBuf.Get();
+    toCopyDest.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    toCopyDest.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+    toCopyDest.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    commandList->ResourceBarrier(1, &toCopyDest);
+    commandList->CopyBufferRegion(inputHeightsBuf.Get(), 0, uploadHeights.Get(), 0, fieldByteSize);
+    D3D12_RESOURCE_BARRIER toUav = toCopyDest;
+    toUav.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+    toUav.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    commandList->ResourceBarrier(1, &toUav);
+
+    ID3D12DescriptorHeap* heaps[] = {descriptorHeap.Get()};
+    commandList->SetDescriptorHeaps(1, heaps);
+    commandList->SetComputeRootSignature(g_sedimentComputeRootSignature.Get());
+    commandList->SetComputeRootDescriptorTable(1, descriptorHeap->GetGPUDescriptorHandleForHeapStart());
+
+    const float terrainSizeMeters = std::max(grid.terrainSizeMeters, 1.0f);
+    const float cellSizeMeters = terrainSizeMeters / static_cast<float>(std::max<UINT>(1, resolution - 1));
+
+    // Talus angle from viscosity (matches CPU: viscosity² × 80°).
+    const float viscosity = std::clamp(settings.sedimentViscosity, 0.0f, 1.0f);
+    const float talusAngleDeg = viscosity * viscosity * 80.0f;
+    const float talusH = std::tan(talusAngleDeg * 3.14159265358979323846f / 180.0f) * cellSizeMeters;
+
+    const float largestM = std::clamp(settings.largestDetailLevelM, cellSizeMeters, terrainSizeMeters * 0.5f);
+    const int macroPasses = std::max(1, static_cast<int>(std::ceil(largestM / cellSizeMeters)));
+
+    const int iterations = std::max(1, settings.iterations);
+    const int stabIter = std::max(1, settings.stabilizationIterations);
+    const float emissionAmount = std::max(0.0f, settings.emissionAmountM);
+    const float emissionTime = std::clamp(settings.emissionTime, 0.0f, 1.0f);
+    const int emissionEnd = std::max(1,
+        static_cast<int>(std::ceil(static_cast<float>(iterations) * emissionTime)));
+    const float emissionPerIter = emissionAmount / static_cast<float>(emissionEnd);
+
+    const UINT groupCount = (resolution + 7u) / 8u;
+
+    auto setConstants = [&](float talusHValue, float emitValue, UINT convertFlag) {
+        SedimentShaderConstants k{};
+        k.resolution = resolution;
+        k.talusH = talusHValue;
+        k.emissionPerIter = emitValue;
+        k.convertTerrainToSediment = convertFlag;
+        commandList->SetComputeRoot32BitConstants(0, 4, &k, 0);
+    };
+    auto uavBarrier = [&]() {
+        D3D12_RESOURCE_BARRIER barrier{};
+        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+        barrier.UAV.pResource = nullptr;
+        commandList->ResourceBarrier(1, &barrier);
+    };
+
+    // 1. Setup: write bedrock and sediment from input heights.
+    setConstants(talusH, 0.0f, settings.convertTerrainToSediment ? 1u : 0u);
+    commandList->SetPipelineState(g_sedimentSetupPso.Get());
+    commandList->Dispatch(groupCount, groupCount, 1);
+    uavBarrier();
+
+    for (int iter = 0; iter < iterations; ++iter)
+    {
+        if (iter < emissionEnd && emissionPerIter > 0.0f)
+        {
+            setConstants(talusH, emissionPerIter, 0u);
+            commandList->SetPipelineState(g_sedimentEmitPso.Get());
+            commandList->Dispatch(groupCount, groupCount, 1);
+            uavBarrier();
+        }
+
+        const int passes = macroPasses * stabIter;
+        for (int p = 0; p < passes; ++p)
+        {
+            // Sweep 1: compute outgoing shares.
+            setConstants(talusH, 0.0f, 0u);
+            commandList->SetPipelineState(g_sedimentSweep1Pso.Get());
+            commandList->Dispatch(groupCount, groupCount, 1);
+            uavBarrier();
+            // Sweep 2: apply self-out − incoming-from-neighbours.
+            commandList->SetPipelineState(g_sedimentSweep2Pso.Get());
+            commandList->Dispatch(groupCount, groupCount, 1);
+            uavBarrier();
+        }
+    }
+
+    // Read sediment + bedrock back to CPU. Heights and mask are
+    // assembled host-side (need max sediment for mask normalisation).
+    D3D12_RESOURCE_BARRIER toCopySrc[2]{};
+    ID3D12Resource* copyResources[2] = {sedimentBuf.Get(), bedrockBuf.Get()};
+    for (int i = 0; i < 2; ++i)
+    {
+        toCopySrc[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        toCopySrc[i].Transition.pResource = copyResources[i];
+        toCopySrc[i].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        toCopySrc[i].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+        toCopySrc[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    }
+    commandList->ResourceBarrier(2, toCopySrc);
+    commandList->CopyBufferRegion(readbackSediment.Get(), 0, sedimentBuf.Get(), 0, fieldByteSize);
+    commandList->CopyBufferRegion(readbackBedrock.Get(),  0, bedrockBuf.Get(),  0, fieldByteSize);
+    ThrowIfFailed(commandList->Close(), "Close Sediment command list failed");
+
+    ID3D12CommandList* lists[] = {commandList.Get()};
+    g_commandQueue->ExecuteCommandLists(1, lists);
+    const UINT64 fenceValue = ++g_fenceLastSignaledValue;
+    ThrowIfFailed(g_commandQueue->Signal(g_fence.Get(), fenceValue), "Signal Sediment fence failed");
+    WaitForFenceValue(fenceValue);
+
+    void* mappedSed = nullptr;
+    void* mappedRock = nullptr;
+    const D3D12_RANGE readRange{0, static_cast<SIZE_T>(fieldByteSize)};
+    ThrowIfFailed(readbackSediment->Map(0, &readRange, &mappedSed), "Map Sediment readback (sediment) failed");
+    ThrowIfFailed(readbackBedrock->Map(0, &readRange, &mappedRock), "Map Sediment readback (bedrock) failed");
+    const float* sedimentValues = static_cast<const float*>(mappedSed);
+    const float* bedrockValues  = static_cast<const float*>(mappedRock);
+
+    grid.heights.assign(static_cast<size_t>(cellCount), 0.0f);
+    grid.mask.assign(static_cast<size_t>(cellCount), 0.0f);
+    // 95th percentile normalisation (matches the CPU path). Avoids the
+    // single-deepest-pile compressing the rest of the map to near-zero.
+    std::vector<float> sortedSediment(sedimentValues, sedimentValues + cellCount);
+    const size_t pIndex = std::min(static_cast<size_t>(cellCount - 1), (static_cast<size_t>(cellCount) * 95u) / 100u);
+    std::nth_element(sortedSediment.begin(), sortedSediment.begin() + pIndex, sortedSediment.end());
+    const float maskNorm = std::max(sortedSediment[pIndex], 1e-4f);
+    const float halfBand = std::max((1.0f - std::clamp(settings.maskContrast, 0.0f, 1.0f)) * 0.5f, 0.005f);
+    const float maskLo = 0.5f - halfBand;
+    const float maskHi = 0.5f + halfBand;
+    for (size_t i = 0; i < cellCount; ++i)
+    {
+        grid.heights[i] = bedrockValues[i] + sedimentValues[i];
+        const float t = std::clamp((sedimentValues[i] / maskNorm - maskLo) / (maskHi - maskLo), 0.0f, 1.0f);
+        grid.mask[i] = t * t * (3.0f - 2.0f * t);
+    }
+    const D3D12_RANGE emptyWriteRange{0, 0};
+    readbackSediment->Unmap(0, &emptyWriteRange);
+    readbackBedrock->Unmap(0, &emptyWriteRange);
+
+    g_sedimentComputeStatus = "Sediment GPU Compute evaluated";
+    return true;
+}
+
+bool RunSedimentCompute(rock::HeightfieldGrid& grid, const rock::SedimentSettings& settings, std::string* error)
+{
+    if (std::this_thread::get_id() == g_mainThreadId)
+    {
+        return RunSedimentComputeImmediate(grid, settings, error);
+    }
+
+    auto request = std::make_shared<SedimentGpuRequest>();
+    request->grid = grid;
+    request->settings = settings;
+    std::future<SedimentGpuRequestResult> future = request->promise.get_future();
+    {
+        std::lock_guard<std::mutex> lock(g_sedimentGpuRequestMutex);
+        g_pendingSedimentGpuRequests.push_back(request);
+    }
+    g_sedimentComputeStatus = "Sediment GPU Compute queued on main thread";
+
+    SedimentGpuRequestResult result = future.get();
+    if (!result.success)
+    {
+        if (error) *error = result.error;
+        return false;
+    }
+    grid = std::move(result.grid);
+    return true;
+}
+
+void ProcessPendingSedimentGpuRequests()
+{
+    if (std::this_thread::get_id() != g_mainThreadId)
+    {
+        return;
+    }
+
+    std::vector<std::shared_ptr<SedimentGpuRequest>> requests;
+    {
+        std::lock_guard<std::mutex> lock(g_sedimentGpuRequestMutex);
+        requests.swap(g_pendingSedimentGpuRequests);
+    }
+
+    for (const std::shared_ptr<SedimentGpuRequest>& request : requests)
+    {
+        SedimentGpuRequestResult result;
+        result.grid = std::move(request->grid);
+        result.success = RunSedimentComputeImmediate(result.grid, request->settings, &result.error);
+        request->promise.set_value(std::move(result));
+    }
+}
+
 // Mirrors the cbuffer in shaders/sky.hlsl. Packed manually to match HLSL's
 // 16-byte alignment rules so we can splat it as 32-bit root constants.
 struct SkyShaderConstants
@@ -5308,6 +5735,7 @@ void WaitForAsyncEvaluationForShutdown()
     {
         ProcessPendingMseGpuRequests();
         ProcessPendingMaskNoiseGpuRequests();
+        ProcessPendingSedimentGpuRequests();
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 
@@ -8775,76 +9203,55 @@ bool DrawSedimentProperties(rock::Node& editableNode)
     ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 210.0f);
     ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
     rock::SedimentSettings& sd = editableNode.sediment;
-    sd.iterations = std::clamp(sd.iterations, 0, 4096);
-    sd.initialSedimentM = std::clamp(sd.initialSedimentM, 0.0f, 1000.0f);
+    sd.iterations = std::clamp(sd.iterations, 1, 1000);
+    sd.stabilizationIterations = std::clamp(sd.stabilizationIterations, 1, 32);
+    sd.largestDetailLevelM = std::clamp(sd.largestDetailLevelM, 1.0f, 1024.0f);
+    sd.emissionAmountM = std::clamp(sd.emissionAmountM, 0.0f, 1000.0f);
+    sd.emissionTime = std::clamp(sd.emissionTime, 0.0f, 1.0f);
+    sd.sedimentViscosity = std::clamp(sd.sedimentViscosity, 0.0f, 1.0f);
     sd.maskContrast = std::clamp(sd.maskContrast, 0.0f, 1.0f);
-    sd.particleCount = std::clamp(sd.particleCount, 0, 4'000'000);
-    sd.particleLifetime = std::clamp(sd.particleLifetime, 1, 1024);
-    sd.particleGradientRadiusM = std::clamp(sd.particleGradientRadiusM, 0.5f, 500.0f);
-    sd.particleInertia = std::clamp(sd.particleInertia, 0.0f, 0.99f);
-    sd.particleFriction = std::clamp(sd.particleFriction, 0.0f, 0.95f);
-    sd.particleCapacity = std::clamp(sd.particleCapacity, 0.0f, 32.0f);
-    sd.particleErosion = std::clamp(sd.particleErosion, 0.0f, 1.0f);
-    sd.particleDeposition = std::clamp(sd.particleDeposition, 0.0f, 1.0f);
-    sd.particleEvaporation = std::clamp(sd.particleEvaporation, 0.0f, 1.0f);
-    sd.particleEmissionTime = std::clamp(sd.particleEmissionTime, 0.0f, 1.0f);
-    sd.particleSeed = std::clamp(sd.particleSeed, 0, 999999);
-    if (DrawPropertyFloatRow("Initial Sediment (m)", "SedimentInitial", &sd.initialSedimentM, 0.0f, 50.0f, rock::SedimentSettings{}.initialSedimentM, "Sediment initial changed", true, "全セルに最初に積む土砂の厚み (m)。多いほど侵食/堆積で動かせる量が増えます。", "%.2f"))
-    {
-        EvaluateGraph();
-    }
-    if (DrawPropertyPercentRow("Mask Contrast (%)", "SedimentMaskContrast", &sd.maskContrast, 0.0f, 1.0f, rock::SedimentSettings{}.maskContrast, "Sediment mask contrast changed", "Mask 出力のコントラスト。0 で連続グラデーション(中間グレーが多い)、1 でほぼバイナリ(黒/白のみ)。GeoGen ライクなくっきり dendritic を出すには 0.7+ が目安。"))
-    {
-        EvaluateGraph();
-    }
-    if (DrawPropertyIntRow("Iterations", "SedimentIterations", &sd.iterations, 1, 1000, rock::SedimentSettings{}.iterations, "Sediment iterations changed", true, "粒子を投入する回数(波数)。各 wave 後に sediment が更新されるので、後の wave は侵食された地形を見て更にチャンネルを彫る。総粒子数 = Iterations × Particle Count。"))
-    {
-        EvaluateGraph();
-    }
 
-    if (DrawPropertyIntRow("Particle Count", "SedimentParticleCount", &sd.particleCount, 0, 1'000'000, rock::SedimentSettings{}.particleCount, "Sediment particle count changed", true, "1 wave で発射する粒子数。Iterations と組み合わせて総量が決まる。"))
+    if (DrawPropertyPercentRow("Emission Time (%)", "SedimentEmissionTime", &sd.emissionTime, 0.0f, 1.0f, rock::SedimentSettings{}.emissionTime, "Sediment emission time changed", "Emission Amount を最初の何割の Iteration にかけて徐々に追加するか。0% は最初に全量を一度に積む (緩い層が自由に流れて落ち着く)、100% は毎 Iteration に均等追加 (前 Iteration が彫った河道に新層が流れ込みディテールがシャープになる)。"))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyIntRow("Particle Lifetime", "SedimentParticleLifetime", &sd.particleLifetime, 1, 512, rock::SedimentSettings{}.particleLifetime, "Sediment particle lifetime changed", true, "1 粒子あたりの最大移動ステップ数。多いほど遠くまで運ばれる。"))
+    if (DrawPropertyFloatRow("Largest Detail Level (m)", "SedimentLargestDetailLevel", &sd.largestDetailLevelM, 1.0f, 256.0f, rock::SedimentSettings{}.largestDetailLevelM, "Sediment largest detail level changed", true, "マルチグリッド緩和の最も粗いスケール (m)。この間隔の近傍へのスライドから始め、1 セルまで段階的に半分にしていきます。大きいほど大規模盆地が早く埋まり、小さいほど細部優先。", "%.1f"))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Gradient Distance (m)", "SedimentGradientDistanceM", &sd.particleGradientRadiusM, 0.5f, 200.0f, rock::SedimentSettings{}.particleGradientRadiusM, "Sediment gradient distance changed", true, "勾配サンプリングの距離 (m)。粒子はこの半径の中央差分で進路を決めるので、大きいほど地形の高周波ノイズが平滑化されて主要 drainage に粒子が収束 → 河道が太く少なくなる。GeoGen の Largest Detail Level (8/16/32m) 相当。解像度非依存。", "%.1f"))
+    if (DrawPropertyIntRow("Iterations Count", "SedimentIterations", &sd.iterations, 1, 500, rock::SedimentSettings{}.iterations, "Sediment iterations changed", true, "外側の緩和反復回数。各反復で全スケールを粗→細で 1 周します。多いほど安定状態に近づきます。"))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyPercentRow("Inertia (%)", "SedimentInertia", &sd.particleInertia, 0.0f, 0.99f, rock::SedimentSettings{}.particleInertia, "Sediment inertia changed", "粒子が前ステップの方向をどれだけ引き継ぐか。高いほど直線的、低いほど真っ直ぐ最急降下。"))
+    if (DrawPropertyIntRow("Stabilization Iterations", "SedimentStabilization", &sd.stabilizationIterations, 1, 16, rock::SedimentSettings{}.stabilizationIterations, "Sediment stabilization changed", true, "1 反復・1 スケール内で何回の安息角スライドを連続実行するか。多いほど各スケールがそのスケール内で完全に静定します。"))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyPercentRow("Friction (%)", "SedimentFriction", &sd.particleFriction, 0.0f, 0.95f, rock::SedimentSettings{}.particleFriction, "Sediment friction changed", "1 ステップごとに失われる速度の割合。0 だと長い斜面で速度が無制限に増え、容量も増えて経路で堆積されず終端で大量 dump → スパイク発生。10-20% が安定範囲。"))
+    if (DrawPropertyPercentRow("Sediment Viscosity (%)", "SedimentViscosity", &sd.sedimentViscosity, 0.0f, 1.0f, rock::SedimentSettings{}.sedimentViscosity, "Sediment viscosity changed", "堆積物の流動性 / 安息角を制御 (二乗カーブ)。0% = 0° (完全流体、谷底で水平面に均される)、20% (既定) ≈ 3° (ほぼ平らな堆積、GeoGen 相当)、50% = 20°、100% = 80° (粘り強く急斜面でも崩れない)。低いほど谷で水平な池状に、高いほど中腹に急な堆積として積もります。"))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Capacity", "SedimentCapacity", &sd.particleCapacity, 0.0f, 16.0f, rock::SedimentSettings{}.particleCapacity, "Sediment capacity changed", true, "粒子の運搬容量係数 (capacity = max(slope, 0.01) × |v| × water × Kc)。大きいほど多く運ぶ → 侵食が強い。", "%.2f"))
+    if (DrawPropertyFloatRow("Emission Amount (m)", "SedimentEmissionAmount", &sd.emissionAmountM, 0.0f, 100.0f, rock::SedimentSettings{}.emissionAmountM, "Sediment emission amount changed", true, "全セルに上乗せする堆積物の総厚 (m)。Convert Terrain to Sediment が ON のときは元地形に対する追加分です。", "%.2f"))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyPercentRow("Erosion (%)", "SedimentErosion", &sd.particleErosion, 0.0f, 1.0f, rock::SedimentSettings{}.particleErosion, "Sediment erosion changed", "容量に対する侵食レート。1 で 1 ステップで全容量分削る。"))
+    if (DrawPropertyBoolRow("Convert Terrain to Sediment", "SedimentConvertTerrain", &sd.convertTerrainToSediment, "Sediment convert terrain changed", "ON: 入力ハイトフィールド全体を可動堆積物として扱います (基盤 = 平坦)。山頂が崩れて谷を埋め、典型的な GeoGen 風の樹枝状デポジット模様になります。OFF: 入力は固定基盤、Emission Amount で追加した分だけが流れます。", rock::SedimentSettings{}.convertTerrainToSediment, true))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyPercentRow("Deposition (%)", "SedimentDeposition", &sd.particleDeposition, 0.0f, 1.0f, rock::SedimentSettings{}.particleDeposition, "Sediment deposition changed", "過剰運搬量の堆積レート。1 で過剰分を 1 ステップで全堆積。"))
+    if (DrawPropertyPercentRow("Mask Contrast (%)", "SedimentMaskContrast", &sd.maskContrast, 0.0f, 1.0f, rock::SedimentSettings{}.maskContrast, "Sediment mask contrast changed", "Mask 出力のコントラスト。0 で線形 (滑らかなグラデーション)、1 でほぼバイナリ。dendritic を強調するなら 0.5 以上。"))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyPercentRow("Evaporation (%)", "SedimentEvaporation", &sd.particleEvaporation, 0.0f, 0.5f, rock::SedimentSettings{}.particleEvaporation, "Sediment evaporation changed", "1 ステップあたりに失われる水の割合。粒子の運搬容量を時間で減衰させ、終端で堆積させる。"))
     {
-        EvaluateGraph();
-    }
-    if (DrawPropertyPercentRow("Emission Time (%)", "SedimentEmissionTime", &sd.particleEmissionTime, 0.0f, 1.0f, rock::SedimentSettings{}.particleEmissionTime, "Sediment emission time changed", "総粒子予算 (Iterations × Particle Count) を先頭何割の wave に集中させるか。0% は全粒子を 1 wave で初期地形に投入し wave 間 merge なし(樹枝状がシャープ)、100% は毎 wave に Particle Count ずつ均等(progressive な彫り込みと平滑化)。総仕事量は変わりません。"))
-    {
-        EvaluateGraph();
-    }
-    if (DrawPropertyIntRow("Seed", "SedimentSeed", &sd.particleSeed, 0, 999999, rock::SedimentSettings{}.particleSeed, "Sediment seed changed", true, "粒子位置の乱数シード。"))
-    {
-        EvaluateGraph();
+        int backendInt = static_cast<int>(sd.backend);
+        if (DrawPropertyComboRow("Backend", "SedimentBackend", &backendInt, "CPU\0GPU Compute\0\0", "実行バックエンド。GPU Compute (D3D12) は CPU 比で 10-30 倍高速 (1024² で 100ms 程度)。シェーダーコンパイル/ディスパッチ失敗時は CPU に自動フォールバック。CPU は決定論的でデバッグ向き。", static_cast<int>(rock::SedimentSettings{}.backend)))
+        {
+            sd.backend = static_cast<rock::SedimentBackend>(std::clamp(backendInt,
+                static_cast<int>(rock::SedimentBackend::CpuReference),
+                static_cast<int>(rock::SedimentBackend::GpuCompute)));
+            EvaluateGraph();
+        }
     }
 
     ImGui::EndTable();
@@ -9831,6 +10238,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         InitD3D(g_hwnd);
         rock::SetMultiScaleErosionGpuEvaluator(RunMseComputeGrid);
         rock::SetMaskNoiseGpuEvaluator(RunMaskNoiseCompute);
+        rock::SetSedimentGpuEvaluator(RunSedimentCompute);
 
         ShowWindow(g_hwnd, showCommand);
         UpdateWindow(g_hwnd);
@@ -9890,6 +10298,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
             ImGui::NewFrame();
             ProcessPendingMseGpuRequests();
             ProcessPendingMaskNoiseGpuRequests();
+            ProcessPendingSedimentGpuRequests();
             PollAsyncEvaluation();
             DrawUi();
             ImGui::Render();
@@ -9906,6 +10315,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         ImGui::DestroyContext();
         rock::SetMultiScaleErosionGpuEvaluator(nullptr);
         rock::SetMaskNoiseGpuEvaluator(nullptr);
+        rock::SetSedimentGpuEvaluator(nullptr);
         CleanupD3D();
         DestroyWindow(g_hwnd);
         UnregisterClassW(wc.lpszClassName, wc.hInstance);

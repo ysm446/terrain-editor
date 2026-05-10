@@ -1,63 +1,69 @@
 # Sediment ノード
 
-入力ハイトフィールドを岩盤(bedrock)とみなし、上に載せた **均一な土砂レイヤー** を確率的な水力侵食パーティクルで再分配します。GeoGen の Sediment ノード相当で、土砂が斜面を流れて谷や窪みに堆積し、**dendritic な流路に沿った筋状の堆積パターン**が出ます。
+入力ハイトフィールドの上 (もしくは入力地形そのもの) に **可動な堆積物レイヤー** を置き、重力でマルチスケールに再分配する GeoGen 互換の堆積シミュレーションノードです。安息角を超えた斜面から土砂が低い隣接セルへスライドし、谷底に厚く堆積、尾根は剥き出しになる **dendritic な堆積パターン** が形成されます。
 
 ## 入出力
 
 | 種類 | 内容 |
 | --- | --- |
-| 入力 | `HeightField`(bedrock として固定、岩盤とみなす) |
-| 出力 | `Heightmap`(bedrock + 残った土砂)、`Mask`(土砂厚みを 0..1 に正規化) |
+| 入力 | `HeightField` (基盤として固定 — `Convert Terrain to Sediment` が ON のときは入力高さ全体が可動堆積物として扱われ、基盤は平坦 = 0 になります) |
+| 出力 | `Heightmap` (基盤 + 再分配後の堆積物)、`Mask` (堆積厚みを max で 0..1 正規化 → 谷底が明、尾根が暗) |
 
 ## アルゴリズム
 
-各粒子は `(pos, dir, velocity, water, carried)` を持ち、以下のループで動きます:
-1. 現在位置で双線形勾配を計算
-2. `dir = inertia × dir + (1 - inertia) × (-gradient)`
-3. 単位ベクトル化して 1 セル進む
-4. 新位置の高さ差 `dh = oldH - newH` を計算
-5. 容量 `c = max(dh, 0.01) × |v| × water × Kc`
-6. `carried < c` なら `(c - carried) × Ke` を侵食。岩盤を掘らない sediment-only モデルなので、**`dh` による侵食キャップは無し**(古典的な hydraulic erosion のキャップを撤廃)、各セルの利用可能 sediment 量だけで cap。
-7. `carried > c` なら `(carried - c) × Kd` を旧位置に堆積
-8. `velocity = sqrt(v² + dh × 4)`、`water *= 1 - Kev`
-9. 寿命到達 or 水切れ で残り全堆積
+GeoGen 風の **マルチグリッド・サーマル (talus) スライディング**:
+
+1. **初期化** — `Convert Terrain to Sediment` ON: 基盤 = 0, 堆積物 = 入力高さ。OFF: 基盤 = 入力高さ, 堆積物 = 0。
+2. **スケール階層生成** — `Largest Detail Level (m)` をセル単位に変換した stride を最大値とし、1 セルまで毎回半分にします (例: 8m / 4m / 2m / 1m)。
+3. **外側反復ループ** (`Iterations Count` 回):
+   - **エミッション** — `Emission Amount (m)` を `emissionEnd = ceil(iterations × Emission Time)` 反復で均等加算 (Emission Time = 0% なら最初の 1 反復で全量)。
+   - **粗→細スケール走査** — 各 stride で `Stabilization Iterations` 回スライドパスを実行。各パスは:
+     - 各セルから 4 近傍 (距離 = stride) への高さ差を見て、`talusH = tan(角度) × cellSize × stride` を超える落差ぶんだけ可動量とみなす。
+     - その合計の半分 (`flowRate = 0.5`) を、各方向の落差比で按分して隣接セルへ送る。
+     - スレッドセーフのため、第 1 sweep で各セルの「方向別流出量」をスナップショットへ書き、第 2 sweep でそれを `自分の流出 − 4 近傍からの流入 (= 隣接の対方向スロット)` として適用します。
+4. **マスク生成** — `mask[i] = sediment[i] / max(sediment)` を `Mask Contrast` の S カーブで補正。
 
 ## 主な設定
 
 | 設定 | 既定値 | 役割 |
 | --- | --- | --- |
-| `Initial Sediment (m)` | 2.0 | 全セルに最初に積む土砂の厚み。再分配で動かせる絶対量を決める(薄すぎると地形に埋もれる) |
-| `Mask Contrast (%)` | 70 | Mask 出力のコントラスト。`smoothstep((initial×2) 周辺で遷移)`。0 で連続グラデーション、1 でほぼバイナリ。GeoGen 風くっきり dendritic は 0.7+ |
-| `Iterations` | 30 | 粒子を投入する回数(波数)。各 wave 後に sediment が更新され、次 wave は侵食済み地形を見る。GeoGen の Iter X 相当 |
-| `Particle Count` | 5,000 | 1 wave で発射する粒子数(総粒子数 = `Iterations × Particle Count`) |
-| `Particle Lifetime` | 128 | 1 粒子の最大ステップ数 |
-| `Gradient Distance (m)` | 8 | 勾配サンプリングの距離(メートル、解像度非依存)。GeoGen の "Largest Detail Level" 相当。4m で局所地形に追従(細かい筋状)、8m がほどよい集約、16m+ で主要谷強調(ただし収束が強くなりスパイク出やすい) |
-| `Inertia (%)` | 40 | 前ステップ方向への引き継ぎ率。高めにして小さな pit / ノイズに引っ掛からず長く流れるように |
-| `Friction (%)` | 5 | 1 ステップごとに失われる速度の割合。長い斜面で velocity が無制限に増えるのを防ぐ。低いほど重力加速感が強い、上げるとスパイク防止に有効 |
-| `Capacity` | 4.0 | 容量係数 Kc |
-| `Erosion (%)` | 30 | 1 ステップで容量差から侵食する割合(available sediment による cap のみ) |
-| `Deposition (%)` | 30 | 1 ステップで過剰分から堆積する割合(低いほど粒子が長く運んでから徐々に吐く) |
-| `Evaporation (%)` | 2 | 1 ステップでの水の喪失率 |
-| `Emission Time (%)` | 0 | 総粒子予算 (`Iterations × Particle Count`) を先頭何割の wave に集中させるか。0% は **全粒子を 1 wave に集中**(初期地形だけを侵食、wave 間 merge なし → 樹枝状がシャープ)、100% は従来どおり毎 wave に `Particle Count` ずつ均等(progressive な彫り込みと平滑化)。総仕事量は不変で、wave 間 merge の粒度のみ変わる |
-| `Seed` | 0 | 粒子位置の乱数シード |
+| `Emission Time (%)` | 0 | `Emission Amount` を最初の何割の反復にかけて徐々に積むか。0% = 最初に全量を一度に積む (緩い層が自由に流れて落ち着く)、100% = 毎反復に均等 (前反復が彫った河道に新層が流れ込み、河道がよりシャープに刻まれる) |
+| `Largest Detail Level (m)` | 8.0 | マルチグリッドの最も粗いスケール。大きいほど大規模盆地が早く埋まり、小さいほど細部優先。最大は 1/4 グリッドまでクランプ |
+| `Iterations Count` | 40 | 外側の緩和反復回数。各反復で全スケールを粗→細で 1 周します |
+| `Stabilization Iterations` | 2 | 1 反復・1 スケール内で何回連続でスライドパスを走らせるか。多いほど各スケールがそのスケール内で完全に静定します |
+| `Sediment Viscosity (%)` | 20 | 流動性 / 安息角を制御 (二乗カーブ)。0% = 0° (完全流体、谷底で水平面に均される)、20% (既定) ≈ 3° (ほぼ平らな堆積、GeoGen 相当)、50% = 20°、100% = 80° (粘り強く中腹に厚く積もる) |
+| `Emission Amount (m)` | 0.5 | 全セルに上乗せする堆積物の総厚 (m)。`Convert Terrain to Sediment` が ON のときは元地形に対する追加分 |
+| `Convert Terrain to Sediment` | true | ON: 入力地形全体を可動堆積物として扱い、山頂が崩れて谷を埋める典型 GeoGen 風出力。OFF: 入力は固定基盤、Emission Amount で追加した分だけが流れます |
+| `Mask Contrast (%)` | 0 | Mask 出力のコントラスト。0 で線形、1 でほぼバイナリ。dendritic を強調するなら 0.5 以上 |
+| `Backend` | GPU Compute | 実行バックエンド (`CPU` / `GPU Compute`)。GPU は D3D12 compute shader で 10-30 倍高速。シェーダーコンパイル / ディスパッチ失敗時は自動的に CPU にフォールバック |
 
-## CPU 並列化
+## バックエンド (CPU / GPU)
 
-粒子をスレッドに均等分割し、各スレッドが **自分専用の delta マップ**(`std::vector<float>` × N スレッド)に書き込む。同期は最終マージのみ。スレッド間の粒子相互作用は弱まる(他スレッドの侵食/堆積が走査中に見えない)が、レース回避のために標準的な選択。1024² × 100k 粒子 × 64 step で ~500ms 程度。
+`Backend` プロパティで実行経路を切り替えられます。
+
+**CPU パス** — 各スライドパスは 2 つの sweep からなり、両方とも `ParallelForRows` で行並列化。作業バッファ `outgoing[4 × n²]` (4 方向 × 全セル) はノード呼び出し全体で 1 回だけ確保し、すべてのパスで再利用。1024² グリッド × `iterations 40` × stab 2 × macro 8 = 640 パスで数秒。
+
+**GPU パス (既定)** — [shaders/sediment_compute.hlsl](../../../../shaders/sediment_compute.hlsl) の D3D12 compute shader で同じアルゴリズムを並列実行。エントリは:
+- `CSSetup`: 入力 height から bedrock + sediment を初期化
+- `CSEmit`: sediment に emissionPerIter を加算
+- `CSSlideSweep1`: 流出シェアを `outgoing[i*4..i*4+3]` に書き出し
+- `CSSlideSweep2`: `自身の流出 - 4 近傍の対方向流出` で sediment を更新
+
+CPU 比 10-30 倍高速 (1024² グリッドで 100ms 程度)。シェーダーコンパイル / ディスパッチ失敗時は CPU パスに自動フォールバック。Multi-Scale Erosion / Mask Noise と同じワーカー → メインスレッドキューパターンで非同期評価でも安全に動作します。
 
 ## 用途の使い分け
 
 | 目的 | 推奨パラメータ |
 | --- | --- |
-| 谷の樹枝状堆積(GeoGen 参考画像) | `Particle Count 200000` / `Lifetime 64` / `Initial Sediment 2-5m` |
-| 軽い土砂層を斜面から谷へ | `Initial Sediment 0.5m` / `Lifetime 30` |
-| シャープな初期侵食を強調 | `Emission Time 0%`(全粒子を 1 wave で初期地形に投入) |
-| Progressive な彫り込み・平滑化 | `Emission Time 100%`(波間 merge を毎回挟む) |
+| GeoGen 風の樹枝状堆積 (参考画像) | 既定値 (Convert Terrain to Sediment = ON, Viscosity 20%, Emission Amount 0.5m) |
+| 山頂を強く削り谷を厚く埋める | `Iterations Count 80-150` / `Largest Detail Level 16m` / `Viscosity 10%` |
+| 中腹に粘り強く積もらせる | `Viscosity 50-70%` / `Emission Amount 1-2m` |
+| 細部の樹枝状を強調 | `Largest Detail Level 4m` / `Stabilization Iterations 4` |
+| 既存地形を残し追加層だけ動かす | `Convert Terrain to Sediment OFF` / `Emission Amount 1-3m` |
 
 ## メモ
 
-- Heights 出力は **bedrock + 残った土砂**(加算ではなく、bedrock の上に sediment レイヤを重ねた最終地形)。
-- Mask 出力は **土砂厚みを max 値で正規化** した 0..1 マスク。GeoGen の白い堆積マスクに対応。
-- `Seed` を変えると粒子配置が変わるので、決定論を求めるならシード固定。
-- パフォーマンスは `Iterations × Particle Count × Lifetime` に線形依存。プレビュー解像度を下げると高速化。
-- キャッシュは入力ハッシュ + パラメータハッシュで他ノードと同様。粒子数変更でも個別に再評価。
+- Heights 出力は **基盤 + 再分配後の堆積物**。`Convert Terrain to Sediment` が ON だと基盤 = 0 なので、出力高さ = 再分配後の堆積物そのもの。
+- Mask 出力は **堆積厚みを max で正規化** した 0..1 値。最大堆積セルが必ず 1 になるので、堆積量の絶対値ではなく相対分布を見る用途。
+- 流れの安定性は `Sediment Viscosity` × `Stabilization Iterations` でほぼ決まります。低粘性 + 少ない安定化反復だと振動気味になることがあるので、低粘性なら Stab を 4-8 に上げるのが安全。
+- キャッシュは入力ハッシュ + パラメータハッシュで他ノードと同様。

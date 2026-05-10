@@ -3,6 +3,11 @@
 ## 未リリース
 
 - 表示設定に `マスクシェーディング` プルダウンを追加しました。`グレースケール` (mask=0→黒, mask=1→白の純粋な白黒ランプ、既定) と `グレー×オレンジ` (従来のライティング付きシェーディング) を選択できます。3D ビューと 2D マップ両方に反映されます。
+- `Sediment` ノードを GeoGen 互換のマルチスケール重力スライディングに全置き換えしました。粒子ベースの水力侵食モデルを廃止し、安息角 (`Sediment Viscosity`) を超えた斜面から土砂が低い隣接セルへスライドする gravity / talus シミュレーションに変更。パラメータも GeoGen に合わせ `Iterations Count` / `Stabilization Iterations` / `Largest Detail Level` / `Sediment Viscosity` / `Emission Amount` / `Emission Time` / `Convert Terrain to Sediment` / `Mask Contrast` に再構成しました (Frequencies カーブは未対応で全周波数 100% 固定相当)。`Convert Terrain to Sediment` ON では入力地形全体が可動堆積物として扱われ、山頂が崩れて谷を埋める典型的な GeoGen 風 dendritic デポジット模様が得られます。既存プロジェクトの旧パラメータは破棄されデフォルト値で読み込まれます。
+- `Sediment` ノードのアーティファクトを修正しました。マルチストライド近傍サンプリング (8m/4m/2m/1m) で発生していた水平方向の段々畑模様を解消するため、隣接セル参照を 4 連結 (距離 1 セル) に固定しました。さらに流量配分公式を `(n+1)` 除算に修正し、複数の低い隣接セルがある場合に発生していた過剰排出 (中央の細い尖塔の原因) を解消、各パス後の傾斜が `talusH` に厳密収束するようになりました。`Largest Detail Level` は 1 反復あたりのスライドパス数倍率に再マッピングされ、指定 m ぶんの距離をセル単位で繰り返しスライドさせます。
+- `Sediment` ノードの `Sediment Viscosity` の安息角マッピングを二乗カーブに変更しました (`viscosity² × 80°`)。0% = 0° (完全流体)、20% (既定) ≈ 3° (ほぼ平らな堆積)、50% = 20°、100% = 80°。これでデフォルト設定で谷底や窪地の堆積物がほぼ水平面に均され、GeoGen 同等の「池状の平らな堆積」パターンが得られます。
+- `Sediment` ノードのマスク正規化を 95 パーセンタイル基準に変更しました。従来は最大値で除算していたため、深い谷底の堆積物が残り 99% を圧縮し、最も深い 1% だけが明るく見える状態でした。新しい正規化では上位 5% が白で飽和、残り 95% が `[0, 1]` 全域に広がり、3D ビューで見える広い堆積エリアもマスクで明るく表示されるようになります。CPU / GPU 両パスに反映。
+- `Sediment` ノードを D3D12 GPU compute に対応させました。プロパティパネルの `Backend` プルダウンで `CPU` / `GPU Compute` を切り替え可能 (既定は `GPU Compute`)。新規シェーダー [shaders/sediment_compute.hlsl](shaders/sediment_compute.hlsl) に 4 つの compute エントリ (`CSSetup` / `CSEmit` / `CSSlideSweep1` / `CSSlideSweep2`) を実装し、CPU 版と完全に同じアルゴリズム (`(n+1)` 除算流量配分、race-free 2-sweep) を GPU で並列実行します。1024² グリッドの既定パラメータ (40 iter × 2 stab × 8 macro = 640 パス) でおおよそ 100ms 程度、CPU 比 10-30 倍高速。シェーダーコンパイル/ディスパッチ失敗時は CPU パスに自動フォールバックします。`Multi-Scale Erosion` / `Mask Noise` と同じワーカー → メイン スレッド キューパターンで、評価が非同期スレッドから走っても安全に動作します。
 
 ## 3.10.30 - 2026-05-10 12:04
 

@@ -45,6 +45,12 @@ enum class MultiScaleErosionBackend
     GpuCompute,
 };
 
+enum class SedimentBackend
+{
+    CpuReference,
+    GpuCompute,
+};
+
 enum class MaskNoiseBackend
 {
     CpuParallel,
@@ -204,28 +210,27 @@ struct RockSettings
     float facetScale = 2.5f;         // Sub-cell Voronoi frequency in the rock-local frame (higher = more, smaller facets per rock).
 };
 
-// Heightfield + mask. Lays a uniform sediment layer of `initialSedimentM`
-// on the input bedrock and redistributes it with a stochastic
-// hydraulic-erosion particle simulation. Output heights =
-// bedrock + remaining sediment; output mask = sediment thickness scaled
-// around the initial layer depth, with an optional contrast curve.
+// Heightfield → heightfield + mask. GeoGen-style sediment simulation.
+// Lays a uniform layer of loose sediment on the bedrock (or treats the
+// whole input as sediment if `convertTerrainToSediment`) and lets gravity
+// redistribute it through multi-scale thermal sliding: at each scale
+// (largest → cell-sized) sediment flows from cells whose slope to a
+// neighbour exceeds the talus angle (= `sedimentViscosity`). Coarser
+// scales settle large basins first, finer scales add detail. Output
+// heights = bedrock + redistributed sediment; output mask = sediment
+// thickness normalised by its maximum so valleys (thickly piled) are
+// bright and ridges (denuded) are dark.
 struct SedimentSettings
 {
-    int iterations = 30;             // Number of waves of particles (sediment is updated between waves).
-    float initialSedimentM = 2.0f;   // Initial sediment thickness on every cell (m). Determines how much there is to redistribute and the mask scale.
-    float maskContrast = 0.7f;       // 0 = linear gradient (smooth grey transitions), 1 = hard binary at 50% of (initial × 2). Higher → more GeoGen-like crisp dendritic mask.
-
-    int particleCount = 5000;        // Particles per wave (× iterations = total particles).
-    int particleLifetime = 128;      // Max steps per particle.
-    float particleGradientRadiusM = 8.0f; // Metres. Distance at which the wider central-difference gradient is sampled. Resolution-independent: 8m on a 1024m / 1024² grid is 8 cells, on a 512² grid is 4 cells. Larger → smoother flow that follows large-scale topology (matches GeoGen's "Largest Detail Level" setting). 16m+ may produce noticeable spikes at convergence points.
-    float particleInertia = 0.40f;   // 0..1, blend with previous direction (carries particles past tiny pits/noise so they don't get stuck mid-slope).
-    float particleFriction = 0.05f;  // 0..1, fraction of velocity lost per step (low enough to feel gravity-driven, high enough to bound velocity).
-    float particleCapacity = 4.0f;   // Multiplier on slope × |v| × water for carrying capacity.
-    float particleErosion = 0.3f;    // 0..1, fraction of (capacity - carried) eroded per step.
-    float particleDeposition = 0.3f; // 0..1, fraction of (carried - capacity) deposited per step (lower → particles travel further before dumping, more streak-like).
-    float particleEvaporation = 0.02f; // 0..1, water lost per step.
-    float particleEmissionTime = 0.0f; // 0..1, fraction of iterations that emit new particles. 0 = first wave only, 1 = every wave.
-    int particleSeed = 0;
+    int iterations = 40;                  // GeoGen "Iterations count". Outer relaxation passes.
+    int stabilizationIterations = 2;      // GeoGen "Stabilization iterations". Inner sliding passes per scale per outer iteration.
+    float largestDetailLevelM = 8.0f;     // GeoGen "Largest detail level" (m). Coarsest neighbour stride; halved each level down to one cell.
+    float emissionAmountM = 0.5f;         // GeoGen "Emission amount" (m). Total sediment thickness added uniformly.
+    float emissionTime = 0.0f;            // GeoGen "Emission time". 0..1, fraction of iterations over which the emission is gradually added; 0 = all up-front.
+    float sedimentViscosity = 0.20f;      // GeoGen "Sediment viscosity". 0..1; controls the talus angle (low = fluid, high = stiff piles).
+    bool convertTerrainToSediment = true; // GeoGen "Convert terrain to sediment". If true, the input height itself is treated as movable sediment over a flat bedrock = 0.
+    float maskContrast = 0.0f;            // Mask output contrast (S-curve). 0 = linear, 1 = near-binary.
+    SedimentBackend backend = SedimentBackend::GpuCompute; // CPU reference vs GPU compute (D3D12). Defaults to GPU; falls back to CPU on shader/device failure.
 };
 
 // Heightfield -> mask. Performs D8 (or MFD) flow accumulation on the
@@ -442,6 +447,7 @@ struct MaskGrid
 
 using MultiScaleErosionGpuEvaluator = bool (*)(HeightfieldGrid& grid, const MultiScaleErosionSettings& settings, std::string* error);
 using MaskNoiseGpuEvaluator = bool (*)(MaskGrid& grid, const MaskNoiseSettings& settings, std::string* error);
+using SedimentGpuEvaluator = bool (*)(HeightfieldGrid& grid, const SedimentSettings& settings, std::string* error);
 
 struct HeightfieldPipeline
 {
@@ -580,6 +586,7 @@ PreviewStage PreviewStageFor(NodeKind kind);
 bool IsMaskOnlyNodeKind(NodeKind kind);
 void SetMultiScaleErosionGpuEvaluator(MultiScaleErosionGpuEvaluator evaluator);
 void SetMaskNoiseGpuEvaluator(MaskNoiseGpuEvaluator evaluator);
+void SetSedimentGpuEvaluator(SedimentGpuEvaluator evaluator);
 
 // Thread-safe progress signal: holds the GraphId of the node whose
 // evaluation kernel is currently running on a worker thread, or 0 when
