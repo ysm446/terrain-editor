@@ -289,7 +289,7 @@ struct MeshPreviewConstants
     float shadowMapResolution;
     float shadowBias;
     float shadowEnabled;
-    float padding;
+    float maskGrayscale;
     float padding0;
     float lightRight[4];
     float lightUp[4];
@@ -349,6 +349,7 @@ struct GpuMeshPreview
     bool showWireframe = false;
     bool showGrid = false;
     bool maskPreview = false;
+    int maskShading = -1;
     int lightingMode = 0;
     float sunAzimuthDegrees = 0.0f;
     float sunElevationDegrees = 0.0f;
@@ -1219,6 +1220,7 @@ bool SaveAppSettings(std::string* error = nullptr)
                 settings.preview.viewportBackground[1],
                 settings.preview.viewportBackground[2],
             }},
+            {"maskShading", static_cast<int>(settings.preview.maskShading)},
         };
         root["layout"] = {
             {"rightPaneWidth", g_ui.rightPaneWidth},
@@ -1357,6 +1359,12 @@ bool LoadAppSettings(std::string* error = nullptr)
             settings.preview.viewportBackground[0] = std::clamp(visibilityJson["viewportBackground"][0].get<float>(), 0.0f, 1.0f);
             settings.preview.viewportBackground[1] = std::clamp(visibilityJson["viewportBackground"][1].get<float>(), 0.0f, 1.0f);
             settings.preview.viewportBackground[2] = std::clamp(visibilityJson["viewportBackground"][2].get<float>(), 0.0f, 1.0f);
+        }
+        {
+            const int maskShadingInt = visibilityJson.value("maskShading", static_cast<int>(settings.preview.maskShading));
+            settings.preview.maskShading = static_cast<rock::MaskShadingMode>(std::clamp(maskShadingInt,
+                static_cast<int>(rock::MaskShadingMode::Grayscale),
+                static_cast<int>(rock::MaskShadingMode::GrayOrange)));
         }
 
         const nlohmann::json layoutJson = root.value("layout", nlohmann::json::object());
@@ -5881,6 +5889,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.showWireframe != showWireframe ||
         g_gpuMeshPreview.showGrid != showGrid ||
         g_gpuMeshPreview.maskPreview != g_graph.Evaluation().previewShowsMask ||
+        g_gpuMeshPreview.maskShading != static_cast<int>(g_graph.Settings().preview.maskShading) ||
         g_gpuMeshPreview.lightingMode != g_graph.Settings().preview.lightingMode ||
         g_gpuMeshPreview.sunAzimuthDegrees != g_graph.Settings().preview.sunAzimuthDegrees ||
         g_gpuMeshPreview.sunElevationDegrees != g_graph.Settings().preview.sunElevationDegrees ||
@@ -6053,6 +6062,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         constants.nearPlane  = 0.05f;
         constants.farPlane   = 20000.0f;
         constants.maskPreview = g_graph.Evaluation().previewShowsMask ? 1.0f : 0.0f;
+        constants.maskGrayscale = (g_graph.Settings().preview.maskShading == rock::MaskShadingMode::Grayscale) ? 1.0f : 0.0f;
         constants.lightingMode = static_cast<float>(g_graph.Settings().preview.lightingMode);
         const float azimuth = g_graph.Settings().preview.sunAzimuthDegrees * 3.1415926535f / 180.0f;
         const float elevation = g_graph.Settings().preview.sunElevationDegrees * 3.1415926535f / 180.0f;
@@ -6587,6 +6597,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.showWireframe = showWireframe;
         g_gpuMeshPreview.showGrid      = showGrid;
         g_gpuMeshPreview.maskPreview   = g_graph.Evaluation().previewShowsMask;
+        g_gpuMeshPreview.maskShading   = static_cast<int>(g_graph.Settings().preview.maskShading);
         g_gpuMeshPreview.lightingMode  = g_graph.Settings().preview.lightingMode;
         g_gpuMeshPreview.sunAzimuthDegrees = g_graph.Settings().preview.sunAzimuthDegrees;
         g_gpuMeshPreview.sunElevationDegrees = g_graph.Settings().preview.sunElevationDegrees;
@@ -6868,10 +6879,10 @@ void DrawViewportCube(const ImVec2& min, const ImVec2& max, float timeSeconds)
     DrawViewportAxisGizmo(drawList, min, max);
 }
 
-ImU32 MapPreviewColor(float value, bool mask)
+ImU32 MapPreviewColor(float value, bool mask, bool grayscale)
 {
     value = std::clamp(value, 0.0f, 1.0f);
-    if (mask)
+    if (mask && !grayscale)
     {
         const int r = static_cast<int>(35.0f + value * 220.0f);
         const int g = static_cast<int>(42.0f + value * 122.0f);
@@ -6961,7 +6972,7 @@ void DrawHeightfieldMapPreview(const ImVec2& min, const ImVec2& max)
             const float value = maskPreview ? sourceValue : (sourceValue - minHeight) / heightRange;
             const ImVec2 cellMin(mapMin.x + static_cast<float>(x) * cellSize, mapMin.y + static_cast<float>(z) * cellSize);
             const ImVec2 cellMax(mapMin.x + static_cast<float>(x + 1) * cellSize + 0.5f, mapMin.y + static_cast<float>(z + 1) * cellSize + 0.5f);
-            drawList->AddRectFilled(cellMin, cellMax, MapPreviewColor(value, maskPreview));
+            drawList->AddRectFilled(cellMin, cellMax, MapPreviewColor(value, maskPreview, g_graph.Settings().preview.maskShading == rock::MaskShadingMode::Grayscale));
         }
     }
     drawList->AddRect(mapMin, mapMax, ThemeColor("border", ImVec4(0.20f, 0.23f, 0.22f, 0.85f)));
@@ -8994,6 +9005,16 @@ void DrawDisplaySettingsPanel()
         {
             if (DrawColorRgbRow("ビューポート背景色", "ViewportBackgroundColor", settings.preview.viewportBackground, rock::PreviewSettings{}.viewportBackground))
             {
+                SaveAppSettingsSilently();
+            }
+        }
+        {
+            int maskShadingInt = static_cast<int>(settings.preview.maskShading);
+            if (DrawPropertyComboRow("マスクシェーディング", "DisplayMaskShading", &maskShadingInt, "グレースケール\0グレー×オレンジ\0\0", "マスクプレビューの表示方式です。グレースケール: mask=0→黒, mask=1→白の純粋な白黒ランプ (既定)。グレー×オレンジ: ライティング付きのグレー×オレンジ調シェーディング。3D ビューと 2D マップ両方に反映されます。", static_cast<int>(rock::PreviewSettings{}.maskShading)))
+            {
+                settings.preview.maskShading = static_cast<rock::MaskShadingMode>(std::clamp(maskShadingInt,
+                    static_cast<int>(rock::MaskShadingMode::Grayscale),
+                    static_cast<int>(rock::MaskShadingMode::GrayOrange)));
                 SaveAppSettingsSilently();
             }
         }

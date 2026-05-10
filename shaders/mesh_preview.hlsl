@@ -20,6 +20,7 @@ cbuffer Constants : register(b0)
     float shadowMapResolution;
     float shadowBias;
     float shadowEnabled;
+    float maskGrayscale;
     float padding;
     float4 lightRight;
     float4 lightUp;
@@ -364,6 +365,12 @@ float4 PSSurface(VSOut i) : SV_TARGET
     if (maskPreview > 0.5)
     {
         float mask = saturate(i.mask);
+        if (maskGrayscale > 0.5)
+        {
+            // 純粋グレースケール (mask=0→黒, mask=1→白)。
+            // リム/ガンマも掛けず、2D マップ表示と同じ素直なランプにする。
+            return float4(mask, mask, mask, 1.0);
+        }
         float3 lowMask = float3(0.18, 0.20, 0.21);
         float3 highMask = float3(0.95, 0.56, 0.18);
         baseColor = lerp(lowMask, highMask, mask);

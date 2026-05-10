@@ -83,6 +83,15 @@ enum class MeshPreviewBackend
     GpuDisplacement,
 };
 
+// マスクプレビューのシェーディング方式。
+// Grayscale: mask=0 を黒、mask=1 を白とする純粋な白黒ランプ (既定)。
+// GrayOrange: ライティング付きのグレー×オレンジのトーン。
+enum class MaskShadingMode
+{
+    Grayscale,
+    GrayOrange,
+};
+
 enum class MaskFluvialOutputCurve
 {
     // log(1 + accum) / log(1 + maxAdjusted), then pow(gamma). Continuous
@@ -323,6 +332,7 @@ struct PreviewSettings
     float gridCellSizeMeters = 100.0f;
     std::array<float, 3> gridColor = {0.2f, 0.2f, 0.2f};
     std::array<float, 3> viewportBackground = {0.268f, 0.268f, 0.268f};
+    MaskShadingMode maskShading = MaskShadingMode::Grayscale;
 };
 
 enum class SkyMode
