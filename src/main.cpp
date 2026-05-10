@@ -289,7 +289,7 @@ struct MeshPreviewConstants
     float shadowMapResolution;
     float shadowBias;
     float shadowEnabled;
-    float maskGrayscale;
+    float maskShadingMode;  // 0 = Grayscale, 1 = GrayOrange, 2 = GrayscaleHatched
     float padding0;
     float lightRight[4];
     float lightUp[4];
@@ -1401,7 +1401,7 @@ bool LoadAppSettings(std::string* error = nullptr)
             const int maskShadingInt = visibilityJson.value("maskShading", static_cast<int>(settings.preview.maskShading));
             settings.preview.maskShading = static_cast<rock::MaskShadingMode>(std::clamp(maskShadingInt,
                 static_cast<int>(rock::MaskShadingMode::Grayscale),
-                static_cast<int>(rock::MaskShadingMode::GrayOrange)));
+                static_cast<int>(rock::MaskShadingMode::GrayscaleHatched)));
         }
 
         const nlohmann::json layoutJson = root.value("layout", nlohmann::json::object());
@@ -6297,8 +6297,13 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
 
     const float viewportWidth = std::max(1.0f, max.x - min.x);
     const float viewportHeight = std::max(1.0f, max.y - min.y);
-    const int targetWidth = std::clamp(static_cast<int>(viewportWidth), 160, 960);
-    const int targetHeight = std::clamp(static_cast<int>(viewportHeight), 120, 720);
+    // Clamp the offscreen RT size up to 4K so it matches the on-screen
+    // viewport 1:1 in most setups. With a smaller cap (the previous
+    // 960×720) the offscreen RT got bilinearly upscaled by ImGui's
+    // sampler, smearing fine 1-px patterns (e.g. mask shading hatching)
+    // into wide horizontal bands.
+    const int targetWidth = std::clamp(static_cast<int>(viewportWidth), 160, 3840);
+    const int targetHeight = std::clamp(static_cast<int>(viewportHeight), 120, 2160);
     if (!EnsureMeshPreviewRenderTarget(targetWidth, targetHeight, error)) return false;
 
     const rock::MeshData& mesh = g_graph.Evaluation().previewMesh;
@@ -6490,7 +6495,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         constants.nearPlane  = 0.05f;
         constants.farPlane   = 20000.0f;
         constants.maskPreview = g_graph.Evaluation().previewShowsMask ? 1.0f : 0.0f;
-        constants.maskGrayscale = (g_graph.Settings().preview.maskShading == rock::MaskShadingMode::Grayscale) ? 1.0f : 0.0f;
+        constants.maskShadingMode = static_cast<float>(g_graph.Settings().preview.maskShading);
         constants.lightingMode = static_cast<float>(g_graph.Settings().preview.lightingMode);
         const float azimuth = g_graph.Settings().preview.sunAzimuthDegrees * 3.1415926535f / 180.0f;
         const float elevation = g_graph.Settings().preview.sunElevationDegrees * 3.1415926535f / 180.0f;
@@ -7084,8 +7089,14 @@ void DrawGpuMeshPreview(ImDrawList* drawList, const ImVec2& min, const ImVec2& m
     }
     if (g_gpuMeshPreview.srvAllocated && g_gpuMeshPreview.colorState == D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)
     {
+        // Snap the destination rect to integer pixel boundaries so the
+        // offscreen texture grid aligns 1:1 with screen pixels. Without
+        // this, sub-pixel offsets (e.g. an ImGui window at x=123.5) make
+        // the bilinear sampler smear fine 1-px patterns.
+        const ImVec2 snappedMin(std::round(min.x), std::round(min.y));
+        const ImVec2 snappedMax(std::round(max.x), std::round(max.y));
         drawList->PushClipRect(min, max, true);
-        drawList->AddImage(static_cast<ImTextureID>(g_gpuMeshPreview.srvGpu.ptr), min, max);
+        drawList->AddImage(static_cast<ImTextureID>(g_gpuMeshPreview.srvGpu.ptr), snappedMin, snappedMax);
         drawList->PopClipRect();
     }
 }
@@ -7307,15 +7318,34 @@ void DrawViewportCube(const ImVec2& min, const ImVec2& max, float timeSeconds)
     DrawViewportAxisGizmo(drawList, min, max);
 }
 
-ImU32 MapPreviewColor(float value, bool mask, bool grayscale)
+ImU32 MapPreviewColor(float value, bool mask, rock::MaskShadingMode mode, int cellX, int cellZ)
 {
     value = std::clamp(value, 0.0f, 1.0f);
-    if (mask && !grayscale)
+    if (mask && mode == rock::MaskShadingMode::GrayOrange)
     {
         const int r = static_cast<int>(35.0f + value * 220.0f);
         const int g = static_cast<int>(42.0f + value * 122.0f);
         const int b = static_cast<int>(44.0f + value * 24.0f);
         return IM_COL32(r, g, b, 255);
+    }
+
+    if (mask && mode == rock::MaskShadingMode::GrayscaleHatched)
+    {
+        // 飽和域のみ均等な 3:1 対角ハッチで描画 (GeoGen 風)。
+        // 背景は純白 / 純黒、4 セル中 1 つだけグレー (= 斜線) で
+        // コントラストを抑える。
+        //   value >= 0.99 → 白×3 + グレー×1
+        //   value <= 0.01 → 黒×3 + グレー×1
+        //   中間域       → 通常のグレースケールランプ
+        if (value >= 0.99f || value <= 0.01f)
+        {
+            const int phase = ((cellX + cellZ) % 4 + 4) % 4;
+            const bool isMinor = (phase == 3);
+            const int majorVal = (value >= 0.99f) ? 255 : 0;
+            const int stripeGray = 128;
+            const int c = isMinor ? stripeGray : majorVal;
+            return IM_COL32(c, c, c, 255);
+        }
     }
 
     const int c = static_cast<int>(28.0f + value * 214.0f);
@@ -7400,7 +7430,7 @@ void DrawHeightfieldMapPreview(const ImVec2& min, const ImVec2& max)
             const float value = maskPreview ? sourceValue : (sourceValue - minHeight) / heightRange;
             const ImVec2 cellMin(mapMin.x + static_cast<float>(x) * cellSize, mapMin.y + static_cast<float>(z) * cellSize);
             const ImVec2 cellMax(mapMin.x + static_cast<float>(x + 1) * cellSize + 0.5f, mapMin.y + static_cast<float>(z + 1) * cellSize + 0.5f);
-            drawList->AddRectFilled(cellMin, cellMax, MapPreviewColor(value, maskPreview, g_graph.Settings().preview.maskShading == rock::MaskShadingMode::Grayscale));
+            drawList->AddRectFilled(cellMin, cellMax, MapPreviewColor(value, maskPreview, g_graph.Settings().preview.maskShading, x, z));
         }
     }
     drawList->AddRect(mapMin, mapMax, ThemeColor("border", ImVec4(0.20f, 0.23f, 0.22f, 0.85f)));
@@ -9415,22 +9445,28 @@ void DrawDisplaySettingsPanel()
                 SaveAppSettingsSilently();
             }
         }
-        {
-            int maskShadingInt = static_cast<int>(settings.preview.maskShading);
-            if (DrawPropertyComboRow("マスクシェーディング", "DisplayMaskShading", &maskShadingInt, "グレースケール\0グレー×オレンジ\0\0", "マスクプレビューの表示方式です。グレースケール: mask=0→黒, mask=1→白の純粋な白黒ランプ (既定)。グレー×オレンジ: ライティング付きのグレー×オレンジ調シェーディング。3D ビューと 2D マップ両方に反映されます。", static_cast<int>(rock::PreviewSettings{}.maskShading)))
-            {
-                settings.preview.maskShading = static_cast<rock::MaskShadingMode>(std::clamp(maskShadingInt,
-                    static_cast<int>(rock::MaskShadingMode::Grayscale),
-                    static_cast<int>(rock::MaskShadingMode::GrayOrange)));
-                SaveAppSettingsSilently();
-            }
-        }
         if (displayMode != ViewportDisplayMode::Simple)
         {
             if (DrawColorRgbRow("Albedo", "DisplayPbrAlbedo", settings.preview.pbrAlbedo, rock::PreviewSettings{}.pbrAlbedo))
             {
                 SaveAppSettingsSilently();
             }
+        }
+
+        ImGui::SeparatorText("マスクテクスチャー");
+        {
+            int maskShadingInt = static_cast<int>(settings.preview.maskShading);
+            if (DrawPropertyComboRow("マスクシェーディング", "DisplayMaskShading", &maskShadingInt, "グレースケール\0グレー×オレンジ\0グレースケール + 斜線\0\0", "マスクプレビューの表示方式です。グレースケール: mask=0→黒, mask=1→白の純粋な白黒ランプ (既定)。グレー×オレンジ: ライティング付きのグレー×オレンジ調シェーディング。グレースケール + 斜線: GeoGen 風の対角ハッチング — mask が 1.0 付近では密な白斜線、0.0 付近では疎な白斜線、中間は素直なランプ。3D ビューと 2D マップ両方に反映されます。", static_cast<int>(rock::PreviewSettings{}.maskShading)))
+            {
+                settings.preview.maskShading = static_cast<rock::MaskShadingMode>(std::clamp(maskShadingInt,
+                    static_cast<int>(rock::MaskShadingMode::Grayscale),
+                    static_cast<int>(rock::MaskShadingMode::GrayscaleHatched)));
+                SaveAppSettingsSilently();
+            }
+        }
+
+        if (displayMode != ViewportDisplayMode::Simple)
+        {
             ImGui::SeparatorText("太陽");
             if (DrawPropertyFloatRow("Sun Azimuth (deg)", "DisplaySunAzimuth", &settings.preview.sunAzimuthDegrees, 0.0f, 360.0f, rock::PreviewSettings{}.sunAzimuthDegrees, "Sun azimuth changed", false, "太陽の水平角度です。地形の溝が読みやすい方向へ回せます。"))
             {

@@ -92,10 +92,15 @@ enum class MeshPreviewBackend
 // マスクプレビューのシェーディング方式。
 // Grayscale: mask=0 を黒、mask=1 を白とする純粋な白黒ランプ (既定)。
 // GrayOrange: ライティング付きのグレー×オレンジのトーン。
+// GrayscaleHatched: グレースケール + 斜線オーバーレイ (GeoGen 風)。
+//   mask が 1.0 付近: 白背景 + 密な白斜線。mask が 0.0 付近: 黒背景 +
+//   疎な白斜線。中間域は標準のグレースケールランプ。マスクの飽和・
+//   減衰具合をスクリーンスペースの対角線パターンで可視化します。
 enum class MaskShadingMode
 {
     Grayscale,
     GrayOrange,
+    GrayscaleHatched,
 };
 
 enum class MaskFluvialOutputCurve

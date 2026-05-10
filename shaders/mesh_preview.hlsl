@@ -20,7 +20,7 @@ cbuffer Constants : register(b0)
     float shadowMapResolution;
     float shadowBias;
     float shadowEnabled;
-    float maskGrayscale;
+    float maskShadingMode;  // 0 = Grayscale, 1 = GrayOrange, 2 = GrayscaleHatched
     float padding;
     float4 lightRight;
     float4 lightUp;
@@ -365,12 +365,41 @@ float4 PSSurface(VSOut i) : SV_TARGET
     if (maskPreview > 0.5)
     {
         float mask = saturate(i.mask);
-        if (maskGrayscale > 0.5)
+        if (maskShadingMode < 0.5)
         {
-            // 純粋グレースケール (mask=0→黒, mask=1→白)。
+            // モード 0: 純粋グレースケール (mask=0→黒, mask=1→白)。
             // リム/ガンマも掛けず、2D マップ表示と同じ素直なランプにする。
             return float4(mask, mask, mask, 1.0);
         }
+        if (maskShadingMode > 1.5)
+        {
+            // モード 2: グレースケール + 斜線オーバーレイ (GeoGen 風)。
+            // 飽和域に対角線パターンを均等な 3:1 比率でオーバーレイし、
+            // マスクのクリッピング (1.0 への張り付き / 0.0 への張り付き)
+            // を視覚的に可視化する。背景は純白 / 純黒、4 ストライプ中
+            // 1 つだけグレー (= 斜線) にしてコントラストを抑えた。
+            //   mask >= 0.99 (白の所)  → 白×3 + グレー×1
+            //   mask <= 0.01 (黒の所)  → 黒×3 + グレー×1
+            //   中間域                  → 通常のグレースケールランプ (斜線なし)
+            // ストライプ幅は 1 px、4 ストライプ周期 (= 4 px) で 1 つだけ反転。
+            // SV_POSITION.xy はピクセル中心 (0.5 オフセット)。x+y 合計を
+            // float でやって floor すると合計時に精度を失って (例 0.5 + 1.5
+            // = 1.999...) 隣接ピクセルで stripe index が予期せず揺れて
+            // 見える幅広のバンドになるので、x と y を別々に int に
+            // トランケートしてから加算する。
+            if (mask >= 0.99 || mask <= 0.01)
+            {
+                int2 px = int2(i.pos.xy);
+                int stripeIdx = (px.x + px.y) & 3;
+                bool isMinor = (stripeIdx == 3);
+                float majorVal = (mask >= 0.99) ? 1.0 : 0.0;
+                float stripeGray = 0.5;
+                float c = isMinor ? stripeGray : majorVal;
+                return float4(c, c, c, 1.0);
+            }
+            return float4(mask, mask, mask, 1.0);
+        }
+        // モード 1: グレー×オレンジ (ライティング付き)。
         float3 lowMask = float3(0.18, 0.20, 0.21);
         float3 highMask = float3(0.95, 0.56, 0.18);
         baseColor = lerp(lowMask, highMask, mask);
