@@ -394,25 +394,44 @@ float4 PSSurface(VSOut i) : SV_TARGET
             // を視覚的に可視化する。背景は純白 / 純黒、4 ストライプ中
             // 1 つだけグレー (= 斜線) にしてコントラストを抑えた。
             //   mask >= 0.99 (白の所)  → 白×3 + グレー×1
-            //   mask <= 0.01 (黒の所)  → 黒×3 + グレー×1
+            //   mask <= 0.01 (黒の所)  → 黒×3 + 白×1
             //   中間域                  → 通常のグレースケールランプ (斜線なし)
+            // 黒の所の縞色を白にしたのは、ハーフランバート乗算 (最大 1.0)
+            // で白縞が halfL の階調そのまま見えるようにし、暗部でも縞が
+            // 沈み込まずに陰影パターンとして読めるようにするため。
             // ストライプ幅は 1 px、4 ストライプ周期 (= 4 px) で 1 つだけ反転。
             // SV_POSITION.xy はピクセル中心 (0.5 オフセット)。x+y 合計を
             // float でやって floor すると合計時に精度を失って (例 0.5 + 1.5
             // = 1.999...) 隣接ピクセルで stripe index が予期せず揺れて
             // 見える幅広のバンドになるので、x と y を別々に int に
             // トランケートしてから加算する。
+            // 仕上げにハーフランバート (n·L*0.5+0.5) を最低 0.5 にクランプ
+            // (lerp(0.5, 1.0, halfL)) して乗算し、GeoGen 風の陰影を載せる。
+            // 太陽方向=1.0 / 真横=0.75 / 反対側=0.5 と、暗い側もハッチが
+            // 沈み込みすぎない明るさを保つ。素の二乗ハーフランバートだと
+            // 反対側が真っ黒になりすぎたためクランプ補正を入れている。
+            // モード 2 限定の処理。
+            float c;
             if (mask >= 0.99 || mask <= 0.01)
             {
                 int2 px = int2(i.pos.xy);
                 int stripeIdx = (px.x + px.y) & 3;
                 bool isMinor = (stripeIdx == 3);
-                float majorVal = (mask >= 0.99) ? 1.0 : 0.0;
-                float stripeGray = 0.5;
-                float c = isMinor ? stripeGray : majorVal;
-                return float4(c, c, c, 1.0);
+                bool isHigh = (mask >= 0.99);
+                float majorVal = isHigh ? 1.0 : 0.0;
+                float stripeVal = isHigh ? 0.5 : 1.0;
+                c = isMinor ? stripeVal : majorVal;
             }
-            return float4(mask, mask, mask, 1.0);
+            else
+            {
+                c = mask;
+            }
+            float3 hatchN = normalize(i.worldNor);
+            float3 hatchL = normalize(sunDirection.xyz);
+            float halfL = saturate(dot(hatchN, hatchL) * 0.5 + 0.5);
+            halfL = lerp(0.5, 1.0, halfL);
+            c *= halfL;
+            return float4(c, c, c, 1.0);
         }
         // モード 1: グレー×オレンジ (ライティング付き)。
         float3 lowMask = float3(0.18, 0.20, 0.21);
