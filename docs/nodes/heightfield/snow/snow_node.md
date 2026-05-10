@@ -17,19 +17,55 @@
 | `Slope Limit Min (deg)` | 50.0 | この角度以下では雪が満杯まで積もる (Emission Amount まるごと) |
 | `Slope Limit Max (deg)` | 60.0 | この角度以上では雪はまったく積もらない (剥き出しの岩肌)。Min と Max の間は smoothstep で滑らかに遷移 |
 | `Mask Max Snow (m)` | 1.0 | Snow mask 出力の正規化基準 (`雪厚 / Mask Max Snow` を [0,1] にクランプ)。Emission Amount と同じ値にすれば満雪域が真っ白に出る |
+| `Smoothing Iterations` | 2 | 雪の表面を反復的に平滑化 + 溝埋めする回数。各反復で `surface = heights + thickness` を 3×3 box blur し、`max(surface, blurred)` でセル更新。0 = 平滑化なし、1-3 が見栄え良し。詳細はアルゴリズム節参照 |
+| `Backend` | GPU | `CPU` / `GPU` (D3D12 compute shader) を切り替え。既定 GPU。シェーダーコンパイル/ディスパッチ失敗時は CPU に自動フォールバック |
 
 ## アルゴリズム
 
-シングルパスの簡易モデル:
+3 フェーズ構成:
+
+### Phase 1: 初期 thickness 計算
 
 1. **斜面角を計算**: 各セルで 4 タップ中央差分から `tan(slope) = √((dh/dx)² + (dh/dz)²)` を求める。
 2. **積雪割合**: `t = clamp((tan(slope) - tan(min)) / (tan(max) - tan(min)), 0, 1)` を smoothstep `t² × (3 - 2t)` で滑らかにし、`snowFraction = 1 - smoothT` を得る。
 3. **雪の厚み**: `thickness = emissionAmount × snowFraction`
-4. **書き戻し**: `grid.heights[c] += thickness`、`grid.mask[c] = clamp(thickness / maskMaxSnow, 0, 1)`
+4. **初期 surface**: `surface = baseHeights + thickness` を smoothing 用バッファに書く。
 
 `tan` で比較しているのは、ラジアンや度の比較より勾配の生値とそのまま噛み合うため。Min/Max は度で UI に出していますが、内部では `std::tan(deg × π/180)` に変換してから比較しています。
 
-スレッド並列は `ParallelForRows` で行単位。元高さは事前にスナップショットしてから雪を加算するため、隣接セルへの「雪を含む高さの読み込み」は発生しません (将来 iterations を入れる余地を残してこの構造にしている)。
+### Phase 2: snow envelope smoothing (`Smoothing Iterations` 回)
+
+各反復で:
+1. 現在の `surface` を 3×3 box blur で平均化 (Jacobi double-buffer)。
+2. 各セルで `surface[c] = max(surface[c], blurred[c])` で更新。
+
+これにより:
+- **周囲より低いセル (= 溝の底)** は `blurred` が `surface` より高くなるので雪が増えて埋まる
+- **周囲より高いセル (= 出っ張り)** は `surface` のまま変わらない (`max` が元値を保持)
+- スロープ遷移域の per-cell な thickness 揺らぎが消え、雪が物理的に「積もって流れて埋める」自然な見た目になる
+
+反復するごとに「snow envelope」がさらに滑らかになり、より広い範囲の溝が埋まります。`Smoothing Iterations = 0` で旧挙動 (素のフィルタ)、`1-3` が見栄え良し。
+
+### Phase 3: 出力書き戻し
+
+最終的な `surface` から `thickness = surface - baseHeights` を取り、`grid.heights = baseHeights + thickness` と `grid.mask = clamp(thickness / maskMaxSnow, 0, 1)` を書き出す。
+
+スレッド並列は `ParallelForRows` で行単位。元高さは事前にスナップショットして使うため、in-place 更新の競合は発生しません。
+
+## GPU Compute バックエンド
+
+`Backend` プルダウンで `GPU` を選ぶと [shaders/snow_compute.hlsl](../../../../shaders/snow_compute.hlsl) の compute shader 群で評価します。アルゴリズムは CPU 版と同じ 3 フェーズ:
+
+| エントリ | 役割 |
+| --- | --- |
+| `CSCopyInputHeights` | InputHeights → BaseHeights (UAV) |
+| `CSComputeThickness` | per-cell slope + smoothstep + 初期 SurfA = base + thickness |
+| `CSEnvelopeSmoothing` | `Smoothing Iterations` 回 (smoothDirection で SurfA/SurfB ping-pong)。3×3 box blur → max で envelope 更新 |
+| `CSApply` | 最終 surface から thickness を求めて OutHeights + OutMask |
+
+CB に `smoothDirection` フラグを入れて UAV ping-pong を回避しています。CPU 側は `Smoothing Iterations` を偶数に丸めて、最終結果が必ず SurfA に着地するようにしています。
+
+per-pixel 完全並列なので 1024² で **CPU 比 5-15 倍程度高速** の見込み。シェーダーコンパイル / ディスパッチ失敗時は CPU 実装に自動フォールバックします。
 
 ## 用途の使い分け
 
@@ -43,7 +79,6 @@
 ## メモ
 
 - 出力は **加算**。地形がせり上がります。`Mask Blend` で他のマスクと合成して特定領域だけ雪を出す合成も可能です。
-- GeoGen Snow にあるパラメータのうち、本実装では `Emission Amount` と `Slope Limit Min/Max` の三つを基本機能として採用。`Iterations count` / 風 (Wind direction/intensity/chaos) / `Hardness mask intensity` などは未実装 (粒子シムや反復が前提のものは省略)。必要になったら追加可能。
-- アルゴリズムが per-pixel で完全に並列なので将来 GPU compute 化は容易。現状は CPU 実装のみ。
+- GeoGen Snow にあるパラメータのうち、本実装では `Emission Amount` / `Slope Limit Min/Max` / `Smoothing Iterations` (envelope smoothing) を採用。`Iterations count` / 風 (Wind direction/intensity/chaos) / `Hardness mask intensity` などは未実装 (粒子シムや反復が前提のものは省略)。必要になったら追加可能。
 - キャッシュキーは入力ハッシュ + パラメータハッシュ。他ノードの編集や Snow パラメータ変更で該当ノードのみ再評価されます。
 - 出力 mask は満雪域が 1.0、雪なし斜面が 0.0 のグラデーション。マスクシェーディングを `グレースケール` にするとほぼ GeoGen 参考画像と同じ見た目になります。

@@ -31,6 +31,7 @@ MaskNoiseGpuEvaluator g_maskNoiseGpuEvaluator = nullptr;
 SedimentGpuEvaluator g_sedimentGpuEvaluator = nullptr;
 RockGpuEvaluator g_rockGpuEvaluator = nullptr;
 MaskFluvialGpuEvaluator g_maskFluvialGpuEvaluator = nullptr;
+SnowGpuEvaluator g_snowGpuEvaluator = nullptr;
 std::atomic<GraphId> g_currentlyEvaluatingNodeId{0};
 
 struct HeightmapImage
@@ -149,6 +150,8 @@ uint64_t HashSnowSettings(const SnowSettings& settings, int resolution)
     HashCombine(hash, HashFloat(settings.slopeLimitMinDeg));
     HashCombine(hash, HashFloat(settings.slopeLimitMaxDeg));
     HashCombine(hash, HashFloat(settings.maskMaxSnow));
+    HashCombine(hash, static_cast<uint64_t>(settings.smoothingIterations));
+    HashCombine(hash, static_cast<uint64_t>(settings.backend));
     HashCombine(hash, static_cast<uint64_t>(resolution));
     return hash;
 }
@@ -1914,12 +1917,18 @@ void ApplyRock(HeightfieldGrid& grid, const RockSettings& settings)
 //   slope >= slopeLimitMax    → 雪はまったく積もらない (剥き出しの岩)
 //   その間                    → smoothstep で滑らかに遷移
 //
-// 出力:
-//   grid.heights += snowThickness   (元地形 + 雪の厚み)
-//   grid.mask     = snowThickness / maskMaxSnow を [0,1] にクランプ
+// 仕上げに「snow envelope smoothing」を smoothingIterations 回かける:
+//   surface = heights + thickness
+//   blurred = 3x3 box blur of surface
+//   surface = max(surface, blurred)   ← 周囲より低いセルだけ持ち上がる
+//   thickness = surface - heights
+// これにより周囲が高いセル (= 溝の底) は雪が増えて埋まり、周囲より高い
+// セル (= 出っ張り) は変わらない。スロープ遷移域の per-cell な厚み揺らぎ
+// が消え、雪が物理的に「積もって流れて埋める」自然な見た目になる。
 //
-// シングルパスで完結する決定的アルゴリズム。粒子シムや反復は無し。
-// GeoGen Snow ノードの「斜面に積もらない」見た目をそのまま狙ったもの。
+// 出力:
+//   grid.heights += smoothedThickness  (元地形 + 雪の厚み)
+//   grid.mask     = smoothedThickness / maskMaxSnow を [0,1] にクランプ
 void ApplySnow(HeightfieldGrid& grid, const SnowSettings& settings)
 {
     const int n = grid.resolution;
@@ -1927,6 +1936,16 @@ void ApplySnow(HeightfieldGrid& grid, const SnowSettings& settings)
     if (n < 2 || grid.heights.size() < cellCount)
     {
         return;
+    }
+
+    if (settings.backend == SnowBackend::GpuCompute && g_snowGpuEvaluator != nullptr)
+    {
+        std::string ignoredError;
+        if (g_snowGpuEvaluator(grid, settings, &ignoredError))
+        {
+            return;
+        }
+        // Falls through to the CPU implementation on shader / dispatch failure.
     }
 
     grid.mask.assign(cellCount, 0.0f);
@@ -1939,18 +1958,15 @@ void ApplySnow(HeightfieldGrid& grid, const SnowSettings& settings)
     const float maxTan = std::tan(maxRad);
     const float invRange = 1.0f / std::max(maxTan - minTan, 1e-6f);
     const float maskMax = std::max(1e-4f, settings.maskMaxSnow);
+    const int smoothIters = std::clamp(settings.smoothingIterations, 0, 16);
 
     const float terrainSize = std::max(grid.terrainSizeMeters, 1.0f);
     const float cellSize = terrainSize / static_cast<float>(std::max(1, n - 1));
     const float invTwoCell = 1.0f / (2.0f * cellSize);
 
-    // 高さスナップショットから slope を計算 (in-place で grid.heights を
-    // 更新するので、隣接セルを読むときに既に雪が乗った値を読まないよう
-    // にする)。雪を均一に乗せるならスナップショット不要だが、後で
-    // iterations を入れる余地を残しておく。
-    const std::vector<float> heightsSnapshot = grid.heights;
-    const float* H = heightsSnapshot.data();
-
+    // Phase 1: 元高さから slope を計算し、初期 thickness を求める。
+    const std::vector<float> baseHeights = grid.heights;
+    std::vector<float> thickness(cellCount, 0.0f);
     ParallelForRows(n, [&](int z) {
         const int zm = std::max(0, z - 1);
         const int zp = std::min(n - 1, z + 1);
@@ -1961,10 +1977,10 @@ void ApplySnow(HeightfieldGrid& grid, const SnowSettings& settings)
         {
             const int xm = std::max(0, x - 1);
             const int xp = std::min(n - 1, x + 1);
-            const float h_xm = H[rowBase + static_cast<size_t>(xm)];
-            const float h_xp = H[rowBase + static_cast<size_t>(xp)];
-            const float h_zm = H[rowAbove + static_cast<size_t>(x)];
-            const float h_zp = H[rowBelow + static_cast<size_t>(x)];
+            const float h_xm = baseHeights[rowBase + static_cast<size_t>(xm)];
+            const float h_xp = baseHeights[rowBase + static_cast<size_t>(xp)];
+            const float h_zm = baseHeights[rowAbove + static_cast<size_t>(x)];
+            const float h_zp = baseHeights[rowBelow + static_cast<size_t>(x)];
             const float dhdx = (h_xp - h_xm) * invTwoCell;
             const float dhdz = (h_zp - h_zm) * invTwoCell;
             const float slopeTan = std::sqrt(dhdx * dhdx + dhdz * dhdz);
@@ -1972,11 +1988,70 @@ void ApplySnow(HeightfieldGrid& grid, const SnowSettings& settings)
             const float t = std::clamp((slopeTan - minTan) * invRange, 0.0f, 1.0f);
             const float smoothT = t * t * (3.0f - 2.0f * t);
             const float snowFraction = 1.0f - smoothT;
-            const float thickness = emission * snowFraction;
+            thickness[rowBase + static_cast<size_t>(x)] = emission * snowFraction;
+        }
+    });
 
+    // Phase 2: snow envelope smoothing。
+    //   surface = baseHeights + thickness を 3x3 box blur (Jacobi double-buffer)、
+    //   max(surface, blurred) で出っ張りを保ちつつ溝を埋める。
+    if (smoothIters > 0)
+    {
+        std::vector<float> surfA(cellCount);
+        std::vector<float> surfB(cellCount);
+        ParallelForRows(n, [&](int z) {
+            const size_t rowBase = static_cast<size_t>(z) * static_cast<size_t>(n);
+            for (int x = 0; x < n; ++x)
+            {
+                const size_t idx = rowBase + static_cast<size_t>(x);
+                surfA[idx] = baseHeights[idx] + thickness[idx];
+            }
+        });
+        for (int iter = 0; iter < smoothIters; ++iter)
+        {
+            ParallelForRows(n, [&](int z) {
+                const int zm = std::max(0, z - 1);
+                const int zp = std::min(n - 1, z + 1);
+                const size_t rowBase = static_cast<size_t>(z) * static_cast<size_t>(n);
+                const size_t rowAbove = static_cast<size_t>(zm) * static_cast<size_t>(n);
+                const size_t rowBelow = static_cast<size_t>(zp) * static_cast<size_t>(n);
+                for (int x = 0; x < n; ++x)
+                {
+                    const int xm = std::max(0, x - 1);
+                    const int xp = std::min(n - 1, x + 1);
+                    const float s00 = surfA[rowAbove + static_cast<size_t>(xm)];
+                    const float s01 = surfA[rowAbove + static_cast<size_t>(x)];
+                    const float s02 = surfA[rowAbove + static_cast<size_t>(xp)];
+                    const float s10 = surfA[rowBase + static_cast<size_t>(xm)];
+                    const float s11 = surfA[rowBase + static_cast<size_t>(x)];
+                    const float s12 = surfA[rowBase + static_cast<size_t>(xp)];
+                    const float s20 = surfA[rowBelow + static_cast<size_t>(xm)];
+                    const float s21 = surfA[rowBelow + static_cast<size_t>(x)];
+                    const float s22 = surfA[rowBelow + static_cast<size_t>(xp)];
+                    const float blurred = (s00 + s01 + s02 + s10 + s11 + s12 + s20 + s21 + s22) * (1.0f / 9.0f);
+                    surfB[rowBase + static_cast<size_t>(x)] = std::max(s11, blurred);
+                }
+            });
+            std::swap(surfA, surfB);
+        }
+        ParallelForRows(n, [&](int z) {
+            const size_t rowBase = static_cast<size_t>(z) * static_cast<size_t>(n);
+            for (int x = 0; x < n; ++x)
+            {
+                const size_t idx = rowBase + static_cast<size_t>(x);
+                thickness[idx] = std::max(0.0f, surfA[idx] - baseHeights[idx]);
+            }
+        });
+    }
+
+    // Phase 3: 元高さに smoothing 後の thickness を加算 + mask 出力。
+    ParallelForRows(n, [&](int z) {
+        const size_t rowBase = static_cast<size_t>(z) * static_cast<size_t>(n);
+        for (int x = 0; x < n; ++x)
+        {
             const size_t idx = rowBase + static_cast<size_t>(x);
-            grid.heights[idx] += thickness;
-            grid.mask[idx] = std::clamp(thickness / maskMax, 0.0f, 1.0f);
+            grid.heights[idx] = baseHeights[idx] + thickness[idx];
+            grid.mask[idx] = std::clamp(thickness[idx] / maskMax, 0.0f, 1.0f);
         }
     });
 }
@@ -3765,6 +3840,11 @@ void SetRockGpuEvaluator(RockGpuEvaluator evaluator)
 void SetMaskFluvialGpuEvaluator(MaskFluvialGpuEvaluator evaluator)
 {
     g_maskFluvialGpuEvaluator = evaluator;
+}
+
+void SetSnowGpuEvaluator(SnowGpuEvaluator evaluator)
+{
+    g_snowGpuEvaluator = evaluator;
 }
 
 std::atomic<GraphId>& CurrentlyEvaluatingNodeId()
