@@ -36,7 +36,7 @@ struct UiTheme
     std::optional<ImVec2> itemSpacing;
     std::optional<ImVec2> itemInnerSpacing;
     std::vector<std::pair<ImGuiCol, ImVec4>> colors;
-    std::unordered_map<std::string, ImVec4> appColors;
+    std::unordered_map<std::string, ImVec4> namedColors;
 };
 
 class UiThemeManager

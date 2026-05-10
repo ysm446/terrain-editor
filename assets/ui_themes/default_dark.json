@@ -61,9 +61,7 @@
     "PlotHistogramHovered": [0.40, 0.439, 0.467, 1.0],
     "TextSelectedBg": [0.20, 0.22, 0.23, 1.0],
     "NavCursor": [0.329, 0.667, 0.859, 1.0],
-    "ModalWindowDimBg": [0.0, 0.0, 0.0, 0.35]
-  },
-  "appColors": {
+    "ModalWindowDimBg": [0.0, 0.0, 0.0, 0.35],
     "modeButtonActive": [0.231, 0.608, 0.749, 1.0],
     "modeButtonActiveHovered": [0.231, 0.608, 0.749, 1.0],
     "modeButtonIdle": [0.047, 0.047, 0.047, 0.80],

@@ -57,13 +57,25 @@ constexpr float kDefaultViewportFovDegrees = 45.0f;
 constexpr float kDefaultViewportOrbitDistance = 1800.0f;
 constexpr float kDefaultViewportZoom = 1.0f;
 constexpr std::array<int, 5> kResolutionPresets = {128, 256, 512, 1024, 2048};
+constexpr std::array<int, 4> kShadowResolutionPresets = {512, 1024, 2048, 4096};
+
+template <size_t N>
+int NearestPreset(int value, const std::array<int, N>& presets, int fallback)
+{
+    const auto nearest = std::ranges::min_element(presets, [value](int lhs, int rhs) {
+        return std::abs(lhs - value) < std::abs(rhs - value);
+    });
+    return nearest != presets.end() ? *nearest : fallback;
+}
 
 int NearestResolutionPreset(int value)
 {
-    const auto nearest = std::ranges::min_element(kResolutionPresets, [value](int lhs, int rhs) {
-        return std::abs(lhs - value) < std::abs(rhs - value);
-    });
-    return nearest != kResolutionPresets.end() ? *nearest : 512;
+    return NearestPreset(value, kResolutionPresets, 512);
+}
+
+int NearestShadowResolutionPreset(int value)
+{
+    return NearestPreset(value, kShadowResolutionPresets, 1024);
 }
 
 struct FrameContext
@@ -1332,7 +1344,7 @@ bool LoadAppSettings(std::string* error = nullptr)
         settings.preview.sunIntensity = std::clamp(visibilityJson.value("sunIntensity", settings.preview.sunIntensity), 0.0f, 5.0f);
         settings.preview.ambientStrength = std::clamp(visibilityJson.value("ambientStrength", settings.preview.ambientStrength), 0.0f, 2.0f);
         settings.preview.shadowStrength = std::clamp(visibilityJson.value("shadowStrength", settings.preview.shadowStrength), 0.0f, 1.0f);
-        settings.preview.shadowMapResolution = std::clamp(visibilityJson.value("shadowMapResolution", settings.preview.shadowMapResolution), 512, 4096);
+        settings.preview.shadowMapResolution = NearestShadowResolutionPreset(visibilityJson.value("shadowMapResolution", settings.preview.shadowMapResolution));
         settings.preview.shadowBias = std::clamp(visibilityJson.value("shadowBias", settings.preview.shadowBias), 0.0f, 0.05f);
         if (visibilityJson.contains("pbrAlbedo") && visibilityJson["pbrAlbedo"].is_array() && visibilityJson["pbrAlbedo"].size() == 3)
         {
@@ -2279,7 +2291,7 @@ void ReadCloudSettingsJson(const nlohmann::json& settingsJson, rock::CloudSettin
     clouds.windSpeedMetersPerSec = std::clamp(cloudsJson.value("windSpeedMetersPerSec", clouds.windSpeedMetersPerSec), 0.0f, 500.0f);
     clouds.qualitySamples = std::clamp(cloudsJson.value("qualitySamples", clouds.qualitySamples), 8, 128);
     clouds.shadowStrength = std::clamp(cloudsJson.value("shadowStrength", clouds.shadowStrength), 0.0f, 1.0f);
-    clouds.shadowResolution = std::clamp(cloudsJson.value("shadowResolution", clouds.shadowResolution), 256, 4096);
+    clouds.shadowResolution = NearestShadowResolutionPreset(cloudsJson.value("shadowResolution", clouds.shadowResolution));
     clouds.shadowSamples = std::clamp(cloudsJson.value("shadowSamples", clouds.shadowSamples), 4, 64);
     clouds.fieldRadius = std::clamp(cloudsJson.value("fieldRadius", clouds.fieldRadius), 100.0f, 200000.0f);
     clouds.fieldFalloff = std::clamp(cloudsJson.value("fieldFalloff", clouds.fieldFalloff), 1.0f, 50000.0f);
@@ -8043,17 +8055,26 @@ bool DrawPropertyIntRow(const char* label, const char* id, int* value, int minVa
     return editEnded;
 }
 
-bool DrawResolutionPresetRow(const char* label, const char* id, int* value, int defaultValue, const char* dirtyReason, bool recordUndo = true, const char* tooltip = nullptr)
+template <size_t N>
+bool DrawPresetIntRow(const char* label,
+                      const char* id,
+                      int* value,
+                      int defaultValue,
+                      const std::array<int, N>& presets,
+                      int fallback,
+                      const char* dirtyReason,
+                      bool recordUndo = true,
+                      const char* tooltip = nullptr)
 {
     bool changed = false;
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
-    const int normalizedValue = NearestResolutionPreset(*value);
+    const int normalizedValue = NearestPreset(*value, presets, fallback);
     if (*value != normalizedValue)
     {
         *value = normalizedValue;
     }
-    const int normalizedDefault = NearestResolutionPreset(defaultValue);
+    const int normalizedDefault = NearestPreset(defaultValue, presets, fallback);
     DrawPropertyLabel(label, tooltip, *value != normalizedDefault);
     ImGui::TableSetColumnIndex(1);
 
@@ -8063,7 +8084,7 @@ bool DrawResolutionPresetRow(const char* label, const char* id, int* value, int 
     ImGui::SetNextItemWidth(comboWidth);
     if (ImGui::BeginCombo("##preset", previewValue.c_str()))
     {
-        for (int preset : kResolutionPresets)
+        for (int preset : presets)
         {
             const bool selected = *value == preset;
             const std::string presetText = std::to_string(preset);
@@ -8102,6 +8123,16 @@ bool DrawResolutionPresetRow(const char* label, const char* id, int* value, int 
     }
     ImGui::PopID();
     return changed;
+}
+
+bool DrawShadowResolutionPresetRow(const char* label, const char* id, int* value, int defaultValue, const char* dirtyReason, bool recordUndo = true, const char* tooltip = nullptr)
+{
+    return DrawPresetIntRow(label, id, value, defaultValue, kShadowResolutionPresets, 1024, dirtyReason, recordUndo, tooltip);
+}
+
+bool DrawResolutionPresetRow(const char* label, const char* id, int* value, int defaultValue, const char* dirtyReason, bool recordUndo = true, const char* tooltip = nullptr)
+{
+    return DrawPresetIntRow(label, id, value, defaultValue, kResolutionPresets, 512, dirtyReason, recordUndo, tooltip);
 }
 
 bool DrawPropertyBoolRow(const char* label, const char* id, bool* value, const char* dirtyReason, const char* tooltip = nullptr, bool defaultValue = false, bool compact = false)
@@ -8994,9 +9025,8 @@ void DrawDisplaySettingsPanel()
             {
                 SaveAppSettingsSilently();
             }
-            if (DrawPropertyIntRow("Shadow Map Resolution", "DisplayShadowMapResolution", &settings.preview.shadowMapResolution, 512, 4096, rock::PreviewSettings{}.shadowMapResolution, "Shadow map resolution changed", false, "太陽方向から見た深度マップの解像度です。高いほど影の輪郭が細かくなりますが描画負荷が増えます。"))
+            if (DrawShadowResolutionPresetRow("Shadow Map Resolution", "DisplayShadowMapResolution", &settings.preview.shadowMapResolution, rock::PreviewSettings{}.shadowMapResolution, "Shadow map resolution changed", false, "太陽方向から見た深度マップの解像度です。高いほど影の輪郭が細かくなりますが描画負荷が増えます。"))
             {
-                settings.preview.shadowMapResolution = std::clamp(settings.preview.shadowMapResolution, 512, 4096);
                 SaveAppSettingsSilently();
             }
             if (DrawPropertyFloatRow("Shadow Bias", "DisplayShadowBias", &settings.preview.shadowBias, 0.0f, 0.05f, rock::PreviewSettings{}.shadowBias, "Shadow bias changed", false, "影のにじみや縞を抑えるための深度オフセットです。大きすぎると影が浮いて見えます。"))
@@ -9005,9 +9035,29 @@ void DrawDisplaySettingsPanel()
             }
         }
 
+        ImGui::EndTable();
+    }
+    ImGui::EndChild();
+}
+
+void DrawSkySettingsPanel()
+{
+    rock::GraphSettings& settings = g_graph.Settings();
+    const float headerRightPadding = 10.0f;
+    const float sectionWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x - headerRightPadding);
+    ImGui::BeginChild("SkySettingsSection", ImVec2(sectionWidth, 0.0f), false);
+    if (!ImGui::CollapsingHeader("天球と雲", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        ImGui::EndChild();
+        return;
+    }
+
+    if (ImGui::BeginTable("SkySettingsRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 112.0f);
+        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+
         rock::SkySettings& sky = settings.sky;
-        if (displayMode == ViewportDisplayMode::Sky)
-        {
             ImGui::SeparatorText("天球 (大気散乱)");
             DrawPropertyFloatRow("大気厚み (密度)", "SkyAtmosphereDensity", &sky.atmosphereDensity, 0.05f, 5.0f, rock::SkySettings{}.atmosphereDensity, "Sky atmosphere density changed", false, "Rayleigh 散乱係数 β_R と地平ヘイズの倍率。1.0 が地球標準、0.5 で薄い大気、2-3 で濃い大気。地形の遠景フォグもこの値から自動で決まります。");
             DrawPropertyFloatRow("ヘイズ (Mie 強度)", "SkyMieStrength", &sky.mieStrength, 0.0f, 8.0f, rock::SkySettings{}.mieStrength, "Sky mie strength changed", false, "Mie 散乱の強さ。0.2 前後が編集ビュー向けの標準です。大きいほど太陽方向の霞とグローが強くなりますが、地平の暖色帯も出やすくなります。0 で純 Rayleigh。");
@@ -9035,14 +9085,15 @@ void DrawDisplaySettingsPanel()
                 DrawPropertyFloatRow("Wind Speed (m/s)", "CloudWindSpeed", &clouds.windSpeedMetersPerSec, 0.0f, 200.0f, rock::CloudSettings{}.windSpeedMetersPerSec, "Cloud wind speed changed", false, "雲が流れる速度 (m/s)。0 で静止。動かすとフレーム毎にビューポートが再描画され負荷が増えます。");
                 DrawPropertyIntRow("Quality (samples)", "CloudQuality", &clouds.qualitySamples, 8, 96, rock::CloudSettings{}.qualitySamples, "Cloud quality changed", false, "1 ピクセルあたりのレイマーチサンプル数。大きいほど雲のディテールが上がりますが負荷も増えます。32 が標準、低スペックなら 16、高品質なら 64。");
                 DrawPropertyFloatRow("Shadow Strength", "CloudShadowStrength", &clouds.shadowStrength, 0.0f, 1.0f, rock::CloudSettings{}.shadowStrength, "Cloud shadow strength changed", false, "雲が地形に落とす影の強さ。0 で影無し、1 で完全に暗くなります。太陽方向に projection した雲の透過率を地形シェーダーで乗算します。");
-                DrawPropertyIntRow("Shadow Resolution", "CloudShadowResolution", &clouds.shadowResolution, 256, 4096, rock::CloudSettings{}.shadowResolution, "Cloud shadow resolution changed", false, "雲影テクスチャの解像度 (片辺ピクセル数)。1024 で約 1MB。大きいほど影の輪郭が細かくなりますが生成負荷が増えます。");
+                if (DrawShadowResolutionPresetRow("Shadow Resolution", "CloudShadowResolution", &clouds.shadowResolution, rock::CloudSettings{}.shadowResolution, "Cloud shadow resolution changed", false, "雲影テクスチャの解像度 (片辺ピクセル数)。1024 で約 1MB。大きいほど影の輪郭が細かくなりますが生成負荷が増えます。"))
+                {
+                    SaveAppSettingsSilently();
+                }
                 DrawPropertyIntRow("Shadow Samples", "CloudShadowSamples", &clouds.shadowSamples, 4, 64, rock::CloudSettings{}.shadowSamples, "Cloud shadow samples changed", false, "雲影テクスチャ生成時に太陽方向へ撃つレイのサンプル数。大きいほど厚い雲の影が正確になりますが生成時間も増えます。16 が標準。");
                 DrawPropertyIntRow("Light Samples", "CloudLightSamples", &clouds.lightSamples, 0, 16, rock::CloudSettings{}.lightSamples, "Cloud light samples changed", false, "雲内自己遮蔽の太陽方向レイマーチ段数。0 で無効化(従来の上下ランプのみ)、6 が標準。大きいほど雲塊の陰影がはっきりしますが負荷も増えます。");
                 DrawPropertyFloatRow("Light Step (m)", "CloudLightStep", &clouds.lightStepMeters, 1.0f, 1000.0f, rock::CloudSettings{}.lightStepMeters, "Cloud light step changed", false, "自己遮蔽レイマーチの 1 ステップあたりの距離 (m)。Light Samples × Light Step が太陽方向への投光距離になります。雲スケールに対して短すぎると深い雲の中まで届かず、長すぎるとサンプルが粗くなります。", "%.0f");
                 DrawPropertyFloatRow("Phase Eccentricity", "CloudPhaseG", &clouds.phaseEccentricity, -0.99f, 0.99f, rock::CloudSettings{}.phaseEccentricity, "Cloud phase eccentricity changed", false, "Henyey-Greenstein 位相関数の g 値。0 で等方散乱、正値で前方散乱(逆光時に太陽周りが明るくなるシルバーライニング)、負値で後方散乱。0.4 前後が雲らしい見た目。");
             }
-        }
-
         ImGui::EndTable();
     }
     ImGui::EndChild();
@@ -9595,10 +9646,10 @@ void DrawUi()
             EndInspectorTabContent();
             EndStyledTabItem(defaultTabStyle);
         }
-        if (BeginStyledTabItem("統計"))
+        if (BeginStyledTabItem("天球"))
         {
             BeginInspectorTabContent();
-            DrawStatsPanel();
+            DrawSkySettingsPanel();
             EndInspectorTabContent();
             EndStyledTabItem(defaultTabStyle);
         }
@@ -9606,6 +9657,13 @@ void DrawUi()
         {
             BeginInspectorTabContent();
             DrawCameraPanel();
+            EndInspectorTabContent();
+            EndStyledTabItem(defaultTabStyle);
+        }
+        if (BeginStyledTabItem("統計"))
+        {
+            BeginInspectorTabContent();
+            DrawStatsPanel();
             EndInspectorTabContent();
             EndStyledTabItem(defaultTabStyle);
         }

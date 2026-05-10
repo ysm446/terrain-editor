@@ -154,21 +154,17 @@ UiTheme ThemeFromJson(const nlohmann::json& root)
         {
             ImGuiCol colorIndex = ImGuiCol_COUNT;
             ImVec4 colorValue;
-            if (TryGetColorName(it.key(), colorIndex) && TryReadColor(it.value(), colorValue))
+            if (!TryReadColor(it.value(), colorValue))
+            {
+                continue;
+            }
+            if (TryGetColorName(it.key(), colorIndex))
             {
                 theme.colors.push_back({colorIndex, colorValue});
             }
-        }
-    }
-
-    if (root.contains("appColors") && root["appColors"].is_object())
-    {
-        for (auto it = root["appColors"].begin(); it != root["appColors"].end(); ++it)
-        {
-            ImVec4 colorValue;
-            if (TryReadColor(it.value(), colorValue))
+            else
             {
-                theme.appColors[it.key()] = colorValue;
+                theme.namedColors[it.key()] = colorValue;
             }
         }
     }
@@ -253,8 +249,8 @@ ImVec4 UiThemeManager::AppColor(const std::string& name, const ImVec4& fallback)
     {
         return fallback;
     }
-    const auto it = currentTheme_->appColors.find(name);
-    return it != currentTheme_->appColors.end() ? it->second : fallback;
+    const auto it = currentTheme_->namedColors.find(name);
+    return it != currentTheme_->namedColors.end() ? it->second : fallback;
 }
 
 void UiThemeManager::ApplyThemeData(const UiTheme& theme)
