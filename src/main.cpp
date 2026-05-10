@@ -461,6 +461,19 @@ ComPtr<ID3D12PipelineState> g_sedimentSetupPso;
 ComPtr<ID3D12PipelineState> g_sedimentEmitPso;
 ComPtr<ID3D12PipelineState> g_sedimentSweep1Pso;
 ComPtr<ID3D12PipelineState> g_sedimentSweep2Pso;
+ComPtr<ID3D12RootSignature> g_rockComputeRootSignature;
+ComPtr<ID3D12PipelineState> g_rockComputePso;
+ComPtr<ID3D12RootSignature> g_maskFluvialComputeRootSignature;
+ComPtr<ID3D12PipelineState> g_mfPitFillPso;
+ComPtr<ID3D12PipelineState> g_mfCommitHeightsPso;
+ComPtr<ID3D12PipelineState> g_mfCopyInputHeightsPso;
+ComPtr<ID3D12PipelineState> g_mfComputeWeightsPso;
+ComPtr<ID3D12PipelineState> g_mfAccumInitPso;
+ComPtr<ID3D12PipelineState> g_mfAccumIterPso;
+ComPtr<ID3D12PipelineState> g_mfMaxReducePso;
+ComPtr<ID3D12PipelineState> g_mfToMaskLogPso;
+ComPtr<ID3D12PipelineState> g_mfToMaskLinearPso;
+ComPtr<ID3D12PipelineState> g_mfToMaskThresholdPso;
 ComPtr<ID3D12RootSignature> g_skyRootSignature;
 ComPtr<ID3D12PipelineState> g_skyPso;
 bool g_skyPipelineReady = false;
@@ -523,6 +536,14 @@ std::string g_sedimentComputeStatus = "Sediment GPU Compute not initialized";
 bool g_sedimentComputeReady = false;
 std::mutex g_sedimentComputeMutex;
 std::mutex g_sedimentGpuRequestMutex;
+std::string g_rockComputeStatus = "Rock GPU Compute not initialized";
+bool g_rockComputeReady = false;
+std::mutex g_rockComputeMutex;
+std::mutex g_rockGpuRequestMutex;
+std::string g_maskFluvialComputeStatus = "Mask Fluvial GPU Compute not initialized";
+bool g_maskFluvialComputeReady = false;
+std::mutex g_maskFluvialComputeMutex;
+std::mutex g_maskFluvialGpuRequestMutex;
 std::thread::id g_mainThreadId;
 
 struct MseGpuRequestResult
@@ -563,6 +584,38 @@ struct SedimentGpuRequest
 };
 
 std::vector<std::shared_ptr<SedimentGpuRequest>> g_pendingSedimentGpuRequests;
+
+struct RockGpuRequestResult
+{
+    bool success = false;
+    rock::HeightfieldGrid grid;
+    std::string error;
+};
+
+struct RockGpuRequest
+{
+    rock::HeightfieldGrid grid;
+    rock::RockSettings settings;
+    std::promise<RockGpuRequestResult> promise;
+};
+
+std::vector<std::shared_ptr<RockGpuRequest>> g_pendingRockGpuRequests;
+
+struct MaskFluvialGpuRequestResult
+{
+    bool success = false;
+    rock::HeightfieldGrid grid;
+    std::string error;
+};
+
+struct MaskFluvialGpuRequest
+{
+    rock::HeightfieldGrid grid;
+    rock::MaskFluvialSettings settings;
+    std::promise<MaskFluvialGpuRequestResult> promise;
+};
+
+std::vector<std::shared_ptr<MaskFluvialGpuRequest>> g_pendingMaskFluvialGpuRequests;
 
 struct MaskNoiseGpuRequest
 {
@@ -894,6 +947,21 @@ void CleanupD3D()
     g_sedimentSweep2Pso.Reset();
     g_sedimentComputeRootSignature.Reset();
     g_sedimentComputeReady = false;
+    g_rockComputePso.Reset();
+    g_rockComputeRootSignature.Reset();
+    g_rockComputeReady = false;
+    g_mfPitFillPso.Reset();
+    g_mfCommitHeightsPso.Reset();
+    g_mfCopyInputHeightsPso.Reset();
+    g_mfComputeWeightsPso.Reset();
+    g_mfAccumInitPso.Reset();
+    g_mfAccumIterPso.Reset();
+    g_mfMaxReducePso.Reset();
+    g_mfToMaskLogPso.Reset();
+    g_mfToMaskLinearPso.Reset();
+    g_mfToMaskThresholdPso.Reset();
+    g_maskFluvialComputeRootSignature.Reset();
+    g_maskFluvialComputeReady = false;
     g_skyPso.Reset();
     g_skyRootSignature.Reset();
     g_skyPipelineReady = false;
@@ -976,6 +1044,16 @@ std::filesystem::path SedimentComputeShaderPath()
     return ShaderPath("sediment_compute.hlsl");
 }
 
+std::filesystem::path RockComputeShaderPath()
+{
+    return ShaderPath("rock_compute.hlsl");
+}
+
+std::filesystem::path MaskFluvialComputeShaderPath()
+{
+    return ShaderPath("mask_fluvial_compute.hlsl");
+}
+
 std::filesystem::path SkyShaderPath()
 {
     return ShaderPath("sky.hlsl");
@@ -1005,6 +1083,8 @@ void EvaluateGraph();
 void ProcessPendingMseGpuRequests();
 void ProcessPendingMaskNoiseGpuRequests();
 void ProcessPendingSedimentGpuRequests();
+void ProcessPendingRockGpuRequests();
+void ProcessPendingMaskFluvialGpuRequests();
 void EnsurePreviewMesh();
 int CurrentPreviewMeshResolution();
 bool IsTerrainNodeKind(rock::NodeKind kind);
@@ -1789,6 +1869,7 @@ nlohmann::json MakeMaskSettingsJson(const rock::Node& node)
             {"power", node.maskFluvial.power},
             {"pitFillIterations", node.maskFluvial.pitFillIterations},
             {"mfdExponent", node.maskFluvial.mfdExponent},
+            {"backend", static_cast<int>(node.maskFluvial.backend)},
         }},
         {"maskBlend", {
             {"mode", static_cast<int>(node.maskBlend.mode)},
@@ -1814,6 +1895,7 @@ nlohmann::json MakeRockSettingsJson(const rock::Node& node)
             {"bumpiness", node.rock.bumpiness},
             {"facetSharpness", node.rock.facetSharpness},
             {"facetScale", node.rock.facetScale},
+            {"backend", static_cast<int>(node.rock.backend)},
         }},
     };
 }
@@ -2001,6 +2083,12 @@ void ReadMaskSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     node.maskFluvial.power = std::clamp(nodeMaskFluvialJson.value("power", node.maskFluvial.power), 0.1f, 8.0f);
     node.maskFluvial.pitFillIterations = std::clamp(nodeMaskFluvialJson.value("pitFillIterations", node.maskFluvial.pitFillIterations), 0, 64);
     node.maskFluvial.mfdExponent = std::clamp(nodeMaskFluvialJson.value("mfdExponent", node.maskFluvial.mfdExponent), 0.1f, 16.0f);
+    {
+        const int backendInt = std::clamp(nodeMaskFluvialJson.value("backend", static_cast<int>(node.maskFluvial.backend)),
+                                           static_cast<int>(rock::MaskFluvialBackend::CpuReference),
+                                           static_cast<int>(rock::MaskFluvialBackend::GpuCompute));
+        node.maskFluvial.backend = static_cast<rock::MaskFluvialBackend>(backendInt);
+    }
 }
 
 void ReadRockSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
@@ -2047,6 +2135,12 @@ void ReadRockSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     node.rock.bumpiness = std::clamp(nodeRockJson.value("bumpiness", node.rock.bumpiness), 0.0f, 1.0f);
     node.rock.facetSharpness = std::clamp(nodeRockJson.value("facetSharpness", node.rock.facetSharpness), 0.0f, 1.0f);
     node.rock.facetScale = std::clamp(nodeRockJson.value("facetScale", node.rock.facetScale), 0.5f, 8.0f);
+    {
+        const int backendInt = nodeRockJson.value("backend", static_cast<int>(node.rock.backend));
+        node.rock.backend = static_cast<rock::RockBackend>(std::clamp(backendInt,
+            static_cast<int>(rock::RockBackend::CpuReference),
+            static_cast<int>(rock::RockBackend::GpuCompute)));
+    }
 }
 
 void ReadSedimentSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
@@ -4338,6 +4432,796 @@ void ProcessPendingSedimentGpuRequests()
     }
 }
 
+// Mirrors the cbuffer in shaders/rock_compute.hlsl.
+struct RockShaderConstants
+{
+    UINT  resolution;
+    int   seed;
+    float terrainSizeMeters;
+    float density;
+
+    float coverage;
+    float rockSizeMinCells;
+    float rockSizeMaxCells;
+    float rockHeight;
+
+    float heightJitter;
+    float rotationVar;
+    float aspectVar;
+    float edgeSharpness;
+
+    float bumpiness;
+    float facetSharpness;
+    float facetScale;
+    int   searchRadius;
+
+    float maxReach;
+    float domeExp;
+    int   needPolyhedral;
+    int   pad0;
+};
+static_assert(sizeof(RockShaderConstants) == 20 * sizeof(UINT), "RockShaderConstants must be 20 DWORDs");
+
+bool EnsureRockComputePipeline(std::string* error)
+{
+    if (g_rockComputeReady && g_rockComputeRootSignature && g_rockComputePso)
+    {
+        return true;
+    }
+    if (!g_device)
+    {
+        if (error) *error = "D3D12 device is not available";
+        g_rockComputeStatus = "Rock GPU Compute unavailable";
+        return false;
+    }
+
+    // 3 UAVs (inputHeights, outputHeights, outputMask) bound as one
+    // descriptor table at u0..u2.
+    D3D12_DESCRIPTOR_RANGE uavRange{};
+    uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    uavRange.NumDescriptors = 3;
+    uavRange.BaseShaderRegister = 0;
+    uavRange.RegisterSpace = 0;
+    uavRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_ROOT_PARAMETER rootParams[2]{};
+    rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    rootParams[0].Constants.ShaderRegister = 0;
+    rootParams[0].Constants.RegisterSpace = 0;
+    rootParams[0].Constants.Num32BitValues = 20;
+    rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[1].DescriptorTable.pDescriptorRanges = &uavRange;
+    rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    D3D12_ROOT_SIGNATURE_DESC rsDesc{};
+    rsDesc.NumParameters = 2;
+    rsDesc.pParameters = rootParams;
+    rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+    ComPtr<ID3DBlob> sigBlob, errBlob;
+    HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
+    if (FAILED(hr))
+    {
+        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Serialize Rock root sig failed";
+        g_rockComputeStatus = "Rock GPU Compute root signature failed";
+        return false;
+    }
+    hr = g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_rockComputeRootSignature));
+    if (FAILED(hr))
+    {
+        if (error) *error = "Create Rock root sig failed";
+        g_rockComputeStatus = "Rock GPU Compute root signature failed";
+        return false;
+    }
+
+    const std::filesystem::path shaderPath = RockComputeShaderPath();
+    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
+#if defined(_DEBUG)
+    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+#endif
+
+    ComPtr<ID3DBlob> csBlob;
+    errBlob.Reset();
+    const HRESULT compileHr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE,
+                                                 "CSRock", "cs_5_0", compileFlags, 0, &csBlob, &errBlob);
+    if (FAILED(compileHr))
+    {
+        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile Rock shader failed";
+        g_rockComputeStatus = "Rock shader compile failed";
+        return false;
+    }
+
+    D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{};
+    psoDesc.pRootSignature = g_rockComputeRootSignature.Get();
+    psoDesc.CS = {csBlob->GetBufferPointer(), csBlob->GetBufferSize()};
+    const HRESULT psoHr = g_device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&g_rockComputePso));
+    if (FAILED(psoHr))
+    {
+        if (error) *error = "Create Rock PSO failed";
+        g_rockComputeStatus = "Rock PSO failed";
+        return false;
+    }
+
+    g_rockComputeReady = true;
+    g_rockComputeStatus = "Rock GPU Compute dispatch ready";
+    return true;
+}
+
+bool RunRockComputeImmediate(rock::HeightfieldGrid& grid, const rock::RockSettings& settings, std::string* error)
+{
+    std::lock_guard<std::mutex> lock(g_rockComputeMutex);
+    if (!EnsureRockComputePipeline(error))
+    {
+        return false;
+    }
+
+    const UINT resolution = static_cast<UINT>(std::clamp(grid.resolution, 0, 4096));
+    const UINT64 cellCount = static_cast<UINT64>(resolution) * static_cast<UINT64>(resolution);
+    if (resolution < 2 || grid.heights.size() < cellCount || settings.density <= 0.0f)
+    {
+        if (error) *error = "Invalid heightfield for Rock GPU Compute";
+        return false;
+    }
+
+    const UINT64 fieldByteSize = cellCount * sizeof(float);
+
+    const D3D12_HEAP_PROPERTIES defaultHeap = HeapProperties(D3D12_HEAP_TYPE_DEFAULT);
+    const D3D12_HEAP_PROPERTIES uploadHeap = HeapProperties(D3D12_HEAP_TYPE_UPLOAD);
+    const D3D12_HEAP_PROPERTIES readbackHeap = HeapProperties(D3D12_HEAP_TYPE_READBACK);
+    const D3D12_RESOURCE_DESC fieldGpuDesc = BufferResourceDesc(fieldByteSize, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    const D3D12_RESOURCE_DESC fieldCpuDesc = BufferResourceDesc(fieldByteSize);
+
+    ComPtr<ID3D12Resource> inputHeightsBuf, outputHeightsBuf, outputMaskBuf;
+    ComPtr<ID3D12Resource> uploadHeights;
+    ComPtr<ID3D12Resource> readbackHeights, readbackMask;
+
+    auto createDefault = [&](ComPtr<ID3D12Resource>& out, const D3D12_RESOURCE_DESC& desc, const char* name) -> bool {
+        const HRESULT hrLocal = g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&out));
+        if (FAILED(hrLocal)) { if (error) *error = std::string("Create ") + name + " failed"; return false; }
+        return true;
+    };
+    auto createUpload = [&](ComPtr<ID3D12Resource>& out, const char* name) -> bool {
+        const HRESULT hrLocal = g_device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &fieldCpuDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&out));
+        if (FAILED(hrLocal)) { if (error) *error = std::string("Create ") + name + " failed"; return false; }
+        return true;
+    };
+    auto createReadback = [&](ComPtr<ID3D12Resource>& out, const char* name) -> bool {
+        const HRESULT hrLocal = g_device->CreateCommittedResource(&readbackHeap, D3D12_HEAP_FLAG_NONE, &fieldCpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&out));
+        if (FAILED(hrLocal)) { if (error) *error = std::string("Create ") + name + " failed"; return false; }
+        return true;
+    };
+
+    if (!createDefault(inputHeightsBuf,  fieldGpuDesc, "Rock input-heights buffer"))  return false;
+    if (!createDefault(outputHeightsBuf, fieldGpuDesc, "Rock output-heights buffer")) return false;
+    if (!createDefault(outputMaskBuf,    fieldGpuDesc, "Rock output-mask buffer"))    return false;
+    if (!createUpload(uploadHeights,     "Rock upload heights"))                      return false;
+    if (!createReadback(readbackHeights, "Rock readback heights"))                    return false;
+    if (!createReadback(readbackMask,    "Rock readback mask"))                       return false;
+
+    void* mapped = nullptr;
+    const D3D12_RANGE emptyReadRange{0, 0};
+    ThrowIfFailed(uploadHeights->Map(0, &emptyReadRange, &mapped), "Map Rock heights upload failed");
+    std::memcpy(mapped, grid.heights.data(), fieldByteSize);
+    uploadHeights->Unmap(0, nullptr);
+
+    constexpr UINT kDescriptorCount = 3;
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    heapDesc.NumDescriptors = kDescriptorCount;
+    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    ComPtr<ID3D12DescriptorHeap> descriptorHeap;
+    HRESULT hr = g_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&descriptorHeap));
+    if (FAILED(hr)) { if (error) *error = "Create Rock descriptor heap failed"; return false; }
+
+    auto createUav = [&](ID3D12Resource* res, UINT numElements, UINT slot) {
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+        uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+        uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+        uavDesc.Buffer.NumElements = numElements;
+        uavDesc.Buffer.StructureByteStride = sizeof(float);
+        D3D12_CPU_DESCRIPTOR_HANDLE handle = descriptorHeap->GetCPUDescriptorHandleForHeapStart();
+        handle.ptr += static_cast<SIZE_T>(slot) * g_srvDescriptorSize;
+        g_device->CreateUnorderedAccessView(res, nullptr, &uavDesc, handle);
+    };
+    createUav(inputHeightsBuf.Get(),  static_cast<UINT>(cellCount), 0);
+    createUav(outputHeightsBuf.Get(), static_cast<UINT>(cellCount), 1);
+    createUav(outputMaskBuf.Get(),    static_cast<UINT>(cellCount), 2);
+
+    ComPtr<ID3D12CommandAllocator> allocator;
+    ComPtr<ID3D12GraphicsCommandList> commandList;
+    ThrowIfFailed(g_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)), "Create Rock command allocator failed");
+    ThrowIfFailed(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&commandList)), "Create Rock command list failed");
+
+    // Stage input heights: UAV → COPY_DEST → CopyBufferRegion → UAV.
+    D3D12_RESOURCE_BARRIER toCopyDest{};
+    toCopyDest.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    toCopyDest.Transition.pResource = inputHeightsBuf.Get();
+    toCopyDest.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    toCopyDest.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+    toCopyDest.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    commandList->ResourceBarrier(1, &toCopyDest);
+    commandList->CopyBufferRegion(inputHeightsBuf.Get(), 0, uploadHeights.Get(), 0, fieldByteSize);
+    D3D12_RESOURCE_BARRIER toUav = toCopyDest;
+    toUav.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+    toUav.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    commandList->ResourceBarrier(1, &toUav);
+
+    ID3D12DescriptorHeap* heaps[] = {descriptorHeap.Get()};
+    commandList->SetDescriptorHeaps(1, heaps);
+    commandList->SetComputeRootSignature(g_rockComputeRootSignature.Get());
+    commandList->SetComputeRootDescriptorTable(1, descriptorHeap->GetGPUDescriptorHandleForHeapStart());
+
+    // Constants — mirror CPU-side derivations (ApplyRock).
+    const float density = std::max(settings.density, 0.1f);
+    const float rockSizeMinM = std::clamp(settings.rockSizeMinM, 0.1f, 200.0f);
+    const float rockSizeMaxM = std::clamp(std::max(settings.rockSizeMaxM, rockSizeMinM), 0.1f, 200.0f);
+    const float rockSizeMinCells = rockSizeMinM / density;
+    const float rockSizeMaxCells = rockSizeMaxM / density;
+    const float aspectVar = std::clamp(settings.aspectVariation, 0.0f, 1.0f);
+    const float maxDomeRadius = rockSizeMaxCells * 0.5f;
+    const float maxAspect = std::pow(2.0f, aspectVar);
+    const float maxReach = maxDomeRadius * maxAspect;
+    const int searchRadius = std::max(1, static_cast<int>(std::ceil(maxReach - 0.05f)));
+    const float edgeSharpness = std::clamp(settings.edgeSharpness, 0.0f, 1.0f);
+    const float facetSharpness = std::clamp(settings.facetSharpness, 0.0f, 1.0f);
+    const float domeExp = 1.0f + facetSharpness * 1.5f * (1.0f - edgeSharpness);
+
+    RockShaderConstants k{};
+    k.resolution        = resolution;
+    k.seed              = settings.seed;
+    k.terrainSizeMeters = std::max(grid.terrainSizeMeters, 1.0f);
+    k.density           = density;
+    k.coverage          = std::clamp(settings.coverage, 0.0f, 1.0f);
+    k.rockSizeMinCells  = rockSizeMinCells;
+    k.rockSizeMaxCells  = rockSizeMaxCells;
+    k.rockHeight        = std::max(settings.rockHeight, 0.0f);
+    k.heightJitter      = std::clamp(settings.heightJitter, 0.0f, 1.0f);
+    k.rotationVar       = std::clamp(settings.rotationVariation, 0.0f, 1.0f);
+    k.aspectVar         = aspectVar;
+    k.edgeSharpness     = edgeSharpness;
+    k.bumpiness         = std::clamp(settings.bumpiness, 0.0f, 1.0f);
+    k.facetSharpness    = facetSharpness;
+    k.facetScale        = std::clamp(settings.facetScale, 0.5f, 8.0f);
+    k.searchRadius      = searchRadius;
+    k.maxReach          = maxReach;
+    k.domeExp           = domeExp;
+    k.needPolyhedral    = (edgeSharpness > 0.0f) ? 1 : 0;
+    k.pad0              = 0;
+    commandList->SetComputeRoot32BitConstants(0, 20, &k, 0);
+
+    commandList->SetPipelineState(g_rockComputePso.Get());
+    const UINT groupCount = (resolution + 7u) / 8u;
+    commandList->Dispatch(groupCount, groupCount, 1);
+
+    D3D12_RESOURCE_BARRIER uavBar{};
+    uavBar.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    uavBar.UAV.pResource = nullptr;
+    commandList->ResourceBarrier(1, &uavBar);
+
+    // Read back outputHeights + outputMask.
+    D3D12_RESOURCE_BARRIER toCopySrc[2]{};
+    ID3D12Resource* copyResources[2] = {outputHeightsBuf.Get(), outputMaskBuf.Get()};
+    for (int i = 0; i < 2; ++i)
+    {
+        toCopySrc[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        toCopySrc[i].Transition.pResource = copyResources[i];
+        toCopySrc[i].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        toCopySrc[i].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+        toCopySrc[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    }
+    commandList->ResourceBarrier(2, toCopySrc);
+    commandList->CopyBufferRegion(readbackHeights.Get(), 0, outputHeightsBuf.Get(), 0, fieldByteSize);
+    commandList->CopyBufferRegion(readbackMask.Get(),    0, outputMaskBuf.Get(),    0, fieldByteSize);
+    ThrowIfFailed(commandList->Close(), "Close Rock command list failed");
+
+    ID3D12CommandList* lists[] = {commandList.Get()};
+    g_commandQueue->ExecuteCommandLists(1, lists);
+    const UINT64 fenceValue = ++g_fenceLastSignaledValue;
+    ThrowIfFailed(g_commandQueue->Signal(g_fence.Get(), fenceValue), "Signal Rock fence failed");
+    WaitForFenceValue(fenceValue);
+
+    void* mappedHeights = nullptr;
+    void* mappedMask = nullptr;
+    const D3D12_RANGE readRange{0, static_cast<SIZE_T>(fieldByteSize)};
+    ThrowIfFailed(readbackHeights->Map(0, &readRange, &mappedHeights), "Map Rock readback (heights) failed");
+    ThrowIfFailed(readbackMask->Map(0, &readRange, &mappedMask),       "Map Rock readback (mask) failed");
+    std::memcpy(grid.heights.data(), mappedHeights, fieldByteSize);
+    grid.mask.assign(static_cast<size_t>(cellCount), 0.0f);
+    std::memcpy(grid.mask.data(), mappedMask, fieldByteSize);
+    const D3D12_RANGE emptyWriteRange{0, 0};
+    readbackHeights->Unmap(0, &emptyWriteRange);
+    readbackMask->Unmap(0, &emptyWriteRange);
+
+    g_rockComputeStatus = "Rock GPU Compute evaluated";
+    return true;
+}
+
+bool RunRockCompute(rock::HeightfieldGrid& grid, const rock::RockSettings& settings, std::string* error)
+{
+    if (std::this_thread::get_id() == g_mainThreadId)
+    {
+        return RunRockComputeImmediate(grid, settings, error);
+    }
+
+    auto request = std::make_shared<RockGpuRequest>();
+    request->grid = grid;
+    request->settings = settings;
+    std::future<RockGpuRequestResult> future = request->promise.get_future();
+    {
+        std::lock_guard<std::mutex> lock(g_rockGpuRequestMutex);
+        g_pendingRockGpuRequests.push_back(request);
+    }
+    g_rockComputeStatus = "Rock GPU Compute queued on main thread";
+
+    RockGpuRequestResult result = future.get();
+    if (!result.success)
+    {
+        if (error) *error = result.error;
+        return false;
+    }
+    grid = std::move(result.grid);
+    return true;
+}
+
+void ProcessPendingRockGpuRequests()
+{
+    if (std::this_thread::get_id() != g_mainThreadId)
+    {
+        return;
+    }
+
+    std::vector<std::shared_ptr<RockGpuRequest>> requests;
+    {
+        std::lock_guard<std::mutex> lock(g_rockGpuRequestMutex);
+        requests.swap(g_pendingRockGpuRequests);
+    }
+
+    for (const std::shared_ptr<RockGpuRequest>& request : requests)
+    {
+        RockGpuRequestResult result;
+        result.grid = std::move(request->grid);
+        result.success = RunRockComputeImmediate(result.grid, request->settings, &result.error);
+        request->promise.set_value(std::move(result));
+    }
+}
+
+// Mirrors the cbuffer in shaders/mask_fluvial_compute.hlsl.
+struct MaskFluvialShaderConstants
+{
+    UINT  resolution;
+    UINT  algorithmIsMfd;
+    float mfdExponent;
+    UINT  accumDirection;
+
+    float thresholdCells;
+    float gamma;
+    float softness;
+    float power;
+
+    UINT  outputCurve;
+    float pad0;
+    float pad1;
+    float pad2;
+};
+static_assert(sizeof(MaskFluvialShaderConstants) == 12 * sizeof(UINT), "MaskFluvialShaderConstants must be 12 DWORDs");
+
+bool EnsureMaskFluvialComputePipeline(std::string* error)
+{
+    if (g_maskFluvialComputeReady && g_maskFluvialComputeRootSignature
+        && g_mfPitFillPso && g_mfCommitHeightsPso && g_mfCopyInputHeightsPso
+        && g_mfComputeWeightsPso && g_mfAccumInitPso && g_mfAccumIterPso
+        && g_mfMaxReducePso && g_mfToMaskLogPso && g_mfToMaskLinearPso && g_mfToMaskThresholdPso)
+    {
+        return true;
+    }
+    if (!g_device)
+    {
+        if (error) *error = "D3D12 device is not available";
+        g_maskFluvialComputeStatus = "Mask Fluvial GPU Compute unavailable";
+        return false;
+    }
+
+    // 8 UAVs (Heights, HeightsScratch, Weights, AccumA, AccumB, OutMask, MaxScratch, InputHeights).
+    D3D12_DESCRIPTOR_RANGE uavRange{};
+    uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    uavRange.NumDescriptors = 8;
+    uavRange.BaseShaderRegister = 0;
+    uavRange.RegisterSpace = 0;
+    uavRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_ROOT_PARAMETER rootParams[2]{};
+    rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    rootParams[0].Constants.ShaderRegister = 0;
+    rootParams[0].Constants.RegisterSpace = 0;
+    rootParams[0].Constants.Num32BitValues = 12;
+    rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[1].DescriptorTable.pDescriptorRanges = &uavRange;
+    rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    D3D12_ROOT_SIGNATURE_DESC rsDesc{};
+    rsDesc.NumParameters = 2;
+    rsDesc.pParameters = rootParams;
+    rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+    ComPtr<ID3DBlob> sigBlob, errBlob;
+    HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
+    if (FAILED(hr))
+    {
+        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Serialize Mask Fluvial root sig failed";
+        g_maskFluvialComputeStatus = "Mask Fluvial GPU Compute root signature failed";
+        return false;
+    }
+    hr = g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_maskFluvialComputeRootSignature));
+    if (FAILED(hr))
+    {
+        if (error) *error = "Create Mask Fluvial root sig failed";
+        g_maskFluvialComputeStatus = "Mask Fluvial GPU Compute root signature failed";
+        return false;
+    }
+
+    const std::filesystem::path shaderPath = MaskFluvialComputeShaderPath();
+    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
+#if defined(_DEBUG)
+    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+#endif
+
+    auto compileEntry = [&](const char* entryPoint, ComPtr<ID3DBlob>& outBlob) -> bool {
+        errBlob.Reset();
+        const HRESULT compileHr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE,
+                                                     entryPoint, "cs_5_0", compileFlags, 0, &outBlob, &errBlob);
+        if (FAILED(compileHr))
+        {
+            if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile Mask Fluvial shader failed";
+            return false;
+        }
+        return true;
+    };
+
+    auto buildPso = [&](ID3DBlob* csBlob, ComPtr<ID3D12PipelineState>& outPso) -> bool {
+        D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{};
+        psoDesc.pRootSignature = g_maskFluvialComputeRootSignature.Get();
+        psoDesc.CS = {csBlob->GetBufferPointer(), csBlob->GetBufferSize()};
+        const HRESULT psoHr = g_device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&outPso));
+        if (FAILED(psoHr))
+        {
+            if (error) *error = "Create Mask Fluvial PSO failed";
+            return false;
+        }
+        return true;
+    };
+
+    struct Entry { const char* name; ComPtr<ID3D12PipelineState>* pso; };
+    Entry entries[] = {
+        {"CSCopyInputHeights", &g_mfCopyInputHeightsPso},
+        {"CSPitFillJacobi",    &g_mfPitFillPso},
+        {"CSCommitHeights",    &g_mfCommitHeightsPso},
+        {"CSComputeWeights",   &g_mfComputeWeightsPso},
+        {"CSAccumInit",        &g_mfAccumInitPso},
+        {"CSAccumIter",        &g_mfAccumIterPso},
+        {"CSMaxReduce",        &g_mfMaxReducePso},
+        {"CSToMaskLog",        &g_mfToMaskLogPso},
+        {"CSToMaskLinear",     &g_mfToMaskLinearPso},
+        {"CSToMaskThreshold",  &g_mfToMaskThresholdPso},
+    };
+    for (const Entry& e : entries)
+    {
+        ComPtr<ID3DBlob> blob;
+        if (!compileEntry(e.name, blob))
+        {
+            g_maskFluvialComputeStatus = std::string("Mask Fluvial ") + e.name + " compile failed";
+            return false;
+        }
+        if (!buildPso(blob.Get(), *e.pso))
+        {
+            g_maskFluvialComputeStatus = std::string("Mask Fluvial ") + e.name + " PSO failed";
+            return false;
+        }
+    }
+
+    g_maskFluvialComputeReady = true;
+    g_maskFluvialComputeStatus = "Mask Fluvial GPU Compute dispatch ready";
+    return true;
+}
+
+bool RunMaskFluvialComputeImmediate(rock::HeightfieldGrid& grid, const rock::MaskFluvialSettings& settings, std::string* error)
+{
+    std::lock_guard<std::mutex> lock(g_maskFluvialComputeMutex);
+    if (!EnsureMaskFluvialComputePipeline(error))
+    {
+        return false;
+    }
+
+    const UINT resolution = static_cast<UINT>(std::clamp(grid.resolution, 0, 4096));
+    const UINT64 cellCount = static_cast<UINT64>(resolution) * static_cast<UINT64>(resolution);
+    if (resolution < 3 || grid.heights.size() < cellCount)
+    {
+        if (error) *error = "Invalid heightfield for Mask Fluvial GPU Compute";
+        return false;
+    }
+
+    const UINT64 fieldByteSize    = cellCount * sizeof(float);
+    const UINT64 weightsByteSize  = cellCount * 8ull * sizeof(float);
+    const UINT64 maxScratchBytes  = sizeof(UINT);
+
+    const D3D12_HEAP_PROPERTIES defaultHeap  = HeapProperties(D3D12_HEAP_TYPE_DEFAULT);
+    const D3D12_HEAP_PROPERTIES uploadHeap   = HeapProperties(D3D12_HEAP_TYPE_UPLOAD);
+    const D3D12_HEAP_PROPERTIES readbackHeap = HeapProperties(D3D12_HEAP_TYPE_READBACK);
+    const D3D12_RESOURCE_DESC fieldGpuDesc   = BufferResourceDesc(fieldByteSize,    D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    const D3D12_RESOURCE_DESC weightsGpuDesc = BufferResourceDesc(weightsByteSize,  D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    const D3D12_RESOURCE_DESC scratchGpuDesc = BufferResourceDesc(maxScratchBytes,  D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    const D3D12_RESOURCE_DESC fieldCpuDesc   = BufferResourceDesc(fieldByteSize);
+    const D3D12_RESOURCE_DESC scratchCpuDesc = BufferResourceDesc(maxScratchBytes);
+
+    ComPtr<ID3D12Resource> heightsBuf, heightsScratchBuf, weightsBuf, accumABuf, accumBBuf, outMaskBuf, maxScratchBuf, inputHeightsBuf;
+    ComPtr<ID3D12Resource> uploadHeights, uploadMaxScratch, readbackMask;
+
+    auto createDefault = [&](ComPtr<ID3D12Resource>& out, const D3D12_RESOURCE_DESC& desc, const char* name) -> bool {
+        const HRESULT hrLocal = g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&out));
+        if (FAILED(hrLocal)) { if (error) *error = std::string("Create ") + name + " failed"; return false; }
+        return true;
+    };
+    auto createUpload = [&](ComPtr<ID3D12Resource>& out, const D3D12_RESOURCE_DESC& desc, const char* name) -> bool {
+        const HRESULT hrLocal = g_device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&out));
+        if (FAILED(hrLocal)) { if (error) *error = std::string("Create ") + name + " failed"; return false; }
+        return true;
+    };
+    auto createReadback = [&](ComPtr<ID3D12Resource>& out, const D3D12_RESOURCE_DESC& desc, const char* name) -> bool {
+        const HRESULT hrLocal = g_device->CreateCommittedResource(&readbackHeap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&out));
+        if (FAILED(hrLocal)) { if (error) *error = std::string("Create ") + name + " failed"; return false; }
+        return true;
+    };
+
+    if (!createDefault(heightsBuf,        fieldGpuDesc,   "MF heights"))         return false;
+    if (!createDefault(heightsScratchBuf, fieldGpuDesc,   "MF heights scratch")) return false;
+    if (!createDefault(weightsBuf,        weightsGpuDesc, "MF weights"))         return false;
+    if (!createDefault(accumABuf,         fieldGpuDesc,   "MF accum A"))         return false;
+    if (!createDefault(accumBBuf,         fieldGpuDesc,   "MF accum B"))         return false;
+    if (!createDefault(outMaskBuf,        fieldGpuDesc,   "MF out mask"))        return false;
+    if (!createDefault(maxScratchBuf,     scratchGpuDesc, "MF max scratch"))     return false;
+    if (!createDefault(inputHeightsBuf,   fieldGpuDesc,   "MF input heights"))   return false;
+    if (!createUpload(uploadHeights,      fieldCpuDesc,   "MF upload heights"))  return false;
+    if (!createUpload(uploadMaxScratch,   scratchCpuDesc, "MF upload max"))      return false;
+    if (!createReadback(readbackMask,     fieldCpuDesc,   "MF readback mask"))   return false;
+
+    void* mapped = nullptr;
+    const D3D12_RANGE emptyReadRange{0, 0};
+    ThrowIfFailed(uploadHeights->Map(0, &emptyReadRange, &mapped), "Map MF heights upload failed");
+    std::memcpy(mapped, grid.heights.data(), fieldByteSize);
+    uploadHeights->Unmap(0, nullptr);
+
+    // Upload zero into MaxScratch initial value (atomic max baseline).
+    ThrowIfFailed(uploadMaxScratch->Map(0, &emptyReadRange, &mapped), "Map MF max scratch upload failed");
+    *static_cast<UINT*>(mapped) = 0u;
+    uploadMaxScratch->Unmap(0, nullptr);
+
+    constexpr UINT kDescriptorCount = 8;
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    heapDesc.NumDescriptors = kDescriptorCount;
+    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    ComPtr<ID3D12DescriptorHeap> descriptorHeap;
+    HRESULT hr = g_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&descriptorHeap));
+    if (FAILED(hr)) { if (error) *error = "Create MF descriptor heap failed"; return false; }
+
+    auto createUavFloat = [&](ID3D12Resource* res, UINT numElements, UINT slot) {
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+        uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+        uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+        uavDesc.Buffer.NumElements = numElements;
+        uavDesc.Buffer.StructureByteStride = sizeof(float);
+        D3D12_CPU_DESCRIPTOR_HANDLE handle = descriptorHeap->GetCPUDescriptorHandleForHeapStart();
+        handle.ptr += static_cast<SIZE_T>(slot) * g_srvDescriptorSize;
+        g_device->CreateUnorderedAccessView(res, nullptr, &uavDesc, handle);
+    };
+    auto createUavUint = [&](ID3D12Resource* res, UINT numElements, UINT slot) {
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+        uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+        uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+        uavDesc.Buffer.NumElements = numElements;
+        uavDesc.Buffer.StructureByteStride = sizeof(UINT);
+        D3D12_CPU_DESCRIPTOR_HANDLE handle = descriptorHeap->GetCPUDescriptorHandleForHeapStart();
+        handle.ptr += static_cast<SIZE_T>(slot) * g_srvDescriptorSize;
+        g_device->CreateUnorderedAccessView(res, nullptr, &uavDesc, handle);
+    };
+    createUavFloat(heightsBuf.Get(),         static_cast<UINT>(cellCount),     0);
+    createUavFloat(heightsScratchBuf.Get(),  static_cast<UINT>(cellCount),     1);
+    createUavFloat(weightsBuf.Get(),         static_cast<UINT>(cellCount * 8u), 2);
+    createUavFloat(accumABuf.Get(),          static_cast<UINT>(cellCount),     3);
+    createUavFloat(accumBBuf.Get(),          static_cast<UINT>(cellCount),     4);
+    createUavFloat(outMaskBuf.Get(),         static_cast<UINT>(cellCount),     5);
+    createUavUint (maxScratchBuf.Get(),      1u,                               6);
+    createUavFloat(inputHeightsBuf.Get(),    static_cast<UINT>(cellCount),     7);
+
+    ComPtr<ID3D12CommandAllocator> allocator;
+    ComPtr<ID3D12GraphicsCommandList> commandList;
+    ThrowIfFailed(g_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)), "Create MF command allocator failed");
+    ThrowIfFailed(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&commandList)), "Create MF command list failed");
+
+    auto transition = [&](ID3D12Resource* res, D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to) {
+        D3D12_RESOURCE_BARRIER b{};
+        b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        b.Transition.pResource = res;
+        b.Transition.StateBefore = from;
+        b.Transition.StateAfter = to;
+        b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        commandList->ResourceBarrier(1, &b);
+    };
+    auto uavBarrier = [&]() {
+        D3D12_RESOURCE_BARRIER b{};
+        b.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+        b.UAV.pResource = nullptr;
+        commandList->ResourceBarrier(1, &b);
+    };
+
+    // Stage input heights.
+    transition(inputHeightsBuf.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST);
+    commandList->CopyBufferRegion(inputHeightsBuf.Get(), 0, uploadHeights.Get(), 0, fieldByteSize);
+    transition(inputHeightsBuf.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+    // Initialise MaxScratch to 0 (so atomic max accumulates from baseline).
+    transition(maxScratchBuf.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST);
+    commandList->CopyBufferRegion(maxScratchBuf.Get(), 0, uploadMaxScratch.Get(), 0, maxScratchBytes);
+    transition(maxScratchBuf.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+    ID3D12DescriptorHeap* heaps[] = {descriptorHeap.Get()};
+    commandList->SetDescriptorHeaps(1, heaps);
+    commandList->SetComputeRootSignature(g_maskFluvialComputeRootSignature.Get());
+    commandList->SetComputeRootDescriptorTable(1, descriptorHeap->GetGPUDescriptorHandleForHeapStart());
+
+    const UINT groupCount = (resolution + 7u) / 8u;
+    const float thresholdCells = std::clamp(settings.accumulationThreshold, 0.0f, 1.0f) * static_cast<float>(cellCount);
+
+    MaskFluvialShaderConstants k{};
+    k.resolution      = resolution;
+    k.algorithmIsMfd  = (settings.algorithm == rock::FlowAccumulationAlgorithm::MFD) ? 1u : 0u;
+    k.mfdExponent     = std::clamp(settings.mfdExponent, 0.1f, 16.0f);
+    k.accumDirection  = 0u;
+    k.thresholdCells  = thresholdCells;
+    k.gamma           = std::clamp(settings.gamma, 0.05f, 8.0f);
+    k.softness        = std::clamp(settings.softness, 0.001f, 4.0f);
+    k.power           = std::clamp(settings.power, 0.1f, 8.0f);
+    k.outputCurve     = static_cast<UINT>(settings.outputCurve);
+    auto setConstants = [&]() {
+        commandList->SetComputeRoot32BitConstants(0, 12, &k, 0);
+    };
+
+    // 1. Copy input heights into the working Heights buffer.
+    setConstants();
+    commandList->SetPipelineState(g_mfCopyInputHeightsPso.Get());
+    commandList->Dispatch(groupCount, groupCount, 1);
+    uavBarrier();
+
+    // 2. Pit fill iterations (Jacobi double-buffer + commit).
+    const int pitIters = std::clamp(settings.pitFillIterations, 0, 64);
+    for (int i = 0; i < pitIters; ++i)
+    {
+        commandList->SetPipelineState(g_mfPitFillPso.Get());
+        commandList->Dispatch(groupCount, groupCount, 1);
+        uavBarrier();
+        commandList->SetPipelineState(g_mfCommitHeightsPso.Get());
+        commandList->Dispatch(groupCount, groupCount, 1);
+        uavBarrier();
+    }
+
+    // 3. Compute receivers / weights from final Heights.
+    commandList->SetPipelineState(g_mfComputeWeightsPso.Get());
+    commandList->Dispatch(groupCount, groupCount, 1);
+    uavBarrier();
+
+    // 4. Initialise AccumA = 1.0.
+    commandList->SetPipelineState(g_mfAccumInitPso.Get());
+    commandList->Dispatch(groupCount, groupCount, 1);
+    uavBarrier();
+
+    // 5. Iterative Jacobi gather. K = 2 * resolution iterations, even so
+    //    the final result lands in AccumA. Direction alternates each iter.
+    const int accumIters = static_cast<int>(resolution) * 2;
+    for (int i = 0; i < accumIters; ++i)
+    {
+        k.accumDirection = static_cast<UINT>(i & 1);
+        setConstants();
+        commandList->SetPipelineState(g_mfAccumIterPso.Get());
+        commandList->Dispatch(groupCount, groupCount, 1);
+        uavBarrier();
+    }
+    // Reset accumDirection so subsequent dispatches behave deterministically.
+    k.accumDirection = 0u;
+    setConstants();
+
+    // 6. For Log/Linear: reduce max(adjusted) into MaxScratch[0].
+    if (settings.outputCurve != rock::MaskFluvialOutputCurve::Threshold)
+    {
+        commandList->SetPipelineState(g_mfMaxReducePso.Get());
+        commandList->Dispatch(groupCount, groupCount, 1);
+        uavBarrier();
+    }
+
+    // 7. Mask conversion.
+    ID3D12PipelineState* maskPso = g_mfToMaskLogPso.Get();
+    if (settings.outputCurve == rock::MaskFluvialOutputCurve::Threshold) maskPso = g_mfToMaskThresholdPso.Get();
+    else if (settings.outputCurve == rock::MaskFluvialOutputCurve::Linear) maskPso = g_mfToMaskLinearPso.Get();
+    commandList->SetPipelineState(maskPso);
+    commandList->Dispatch(groupCount, groupCount, 1);
+    uavBarrier();
+
+    // 8. Read back OutMask.
+    transition(outMaskBuf.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
+    commandList->CopyBufferRegion(readbackMask.Get(), 0, outMaskBuf.Get(), 0, fieldByteSize);
+    ThrowIfFailed(commandList->Close(), "Close MF command list failed");
+
+    ID3D12CommandList* lists[] = {commandList.Get()};
+    g_commandQueue->ExecuteCommandLists(1, lists);
+    const UINT64 fenceValue = ++g_fenceLastSignaledValue;
+    ThrowIfFailed(g_commandQueue->Signal(g_fence.Get(), fenceValue), "Signal MF fence failed");
+    WaitForFenceValue(fenceValue);
+
+    void* mappedMask = nullptr;
+    const D3D12_RANGE readRange{0, static_cast<SIZE_T>(fieldByteSize)};
+    ThrowIfFailed(readbackMask->Map(0, &readRange, &mappedMask), "Map MF readback mask failed");
+    grid.mask.assign(static_cast<size_t>(cellCount), 0.0f);
+    std::memcpy(grid.mask.data(), mappedMask, fieldByteSize);
+    const D3D12_RANGE emptyWriteRange{0, 0};
+    readbackMask->Unmap(0, &emptyWriteRange);
+
+    // Mask Fluvial does not modify heights — heights pass through unchanged.
+
+    g_maskFluvialComputeStatus = "Mask Fluvial GPU Compute evaluated";
+    return true;
+}
+
+bool RunMaskFluvialCompute(rock::HeightfieldGrid& grid, const rock::MaskFluvialSettings& settings, std::string* error)
+{
+    if (std::this_thread::get_id() == g_mainThreadId)
+    {
+        return RunMaskFluvialComputeImmediate(grid, settings, error);
+    }
+
+    auto request = std::make_shared<MaskFluvialGpuRequest>();
+    request->grid = grid;
+    request->settings = settings;
+    std::future<MaskFluvialGpuRequestResult> future = request->promise.get_future();
+    {
+        std::lock_guard<std::mutex> lock(g_maskFluvialGpuRequestMutex);
+        g_pendingMaskFluvialGpuRequests.push_back(request);
+    }
+    g_maskFluvialComputeStatus = "Mask Fluvial GPU Compute queued on main thread";
+
+    MaskFluvialGpuRequestResult result = future.get();
+    if (!result.success)
+    {
+        if (error) *error = result.error;
+        return false;
+    }
+    grid = std::move(result.grid);
+    return true;
+}
+
+void ProcessPendingMaskFluvialGpuRequests()
+{
+    if (std::this_thread::get_id() != g_mainThreadId)
+    {
+        return;
+    }
+
+    std::vector<std::shared_ptr<MaskFluvialGpuRequest>> requests;
+    {
+        std::lock_guard<std::mutex> lock(g_maskFluvialGpuRequestMutex);
+        requests.swap(g_pendingMaskFluvialGpuRequests);
+    }
+
+    for (const std::shared_ptr<MaskFluvialGpuRequest>& request : requests)
+    {
+        MaskFluvialGpuRequestResult result;
+        result.grid = std::move(request->grid);
+        result.success = RunMaskFluvialComputeImmediate(result.grid, request->settings, &result.error);
+        request->promise.set_value(std::move(result));
+    }
+}
+
 // Mirrors the cbuffer in shaders/sky.hlsl. Packed manually to match HLSL's
 // 16-byte alignment rules so we can splat it as 32-bit root constants.
 struct SkyShaderConstants
@@ -5736,6 +6620,8 @@ void WaitForAsyncEvaluationForShutdown()
         ProcessPendingMseGpuRequests();
         ProcessPendingMaskNoiseGpuRequests();
         ProcessPendingSedimentGpuRequests();
+        ProcessPendingRockGpuRequests();
+        ProcessPendingMaskFluvialGpuRequests();
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 
@@ -8877,7 +9763,7 @@ bool DrawMultiScaleErosionProperties(rock::Node& editableNode)
 
     {
         int backendInt = static_cast<int>(mse.backend);
-        if (DrawPropertyComboRow("Backend", "MseBackend", &backendInt, "CPU Reference\0GPU Compute\0\0", "CPU 並列実装と GPU compute (D3D12 + HLSL) を切り替えます。GPU は反復回数が多いほど速くなりますが、結果が CPU と微小にずれることがあります (浮動小数の累積順序)。\nGPU が初期化に失敗したり実行時エラーになると自動的に CPU 版にフォールバックします。", static_cast<int>(rock::MultiScaleErosionSettings{}.backend)))
+        if (DrawPropertyComboRow("Backend", "MseBackend", &backendInt, "CPU\0GPU\0\0", "CPU 並列実装と GPU (D3D12 compute) を切り替えます。GPU は反復回数が多いほど速くなりますが、結果が CPU と微小にずれることがあります (浮動小数の累積順序)。\nGPU が初期化に失敗したり実行時エラーになると自動的に CPU 版にフォールバックします。", static_cast<int>(rock::MultiScaleErosionSettings{}.backend)))
         {
             mse.backend = static_cast<rock::MultiScaleErosionBackend>(std::clamp(backendInt,
                 static_cast<int>(rock::MultiScaleErosionBackend::CpuReference),
@@ -9000,7 +9886,7 @@ bool DrawMaskNoiseProperties(rock::Node& editableNode)
 
     {
         int backendInt = static_cast<int>(mn.backend);
-        if (DrawPropertyComboRow("Backend", "MaskNoiseBackend", &backendInt, "CPU Parallel\0GPU Compute\0\0", "CPU 並列実装と GPU compute (D3D12 + HLSL) を切り替えます。GPU は解像度が高いほど速くなります (1024² 以上で顕著)。\nGPU が初期化に失敗したり実行時エラーになると自動的に CPU 版にフォールバックします。", static_cast<int>(rock::MaskNoiseSettings{}.backend)))
+        if (DrawPropertyComboRow("Backend", "MaskNoiseBackend", &backendInt, "CPU\0GPU\0\0", "CPU 並列実装と GPU (D3D12 compute) を切り替えます。GPU は解像度が高いほど速くなります (1024² 以上で顕著)。\nGPU が初期化に失敗したり実行時エラーになると自動的に CPU 版にフォールバックします。", static_cast<int>(rock::MaskNoiseSettings{}.backend)))
         {
             mn.backend = static_cast<rock::MaskNoiseBackend>(std::clamp(backendInt,
                 static_cast<int>(rock::MaskNoiseBackend::CpuParallel),
@@ -9083,6 +9969,17 @@ bool DrawMaskFluvialProperties(rock::Node& editableNode)
     mf.pitFillIterations = std::clamp(mf.pitFillIterations, 0, 64);
     mf.mfdExponent = std::clamp(mf.mfdExponent, 0.1f, 16.0f);
 
+    {
+        int backendInt = static_cast<int>(mf.backend);
+        if (DrawPropertyComboRow("Backend", "MaskFluvialBackend", &backendInt, "CPU\0GPU\0\0", "実行バックエンド。CPU は sort + 降順トポロジカル走査の厳密実装。GPU は Jacobi 反復ゲザー (~2*resolution iter) の近似実装で、視覚的には同等だが数値は完全一致せず (累積順序が異なるため)。GPU は 1024² で 5-10 倍程度高速。シェーダーコンパイル/ディスパッチ失敗時は CPU に自動フォールバック。", static_cast<int>(rock::MaskFluvialSettings{}.backend)))
+        {
+            mf.backend = static_cast<rock::MaskFluvialBackend>(std::clamp(backendInt,
+                static_cast<int>(rock::MaskFluvialBackend::CpuReference),
+                static_cast<int>(rock::MaskFluvialBackend::GpuCompute)));
+            EvaluateGraph();
+        }
+    }
+
     int algoInt = static_cast<int>(mf.algorithm);
     if (DrawPropertyComboRow("Algorithm", "MaskFluvialAlgorithm", &algoInt, "D8\0MFD\0\0", "流れ累積アルゴリズムです。D8 は最急降下方向のみに流す(細い線)、MFD は複数方向に重み付き分配(太い面)。", static_cast<int>(rock::MaskFluvialSettings{}.algorithm)))
     {
@@ -9164,6 +10061,16 @@ bool DrawRockProperties(rock::Node& editableNode)
     rk.facetScale = std::clamp(rk.facetScale, 0.5f, 8.0f);
     rk.seed = std::clamp(rk.seed, 0, 999999);
 
+    {
+        int backendInt = static_cast<int>(rk.backend);
+        if (DrawPropertyComboRow("Backend", "RockBackend", &backendInt, "CPU\0GPU\0\0", "実行バックエンド。GPU (D3D12 compute) は CPU 比で 10-30 倍高速。シェーダーコンパイル/ディスパッチ失敗時は CPU に自動フォールバック。CPU は決定論的でデバッグ向き。", static_cast<int>(rock::RockSettings{}.backend)))
+        {
+            rk.backend = static_cast<rock::RockBackend>(std::clamp(backendInt,
+                static_cast<int>(rock::RockBackend::CpuReference),
+                static_cast<int>(rock::RockBackend::GpuCompute)));
+            EvaluateGraph();
+        }
+    }
     if (DrawPropertyIntRow("Seed", "RockSeed", &rk.seed, 0, 999999, rock::RockSettings{}.seed, "Rock seed changed", true, "ハッシュのオフセットです。同じパラメータでも異なる岩配置を得るために使います。"))
     {
         EvaluateGraph();
@@ -9241,6 +10148,16 @@ bool DrawSedimentProperties(rock::Node& editableNode)
     sd.sedimentViscosity = std::clamp(sd.sedimentViscosity, 0.0f, 1.0f);
     sd.maskContrast = std::clamp(sd.maskContrast, 0.0f, 1.0f);
 
+    {
+        int backendInt = static_cast<int>(sd.backend);
+        if (DrawPropertyComboRow("Backend", "SedimentBackend", &backendInt, "CPU\0GPU\0\0", "実行バックエンド。GPU (D3D12 compute) は CPU 比で 10-30 倍高速 (1024² で 100ms 程度)。シェーダーコンパイル/ディスパッチ失敗時は CPU に自動フォールバック。CPU は決定論的でデバッグ向き。", static_cast<int>(rock::SedimentSettings{}.backend)))
+        {
+            sd.backend = static_cast<rock::SedimentBackend>(std::clamp(backendInt,
+                static_cast<int>(rock::SedimentBackend::CpuReference),
+                static_cast<int>(rock::SedimentBackend::GpuCompute)));
+            EvaluateGraph();
+        }
+    }
     if (DrawPropertyPercentRow("Emission Time (%)", "SedimentEmissionTime", &sd.emissionTime, 0.0f, 1.0f, rock::SedimentSettings{}.emissionTime, "Sediment emission time changed", "Emission Amount を最初の何割の Iteration にかけて徐々に追加するか。0% は最初に全量を一度に積む (緩い層が自由に流れて落ち着く)、100% は毎 Iteration に均等追加 (前 Iteration が彫った河道に新層が流れ込みディテールがシャープになる)。"))
     {
         EvaluateGraph();
@@ -9272,16 +10189,6 @@ bool DrawSedimentProperties(rock::Node& editableNode)
     if (DrawPropertyPercentRow("Mask Contrast (%)", "SedimentMaskContrast", &sd.maskContrast, 0.0f, 1.0f, rock::SedimentSettings{}.maskContrast, "Sediment mask contrast changed", "Mask 出力のコントラスト。0 で線形 (滑らかなグラデーション)、1 でほぼバイナリ。dendritic を強調するなら 0.5 以上。"))
     {
         EvaluateGraph();
-    }
-    {
-        int backendInt = static_cast<int>(sd.backend);
-        if (DrawPropertyComboRow("Backend", "SedimentBackend", &backendInt, "CPU\0GPU Compute\0\0", "実行バックエンド。GPU Compute (D3D12) は CPU 比で 10-30 倍高速 (1024² で 100ms 程度)。シェーダーコンパイル/ディスパッチ失敗時は CPU に自動フォールバック。CPU は決定論的でデバッグ向き。", static_cast<int>(rock::SedimentSettings{}.backend)))
-        {
-            sd.backend = static_cast<rock::SedimentBackend>(std::clamp(backendInt,
-                static_cast<int>(rock::SedimentBackend::CpuReference),
-                static_cast<int>(rock::SedimentBackend::GpuCompute)));
-            EvaluateGraph();
-        }
     }
 
     ImGui::EndTable();
@@ -10285,6 +11192,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         rock::SetMultiScaleErosionGpuEvaluator(RunMseComputeGrid);
         rock::SetMaskNoiseGpuEvaluator(RunMaskNoiseCompute);
         rock::SetSedimentGpuEvaluator(RunSedimentCompute);
+        rock::SetRockGpuEvaluator(RunRockCompute);
+        rock::SetMaskFluvialGpuEvaluator(RunMaskFluvialCompute);
 
         ShowWindow(g_hwnd, showCommand);
         UpdateWindow(g_hwnd);
@@ -10345,6 +11254,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
             ProcessPendingMseGpuRequests();
             ProcessPendingMaskNoiseGpuRequests();
             ProcessPendingSedimentGpuRequests();
+            ProcessPendingRockGpuRequests();
+            ProcessPendingMaskFluvialGpuRequests();
             PollAsyncEvaluation();
             DrawUi();
             ImGui::Render();
@@ -10362,6 +11273,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         rock::SetMultiScaleErosionGpuEvaluator(nullptr);
         rock::SetMaskNoiseGpuEvaluator(nullptr);
         rock::SetSedimentGpuEvaluator(nullptr);
+        rock::SetRockGpuEvaluator(nullptr);
+        rock::SetMaskFluvialGpuEvaluator(nullptr);
         CleanupD3D();
         DestroyWindow(g_hwnd);
         UnregisterClassW(wc.lpszClassName, wc.hInstance);

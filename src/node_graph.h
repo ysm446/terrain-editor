@@ -51,6 +51,18 @@ enum class SedimentBackend
     GpuCompute,
 };
 
+enum class RockBackend
+{
+    CpuReference,
+    GpuCompute,
+};
+
+enum class MaskFluvialBackend
+{
+    CpuReference,
+    GpuCompute,
+};
+
 enum class MaskNoiseBackend
 {
     CpuParallel,
@@ -213,6 +225,7 @@ struct RockSettings
     float bumpiness = 0.6f;          // 0..1, surface detail amplitude (smooth or faceted, see facetSharpness).
     float facetSharpness = 0.5f;     // 0 = smooth dome with rounded bumps, 1 = polyhedral flat facets with sharp creases.
     float facetScale = 2.5f;         // Sub-cell Voronoi frequency in the rock-local frame (higher = more, smaller facets per rock).
+    RockBackend backend = RockBackend::GpuCompute; // CPU reference vs GPU compute (D3D12). Defaults to GPU; falls back to CPU on shader/device failure.
 };
 
 // Heightfield → heightfield + mask. GeoGen-style sediment simulation.
@@ -258,6 +271,7 @@ struct MaskFluvialSettings
     float power = 1.6f;           // Threshold mode: pow(mask, power) for edge taper
     int pitFillIterations = 8;    // 0 keeps lakes, ~8 removes most local pits
     float mfdExponent = 4.0f;     // MFD slope exponent (only when MFD selected)
+    MaskFluvialBackend backend = MaskFluvialBackend::GpuCompute; // CPU 厳密 (sort + topological walk) vs GPU 反復 (Jacobi gather, ~2*resolution iters; 視覚的に同等だが数値は完全一致せず). 既定 GPU. シェーダー / ディスパッチ失敗時は CPU に自動フォールバック.
 };
 
 struct MultiScaleErosionSettings
@@ -453,6 +467,8 @@ struct MaskGrid
 using MultiScaleErosionGpuEvaluator = bool (*)(HeightfieldGrid& grid, const MultiScaleErosionSettings& settings, std::string* error);
 using MaskNoiseGpuEvaluator = bool (*)(MaskGrid& grid, const MaskNoiseSettings& settings, std::string* error);
 using SedimentGpuEvaluator = bool (*)(HeightfieldGrid& grid, const SedimentSettings& settings, std::string* error);
+using RockGpuEvaluator = bool (*)(HeightfieldGrid& grid, const RockSettings& settings, std::string* error);
+using MaskFluvialGpuEvaluator = bool (*)(HeightfieldGrid& grid, const MaskFluvialSettings& settings, std::string* error);
 
 struct HeightfieldPipeline
 {
@@ -592,6 +608,8 @@ bool IsMaskOnlyNodeKind(NodeKind kind);
 void SetMultiScaleErosionGpuEvaluator(MultiScaleErosionGpuEvaluator evaluator);
 void SetMaskNoiseGpuEvaluator(MaskNoiseGpuEvaluator evaluator);
 void SetSedimentGpuEvaluator(SedimentGpuEvaluator evaluator);
+void SetRockGpuEvaluator(RockGpuEvaluator evaluator);
+void SetMaskFluvialGpuEvaluator(MaskFluvialGpuEvaluator evaluator);
 
 // Thread-safe progress signal: holds the GraphId of the node whose
 // evaluation kernel is currently running on a worker thread, or 0 when

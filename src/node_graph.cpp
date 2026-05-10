@@ -29,6 +29,8 @@ using Microsoft::WRL::ComPtr;
 MultiScaleErosionGpuEvaluator g_mseGpuEvaluator = nullptr;
 MaskNoiseGpuEvaluator g_maskNoiseGpuEvaluator = nullptr;
 SedimentGpuEvaluator g_sedimentGpuEvaluator = nullptr;
+RockGpuEvaluator g_rockGpuEvaluator = nullptr;
+MaskFluvialGpuEvaluator g_maskFluvialGpuEvaluator = nullptr;
 std::atomic<GraphId> g_currentlyEvaluatingNodeId{0};
 
 struct HeightmapImage
@@ -119,6 +121,7 @@ uint64_t HashRockSettings(const RockSettings& settings, int resolution)
     HashCombine(hash, HashFloat(settings.bumpiness));
     HashCombine(hash, HashFloat(settings.facetSharpness));
     HashCombine(hash, HashFloat(settings.facetScale));
+    HashCombine(hash, static_cast<uint64_t>(settings.backend));
     HashCombine(hash, static_cast<uint64_t>(resolution));
     return hash;
 }
@@ -150,6 +153,7 @@ uint64_t HashMaskFluvialSettings(const MaskFluvialSettings& settings, int resolu
     HashCombine(hash, HashFloat(settings.power));
     HashCombine(hash, static_cast<uint64_t>(settings.pitFillIterations));
     HashCombine(hash, HashFloat(settings.mfdExponent));
+    HashCombine(hash, static_cast<uint64_t>(settings.backend));
     HashCombine(hash, static_cast<uint64_t>(resolution));
     return hash;
 }
@@ -1328,6 +1332,16 @@ void ApplyMaskFluvial(HeightfieldGrid& grid, const MaskFluvialSettings& settings
         return;
     }
 
+    if (settings.backend == MaskFluvialBackend::GpuCompute && g_maskFluvialGpuEvaluator != nullptr)
+    {
+        std::string ignoredError;
+        if (g_maskFluvialGpuEvaluator(grid, settings, &ignoredError))
+        {
+            return;
+        }
+        // Falls through to the CPU implementation on shader / dispatch failure.
+    }
+
     // 1. Iterative pit fill (Jacobi, double-buffered). Any interior cell
     // whose 8 neighbours are all >= itself gets raised to (min_neighbour +
     // epsilon). Boundary cells act as outlets. We use Jacobi (read from
@@ -1609,6 +1623,16 @@ void ApplyRock(HeightfieldGrid& grid, const RockSettings& settings)
     if (n < 2 || grid.heights.size() < cellCount || settings.density <= 0.0f)
     {
         return;
+    }
+
+    if (settings.backend == RockBackend::GpuCompute && g_rockGpuEvaluator != nullptr)
+    {
+        std::string ignoredError;
+        if (g_rockGpuEvaluator(grid, settings, &ignoredError))
+        {
+            return;
+        }
+        // Falls through to the CPU implementation on shader / dispatch failure.
     }
 
     grid.mask.assign(cellCount, 0.0f);
@@ -3567,6 +3591,16 @@ void SetMaskNoiseGpuEvaluator(MaskNoiseGpuEvaluator evaluator)
 void SetSedimentGpuEvaluator(SedimentGpuEvaluator evaluator)
 {
     g_sedimentGpuEvaluator = evaluator;
+}
+
+void SetRockGpuEvaluator(RockGpuEvaluator evaluator)
+{
+    g_rockGpuEvaluator = evaluator;
+}
+
+void SetMaskFluvialGpuEvaluator(MaskFluvialGpuEvaluator evaluator)
+{
+    g_maskFluvialGpuEvaluator = evaluator;
 }
 
 std::atomic<GraphId>& CurrentlyEvaluatingNodeId()

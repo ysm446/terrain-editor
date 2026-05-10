@@ -21,6 +21,7 @@
 | `Edge Power` | (Threshold) `pow(mask, power)` で川縁をテーパー。1 を超えると細く、1 未満で太く |
 | `Pit Fill Iterations` | 局所窪みを埋める反復回数。0 で湖を残し、増やすほど排水経路が確実につながる |
 | `MFD Exponent` | (MFD) 下流分配の鋭さ。大きいほど D8 寄り(主流に集中)、小さいほど面的に広がる |
+| `Backend` | `CPU`(sort + 降順トポロジカル走査の厳密実装) / `GPU`(Jacobi 反復ゲザーの近似実装、視覚的同等)。既定 `GPU`。詳細は下の「GPU Compute バックエンド」節 |
 
 ## モード別の使い分け
 
@@ -48,3 +49,49 @@
 - 並列化箇所: Pit Fill(行並列 Jacobi)、最大値リダクション、最終マスク変換(`std::log` / `std::pow` がボトルネックなので効果大)、インデックスソート。フロー累積ループ自体は標高順依存があるため逐次のままです。Debug ビルドだと `std::execution::par` のオーバーヘッドが大きいので、体感差を見るときは Release ビルドで確認してください。
 - キャッシュキーは入力ハッシュ + パラメータハッシュ。他ノードの編集や `Output Curve` 切り替えで該当ノードのみ再評価されます。
 - 深い盆地を含む地形では `Pit Fill Iterations` を増やすと排水経路が安定します。逆に火口湖などを残したい場合は 0 にしてください。
+
+## GPU Compute バックエンド
+
+`Backend` プルダウンで `GPU` を選ぶと [shaders/mask_fluvial_compute.hlsl](../../../../shaders/mask_fluvial_compute.hlsl) の compute shader 群で評価します。CPU 側の sort + 降順トポロジカル走査は本質的に逐次なので GPU 直接移植できないため、**Jacobi 反復ゲザー (iterative scatter via gather)** という別アルゴリズムで置き換えています。
+
+**5 段パイプライン:**
+
+1. `CSCopyInputHeights` — InputHeights → Heights buffer (UAV)
+2. `CSPitFillJacobi` + `CSCommitHeights` — `pitFillIterations` 回 Jacobi 二重バッファ
+3. `CSComputeWeights` — D8 / MFD 各セルの 8 方向受信ウェイトを 1 回計算
+4. `CSAccumIter` — Jacobi 反復ゲザー (各セル: `total = 1 + Σ accum_prev[n] * weight[n→c]`)。`accumDirection` フラグで AccumA / AccumB を ping-pong しつつ **2 × resolution** 回ループ
+5. `CSMaxReduce` (Log/Linear のみ、`InterlockedMax` で最大値集約) → `CSToMaskLog` / `CSToMaskLinear` / `CSToMaskThreshold`
+
+**バッファ構成 (8 UAV):**
+
+| スロット | 用途 |
+| --- | --- |
+| `u0` | Heights (pit-fill 後の作業ハイト) |
+| `u1` | HeightsScratch (pit-fill 二重バッファ) |
+| `u2` | Weights (8 floats / cell, 受信側 ping-pong 不要のため固定) |
+| `u3` / `u4` | AccumA / AccumB (Jacobi 反復で交互に read/write) |
+| `u5` | OutMask |
+| `u6` | MaxScratch (`uint`、`InterlockedMax` で最大値集約。マスク変換時に `asfloat` で読む) |
+| `u7` | InputHeights (CPU からのアップロード先) |
+
+**収束について:**
+
+Jacobi 反復は「自身の起源 → 1 セルずつ下流へ伝播」する性質を持つため、収束に必要な反復回数は ≈ **最長流路長**。1024² 解像度の地形では概ね 1024-2048 回のループでほぼ収束します。本実装は安全側で `2 × resolution` 反復に固定しています。
+
+**CPU 結果との差:**
+
+CPU は累積を sort 順に逐次更新するため浮動小数の加算順序が一意 (= 完全に決定論的)。GPU は各反復で全セルを並列ゲザーするため、累積の加算順序が異なります。結果として:
+
+- 視覚的なドレナージ模様 (どの川が太く / どこに支流が分岐するか) は CPU と同等
+- 個別セルの累積値は微小にずれる (浮動小数の累積順序差)
+- 反復不足の場合、最下流の累積値が小さめに出る (浅い色で表示される)
+
+数値精度を要求するパイプライン後段がある場合は CPU バックエンドを使ってください。視覚的なマスク用途 (河川描画 / 浸食マスク / 表示) には GPU で問題ありません。
+
+**性能:**
+
+1024² 既定パラメータでおおよそ **CPU 比 5-10 倍高速** (CPU ~100ms → GPU ~10-20ms 程度の見込み)。Pit fill / max reduce / mask conversion 部分は単発 dispatch なので軽く、ボトルネックは `2 × resolution` 回の Accum Iter ループです。
+
+**フォールバック:**
+
+シェーダーコンパイル / ディスパッチ失敗時は CPU 実装に自動フォールバックします。

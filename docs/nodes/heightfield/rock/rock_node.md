@@ -26,6 +26,7 @@
 | `Bumpiness (%)` | 60 | 表面ディテールの振幅 |
 | `Facet Sharpness (%)` | 50 | 表面形状。0=丸い凸凹、1=多面体状の平らな面 + 鋭いエッジ |
 | `Facet Scale` | 2.5 | 1 つの岩に乗る面の細かさ |
+| `Backend` | GPU Compute | `CPU` / `GPU Compute` (D3D12 compute shader) を切り替え。既定は GPU。シェーダーコンパイル/ディスパッチ失敗時は CPU に自動フォールバック |
 
 ## アルゴリズム概要
 
@@ -75,4 +76,23 @@
   - `rockSizeMin/Max` (3.7.0 ratio) → `× density` で m に
   - `rockSizeMinM/MaxM` (3.8.0+ m) → そのまま
 - `Crack Depth` (旧) は削除しました。max 合成で接合線の折れ線は自然に出るので明示的な彫り込みは不要、加えて Voronoi セル境界が岩境界と一致しなくなったので意味を失っていました。
-- キャッシュは入力ハッシュ + パラメータハッシュで他ノードと同じく個別キャッシュ。
+- キャッシュは入力ハッシュ + パラメータハッシュで他ノードと同じく個別キャッシュ。`Backend` もハッシュに含まれるので CPU/GPU 切り替え時は再評価されます。
+
+## GPU Compute バックエンド
+
+`Backend` プルダウンで `GPU Compute` を選ぶと [shaders/rock_compute.hlsl](../../../../shaders/rock_compute.hlsl) の compute shader (`CSRock`、`[numthreads(8,8,1)]`) で評価します。アルゴリズムは CPU 版と完全に同等で、ハッシュ関数 (`Hash2` / `HashFloat01`) と Voronoi (`VoronoiF1F2`) を HLSL に直接移植してあるため、同一パラメータで CPU と GPU は同じ結果を返します。
+
+ピクセルあたり embarrassingly parallel (近傍 (2*searchRadius+1)² セル走査 + per-rock 計算) で、reduction も pixel-local の max のみ。1024² 既定パラメータでおおむね **CPU 比 10-30 倍高速** の見込み (Sediment / Multi-Scale Erosion GPU 化と同オーダー)。
+
+**バッファ構成:**
+
+| スロット | 種類 | 役割 |
+| --- | --- | --- |
+| `u0` | `RWStructuredBuffer<float>` | InputHeights (UAV としてアップロード後シェーダー内で読み取り) |
+| `u1` | `RWStructuredBuffer<float>` | OutputHeights = `inputH + bestRockH` |
+| `u2` | `RWStructuredBuffer<float>` | OutputMask = `bestDome` |
+| `b0` | 32-bit constants × 20 | resolution / seed / 各種クランプ済みパラメータ + 派生値 (`searchRadius` / `maxReach` / `domeExp`) |
+
+`searchRadius` / `maxReach` / `domeExp` などの派生値は CPU 側 (`RunRockComputeImmediate`) で事前計算してから CB にパックします。多角形 SDF ループは facetCount = 4..7 のため [loop] + 早期 break で展開しています。
+
+非同期評価スレッドから呼ばれた場合はメインスレッド側のキュー (`g_pendingRockGpuRequests`) に投げて `std::promise` で結果を待ちます (Sediment / Mask Noise / Multi-Scale Erosion と同じパターン)。
