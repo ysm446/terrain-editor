@@ -153,6 +153,7 @@ uint64_t HashMaskFluvialSettings(const MaskFluvialSettings& settings, int resolu
     HashCombine(hash, HashFloat(settings.power));
     HashCombine(hash, static_cast<uint64_t>(settings.pitFillIterations));
     HashCombine(hash, HashFloat(settings.mfdExponent));
+    HashCombine(hash, HashFloat(settings.inertia));
     HashCombine(hash, static_cast<uint64_t>(settings.backend));
     HashCombine(hash, static_cast<uint64_t>(resolution));
     return hash;
@@ -1401,6 +1402,48 @@ void ApplyMaskFluvial(HeightfieldGrid& grid, const MaskFluvialSettings& settings
         1.41421356f, 1.0f, 1.41421356f,
     };
 
+    // Inertia bias: 0 = strict steepest descent (legacy), 1 = follow
+    // 3x3 Sobel-smoothed downhill direction. Directions aligned with
+    // the smoothed downhill get a bonus, directions opposite get pruned.
+    // Result: smoother, more meandering river paths instead of the
+    // jagged grid-aligned zig-zags D8 normally produces.
+    const float inertia = std::clamp(settings.inertia, 0.0f, 1.0f);
+    auto computeAlignmentFactors = [&](int x, int z, float (&factors)[8]) {
+        if (inertia <= 0.0f || x <= 0 || x >= n - 1 || z <= 0 || z >= n - 1)
+        {
+            for (int k = 0; k < 8; ++k) factors[k] = 1.0f;
+            return;
+        }
+        auto H = [&](int xx, int zz) -> float {
+            return filled[static_cast<size_t>(zz) * n + xx];
+        };
+        // Sobel 3x3 — Sx,Sz point UPHILL. Downhill = -(Sx,Sz).
+        const float Sx = (H(x+1, z-1) - H(x-1, z-1)) +
+                         2.0f * (H(x+1, z) - H(x-1, z)) +
+                         (H(x+1, z+1) - H(x-1, z+1));
+        const float Sz = (H(x-1, z+1) - H(x-1, z-1)) +
+                         2.0f * (H(x, z+1) - H(x, z-1)) +
+                         (H(x+1, z+1) - H(x+1, z-1));
+        const float downX = -Sx;
+        const float downZ = -Sz;
+        const float gmag = std::sqrt(downX * downX + downZ * downZ);
+        if (gmag < 1e-6f)
+        {
+            for (int k = 0; k < 8; ++k) factors[k] = 1.0f;
+            return;
+        }
+        const float invMag = 1.0f / gmag;
+        const float dnX = downX * invMag;
+        const float dnZ = downZ * invMag;
+        for (int k = 0; k < 8; ++k)
+        {
+            const float dirX = static_cast<float>(kDx[k]) / kDist[k];
+            const float dirZ = static_cast<float>(kDz[k]) / kDist[k];
+            const float align = std::max(0.0f, dirX * dnX + dirZ * dnZ);
+            factors[k] = (1.0f - inertia) + inertia * align;
+        }
+    };
+
     if (settings.algorithm == FlowAccumulationAlgorithm::D8)
     {
         for (int idx : indices)
@@ -1408,8 +1451,10 @@ void ApplyMaskFluvial(HeightfieldGrid& grid, const MaskFluvialSettings& settings
             const int x = idx % n;
             const int z = idx / n;
             const float h = filled[static_cast<size_t>(idx)];
+            float align[8];
+            computeAlignmentFactors(x, z, align);
             int bestK = -1;
-            float bestSlope = 0.0f;
+            float bestScore = 0.0f;
             for (int k = 0; k < 8; ++k)
             {
                 const int nx = x + kDx[k];
@@ -1417,7 +1462,8 @@ void ApplyMaskFluvial(HeightfieldGrid& grid, const MaskFluvialSettings& settings
                 if (nx < 0 || nx >= n || nz < 0 || nz >= n) continue;
                 const float nh = filled[static_cast<size_t>(nz) * n + nx];
                 const float slope = (h - nh) / kDist[k];
-                if (slope > bestSlope) { bestSlope = slope; bestK = k; }
+                const float score = slope * align[k];
+                if (score > bestScore) { bestScore = score; bestK = k; }
             }
             if (bestK >= 0)
             {
@@ -1435,6 +1481,8 @@ void ApplyMaskFluvial(HeightfieldGrid& grid, const MaskFluvialSettings& settings
             const int x = idx % n;
             const int z = idx / n;
             const float h = filled[static_cast<size_t>(idx)];
+            float align[8];
+            computeAlignmentFactors(x, z, align);
             float weights[8] = {0};
             float weightSum = 0.0f;
             for (int k = 0; k < 8; ++k)
@@ -1446,7 +1494,11 @@ void ApplyMaskFluvial(HeightfieldGrid& grid, const MaskFluvialSettings& settings
                 const float slope = (h - nh) / kDist[k];
                 if (slope > 0.0f)
                 {
-                    weights[k] = std::pow(slope, p);
+                    // Lift `align` to the same exponent as `slope` so the
+                    // inertia bias has comparable strength to the slope
+                    // distribution. Otherwise (with default p=4) slope^4
+                    // dominates and align (linear) barely shifts proportions.
+                    weights[k] = std::pow(slope * align[k], p);
                     weightSum += weights[k];
                 }
             }

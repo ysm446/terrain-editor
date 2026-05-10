@@ -1869,6 +1869,7 @@ nlohmann::json MakeMaskSettingsJson(const rock::Node& node)
             {"power", node.maskFluvial.power},
             {"pitFillIterations", node.maskFluvial.pitFillIterations},
             {"mfdExponent", node.maskFluvial.mfdExponent},
+            {"inertia", node.maskFluvial.inertia},
             {"backend", static_cast<int>(node.maskFluvial.backend)},
         }},
         {"maskBlend", {
@@ -2083,6 +2084,7 @@ void ReadMaskSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     node.maskFluvial.power = std::clamp(nodeMaskFluvialJson.value("power", node.maskFluvial.power), 0.1f, 8.0f);
     node.maskFluvial.pitFillIterations = std::clamp(nodeMaskFluvialJson.value("pitFillIterations", node.maskFluvial.pitFillIterations), 0, 64);
     node.maskFluvial.mfdExponent = std::clamp(nodeMaskFluvialJson.value("mfdExponent", node.maskFluvial.mfdExponent), 0.1f, 16.0f);
+    node.maskFluvial.inertia = std::clamp(nodeMaskFluvialJson.value("inertia", node.maskFluvial.inertia), 0.0f, 1.0f);
     {
         const int backendInt = std::clamp(nodeMaskFluvialJson.value("backend", static_cast<int>(node.maskFluvial.backend)),
                                            static_cast<int>(rock::MaskFluvialBackend::CpuReference),
@@ -4801,9 +4803,9 @@ struct MaskFluvialShaderConstants
     float power;
 
     UINT  outputCurve;
+    float inertia;
     float pad0;
     float pad1;
-    float pad2;
 };
 static_assert(sizeof(MaskFluvialShaderConstants) == 12 * sizeof(UINT), "MaskFluvialShaderConstants must be 12 DWORDs");
 
@@ -5085,6 +5087,7 @@ bool RunMaskFluvialComputeImmediate(rock::HeightfieldGrid& grid, const rock::Mas
     k.softness        = std::clamp(settings.softness, 0.001f, 4.0f);
     k.power           = std::clamp(settings.power, 0.1f, 8.0f);
     k.outputCurve     = static_cast<UINT>(settings.outputCurve);
+    k.inertia         = std::clamp(settings.inertia, 0.0f, 1.0f);
     auto setConstants = [&]() {
         commandList->SetComputeRoot32BitConstants(0, 12, &k, 0);
     };
@@ -9341,13 +9344,16 @@ bool DrawPropertyPercentRow(const char* label, const char* id, float* value, flo
     const float maxPercent = maxValue * 100.0f;
     const float defaultPercent = defaultValue * 100.0f;
     const bool editEnded = DrawPropertyFloatRow(label, id, &percentValue, minPercent, maxPercent, defaultPercent, dirtyReason, true, tooltip);
+    // 値そのものは入力中も継続更新する (スライダー / テキストフィールドが
+    // 表示値とずれないようにするため) が、戻り値は editEnded だけにする —
+    // そうしないと毎キー入力 / 毎フレームで呼び出し側の EvaluateGraph が
+    // 走ってしまう。Float / Int 行と挙動を揃える。
     const float nextValue = std::clamp(percentValue / 100.0f, minValue, maxValue);
-    const bool changed = nextValue != *value;
     if (nextValue != *value)
     {
         *value = nextValue;
     }
-    return editEnded || changed;
+    return editEnded;
 }
 
 bool DrawPropertyIntRow(const char* label, const char* id, int* value, int minValue, int maxValue, int defaultValue, const char* dirtyReason, bool recordUndo = true, const char* tooltip = nullptr)
@@ -10022,6 +10028,10 @@ bool DrawMaskFluvialProperties(rock::Node& editableNode)
         }
     }
     if (DrawPropertyIntRow("Pit Fill Iterations", "MaskFluvialPitFill", &mf.pitFillIterations, 0, 64, rock::MaskFluvialSettings{}.pitFillIterations, "Mask fluvial pit fill changed", true, "局所窪みを埋める反復回数です。0 で湖を残し、増やすほど排水経路が確実につながります。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyPercentRow("Inertia (%)", "MaskFluvialInertia", &mf.inertia, 0.0f, 1.0f, rock::MaskFluvialSettings{}.inertia, "Mask fluvial inertia changed", "受信ウェイト計算時に「3x3 Sobel で平滑化された下流方向」へのバイアスを混ぜます。0% で従来の最急降下のみ (グリッド整列のジグザグ川)、上げるほど滑らかに蛇行する川筋になります。30-70% が見栄え良し。100% で完全に平滑化下流方向に従います。"))
     {
         EvaluateGraph();
     }

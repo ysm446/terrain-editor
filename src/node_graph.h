@@ -271,6 +271,11 @@ struct MaskFluvialSettings
     float power = 1.6f;           // Threshold mode: pow(mask, power) for edge taper
     int pitFillIterations = 8;    // 0 keeps lakes, ~8 removes most local pits
     float mfdExponent = 4.0f;     // MFD slope exponent (only when MFD selected)
+    // 0..1. 受信ウェイト計算時に「Sobel 3x3 で平滑化された下流方向」へのバイアスを混ぜる係数。
+    // 0 = 完全にローカル最急降下 (従来)、1 = 平滑化下流方向に強く従う (滑らかに蛇行する川)。
+    // GeoGen の particle inertia とは別物 (粒子状態を持たないため) だが、
+    // 視覚的には同様に「グリッド整列のジグザグ化を抑え、滑らかな川筋」を狙った効果。
+    float inertia = 0.0f;
     MaskFluvialBackend backend = MaskFluvialBackend::GpuCompute; // CPU 厳密 (sort + topological walk) vs GPU 反復 (Jacobi gather, ~2*resolution iters; 視覚的に同等だが数値は完全一致せず). 既定 GPU. シェーダー / ディスパッチ失敗時は CPU に自動フォールバック.
 };
 

@@ -21,6 +21,7 @@
 | `Edge Power` | (Threshold) `pow(mask, power)` で川縁をテーパー。1 を超えると細く、1 未満で太く |
 | `Pit Fill Iterations` | 局所窪みを埋める反復回数。0 で湖を残し、増やすほど排水経路が確実につながる |
 | `MFD Exponent` | (MFD) 下流分配の鋭さ。大きいほど D8 寄り(主流に集中)、小さいほど面的に広がる |
+| `Inertia (%)` | 受信ウェイト計算時に「3×3 Sobel で平滑化された下流方向」へのバイアスを混ぜる係数。0%(既定): 完全にローカル最急降下 — グリッド整列のジグザグ川。30-70%: 滑らかに蛇行する川。100%: 平滑化下流方向に強く従う。 |
 | `Backend` | `CPU`(sort + 降順トポロジカル走査の厳密実装) / `GPU`(Jacobi 反復ゲザーの近似実装、視覚的同等)。既定 `GPU`。詳細は下の「GPU Compute バックエンド」節 |
 
 ## モード別の使い分け
@@ -35,7 +36,7 @@
 
 1. **Pit Fill**: 8 近傍がすべて自分以上のセルを `min(neighbours) + ε` に持ち上げる Jacobi 反復で局所窪みを除去。境界セルは出口として扱うため変更しません。
 2. **Topological sort**: 標高降順にセルインデックスを並べ替え(`std::execution::par` で並列ソート)。
-3. **Flow accumulation**: 各セルは初期重み 1 を持ち、降順に処理しながら下流へ累積を加算。D8 は最急降下方向のみへ、MFD は重み `slope^p` で複数方向へ分配します。
+3. **Flow accumulation**: 各セルは初期重み 1 を持ち、降順に処理しながら下流へ累積を加算。D8 は最急降下方向のみへ、MFD は重み `slope^p` で複数方向へ分配します。`Inertia` > 0 のときは、各方向の整合度 `align[k] = (1 - inertia) + inertia × max(0, dot(dir_k, downhill_smoothed))` を計算し (`downhill_smoothed` は 3×3 Sobel で平滑化した下流方向の単位ベクトル)、D8 では `score = slope × align`、MFD では `weight = pow(slope × align, p)` で重み付けします (MFD では align も slope と同じ指数に乗せるのが重要 — そうしないと p=4 では `slope^4` が支配的で align のシフトがほぼ見えない)。これにより川がローカル最急降下のジグザグから「広域の下流方向」に従って滑らかに蛇行するようになります。GeoGen の particle inertia とは別物 (粒子状態を持たない) ですが、視覚的には同様の「滑らかに曲がる川」を狙ったヒューリスティックです。
 4. **Mask 化**: `Output Curve` に応じて
    - **Log**: `pow(log(1 + max(0, accum - threshold)) / log(1 + maxAdjusted), gamma)`
    - **Threshold**: `pow(smoothstep(threshold, threshold + softness, accum), power)`

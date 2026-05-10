@@ -50,9 +50,9 @@ cbuffer MaskFluvialConstants : register(b0)
     float power;
 
     uint  outputCurve;      // 0=Log, 1=Threshold, 2=Linear
+    float inertia;          // 0..1. Bias receivers toward 3x3 Sobel-smoothed downhill direction.
     float pad0;
     float pad1;
-    float pad2;
 };
 
 RWStructuredBuffer<float> Heights       : register(u0);
@@ -136,6 +136,42 @@ void CSCommitHeights(uint3 dt : SV_DispatchThreadID)
     Heights[i] = HeightsScratch[i];
 }
 
+// Compute inertia bias factor per direction. Returns 1.0 for every
+// direction when inertia = 0 or the cell is on the boundary or the
+// gradient is degenerate (flat). Otherwise returns
+// (1 - inertia) + inertia * max(0, dot(dir_k, downhill_smoothed)).
+void ComputeAlignmentFactors(int x, int z, out float factors[8])
+{
+    [unroll]
+    for (int kInit = 0; kInit < 8; ++kInit) factors[kInit] = 1.0f;
+
+    if (inertia <= 0.0f) return;
+    if (x <= 0 || x >= (int)resolution - 1 || z <= 0 || z >= (int)resolution - 1) return;
+
+    uint baseIdx = (uint)z * resolution + (uint)x;
+    float Sx = (Heights[baseIdx + 1u - resolution] - Heights[baseIdx - 1u - resolution]) +
+               2.0f * (Heights[baseIdx + 1u] - Heights[baseIdx - 1u]) +
+               (Heights[baseIdx + 1u + resolution] - Heights[baseIdx - 1u + resolution]);
+    float Sz = (Heights[baseIdx - 1u + resolution] - Heights[baseIdx - 1u - resolution]) +
+               2.0f * (Heights[baseIdx + resolution] - Heights[baseIdx - resolution]) +
+               (Heights[baseIdx + 1u + resolution] - Heights[baseIdx + 1u - resolution]);
+    float downX = -Sx;
+    float downZ = -Sz;
+    float gmag = sqrt(downX * downX + downZ * downZ);
+    if (gmag < 1e-6f) return;
+    float invMag = 1.0f / gmag;
+    float dnX = downX * invMag;
+    float dnZ = downZ * invMag;
+    [unroll]
+    for (int k = 0; k < 8; ++k)
+    {
+        float dirX = (float)kDx[k] / kDist[k];
+        float dirZ = (float)kDz[k] / kDist[k];
+        float a = max(0.0f, dirX * dnX + dirZ * dnZ);
+        factors[k] = (1.0f - inertia) + inertia * a;
+    }
+}
+
 [numthreads(8, 8, 1)]
 void CSComputeWeights(uint3 dt : SV_DispatchThreadID)
 {
@@ -145,11 +181,15 @@ void CSComputeWeights(uint3 dt : SV_DispatchThreadID)
     uint i = z * resolution + x;
     float h = Heights[i];
 
+    float align[8];
+    ComputeAlignmentFactors((int)x, (int)z, align);
+
     if (algorithmIsMfd == 0u)
     {
-        // D8 — single steepest-descent direction (weight = 1.0).
+        // D8 — single steepest-descent direction (weight = 1.0), with
+        // inertia bias applied to the slope-vs-direction comparison.
         int bestK = -1;
-        float bestSlope = 0.0f;
+        float bestScore = 0.0f;
         [unroll]
         for (int k = 0; k < 8; ++k)
         {
@@ -158,7 +198,8 @@ void CSComputeWeights(uint3 dt : SV_DispatchThreadID)
             if (nx < 0 || nx >= (int)resolution || nz < 0 || nz >= (int)resolution) continue;
             float nh = Heights[(uint)nz * resolution + (uint)nx];
             float slope = (h - nh) / kDist[k];
-            if (slope > bestSlope) { bestSlope = slope; bestK = k; }
+            float score = slope * align[k];
+            if (score > bestScore) { bestScore = score; bestK = k; }
         }
         [unroll]
         for (int k2 = 0; k2 < 8; ++k2)
@@ -168,8 +209,8 @@ void CSComputeWeights(uint3 dt : SV_DispatchThreadID)
     }
     else
     {
-        // MFD — per-direction slope^p, normalised so all positive
-        // slopes sum to 1.
+        // MFD — per-direction slope^p × align, normalised so all
+        // positive weights sum to 1.
         float w[8];
         float sum = 0.0f;
         [unroll]
@@ -182,7 +223,11 @@ void CSComputeWeights(uint3 dt : SV_DispatchThreadID)
             {
                 float nh = Heights[(uint)nz * resolution + (uint)nx];
                 float slope = (h - nh) / kDist[k];
-                if (slope > 0.0f) wk = pow(slope, mfdExponent);
+                // Lift `align` to the same exponent as `slope` (= mfdExponent)
+                // so the inertia bias has comparable strength to the slope
+                // distribution. Without this, slope^p (default p=4) dominates
+                // and the linear align barely shifts proportions.
+                if (slope > 0.0f) wk = pow(slope * align[k], mfdExponent);
             }
             w[k] = wk;
             sum += wk;
