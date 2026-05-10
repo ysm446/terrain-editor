@@ -71,27 +71,24 @@ GeoGen ([https://www.geogen.org/](https://www.geogen.org/)) の地形図表示�
 
 ```hlsl
 if (mask >= 0.99 || mask <= 0.01) {
-    int2 px        = int2(i.pos.xy);
-    int  stripeIdx = (px.x + px.y) & 3;       // 4 ストライプ周期
-    bool isMinor   = (stripeIdx == 3);         // 4 本中 1 本だけ反転
-    bool isHigh    = (mask >= 0.99);
-    float majorVal = isHigh ? 1.0 : 0.0;
-    float stripeVal = isHigh ? 0.5 : 1.0;     // 白側はグレー縞、黒側は白縞
-    c              = isMinor ? stripeVal : majorVal;
+    int2 px         = int2(i.pos.xy);
+    int  stripeIdx  = (px.x + px.y) & 3;       // 4 ストライプ周期
+    bool isMinor    = (stripeIdx == 3);         // 4 本中 1 本だけ反転
+    float majorVal  = (mask >= 0.99) ? 1.0 : 0.0;
+    float stripeGray = 0.5;
+    c               = isMinor ? stripeGray : majorVal;
 } else {
-    c = mask;                                  // 中間域は通常ランプ
+    c = mask;                                   // 中間域は通常ランプ
 }
 ```
 
 | マスク値 | 表示 |
 | --- | --- |
 | `mask >= 0.99` (白に張り付き) | **白×3 + グレー(0.5)×1** の 3:1 縞 |
-| `mask <= 0.01` (黒に張り付き) | **黒×3 + 白(1.0)×1** の 3:1 縞 |
+| `mask <= 0.01` (黒に張り付き) | **黒×3 + グレー(0.5)×1** の 3:1 縞 |
 | 中間域 (`0.01 < mask < 0.99`) | 通常のグレースケールランプ (縞なし) |
 
 ストライプは**スクリーンスペース 1px 幅 / 4px 周期**。`SV_POSITION.xy` (ピクセル中心) を `int` に切ってから `(x + y) & 3` を取り、0/1/2 = メジャー、3 = マイナー (縞) としています。`(x + y)` を `float` のまま `floor` すると合計時に精度を失って隣接ピクセルで stripe index が揺れるので、必ず先に `int2` キャストしてから足してください。
-
-> **黒側だけ縞を白にしている理由**: 仕上げにハーフランバートを乗算するため、白縞 (= 1.0) は `halfL` の階調そのままで見え、暗部でも縞が陰影パターンとして読めるようになります。グレー (= 0.5) のままだと暗部で `0.5 × 0.3 = 0.15` まで沈んで見えづらくなります。
 
 #### ハーフランバート陰影
 

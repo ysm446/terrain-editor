@@ -394,11 +394,8 @@ float4 PSSurface(VSOut i) : SV_TARGET
             // を視覚的に可視化する。背景は純白 / 純黒、4 ストライプ中
             // 1 つだけグレー (= 斜線) にしてコントラストを抑えた。
             //   mask >= 0.99 (白の所)  → 白×3 + グレー×1
-            //   mask <= 0.01 (黒の所)  → 黒×3 + 白×1
+            //   mask <= 0.01 (黒の所)  → 黒×3 + グレー×1
             //   中間域                  → 通常のグレースケールランプ (斜線なし)
-            // 黒の所の縞色を白にしたのは、ハーフランバート乗算 (最大 1.0)
-            // で白縞が halfL の階調そのまま見えるようにし、暗部でも縞が
-            // 沈み込まずに陰影パターンとして読めるようにするため。
             // ストライプ幅は 1 px、4 ストライプ周期 (= 4 px) で 1 つだけ反転。
             // SV_POSITION.xy はピクセル中心 (0.5 オフセット)。x+y 合計を
             // float でやって floor すると合計時に精度を失って (例 0.5 + 1.5
@@ -416,10 +413,9 @@ float4 PSSurface(VSOut i) : SV_TARGET
                 int2 px = int2(i.pos.xy);
                 int stripeIdx = (px.x + px.y) & 3;
                 bool isMinor = (stripeIdx == 3);
-                bool isHigh = (mask >= 0.99);
-                float majorVal = isHigh ? 1.0 : 0.0;
-                float stripeVal = isHigh ? 0.5 : 1.0;
-                c = isMinor ? stripeVal : majorVal;
+                float majorVal = (mask >= 0.99) ? 1.0 : 0.0;
+                float stripeGray = 0.5;
+                c = isMinor ? stripeGray : majorVal;
             }
             else
             {
