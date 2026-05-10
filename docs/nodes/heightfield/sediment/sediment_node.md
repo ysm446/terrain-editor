@@ -6,7 +6,7 @@
 
 | 種類 | 内容 |
 | --- | --- |
-| 入力 | `HeightField` (基盤として固定 — `Convert Terrain to Sediment` が ON のときは入力高さ全体が可動堆積物として扱われ、基盤は平坦 = 0 になります) |
+| 入力 | `Heightmap` (基盤として固定 — `Convert Terrain to Sediment` が ON のときは入力高さ全体が可動堆積物として扱われ、基盤は平坦 = 0 になります) |
 | 出力 | `Heightmap` (基盤 + 再分配後の堆積物)、`Mask` (堆積厚みを max で 0..1 正規化 → 谷底が明、尾根が暗) |
 
 ## アルゴリズム

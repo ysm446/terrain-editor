@@ -142,6 +142,17 @@ uint64_t HashSedimentSettings(const SedimentSettings& settings, int resolution)
     return hash;
 }
 
+uint64_t HashSnowSettings(const SnowSettings& settings, int resolution)
+{
+    uint64_t hash = 14695981039346656037ull;
+    HashCombine(hash, HashFloat(settings.emissionAmount));
+    HashCombine(hash, HashFloat(settings.slopeLimitMinDeg));
+    HashCombine(hash, HashFloat(settings.slopeLimitMaxDeg));
+    HashCombine(hash, HashFloat(settings.maskMaxSnow));
+    HashCombine(hash, static_cast<uint64_t>(resolution));
+    return hash;
+}
+
 uint64_t HashMaskFluvialSettings(const MaskFluvialSettings& settings, int resolution)
 {
     uint64_t hash = 8589869056ull;
@@ -1893,6 +1904,83 @@ void ApplyRock(HeightfieldGrid& grid, const RockSettings& settings)
     });
 }
 
+// Snow node.
+//
+// 「雪を降らせる」フィルタ。ベースとなる emissionAmount [m] の雪を
+// terrain 全体に均一に積もらせるが、ローカルな斜面角度に応じて積雪量を
+// 減衰させる。
+//
+//   slope <= slopeLimitMin    → emissionAmount まるごと積もる (満雪)
+//   slope >= slopeLimitMax    → 雪はまったく積もらない (剥き出しの岩)
+//   その間                    → smoothstep で滑らかに遷移
+//
+// 出力:
+//   grid.heights += snowThickness   (元地形 + 雪の厚み)
+//   grid.mask     = snowThickness / maskMaxSnow を [0,1] にクランプ
+//
+// シングルパスで完結する決定的アルゴリズム。粒子シムや反復は無し。
+// GeoGen Snow ノードの「斜面に積もらない」見た目をそのまま狙ったもの。
+void ApplySnow(HeightfieldGrid& grid, const SnowSettings& settings)
+{
+    const int n = grid.resolution;
+    const size_t cellCount = static_cast<size_t>(n) * static_cast<size_t>(n);
+    if (n < 2 || grid.heights.size() < cellCount)
+    {
+        return;
+    }
+
+    grid.mask.assign(cellCount, 0.0f);
+
+    const float emission = std::max(0.0f, settings.emissionAmount);
+    const float kPi = 3.14159265358979323846f;
+    const float minRad = std::clamp(settings.slopeLimitMinDeg, 0.0f, 89.9f) * (kPi / 180.0f);
+    const float maxRad = std::clamp(std::max(settings.slopeLimitMaxDeg, settings.slopeLimitMinDeg), 0.0f, 89.9f) * (kPi / 180.0f);
+    const float minTan = std::tan(minRad);
+    const float maxTan = std::tan(maxRad);
+    const float invRange = 1.0f / std::max(maxTan - minTan, 1e-6f);
+    const float maskMax = std::max(1e-4f, settings.maskMaxSnow);
+
+    const float terrainSize = std::max(grid.terrainSizeMeters, 1.0f);
+    const float cellSize = terrainSize / static_cast<float>(std::max(1, n - 1));
+    const float invTwoCell = 1.0f / (2.0f * cellSize);
+
+    // 高さスナップショットから slope を計算 (in-place で grid.heights を
+    // 更新するので、隣接セルを読むときに既に雪が乗った値を読まないよう
+    // にする)。雪を均一に乗せるならスナップショット不要だが、後で
+    // iterations を入れる余地を残しておく。
+    const std::vector<float> heightsSnapshot = grid.heights;
+    const float* H = heightsSnapshot.data();
+
+    ParallelForRows(n, [&](int z) {
+        const int zm = std::max(0, z - 1);
+        const int zp = std::min(n - 1, z + 1);
+        const size_t rowBase = static_cast<size_t>(z) * static_cast<size_t>(n);
+        const size_t rowAbove = static_cast<size_t>(zm) * static_cast<size_t>(n);
+        const size_t rowBelow = static_cast<size_t>(zp) * static_cast<size_t>(n);
+        for (int x = 0; x < n; ++x)
+        {
+            const int xm = std::max(0, x - 1);
+            const int xp = std::min(n - 1, x + 1);
+            const float h_xm = H[rowBase + static_cast<size_t>(xm)];
+            const float h_xp = H[rowBase + static_cast<size_t>(xp)];
+            const float h_zm = H[rowAbove + static_cast<size_t>(x)];
+            const float h_zp = H[rowBelow + static_cast<size_t>(x)];
+            const float dhdx = (h_xp - h_xm) * invTwoCell;
+            const float dhdz = (h_zp - h_zm) * invTwoCell;
+            const float slopeTan = std::sqrt(dhdx * dhdx + dhdz * dhdz);
+
+            const float t = std::clamp((slopeTan - minTan) * invRange, 0.0f, 1.0f);
+            const float smoothT = t * t * (3.0f - 2.0f * t);
+            const float snowFraction = 1.0f - smoothT;
+            const float thickness = emission * snowFraction;
+
+            const size_t idx = rowBase + static_cast<size_t>(x);
+            grid.heights[idx] += thickness;
+            grid.mask[idx] = std::clamp(thickness / maskMax, 0.0f, 1.0f);
+        }
+    });
+}
+
 // Sediment node — Particle backend.
 //
 // Hydraulic-erosion-style stochastic particle sim. Each particle has a
@@ -2528,6 +2616,9 @@ void ApplyHeightfieldOperation(HeightfieldGrid& grid, const HeightfieldPipeline:
     case HeightfieldPipeline::HeightfieldOperation::Kind::Sediment:
         ApplySediment(grid, operation.sediment);
         break;
+    case HeightfieldPipeline::HeightfieldOperation::Kind::Snow:
+        ApplySnow(grid, operation.snow);
+        break;
     }
 }
 
@@ -2545,6 +2636,8 @@ uint64_t HashHeightfieldOperation(const HeightfieldPipeline::HeightfieldOperatio
         return HashRockSettings(operation.rock, resolution);
     case HeightfieldPipeline::HeightfieldOperation::Kind::Sediment:
         return HashSedimentSettings(operation.sediment, resolution);
+    case HeightfieldPipeline::HeightfieldOperation::Kind::Snow:
+        return HashSnowSettings(operation.snow, resolution);
     }
     return 0;
 }
@@ -2575,6 +2668,10 @@ HeightfieldPipeline::HeightfieldOperation MakeHeightfieldOperation(const Node& n
         operation.kind = HeightfieldPipeline::HeightfieldOperation::Kind::Sediment;
         operation.sediment = node.sediment;
         break;
+    case NodeKind::Snow:
+        operation.kind = HeightfieldPipeline::HeightfieldOperation::Kind::Snow;
+        operation.snow = node.snow;
+        break;
     default:
         operation.nodeId = 0;
         break;
@@ -2591,6 +2688,7 @@ bool IsHeightfieldOperationNode(NodeKind kind)
     case NodeKind::MaskFluvial:
     case NodeKind::Rock:
     case NodeKind::Sediment:
+    case NodeKind::Snow:
         return true;
     default:
         return false;
@@ -2906,28 +3004,33 @@ GraphId NodeGraph::CreateNode(NodeKind kind)
         AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
         break;
     case NodeKind::HeightmapBlur:
-        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "HeightField");
+        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
         AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
         break;
     case NodeKind::MultiScaleErosion:
-        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "HeightField");
+        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
         AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
         AddPin(nodeId, PinKind::Output, ValueType::Mask, "Flows");
         AddPin(nodeId, PinKind::Output, ValueType::Mask, "Deposits");
         break;
     case NodeKind::MaskFluvial:
-        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "HeightField");
+        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
         AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
         break;
     case NodeKind::Rock:
-        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "HeightField");
+        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
         AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
         AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
         break;
     case NodeKind::Sediment:
-        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "HeightField");
+        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
         AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
         AddPin(nodeId, PinKind::Output, ValueType::Mask, "Sediment");
+        break;
+    case NodeKind::Snow:
+        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
+        AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
+        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Snow");
         break;
     case NodeKind::MaskNoise:
         AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
@@ -3087,8 +3190,11 @@ HeightfieldPipeline NodeGraph::PipelineFor(PreviewStage stage) const
         return PipelineTo(NodeKind::Rock);
     case PreviewStage::Sediment:
         return PipelineTo(NodeKind::Sediment);
+    case PreviewStage::Snow:
+        return PipelineTo(NodeKind::Snow);
     case PreviewStage::Graph:
     default:
+        if (const Node* node = FindFirstNode(NodeKind::Snow)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::Sediment)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::Rock)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::MaskFluvial)) { return PipelineToNode(*node); }
@@ -3551,6 +3657,8 @@ std::string_view ToString(NodeKind kind)
         return "Rock";
     case NodeKind::Sediment:
         return "Sediment";
+    case NodeKind::Snow:
+        return "Snow";
     default:
         return "Unknown";
     }
@@ -3578,6 +3686,8 @@ std::string_view ToString(PreviewStage stage)
         return "Rock";
     case PreviewStage::Sediment:
         return "Sediment";
+    case PreviewStage::Snow:
+        return "Snow";
     default:
         return "Unknown";
     }
@@ -3590,7 +3700,7 @@ std::string_view ToString(ValueType type)
     case ValueType::Mesh:
         return "Mesh";
     case ValueType::HeightField:
-        return "HeightField";
+        return "Heightmap";
     case ValueType::Mask:
         return "Mask";
     default:
@@ -3620,6 +3730,8 @@ PreviewStage PreviewStageFor(NodeKind kind)
         return PreviewStage::Rock;
     case NodeKind::Sediment:
         return PreviewStage::Sediment;
+    case NodeKind::Snow:
+        return PreviewStage::Snow;
     default:
         return PreviewStage::Graph;
     }

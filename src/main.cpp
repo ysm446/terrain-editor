@@ -1879,6 +1879,18 @@ nlohmann::json MakeMaskSettingsJson(const rock::Node& node)
     };
 }
 
+nlohmann::json MakeSnowSettingsJson(const rock::Node& node)
+{
+    return {
+        {"snow", {
+            {"emissionAmount", node.snow.emissionAmount},
+            {"slopeLimitMinDeg", node.snow.slopeLimitMinDeg},
+            {"slopeLimitMaxDeg", node.snow.slopeLimitMaxDeg},
+            {"maskMaxSnow", node.snow.maskMaxSnow},
+        }},
+    };
+}
+
 nlohmann::json MakeRockSettingsJson(const rock::Node& node)
 {
     return {
@@ -1926,6 +1938,7 @@ nlohmann::json MakeNodeSettingsJson(const rock::Node& node)
     nodeJson.update(MakeMaskSettingsJson(node));
     nodeJson.update(MakeRockSettingsJson(node));
     nodeJson.update(MakeSedimentSettingsJson(node));
+    nodeJson.update(MakeSnowSettingsJson(node));
     return nodeJson;
 }
 
@@ -2165,6 +2178,16 @@ void ReadSedimentSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     }
 }
 
+void ReadSnowSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
+{
+    const nlohmann::json nodeSnowJson = nodeJson.value("snow", nlohmann::json::object());
+
+    node.snow.emissionAmount = std::clamp(nodeSnowJson.value("emissionAmount", node.snow.emissionAmount), 0.0f, 100.0f);
+    node.snow.slopeLimitMinDeg = std::clamp(nodeSnowJson.value("slopeLimitMinDeg", node.snow.slopeLimitMinDeg), 0.0f, 89.9f);
+    node.snow.slopeLimitMaxDeg = std::clamp(std::max(nodeSnowJson.value("slopeLimitMaxDeg", node.snow.slopeLimitMaxDeg), node.snow.slopeLimitMinDeg), 0.0f, 89.9f);
+    node.snow.maskMaxSnow = std::clamp(nodeSnowJson.value("maskMaxSnow", node.snow.maskMaxSnow), 0.001f, 1000.0f);
+}
+
 void ReadNodeSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
 {
     ReadBasicHeightfieldSettingsJson(nodeJson, node);
@@ -2172,6 +2195,7 @@ void ReadNodeSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     ReadMaskSettingsJson(nodeJson, node);
     ReadRockSettingsJson(nodeJson, node);
     ReadSedimentSettingsJson(nodeJson, node);
+    ReadSnowSettingsJson(nodeJson, node);
 }
 
 nlohmann::json MakeProjectSettingsJson()
@@ -2526,7 +2550,10 @@ void ReadSerializedPinsJson(const nlohmann::json& pinsJson,
             ? rock::ValueType::Mask
             : rock::ValueType::HeightField;
         pin.label = pinJson.value("label", std::string(rock::ToString(pin.valueType)));
-        if (pin.valueType == rock::ValueType::HeightField && pin.kind == rock::PinKind::Output)
+        // 旧プロジェクトでは入力 / 出力どちらの heightfield ピンも `HeightField`
+        // と保存されていた可能性があるが、現在は両方とも `Heightmap` に統一
+        // しているのでマイグレーションする。
+        if (pin.valueType == rock::ValueType::HeightField && pin.label == "HeightField")
         {
             pin.label = "Heightmap";
         }
@@ -8364,6 +8391,7 @@ ImVec4 NodeAccentColor(rock::NodeKind kind)
     case rock::NodeKind::MultiScaleErosion:
     case rock::NodeKind::Rock:
     case rock::NodeKind::Sediment:
+    case rock::NodeKind::Snow:
         return heightfieldGreen;
     case rock::NodeKind::MaskNoise:
     case rock::NodeKind::MaskBlend:
@@ -8396,6 +8424,8 @@ ImVec2 InitialNodePosition(rock::NodeKind kind)
         return ImVec2(880.0f, 380.0f);
     case rock::NodeKind::Sediment:
         return ImVec2(880.0f, 520.0f);
+    case rock::NodeKind::Snow:
+        return ImVec2(880.0f, 660.0f);
     default:
         return ImVec2(40.0f, 64.0f);
     }
@@ -9118,6 +9148,7 @@ void DrawNodeGraph()
             addNodeMenuItem(rock::NodeKind::MultiScaleErosion);
             addNodeMenuItem(rock::NodeKind::Rock);
             addNodeMenuItem(rock::NodeKind::Sediment);
+            addNodeMenuItem(rock::NodeKind::Snow);
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("マスク"))
@@ -10205,6 +10236,44 @@ bool DrawSedimentProperties(rock::Node& editableNode)
     return true;
 }
 
+bool DrawSnowProperties(rock::Node& editableNode)
+{
+    if (!ImGui::BeginTable("SnowRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        return false;
+    }
+
+    ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 210.0f);
+    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+    rock::SnowSettings& sn = editableNode.snow;
+    sn.emissionAmount = std::clamp(sn.emissionAmount, 0.0f, 100.0f);
+    sn.slopeLimitMinDeg = std::clamp(sn.slopeLimitMinDeg, 0.0f, 89.9f);
+    sn.slopeLimitMaxDeg = std::clamp(std::max(sn.slopeLimitMaxDeg, sn.slopeLimitMinDeg), 0.0f, 89.9f);
+    sn.maskMaxSnow = std::clamp(sn.maskMaxSnow, 0.001f, 1000.0f);
+
+    if (DrawPropertyFloatRow("Emission Amount (m)", "SnowEmissionAmount", &sn.emissionAmount, 0.0f, 50.0f, rock::SnowSettings{}.emissionAmount, "Snow emission amount changed", true, "平地 (slope <= Slope Limit Min) に積もる雪の最大厚み (m)。地形の高さが全体的にこの値だけ持ち上がる感覚です。", "%.2f"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Slope Limit Min (deg)", "SnowSlopeLimitMin", &sn.slopeLimitMinDeg, 0.0f, 89.9f, rock::SnowSettings{}.slopeLimitMinDeg, "Snow slope limit min changed", true, "この角度以下では雪が満杯まで積もります (Emission Amount まるごと)。例: 50° なら緩やかな尾根や谷底にしっかり雪が乗る。下げるほど雪が積もる範囲が狭くなります (=平地でも雪が薄い)。", "%.1f"))
+    {
+        if (sn.slopeLimitMaxDeg < sn.slopeLimitMinDeg) sn.slopeLimitMaxDeg = sn.slopeLimitMinDeg;
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Slope Limit Max (deg)", "SnowSlopeLimitMax", &sn.slopeLimitMaxDeg, 0.0f, 89.9f, rock::SnowSettings{}.slopeLimitMaxDeg, "Snow slope limit max changed", true, "この角度以上では雪はまったく積もらない (剥き出しの岩肌)。Min と Max の間は smoothstep で滑らかに遷移します。Min と Max の差を広げるほど積雪境界がぼやけます。", "%.1f"))
+    {
+        if (sn.slopeLimitMaxDeg < sn.slopeLimitMinDeg) sn.slopeLimitMinDeg = sn.slopeLimitMaxDeg;
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Mask Max Snow (m)", "SnowMaskMaxSnow", &sn.maskMaxSnow, 0.001f, 50.0f, rock::SnowSettings{}.maskMaxSnow, "Snow mask max snow changed", true, "Snow mask 出力の正規化基準 (m)。`雪厚 / Mask Max Snow` を [0, 1] にクランプして mask に書きます。Emission Amount と同じ値にすれば満雪域が真っ白に出ます。下げるとうっすらした雪も明るく見えるようになります。", "%.2f"))
+    {
+        EvaluateGraph();
+    }
+
+    ImGui::EndTable();
+    return true;
+}
+
 void DrawPropertiesPanel()
 {
     const rock::Node* selectedNode = g_graph.FindNode(g_selectedNodeId);
@@ -10266,6 +10335,11 @@ void DrawPropertiesPanel()
     }
 
     if (selectedNode->kind == rock::NodeKind::Sediment && DrawSedimentProperties(*editableNode))
+    {
+        return;
+    }
+
+    if (selectedNode->kind == rock::NodeKind::Snow && DrawSnowProperties(*editableNode))
     {
         return;
     }

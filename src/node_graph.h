@@ -24,6 +24,7 @@ enum class NodeKind
     MaskFluvial = 11,
     Rock = 12,
     Sediment = 13,
+    Snow = 14,
 };
 
 enum class PinKind
@@ -141,6 +142,7 @@ enum class PreviewStage
     MaskFluvial = 10,
     Rock = 11,
     Sediment = 12,
+    Snow = 13,
 };
 
 enum class HeightfieldPreviewField
@@ -251,6 +253,21 @@ struct SedimentSettings
     SedimentBackend backend = SedimentBackend::GpuCompute; // CPU reference vs GPU compute (D3D12). Defaults to GPU; falls back to CPU on shader/device failure.
 };
 
+// Heightfield -> heightfield + mask. Drops a uniform "snowfall" thickness
+// across the terrain and lets the local slope angle decide how much actually
+// stays. Cells flatter than `slopeLimitMinDeg` keep all of `emissionAmount`,
+// cells steeper than `slopeLimitMaxDeg` keep none, the band in between is a
+// smoothstep blend. Heightmap output = input + snow thickness; mask output =
+// snow thickness normalised against `maskMaxSnow`. GeoGen Snow ノードと同じ
+// 「斜面に雪は積もらない」見た目を、シングルパスで作る簡易モデル。
+struct SnowSettings
+{
+    float emissionAmount = 1.0f;       // m. 平地 (slope <= min) に降り積もる雪厚。
+    float slopeLimitMinDeg = 50.0f;    // この角度以下では雪が満杯まで積もる。
+    float slopeLimitMaxDeg = 60.0f;    // この角度以上では雪はまったく積もらない。間は smoothstep。
+    float maskMaxSnow = 1.0f;          // m. mask 出力の正規化基準 (snow >= この値 → mask = 1.0)。
+};
+
 // Heightfield -> mask. Performs D8 (or MFD) flow accumulation on the
 // input heights and emits a mask. The default Log curve produces the
 // classic continuous dendritic drainage tree (every cell visible, fine
@@ -331,6 +348,7 @@ struct Node
     MaskFluvialSettings maskFluvial;
     RockSettings rock;
     SedimentSettings sediment;
+    SnowSettings snow;
 };
 
 struct Link
@@ -486,6 +504,7 @@ struct HeightfieldPipeline
             MaskFluvial,
             Rock,
             Sediment,
+            Snow,
         };
 
         Kind kind = Kind::HeightmapBlur;
@@ -495,6 +514,7 @@ struct HeightfieldPipeline
         MaskFluvialSettings maskFluvial;
         RockSettings rock;
         SedimentSettings sediment;
+        SnowSettings snow;
     };
 
     bool hasSource = false;

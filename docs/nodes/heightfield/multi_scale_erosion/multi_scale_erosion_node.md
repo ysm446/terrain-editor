@@ -37,8 +37,8 @@ KTT 由来の `Fluvial Erosion` ノードと同じ「水流による河川浸食
 
 | ピン | 種別 | 内容 |
 | --- | --- | --- |
-| `HeightField` (入力) | HeightField | 元地形 |
-| `Heightmap` (出力) | HeightField | 浸食後の高さ |
+| `Heightmap` (入力) | Heightmap | 元地形 |
+| `Heightmap` (出力) | Heightmap | 浸食後の高さ |
 | `Flows` (出力) | Mask | 流量累積 (D8 重み付きフロー) |
 | `Deposits` (出力) | Mask | 堆積した土砂量 |
 
