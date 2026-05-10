@@ -337,7 +337,7 @@ struct PreviewSettings
     float shadowStrength = 0.36f;
     int shadowMapResolution = 2048;
     float shadowBias = 0.0035f;
-    std::array<float, 3> pbrAlbedo = {0.74f, 0.76f, 0.70f};
+    std::array<float, 3> pbrAlbedo = {0.80f, 0.80f, 0.80f};
     int gridCellCount = 10;
     float gridCellSizeMeters = 100.0f;
     std::array<float, 3> gridColor = {0.2f, 0.2f, 0.2f};

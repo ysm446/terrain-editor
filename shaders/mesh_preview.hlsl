@@ -405,12 +405,11 @@ float4 PSSurface(VSOut i) : SV_TARGET
             // = 1.999...) 隣接ピクセルで stripe index が予期せず揺れて
             // 見える幅広のバンドになるので、x と y を別々に int に
             // トランケートしてから加算する。
-            // 仕上げにハーフランバート (n·L*0.5+0.5) を最低 0.5 にクランプ
-            // (lerp(0.5, 1.0, halfL)) して乗算し、GeoGen 風の陰影を載せる。
-            // 太陽方向=1.0 / 真横=0.75 / 反対側=0.5 と、暗い側もハッチが
-            // 沈み込みすぎない明るさを保つ。素の二乗ハーフランバートだと
-            // 反対側が真っ黒になりすぎたためクランプ補正を入れている。
-            // モード 2 限定の処理。
+            // 仕上げにハーフランバート (n·L*0.5+0.5)^2 を最低 0.5 にクランプ
+            // (lerp(0.5, 1.0, halfL²)) して乗算し、GeoGen 風の陰影を載せる。
+            // 太陽方向=1.0 / 真横=0.625 / 反対側=0.5。床は 0.5 のまま二乗を
+            // 効かせることで横〜背面側の陰影コントラストを上げ、暗い側でも
+            // ハッチが沈み込みすぎないようにする。モード 2 限定の処理。
             float c;
             if (mask >= 0.99 || mask <= 0.01)
             {
@@ -429,7 +428,7 @@ float4 PSSurface(VSOut i) : SV_TARGET
             float3 hatchN = normalize(i.worldNor);
             float3 hatchL = normalize(sunDirection.xyz);
             float halfL = saturate(dot(hatchN, hatchL) * 0.5 + 0.5);
-            halfL = lerp(0.5, 1.0, halfL);
+            halfL = lerp(0.5, 1.0, halfL * halfL);
             c *= halfL;
             return float4(c, c, c, 1.0);
         }
