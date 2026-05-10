@@ -4,6 +4,7 @@ out/
 .vs/
 .vscode/
 .vcpkg/
+.claude/
 CMakeUserPresets.json
 data/
 *.user
