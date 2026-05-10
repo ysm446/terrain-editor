@@ -81,20 +81,6 @@ uint64_t HashHeightmapBlurSettings(const HeightmapBlurSettings& settings, int re
     return hash;
 }
 
-uint64_t HashErosionNoiseSettings(const ErosionNoiseSettings& settings, int resolution)
-{
-    uint64_t hash = 14695981039346656037ull;
-    HashCombine(hash, HashFloat(settings.frequency));
-    HashCombine(hash, static_cast<uint64_t>(settings.octaves));
-    HashCombine(hash, HashFloat(settings.erosionStrength));
-    HashCombine(hash, HashFloat(settings.directionInfluence));
-    HashCombine(hash, HashFloat(settings.valleyLow));
-    HashCombine(hash, HashFloat(settings.valleyHigh));
-    HashCombine(hash, static_cast<uint64_t>(settings.seed));
-    HashCombine(hash, static_cast<uint64_t>(resolution));
-    return hash;
-}
-
 uint64_t HashMaskNoiseSettings(const MaskNoiseSettings& settings)
 {
     uint64_t hash = 1099511628211ull;
@@ -700,165 +686,6 @@ void ApplyHeightmapBlur(HeightfieldGrid& grid, const HeightmapBlurSettings& sett
             grid.heights[i] = std::lerp(source[i], blurred[i], strength);
         }
     }
-}
-
-// Procedural "Erosion Noise" — port of clayjohn's eroded terrain noise (Shadertoy MtGcWh).
-// Not a simulation: it stacks a directional Gavoronoise-style FBM whose direction follows
-// the input heightfield's slope (90deg-rotated gradient) and adds the result to the input.
-namespace erosion_noise
-{
-constexpr float kPi = 3.14159265358979323846f;
-constexpr float kKx = 0.3183099f;
-constexpr float kKy = 0.3678794f;
-
-inline float Fract(float v)
-{
-    return v - std::floor(v);
-}
-
-inline void Hash2(float px, float py, float seedOffset, float& outX, float& outY)
-{
-    float x = px * kKx + kKy + seedOffset;
-    float y = py * kKy + kKx + seedOffset;
-    const float s = Fract(x * y * (x + y));
-    outX = -1.0f + 2.0f * Fract(16.0f * kKx * s);
-    outY = -1.0f + 2.0f * Fract(16.0f * kKy * s);
-}
-
-// Returns (value, dValue/dpx, dValue/dpy) for a single layer of directional noise.
-// The "derivative" here matches the shadertoy code exactly — it favours direction
-// rather than being a strict analytic gradient.
-inline void ErosionLayer(float px, float py, float dirX, float dirY, float seedOffset,
-                         float& outVal, float& outDx, float& outDy)
-{
-    const float ipx = std::floor(px);
-    const float ipy = std::floor(py);
-    const float fpx = px - ipx;
-    const float fpy = py - ipy;
-    constexpr float f = 2.0f * kPi;
-
-    float vaX = 0.0f;
-    float vaY = 0.0f;
-    float vaZ = 0.0f;
-    float wt = 0.0f;
-    for (int j = -2; j <= 1; ++j)
-    {
-        for (int i = -2; i <= 1; ++i)
-        {
-            float hx, hy;
-            Hash2(ipx - static_cast<float>(i), ipy - static_cast<float>(j), seedOffset, hx, hy);
-            hx *= 0.5f;
-            hy *= 0.5f;
-            const float ppx = fpx + static_cast<float>(i) - hx;
-            const float ppy = fpy + static_cast<float>(j) - hy;
-            const float d = ppx * ppx + ppy * ppy;
-            const float w = std::exp(-d * 2.0f);
-            wt += w;
-            const float mag = ppx * dirX + ppy * dirY;
-            const float c = std::cos(mag * f);
-            const float s = -std::sin(mag * f);
-            vaX += c * w;
-            vaY += s * (ppx + dirX) * w;
-            vaZ += s * (ppy + dirY) * w;
-        }
-    }
-    const float invWt = wt > 0.0f ? 1.0f / wt : 0.0f;
-    outVal = vaX * invWt;
-    outDx = vaY * invWt;
-    outDy = vaZ * invWt;
-}
-
-inline float Smoothstep(float lo, float hi, float x)
-{
-    if (hi <= lo) { return x < lo ? 0.0f : 1.0f; }
-    const float t = std::clamp((x - lo) / (hi - lo), 0.0f, 1.0f);
-    return t * t * (3.0f - 2.0f * t);
-}
-} // namespace erosion_noise
-
-void ApplyErosionNoise(HeightfieldGrid& grid, const ErosionNoiseSettings& settings)
-{
-    using namespace erosion_noise;
-
-    const int n = grid.resolution;
-    const size_t cellCount = static_cast<size_t>(n) * static_cast<size_t>(n);
-    if (n < 3 || grid.heights.size() < cellCount)
-    {
-        return;
-    }
-    const int octaves = std::clamp(settings.octaves, 0, 8);
-    const float erosionStrength = std::max(settings.erosionStrength, 0.0f);
-    if (octaves <= 0 || erosionStrength <= 0.0f)
-    {
-        return;
-    }
-    const float frequency = std::max(settings.frequency, 0.0f);
-    const float directionInfluence = std::max(settings.directionInfluence, 0.0f);
-    const float valleyLow = std::clamp(settings.valleyLow, 0.0f, 1.0f);
-    const float valleyHigh = std::clamp(settings.valleyHigh, 0.0f, 1.0f);
-    const float seedOffset = static_cast<float>(settings.seed) * 12.9898f;
-
-    float hMin = std::numeric_limits<float>::infinity();
-    float hMax = -std::numeric_limits<float>::infinity();
-    for (float v : grid.heights)
-    {
-        if (v < hMin) { hMin = v; }
-        if (v > hMax) { hMax = v; }
-    }
-    const float heightRange = std::max(hMax - hMin, 1e-4f);
-    const float invRange = 1.0f / heightRange;
-    const float invDenom = 1.0f / static_cast<float>(n - 1);
-    // Match the shader's derivative scale closely enough for existing heightfields:
-    // normalize height to the terrain range and measure the slope over the full domain.
-    const float gradScale = invRange * static_cast<float>(n - 1);
-
-    const auto sampleHeight = [&](int x, int z) {
-        const int xc = std::clamp(x, 0, n - 1);
-        const int zc = std::clamp(z, 0, n - 1);
-        return grid.heights[static_cast<size_t>(zc) * static_cast<size_t>(n) + static_cast<size_t>(xc)];
-    };
-
-    std::vector<float> output(cellCount, 0.0f);
-    for (int z = 0; z < n; ++z)
-    {
-        for (int x = 0; x < n; ++x)
-        {
-            const float u = static_cast<float>(x) * invDenom;
-            const float v = static_cast<float>(z) * invDenom;
-            const float px = u * frequency;
-            const float py = v * frequency;
-
-            const float dhdx = (sampleHeight(x + 1, z) - sampleHeight(x - 1, z)) * 0.5f * gradScale;
-            const float dhdz = (sampleHeight(x, z + 1) - sampleHeight(x, z - 1)) * 0.5f * gradScale;
-            const float dirX = dhdz * directionInfluence;
-            const float dirY = -dhdx * directionInfluence;
-
-            const float h0 = sampleHeight(x, z);
-            const float hNorm = std::clamp((h0 - hMin) * invRange, 0.0f, 1.0f);
-            float a = 0.7f * Smoothstep(valleyLow, valleyHigh, hNorm);
-
-            float accVal = 0.0f;
-            float accDx = 0.0f;
-            float accDy = 0.0f;
-            float f = 1.0f;
-            for (int i = 0; i < octaves; ++i)
-            {
-                const float octaveDirX = dirX + accDy;       // h.z * 1
-                const float octaveDirY = dirY - accDx;       // h.y * -1
-                float val, dx, dy;
-                ErosionLayer(px * f, py * f, octaveDirX, octaveDirY, seedOffset, val, dx, dy);
-                accVal += val * a;
-                accDx += dx * a * f;
-                accDy += dy * a * f;
-                a *= 0.4f;
-                f *= 2.0f;
-            }
-
-            output[static_cast<size_t>(z) * static_cast<size_t>(n) + static_cast<size_t>(x)] =
-                h0 + accVal * erosionStrength * heightRange;
-        }
-    }
-    grid.heights = std::move(output);
 }
 
 // 2D Perlin / fBM noise used by the Mask Noise node. Unlike the directional
@@ -2793,9 +2620,6 @@ void ApplyHeightfieldOperation(HeightfieldGrid& grid, const HeightfieldPipeline:
     case HeightfieldPipeline::HeightfieldOperation::Kind::HeightmapBlur:
         ApplyHeightmapBlur(grid, operation.heightmapBlur);
         break;
-    case HeightfieldPipeline::HeightfieldOperation::Kind::ErosionNoise:
-        ApplyErosionNoise(grid, operation.erosionNoise);
-        break;
     case HeightfieldPipeline::HeightfieldOperation::Kind::MultiScaleErosion:
         ApplyMultiScaleErosion(grid, operation.multiScaleErosion);
         break;
@@ -2817,8 +2641,6 @@ uint64_t HashHeightfieldOperation(const HeightfieldPipeline::HeightfieldOperatio
     {
     case HeightfieldPipeline::HeightfieldOperation::Kind::HeightmapBlur:
         return HashHeightmapBlurSettings(operation.heightmapBlur, resolution);
-    case HeightfieldPipeline::HeightfieldOperation::Kind::ErosionNoise:
-        return HashErosionNoiseSettings(operation.erosionNoise, resolution);
     case HeightfieldPipeline::HeightfieldOperation::Kind::MultiScaleErosion:
         return HashMultiScaleErosionSettings(operation.multiScaleErosion, resolution);
     case HeightfieldPipeline::HeightfieldOperation::Kind::MaskFluvial:
@@ -2840,10 +2662,6 @@ HeightfieldPipeline::HeightfieldOperation MakeHeightfieldOperation(const Node& n
     case NodeKind::HeightmapBlur:
         operation.kind = HeightfieldPipeline::HeightfieldOperation::Kind::HeightmapBlur;
         operation.heightmapBlur = node.heightmapBlur;
-        break;
-    case NodeKind::ErosionNoise:
-        operation.kind = HeightfieldPipeline::HeightfieldOperation::Kind::ErosionNoise;
-        operation.erosionNoise = node.erosionNoise;
         break;
     case NodeKind::MultiScaleErosion:
         operation.kind = HeightfieldPipeline::HeightfieldOperation::Kind::MultiScaleErosion;
@@ -2873,7 +2691,6 @@ bool IsHeightfieldOperationNode(NodeKind kind)
     switch (kind)
     {
     case NodeKind::HeightmapBlur:
-    case NodeKind::ErosionNoise:
     case NodeKind::MultiScaleErosion:
     case NodeKind::MaskFluvial:
     case NodeKind::Rock:
@@ -3196,10 +3013,6 @@ GraphId NodeGraph::CreateNode(NodeKind kind)
         AddPin(nodeId, PinKind::Input, ValueType::HeightField, "HeightField");
         AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
         break;
-    case NodeKind::ErosionNoise:
-        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "HeightField");
-        AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
-        break;
     case NodeKind::MultiScaleErosion:
         AddPin(nodeId, PinKind::Input, ValueType::HeightField, "HeightField");
         AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
@@ -3370,8 +3183,6 @@ HeightfieldPipeline NodeGraph::PipelineFor(PreviewStage stage) const
         return PipelineTo(NodeKind::HeightmapBlur);
     case PreviewStage::Shape:
         return PipelineTo(NodeKind::Shape);
-    case PreviewStage::ErosionNoise:
-        return PipelineTo(NodeKind::ErosionNoise);
     case PreviewStage::MultiScaleErosion:
         return PipelineTo(NodeKind::MultiScaleErosion);
     case PreviewStage::MaskFluvial:
@@ -3386,7 +3197,6 @@ HeightfieldPipeline NodeGraph::PipelineFor(PreviewStage stage) const
         if (const Node* node = FindFirstNode(NodeKind::Rock)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::MaskFluvial)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::MultiScaleErosion)) { return PipelineToNode(*node); }
-        if (const Node* node = FindFirstNode(NodeKind::ErosionNoise)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::HeightmapBlur)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::Shape)) { return PipelineToNode(*node); }
         return PipelineTo(NodeKind::HeightmapLoad);
@@ -3833,8 +3643,6 @@ std::string_view ToString(NodeKind kind)
         return "Heightmap Blur";
     case NodeKind::Shape:
         return "Shape";
-    case NodeKind::ErosionNoise:
-        return "Erosion Noise";
     case NodeKind::MultiScaleErosion:
         return "Multi-Scale Erosion";
     case NodeKind::MaskNoise:
@@ -3862,8 +3670,6 @@ std::string_view ToString(PreviewStage stage)
         return "Heightmap Blur";
     case PreviewStage::Shape:
         return "Shape";
-    case PreviewStage::ErosionNoise:
-        return "Erosion Noise";
     case PreviewStage::MultiScaleErosion:
         return "Multi-Scale Erosion";
     case PreviewStage::MaskNoise:
@@ -3902,8 +3708,6 @@ PreviewStage PreviewStageFor(NodeKind kind)
     {
     case NodeKind::HeightmapBlur:
         return PreviewStage::HeightmapBlur;
-    case NodeKind::ErosionNoise:
-        return PreviewStage::ErosionNoise;
     case NodeKind::MultiScaleErosion:
         return PreviewStage::MultiScaleErosion;
     case NodeKind::HeightmapLoad:

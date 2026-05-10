@@ -150,8 +150,8 @@ for level in levels:
 
 | パラメータ | 既定 | 範囲 | uniform | 役割 |
 | --- | --- | --- | --- | --- |
-| `SPE Strength` | 0.0005 | 0–0.01 | `k` | 削り量の倍率 |
-| `Stream Exponent` | 0.8 | 0–2 | `p_sa` | 流量に対する非線形性 |
+| `SPE Strength` | 0.004 | 0–0.01 | `k` | 削り量の倍率 |
+| `Stream Exponent` | 0.9 | 0–2 | `p_sa` | 流量に対する非線形性 |
 | `Slope Exponent` | 2.0 | 0–4 | `p_sl` | 勾配に対する非線形性 |
 | `Max Stream Power` | 10000 | 1–1e6 | `max_spe` | 削り量の上限 |
 | `Flow Exponent` | 1.3 | 0.5–4 | `flow_p` | D8 重み付きフローの集中度 |
@@ -162,7 +162,7 @@ for level in levels:
 | パラメータ | 既定 | 範囲 | uniform | 役割 |
 | --- | --- | --- | --- | --- |
 | `Threshold Angle (deg)` | 30 | 0–60 | `tanThresholdAngle` | 安息角。これを超える勾配は崩落 |
-| `Thermal Strength` | 0.00005 | 0–0.001 | `eps` | 反復あたりの輸送量 |
+| `Thermal Strength` | 0.005 | 0–0.01 | `eps` | 反復あたりの輸送量 |
 | `Noisify Angle` | true | – | `noisifiedAngle` | 安息角を空間ノイズで揺らす |
 | `Noise Min` | 0.9 | 0–4 | `noise_min` | tan(角度) 倍率の下限 |
 | `Noise Max` | 1.4 | 0–4 | `noise_max` | tan(角度) 倍率の上限 |
@@ -172,7 +172,7 @@ for level in levels:
 
 | パラメータ | 既定 | 範囲 | uniform | 役割 |
 | --- | --- | --- | --- | --- |
-| `Deposition Strength` | 1.0 | 0–8 | `deposition_strength` | 搬送能を超えた分の堆積率 |
+| `Deposition Strength` | 0.2 | 0–8 | `deposition_strength` | 搬送能を超えた分の堆積率 |
 | `Rain` | 2.6 | 0–10 | `rain` (定数) | セルあたりに降る水量 |
 
 ## 境界条件

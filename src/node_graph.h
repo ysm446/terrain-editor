@@ -18,7 +18,6 @@ enum class NodeKind
     HeightmapLoad = 4,
     HeightmapBlur = 5,
     Shape = 6,
-    ErosionNoise = 7,
     MultiScaleErosion = 8,
     MaskNoise = 9,
     MaskBlend = 10,
@@ -104,7 +103,6 @@ enum class PreviewStage
     Graph = 3,
     HeightmapBlur = 4,
     Shape = 5,
-    ErosionNoise = 6,
     MultiScaleErosion = 7,
     MaskNoise = 8,
     MaskBlend = 9,
@@ -153,17 +151,6 @@ struct HeightmapBlurSettings
     float radius = 3.0f;
     float strength = 1.0f;
     int iterations = 1;
-};
-
-struct ErosionNoiseSettings
-{
-    float frequency = 20.0f;
-    int octaves = 2;
-    float erosionStrength = 0.02f;
-    float directionInfluence = 0.5f;
-    float valleyLow = 0.1f;
-    float valleyHigh = 0.4f;
-    int seed = 0;
 };
 
 struct MaskNoiseSettings
@@ -268,8 +255,8 @@ struct MultiScaleErosionSettings
     bool useMultigrid = true;
 
     // Stream Power Erosion (erosion.glsl)
-    float speStrength = 0.0005f;        // k
-    float streamExponent = 0.8f;        // p_sa
+    float speStrength = 0.004f;         // k
+    float streamExponent = 0.9f;        // p_sa
     float slopeExponent = 2.0f;         // p_sl
     float maxStreamPower = 10000.0f;    // max_spe
     float flowExponent = 1.3f;          // flow_p
@@ -277,14 +264,14 @@ struct MultiScaleErosionSettings
 
     // Thermal (thermal.glsl)
     float thermalAngleDegrees = 30.0f;  // tanThresholdAngle (in degrees)
-    float thermalStrength = 0.00005f;   // eps
+    float thermalStrength = 0.005f;     // eps
     bool thermalNoisifyAngle = true;
     float thermalNoiseMin = 0.9f;
     float thermalNoiseMax = 1.4f;
     float thermalNoiseWavelength = 0.0023f;
 
     // Deposition (deposition.glsl)
-    float depositionStrength = 1.0f;
+    float depositionStrength = 0.2f;
     float rain = 2.6f;
 
     MultiScaleErosionBackend backend = MultiScaleErosionBackend::CpuReference;
@@ -300,7 +287,6 @@ struct Node
     HeightmapLoadSettings heightmap;
     ShapeSettings shape;
     HeightmapBlurSettings heightmapBlur;
-    ErosionNoiseSettings erosionNoise;
     MultiScaleErosionSettings multiScaleErosion;
     MaskNoiseSettings maskNoise;
     MaskBlendSettings maskBlend;
@@ -454,7 +440,6 @@ struct HeightfieldPipeline
         enum class Kind
         {
             HeightmapBlur,
-            ErosionNoise,
             MultiScaleErosion,
             MaskFluvial,
             Rock,
@@ -464,7 +449,6 @@ struct HeightfieldPipeline
         Kind kind = Kind::HeightmapBlur;
         GraphId nodeId = 0;
         HeightmapBlurSettings heightmapBlur;
-        ErosionNoiseSettings erosionNoise;
         MultiScaleErosionSettings multiScaleErosion;
         MaskFluvialSettings maskFluvial;
         RockSettings rock;

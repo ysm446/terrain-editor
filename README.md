@@ -25,7 +25,6 @@
 - **`Import Heightmap`** — 画像ハイトマップを読み込みます。地形スケール (m)、Relative Vertical Scale、縦方向オフセット、シミュレーション解像度を指定可能。
 - **`Shape`** — 半球やピラミッドなどのプロシージャル形状をハイトフィールドとして生成。
 - **`Heightmap Blur`** — 分離可能ガウシアンによる滑化。半径・強度・反復回数を調整可能。
-- **`Erosion Noise`** — 入力勾配に沿った方向性ノイズで谷筋風のディテールを足す軽量ノード(シミュレーションではありません)。
 - **`Multi-Scale Erosion`** — Schott et al. SIGGRAPH 2024 の Stream Power + Thermal + Deposition の CPU 実装。マルチグリッドピラミッドで解像度依存性を抑え、`Heightmap` / `Flows` / `Deposits` を出力。
 
 ### マスク系
