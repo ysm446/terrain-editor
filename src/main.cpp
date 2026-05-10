@@ -10092,13 +10092,14 @@ void DrawUi()
 
     DrawNodeNetworkTabs(nodePaneHeight, fixedPaneFlags);
 
-    if (DrawHorizontalSplitter("InspectorLayoutSplitter", &nodePaneHeight, rightColumnHeight, 160.0f, 160.0f))
+    const bool inspectorSplitterReleased = DrawHorizontalSplitter("InspectorLayoutSplitter", &nodePaneHeight, rightColumnHeight, 160.0f, 160.0f);
+    if (inspectorLayoutCanFit)
     {
-        if (inspectorLayoutCanFit)
-        {
-            g_ui.nodePaneHeight = nodePaneHeight;
-            SaveAppSettingsSilently();
-        }
+        g_ui.nodePaneHeight = nodePaneHeight;
+    }
+    if (inspectorSplitterReleased && inspectorLayoutCanFit)
+    {
+        SaveAppSettingsSilently();
     }
 
     ImGui::BeginChild("Inspector", ImVec2(0.0f, 0.0f), false);
