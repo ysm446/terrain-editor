@@ -364,6 +364,21 @@ float4 PSSurface(VSOut i) : SV_TARGET
     }
     if (maskPreview > 0.5)
     {
+        // 壁面 (BuildMeshFromHeightfield の側壁) は mask に sentinel = 2.0
+        // を入れている。マスクプレビュー時にここをモードごとのグレーで
+        // 一律塗り潰し、上端マスクが縦方向に引き伸ばされて見えないようにする。
+        //   モード 0 / モード 2: 25% グレー (RGB=0.25) 一律。
+        //   モード 1 (グレー×オレンジ): このモードのベースグレー lowMask
+        //     をライティング非依存の一色で塗る (周囲のライティング差に
+        //     惑わされず壁面が均一に見える)。
+        if (i.mask > 1.5)
+        {
+            if (maskShadingMode > 0.5 && maskShadingMode < 1.5)
+            {
+                return float4(0.18, 0.20, 0.21, 1.0);
+            }
+            return float4(0.25, 0.25, 0.25, 1.0);
+        }
         float mask = saturate(i.mask);
         if (maskShadingMode < 0.5)
         {

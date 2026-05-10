@@ -2228,6 +2228,11 @@ MeshData BuildMeshFromHeightfield(const HeightfieldGrid& grid, int meshResolutio
     // Each segment owns 4 vertices (TopA, TopB, BottomA, BottomB) and 2
     // triangles. Normals are constant per side, so no gradient sampling
     // needed. Emit 5 unique edges per segment too.
+    // 壁の `mask` には sentinel 値 (>1.0 で PSEdge の負センチネルとも非衝突)
+    // を入れ、シェーダー側のマスクプレビューで一律グレーに塗り潰す。上端の
+    // マスクをそのまま継承すると、上端 1 セルのマスクが縦に引き伸ばされて
+    // 見えてしまうため。
+    constexpr float kWallMaskSentinel = 2.0f;
     auto emitWallSegment = [&](size_t segIndex, uint32_t topAIdx, uint32_t topBIdx,
                                float nx, float nz) {
         const size_t vBase = wallVertsStart + segIndex * 4;
@@ -2236,10 +2241,10 @@ MeshData BuildMeshFromHeightfield(const HeightfieldGrid& grid, int meshResolutio
 
         const MeshVertex& va = mesh.vertices[topAIdx];
         const MeshVertex& vb = mesh.vertices[topBIdx];
-        mesh.vertices[vBase + 0] = {va.x, va.y,  va.z, nx, 0.0f, nz, va.mask};  // TopA
-        mesh.vertices[vBase + 1] = {vb.x, vb.y,  vb.z, nx, 0.0f, nz, vb.mask};  // TopB
-        mesh.vertices[vBase + 2] = {va.x, baseY, va.z, nx, 0.0f, nz, va.mask};  // BottomA
-        mesh.vertices[vBase + 3] = {vb.x, baseY, vb.z, nx, 0.0f, nz, vb.mask};  // BottomB
+        mesh.vertices[vBase + 0] = {va.x, va.y,  va.z, nx, 0.0f, nz, kWallMaskSentinel};  // TopA
+        mesh.vertices[vBase + 1] = {vb.x, vb.y,  vb.z, nx, 0.0f, nz, kWallMaskSentinel};  // TopB
+        mesh.vertices[vBase + 2] = {va.x, baseY, va.z, nx, 0.0f, nz, kWallMaskSentinel};  // BottomA
+        mesh.vertices[vBase + 3] = {vb.x, baseY, vb.z, nx, 0.0f, nz, kWallMaskSentinel};  // BottomB
 
         const uint32_t v0 = static_cast<uint32_t>(vBase + 0);
         const uint32_t v1 = static_cast<uint32_t>(vBase + 1);
