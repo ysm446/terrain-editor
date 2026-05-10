@@ -9465,8 +9465,25 @@ void DrawDisplaySettingsPanel()
             }
         }
 
-        if (displayMode != ViewportDisplayMode::Simple)
+        ImGui::EndTable();
+    }
+    ImGui::EndChild();
+}
+
+void DrawSkySettingsPanel()
+{
+    rock::GraphSettings& settings = g_graph.Settings();
+    const float headerRightPadding = 10.0f;
+    const float sectionWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x - headerRightPadding);
+    ImGui::BeginChild("SkySettingsSection", ImVec2(sectionWidth, 0.0f), false);
+
+    if (ImGui::CollapsingHeader("太陽と影", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        if (ImGui::BeginTable("SunShadowSettingsRows", 2, ImGuiTableFlags_SizingStretchProp))
         {
+            ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 112.0f);
+            ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+
             ImGui::SeparatorText("太陽");
             if (DrawPropertyFloatRow("Sun Azimuth (deg)", "DisplaySunAzimuth", &settings.preview.sunAzimuthDegrees, 0.0f, 360.0f, rock::PreviewSettings{}.sunAzimuthDegrees, "Sun azimuth changed", false, "太陽の水平角度です。地形の溝が読みやすい方向へ回せます。"))
             {
@@ -9497,19 +9514,11 @@ void DrawDisplaySettingsPanel()
             {
                 SaveAppSettingsSilently();
             }
+
+            ImGui::EndTable();
         }
-
-        ImGui::EndTable();
     }
-    ImGui::EndChild();
-}
 
-void DrawSkySettingsPanel()
-{
-    rock::GraphSettings& settings = g_graph.Settings();
-    const float headerRightPadding = 10.0f;
-    const float sectionWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x - headerRightPadding);
-    ImGui::BeginChild("SkySettingsSection", ImVec2(sectionWidth, 0.0f), false);
     if (!ImGui::CollapsingHeader("天球と雲", ImGuiTreeNodeFlags_DefaultOpen))
     {
         ImGui::EndChild();

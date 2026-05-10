@@ -107,3 +107,4 @@ Detailed parameter / formula reference is in `docs/sky_and_clouds/sky_and_clouds
 - `docs/nodes/heightfield/fluvial_erosion/` — historical KTT-based fluvial reference (no longer wired into the build).
 - `docs/nodes/node_candidates.md` — backlog of node ideas.
 - `docs/sky_and_clouds/sky_and_clouds.md` — sky / atmosphere / volumetric cloud reference.
+- `docs/mask_texture/mask_texture.md` — mask preview rendering (3 shading modes, wall sentinel, half-Lambert hatch).
