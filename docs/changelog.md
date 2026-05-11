@@ -2,6 +2,26 @@
 
 ## 未リリース
 
+## 3.16.6 - 2026-05-11 23:51
+
+- `Colorize` ノード案を更新し、カラー系またはテクスチャー系ノードとして、入力 `Heightmap` / `Mask` / `Gradient Mask`、出力 `Color Texture` を基本案にしました。`Gradient Mask` でグラデーション割り当て位置を決め、`Mask` で適用範囲を制御し、`Heightmap` は主にプレビュー用途に使う想定です。
+
+## 3.16.5 - 2026-05-11 23:48
+
+- 共有計画に、カラーのグラデーションを作成する `Colorize` ノード案を記録しました。ピッカーで画面上のマウス軌道から色を拾い、サンプル列をグラデーションに落とし込んで取得する仕組みを検討します。
+
+## 3.16.4 - 2026-05-11 23:44
+
+- 共有計画に、予定しているマスク系ノードとして `Mask Invert`、`Mask Curvature`、`Mask Levels` を記録しました。`Mask Invert` は入力反転と底/天井操作、`Mask Curvature` は `Heightmap` からの曲率マスク生成、`Mask Levels` は入力マスク画像の level 調整を想定しています。
+
+## 3.16.3 - 2026-05-11 23:40
+
+- 共有計画に、次の候補として入力 `Heightmap` と `Mask` から崩落した岩や石を転がして散布する `Crumbling` / `Debris` ノード案を記録しました。
+
+## 3.16.2 - 2026-05-11 23:28
+
+- プロジェクトの進捗、ゴール、計画を共有するための `docs/plan/goals.md`、`docs/plan/plan.md`、`docs/plan/progress.md` を追加しました。
+
 - `Snow` ノードを D3D12 GPU compute に対応 + `Smoothing Iterations` パラメータを追加しました。新規シェーダー [shaders/snow_compute.hlsl](../shaders/snow_compute.hlsl) に 4 つの compute エントリ (`CSCopyInputHeights` / `CSComputeThickness` / `CSEnvelopeSmoothing` / `CSApply`) を実装。`Smoothing Iterations` (既定 2) は雪の表面を反復的に「平滑化 + 溝埋め」する回数で、各反復で `surface = heights + thickness` を 3×3 box blur し `max(surface, blurred)` でセル更新します。これによりスロープ遷移域の per-cell な厚み揺らぎ (前回スクリーンショットの斜面境界の溝/ザワザワ) が消え、また周囲より低いセル (= 溝の底) は雪が増えて埋まる物理的に自然な動作になります。CPU/GPU 両バックエンドに反映。プロパティパネルに `Backend` (`CPU` / `GPU`、既定 GPU) と `Smoothing Iterations` (0-16、既定 2) を追加。1024² で CPU 比 5-15 倍程度高速の見込み。
 - 新規ノード `Snow` を追加しました。入力ハイトフィールドの上に「雪を降り積もらせる」フィルタで、出力は `Heightmap` (元地形 + 雪厚) と `Snow` mask (雪量を 0..1 正規化)。GeoGen Snow ノードの「斜面に雪は積もらない」見た目をシングルパスの簡易モデルで再現します。各セルで 4 タップ中央差分から `tan(slope)` を求め、`Slope Limit Min` 以下では Emission Amount を満杯まで積もらせ、`Slope Limit Max` 以上では雪を 0 にし、間は smoothstep で滑らかに遷移します。パラメータは `Emission Amount (m)` / `Slope Limit Min (deg)` / `Slope Limit Max (deg)` / `Mask Max Snow (m)` の 4 つに絞り、GeoGen の Iterations / 風 / Hardness などは未実装 (粒子シム前提のものは省略)。CPU 実装のみ (per-pixel 完全並列なので将来 GPU 化は容易)。docs: [docs/nodes/heightfield/snow/snow_node.md](nodes/heightfield/snow/snow_node.md) 新設、[docs/nodes/README.md](nodes/README.md) インデックスにエントリ追加。
 - ノードの入力ピンラベルを `HeightField` → `Heightmap` に統一しました (出力ピンは元から `Heightmap`)。`HeightmapBlur` / `MultiScaleErosion` / `MaskFluvial` / `Rock` / `Sediment` の入力ピン表示が `Heightmap` に変わります。`ToString(ValueType::HeightField)` の戻り値も `"Heightmap"` に変更し、ピンラベルが未保存な旧プロジェクトのフォールバックも統一。既存 `.terrainproj` で `"HeightField"` と保存されているピンラベルは `ReadSerializedPinsJson` で自動マイグレーションするので互換性影響なし。内部 enum の `ValueType::HeightField` 自体は据え置き (型としての名前であってラベルではないため)。
