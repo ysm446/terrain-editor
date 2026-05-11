@@ -64,6 +64,12 @@ enum class MaskFluvialBackend
     GpuCompute,
 };
 
+enum class SnowBackend
+{
+    CpuReference,
+    GpuCompute,
+};
+
 enum class MaskNoiseBackend
 {
     CpuParallel,
@@ -266,6 +272,16 @@ struct SnowSettings
     float slopeLimitMinDeg = 50.0f;    // この角度以下では雪が満杯まで積もる。
     float slopeLimitMaxDeg = 60.0f;    // この角度以上では雪はまったく積もらない。間は smoothstep。
     float maskMaxSnow = 1.0f;          // m. mask 出力の正規化基準 (snow >= この値 → mask = 1.0)。
+    // 雪の表面を反復的に「平滑化 + 溝埋め」する反復数。各反復で
+    // snowSurface = heights + thickness の 3x3 box blur を取り、
+    // max(snowSurface, blurred) でセルを更新する。これにより:
+    //   - 周囲より低いセル (= 溝の底) は雪が増えて埋まる
+    //   - 周囲より高いセル (= 出っ張り) は変わらない
+    //   - スロープ遷移域の per-cell な thickness 揺らぎが消える
+    // 結果として「雪の envelope」が次第に滑らかになる。0 = 平滑化なし
+    // (旧挙動)、1-3 が見栄え良し。
+    int smoothingIterations = 2;
+    SnowBackend backend = SnowBackend::GpuCompute;
 };
 
 // Heightfield -> mask. Performs D8 (or MFD) flow accumulation on the
@@ -492,6 +508,7 @@ using MaskNoiseGpuEvaluator = bool (*)(MaskGrid& grid, const MaskNoiseSettings& 
 using SedimentGpuEvaluator = bool (*)(HeightfieldGrid& grid, const SedimentSettings& settings, std::string* error);
 using RockGpuEvaluator = bool (*)(HeightfieldGrid& grid, const RockSettings& settings, std::string* error);
 using MaskFluvialGpuEvaluator = bool (*)(HeightfieldGrid& grid, const MaskFluvialSettings& settings, std::string* error);
+using SnowGpuEvaluator = bool (*)(HeightfieldGrid& grid, const SnowSettings& settings, std::string* error);
 
 struct HeightfieldPipeline
 {
@@ -635,6 +652,7 @@ void SetMaskNoiseGpuEvaluator(MaskNoiseGpuEvaluator evaluator);
 void SetSedimentGpuEvaluator(SedimentGpuEvaluator evaluator);
 void SetRockGpuEvaluator(RockGpuEvaluator evaluator);
 void SetMaskFluvialGpuEvaluator(MaskFluvialGpuEvaluator evaluator);
+void SetSnowGpuEvaluator(SnowGpuEvaluator evaluator);
 
 // Thread-safe progress signal: holds the GraphId of the node whose
 // evaluation kernel is currently running on a worker thread, or 0 when

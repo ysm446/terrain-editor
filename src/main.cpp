@@ -474,6 +474,11 @@ ComPtr<ID3D12PipelineState> g_mfMaxReducePso;
 ComPtr<ID3D12PipelineState> g_mfToMaskLogPso;
 ComPtr<ID3D12PipelineState> g_mfToMaskLinearPso;
 ComPtr<ID3D12PipelineState> g_mfToMaskThresholdPso;
+ComPtr<ID3D12RootSignature> g_snowComputeRootSignature;
+ComPtr<ID3D12PipelineState> g_snowCopyInputHeightsPso;
+ComPtr<ID3D12PipelineState> g_snowComputeThicknessPso;
+ComPtr<ID3D12PipelineState> g_snowEnvelopeSmoothingPso;
+ComPtr<ID3D12PipelineState> g_snowApplyPso;
 ComPtr<ID3D12RootSignature> g_skyRootSignature;
 ComPtr<ID3D12PipelineState> g_skyPso;
 bool g_skyPipelineReady = false;
@@ -544,6 +549,10 @@ std::string g_maskFluvialComputeStatus = "Mask Fluvial GPU Compute not initializ
 bool g_maskFluvialComputeReady = false;
 std::mutex g_maskFluvialComputeMutex;
 std::mutex g_maskFluvialGpuRequestMutex;
+std::string g_snowComputeStatus = "Snow GPU Compute not initialized";
+bool g_snowComputeReady = false;
+std::mutex g_snowComputeMutex;
+std::mutex g_snowGpuRequestMutex;
 std::thread::id g_mainThreadId;
 
 struct MseGpuRequestResult
@@ -616,6 +625,22 @@ struct MaskFluvialGpuRequest
 };
 
 std::vector<std::shared_ptr<MaskFluvialGpuRequest>> g_pendingMaskFluvialGpuRequests;
+
+struct SnowGpuRequestResult
+{
+    bool success = false;
+    rock::HeightfieldGrid grid;
+    std::string error;
+};
+
+struct SnowGpuRequest
+{
+    rock::HeightfieldGrid grid;
+    rock::SnowSettings settings;
+    std::promise<SnowGpuRequestResult> promise;
+};
+
+std::vector<std::shared_ptr<SnowGpuRequest>> g_pendingSnowGpuRequests;
 
 struct MaskNoiseGpuRequest
 {
@@ -962,6 +987,12 @@ void CleanupD3D()
     g_mfToMaskThresholdPso.Reset();
     g_maskFluvialComputeRootSignature.Reset();
     g_maskFluvialComputeReady = false;
+    g_snowCopyInputHeightsPso.Reset();
+    g_snowComputeThicknessPso.Reset();
+    g_snowEnvelopeSmoothingPso.Reset();
+    g_snowApplyPso.Reset();
+    g_snowComputeRootSignature.Reset();
+    g_snowComputeReady = false;
     g_skyPso.Reset();
     g_skyRootSignature.Reset();
     g_skyPipelineReady = false;
@@ -1054,6 +1085,11 @@ std::filesystem::path MaskFluvialComputeShaderPath()
     return ShaderPath("mask_fluvial_compute.hlsl");
 }
 
+std::filesystem::path SnowComputeShaderPath()
+{
+    return ShaderPath("snow_compute.hlsl");
+}
+
 std::filesystem::path SkyShaderPath()
 {
     return ShaderPath("sky.hlsl");
@@ -1085,6 +1121,7 @@ void ProcessPendingMaskNoiseGpuRequests();
 void ProcessPendingSedimentGpuRequests();
 void ProcessPendingRockGpuRequests();
 void ProcessPendingMaskFluvialGpuRequests();
+void ProcessPendingSnowGpuRequests();
 void EnsurePreviewMesh();
 int CurrentPreviewMeshResolution();
 bool IsTerrainNodeKind(rock::NodeKind kind);
@@ -1887,6 +1924,8 @@ nlohmann::json MakeSnowSettingsJson(const rock::Node& node)
             {"slopeLimitMinDeg", node.snow.slopeLimitMinDeg},
             {"slopeLimitMaxDeg", node.snow.slopeLimitMaxDeg},
             {"maskMaxSnow", node.snow.maskMaxSnow},
+            {"smoothingIterations", node.snow.smoothingIterations},
+            {"backend", static_cast<int>(node.snow.backend)},
         }},
     };
 }
@@ -2186,6 +2225,13 @@ void ReadSnowSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     node.snow.slopeLimitMinDeg = std::clamp(nodeSnowJson.value("slopeLimitMinDeg", node.snow.slopeLimitMinDeg), 0.0f, 89.9f);
     node.snow.slopeLimitMaxDeg = std::clamp(std::max(nodeSnowJson.value("slopeLimitMaxDeg", node.snow.slopeLimitMaxDeg), node.snow.slopeLimitMinDeg), 0.0f, 89.9f);
     node.snow.maskMaxSnow = std::clamp(nodeSnowJson.value("maskMaxSnow", node.snow.maskMaxSnow), 0.001f, 1000.0f);
+    node.snow.smoothingIterations = std::clamp(nodeSnowJson.value("smoothingIterations", node.snow.smoothingIterations), 0, 16);
+    {
+        const int backendInt = std::clamp(nodeSnowJson.value("backend", static_cast<int>(node.snow.backend)),
+                                           static_cast<int>(rock::SnowBackend::CpuReference),
+                                           static_cast<int>(rock::SnowBackend::GpuCompute));
+        node.snow.backend = static_cast<rock::SnowBackend>(backendInt);
+    }
 }
 
 void ReadNodeSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
@@ -5252,6 +5298,392 @@ void ProcessPendingMaskFluvialGpuRequests()
     }
 }
 
+// Mirrors the cbuffer in shaders/snow_compute.hlsl.
+struct SnowShaderConstants
+{
+    UINT  resolution;
+    float terrainSizeMeters;
+    float emissionAmount;
+    float minTan;
+
+    float invRange;
+    float maskMaxSnow;
+    UINT  smoothDirection;
+    float pad0;
+};
+static_assert(sizeof(SnowShaderConstants) == 8 * sizeof(UINT), "SnowShaderConstants must be 8 DWORDs");
+
+bool EnsureSnowComputePipeline(std::string* error)
+{
+    if (g_snowComputeReady && g_snowComputeRootSignature
+        && g_snowCopyInputHeightsPso && g_snowComputeThicknessPso
+        && g_snowEnvelopeSmoothingPso && g_snowApplyPso)
+    {
+        return true;
+    }
+    if (!g_device)
+    {
+        if (error) *error = "D3D12 device is not available";
+        g_snowComputeStatus = "Snow GPU Compute unavailable";
+        return false;
+    }
+
+    // 7 UAVs (InputHeights, BaseHeights, Thickness, SurfA, SurfB, OutHeights, OutMask)
+    D3D12_DESCRIPTOR_RANGE uavRange{};
+    uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    uavRange.NumDescriptors = 7;
+    uavRange.BaseShaderRegister = 0;
+    uavRange.RegisterSpace = 0;
+    uavRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_ROOT_PARAMETER rootParams[2]{};
+    rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    rootParams[0].Constants.ShaderRegister = 0;
+    rootParams[0].Constants.RegisterSpace = 0;
+    rootParams[0].Constants.Num32BitValues = 8;
+    rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[1].DescriptorTable.pDescriptorRanges = &uavRange;
+    rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    D3D12_ROOT_SIGNATURE_DESC rsDesc{};
+    rsDesc.NumParameters = 2;
+    rsDesc.pParameters = rootParams;
+    rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+    ComPtr<ID3DBlob> sigBlob, errBlob;
+    HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
+    if (FAILED(hr))
+    {
+        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Serialize Snow root sig failed";
+        g_snowComputeStatus = "Snow GPU Compute root signature failed";
+        return false;
+    }
+    hr = g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_snowComputeRootSignature));
+    if (FAILED(hr))
+    {
+        if (error) *error = "Create Snow root sig failed";
+        g_snowComputeStatus = "Snow GPU Compute root signature failed";
+        return false;
+    }
+
+    const std::filesystem::path shaderPath = SnowComputeShaderPath();
+    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
+#if defined(_DEBUG)
+    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+#endif
+
+    auto compileEntry = [&](const char* entryPoint, ComPtr<ID3DBlob>& outBlob) -> bool {
+        errBlob.Reset();
+        const HRESULT compileHr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE,
+                                                     entryPoint, "cs_5_0", compileFlags, 0, &outBlob, &errBlob);
+        if (FAILED(compileHr))
+        {
+            if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile Snow shader failed";
+            return false;
+        }
+        return true;
+    };
+
+    auto buildPso = [&](ID3DBlob* csBlob, ComPtr<ID3D12PipelineState>& outPso) -> bool {
+        D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{};
+        psoDesc.pRootSignature = g_snowComputeRootSignature.Get();
+        psoDesc.CS = {csBlob->GetBufferPointer(), csBlob->GetBufferSize()};
+        const HRESULT psoHr = g_device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&outPso));
+        if (FAILED(psoHr))
+        {
+            if (error) *error = "Create Snow PSO failed";
+            return false;
+        }
+        return true;
+    };
+
+    struct Entry { const char* name; ComPtr<ID3D12PipelineState>* pso; };
+    Entry entries[] = {
+        {"CSCopyInputHeights",   &g_snowCopyInputHeightsPso},
+        {"CSComputeThickness",   &g_snowComputeThicknessPso},
+        {"CSEnvelopeSmoothing",  &g_snowEnvelopeSmoothingPso},
+        {"CSApply",              &g_snowApplyPso},
+    };
+    for (const Entry& e : entries)
+    {
+        ComPtr<ID3DBlob> blob;
+        if (!compileEntry(e.name, blob))
+        {
+            g_snowComputeStatus = std::string("Snow ") + e.name + " compile failed";
+            return false;
+        }
+        if (!buildPso(blob.Get(), *e.pso))
+        {
+            g_snowComputeStatus = std::string("Snow ") + e.name + " PSO failed";
+            return false;
+        }
+    }
+
+    g_snowComputeReady = true;
+    g_snowComputeStatus = "Snow GPU Compute dispatch ready";
+    return true;
+}
+
+bool RunSnowComputeImmediate(rock::HeightfieldGrid& grid, const rock::SnowSettings& settings, std::string* error)
+{
+    std::lock_guard<std::mutex> lock(g_snowComputeMutex);
+    if (!EnsureSnowComputePipeline(error))
+    {
+        return false;
+    }
+
+    const UINT resolution = static_cast<UINT>(std::clamp(grid.resolution, 0, 4096));
+    const UINT64 cellCount = static_cast<UINT64>(resolution) * static_cast<UINT64>(resolution);
+    if (resolution < 2 || grid.heights.size() < cellCount)
+    {
+        if (error) *error = "Invalid heightfield for Snow GPU Compute";
+        return false;
+    }
+
+    const UINT64 fieldByteSize = cellCount * sizeof(float);
+
+    const D3D12_HEAP_PROPERTIES defaultHeap  = HeapProperties(D3D12_HEAP_TYPE_DEFAULT);
+    const D3D12_HEAP_PROPERTIES uploadHeap   = HeapProperties(D3D12_HEAP_TYPE_UPLOAD);
+    const D3D12_HEAP_PROPERTIES readbackHeap = HeapProperties(D3D12_HEAP_TYPE_READBACK);
+    const D3D12_RESOURCE_DESC fieldGpuDesc   = BufferResourceDesc(fieldByteSize, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    const D3D12_RESOURCE_DESC fieldCpuDesc   = BufferResourceDesc(fieldByteSize);
+
+    ComPtr<ID3D12Resource> inputHeightsBuf, baseHeightsBuf, thicknessBuf, surfABuf, surfBBuf, outHeightsBuf, outMaskBuf;
+    ComPtr<ID3D12Resource> uploadHeights, readbackHeights, readbackMask;
+
+    auto createDefault = [&](ComPtr<ID3D12Resource>& out, const D3D12_RESOURCE_DESC& desc, const char* name) -> bool {
+        const HRESULT hrLocal = g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&out));
+        if (FAILED(hrLocal)) { if (error) *error = std::string("Create ") + name + " failed"; return false; }
+        return true;
+    };
+    auto createUpload = [&](ComPtr<ID3D12Resource>& out, const char* name) -> bool {
+        const HRESULT hrLocal = g_device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &fieldCpuDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&out));
+        if (FAILED(hrLocal)) { if (error) *error = std::string("Create ") + name + " failed"; return false; }
+        return true;
+    };
+    auto createReadback = [&](ComPtr<ID3D12Resource>& out, const char* name) -> bool {
+        const HRESULT hrLocal = g_device->CreateCommittedResource(&readbackHeap, D3D12_HEAP_FLAG_NONE, &fieldCpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&out));
+        if (FAILED(hrLocal)) { if (error) *error = std::string("Create ") + name + " failed"; return false; }
+        return true;
+    };
+
+    if (!createDefault(inputHeightsBuf, fieldGpuDesc, "Snow input heights"))  return false;
+    if (!createDefault(baseHeightsBuf,  fieldGpuDesc, "Snow base heights"))   return false;
+    if (!createDefault(thicknessBuf,    fieldGpuDesc, "Snow thickness"))      return false;
+    if (!createDefault(surfABuf,        fieldGpuDesc, "Snow surfA"))          return false;
+    if (!createDefault(surfBBuf,        fieldGpuDesc, "Snow surfB"))          return false;
+    if (!createDefault(outHeightsBuf,   fieldGpuDesc, "Snow out heights"))    return false;
+    if (!createDefault(outMaskBuf,      fieldGpuDesc, "Snow out mask"))       return false;
+    if (!createUpload(uploadHeights,    "Snow upload heights"))               return false;
+    if (!createReadback(readbackHeights,"Snow readback heights"))             return false;
+    if (!createReadback(readbackMask,   "Snow readback mask"))                return false;
+
+    void* mapped = nullptr;
+    const D3D12_RANGE emptyReadRange{0, 0};
+    ThrowIfFailed(uploadHeights->Map(0, &emptyReadRange, &mapped), "Map Snow heights upload failed");
+    std::memcpy(mapped, grid.heights.data(), fieldByteSize);
+    uploadHeights->Unmap(0, nullptr);
+
+    constexpr UINT kDescriptorCount = 7;
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    heapDesc.NumDescriptors = kDescriptorCount;
+    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    ComPtr<ID3D12DescriptorHeap> descriptorHeap;
+    HRESULT hr = g_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&descriptorHeap));
+    if (FAILED(hr)) { if (error) *error = "Create Snow descriptor heap failed"; return false; }
+
+    auto createUav = [&](ID3D12Resource* res, UINT numElements, UINT slot) {
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+        uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+        uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+        uavDesc.Buffer.NumElements = numElements;
+        uavDesc.Buffer.StructureByteStride = sizeof(float);
+        D3D12_CPU_DESCRIPTOR_HANDLE handle = descriptorHeap->GetCPUDescriptorHandleForHeapStart();
+        handle.ptr += static_cast<SIZE_T>(slot) * g_srvDescriptorSize;
+        g_device->CreateUnorderedAccessView(res, nullptr, &uavDesc, handle);
+    };
+    createUav(inputHeightsBuf.Get(), static_cast<UINT>(cellCount), 0);
+    createUav(baseHeightsBuf.Get(),  static_cast<UINT>(cellCount), 1);
+    createUav(thicknessBuf.Get(),    static_cast<UINT>(cellCount), 2);
+    createUav(surfABuf.Get(),        static_cast<UINT>(cellCount), 3);
+    createUav(surfBBuf.Get(),        static_cast<UINT>(cellCount), 4);
+    createUav(outHeightsBuf.Get(),   static_cast<UINT>(cellCount), 5);
+    createUav(outMaskBuf.Get(),      static_cast<UINT>(cellCount), 6);
+
+    ComPtr<ID3D12CommandAllocator> allocator;
+    ComPtr<ID3D12GraphicsCommandList> commandList;
+    ThrowIfFailed(g_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)), "Create Snow command allocator failed");
+    ThrowIfFailed(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&commandList)), "Create Snow command list failed");
+
+    auto transition = [&](ID3D12Resource* res, D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to) {
+        D3D12_RESOURCE_BARRIER b{};
+        b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        b.Transition.pResource = res;
+        b.Transition.StateBefore = from;
+        b.Transition.StateAfter = to;
+        b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        commandList->ResourceBarrier(1, &b);
+    };
+    auto uavBarrier = [&]() {
+        D3D12_RESOURCE_BARRIER b{};
+        b.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+        b.UAV.pResource = nullptr;
+        commandList->ResourceBarrier(1, &b);
+    };
+
+    // Stage input heights
+    transition(inputHeightsBuf.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST);
+    commandList->CopyBufferRegion(inputHeightsBuf.Get(), 0, uploadHeights.Get(), 0, fieldByteSize);
+    transition(inputHeightsBuf.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+    ID3D12DescriptorHeap* heaps[] = {descriptorHeap.Get()};
+    commandList->SetDescriptorHeaps(1, heaps);
+    commandList->SetComputeRootSignature(g_snowComputeRootSignature.Get());
+    commandList->SetComputeRootDescriptorTable(1, descriptorHeap->GetGPUDescriptorHandleForHeapStart());
+
+    const float kPi = 3.14159265358979323846f;
+    const float minDeg = std::clamp(settings.slopeLimitMinDeg, 0.0f, 89.9f);
+    const float maxDeg = std::clamp(std::max(settings.slopeLimitMaxDeg, settings.slopeLimitMinDeg), 0.0f, 89.9f);
+    const float minTan = std::tan(minDeg * (kPi / 180.0f));
+    const float maxTan = std::tan(maxDeg * (kPi / 180.0f));
+
+    SnowShaderConstants k{};
+    k.resolution        = resolution;
+    k.terrainSizeMeters = std::max(grid.terrainSizeMeters, 1.0f);
+    k.emissionAmount    = std::max(0.0f, settings.emissionAmount);
+    k.minTan            = minTan;
+    k.invRange          = 1.0f / std::max(maxTan - minTan, 1e-6f);
+    k.maskMaxSnow       = std::max(1e-4f, settings.maskMaxSnow);
+    k.smoothDirection   = 0u;
+    k.pad0              = 0.0f;
+    auto setConstants = [&]() {
+        commandList->SetComputeRoot32BitConstants(0, 8, &k, 0);
+    };
+    setConstants();
+
+    const UINT groupCount = (resolution + 7u) / 8u;
+
+    // 1. Copy InputHeights → BaseHeights
+    commandList->SetPipelineState(g_snowCopyInputHeightsPso.Get());
+    commandList->Dispatch(groupCount, groupCount, 1);
+    uavBarrier();
+
+    // 2. Compute initial thickness + initial SurfA = base + thickness
+    commandList->SetPipelineState(g_snowComputeThicknessPso.Get());
+    commandList->Dispatch(groupCount, groupCount, 1);
+    uavBarrier();
+
+    // 3. Envelope smoothing iterations (pingpong via smoothDirection).
+    //    CPU side rounds smoothingIterations up to even so the final result
+    //    lands in SurfA (CSApply reads SurfA).
+    int rawIters = std::clamp(settings.smoothingIterations, 0, 16);
+    int smoothIters = (rawIters % 2 == 0) ? rawIters : (rawIters + 1);
+    for (int i = 0; i < smoothIters; ++i)
+    {
+        k.smoothDirection = static_cast<UINT>(i & 1);
+        setConstants();
+        commandList->SetPipelineState(g_snowEnvelopeSmoothingPso.Get());
+        commandList->Dispatch(groupCount, groupCount, 1);
+        uavBarrier();
+    }
+    k.smoothDirection = 0u;
+    setConstants();
+
+    // 4. Apply: thickness = SurfA - BaseHeights, write OutHeights + OutMask
+    commandList->SetPipelineState(g_snowApplyPso.Get());
+    commandList->Dispatch(groupCount, groupCount, 1);
+    uavBarrier();
+
+    // Read back outputs
+    D3D12_RESOURCE_BARRIER toCopySrc[2]{};
+    ID3D12Resource* copyResources[2] = {outHeightsBuf.Get(), outMaskBuf.Get()};
+    for (int i = 0; i < 2; ++i)
+    {
+        toCopySrc[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        toCopySrc[i].Transition.pResource = copyResources[i];
+        toCopySrc[i].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        toCopySrc[i].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+        toCopySrc[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    }
+    commandList->ResourceBarrier(2, toCopySrc);
+    commandList->CopyBufferRegion(readbackHeights.Get(), 0, outHeightsBuf.Get(), 0, fieldByteSize);
+    commandList->CopyBufferRegion(readbackMask.Get(),    0, outMaskBuf.Get(),    0, fieldByteSize);
+    ThrowIfFailed(commandList->Close(), "Close Snow command list failed");
+
+    ID3D12CommandList* lists[] = {commandList.Get()};
+    g_commandQueue->ExecuteCommandLists(1, lists);
+    const UINT64 fenceValue = ++g_fenceLastSignaledValue;
+    ThrowIfFailed(g_commandQueue->Signal(g_fence.Get(), fenceValue), "Signal Snow fence failed");
+    WaitForFenceValue(fenceValue);
+
+    void* mappedHeights = nullptr;
+    void* mappedMask = nullptr;
+    const D3D12_RANGE readRange{0, static_cast<SIZE_T>(fieldByteSize)};
+    ThrowIfFailed(readbackHeights->Map(0, &readRange, &mappedHeights), "Map Snow readback heights failed");
+    ThrowIfFailed(readbackMask->Map(0, &readRange, &mappedMask),       "Map Snow readback mask failed");
+    std::memcpy(grid.heights.data(), mappedHeights, fieldByteSize);
+    grid.mask.assign(static_cast<size_t>(cellCount), 0.0f);
+    std::memcpy(grid.mask.data(), mappedMask, fieldByteSize);
+    const D3D12_RANGE emptyWriteRange{0, 0};
+    readbackHeights->Unmap(0, &emptyWriteRange);
+    readbackMask->Unmap(0, &emptyWriteRange);
+
+    g_snowComputeStatus = "Snow GPU Compute evaluated";
+    return true;
+}
+
+bool RunSnowCompute(rock::HeightfieldGrid& grid, const rock::SnowSettings& settings, std::string* error)
+{
+    if (std::this_thread::get_id() == g_mainThreadId)
+    {
+        return RunSnowComputeImmediate(grid, settings, error);
+    }
+
+    auto request = std::make_shared<SnowGpuRequest>();
+    request->grid = grid;
+    request->settings = settings;
+    std::future<SnowGpuRequestResult> future = request->promise.get_future();
+    {
+        std::lock_guard<std::mutex> lock(g_snowGpuRequestMutex);
+        g_pendingSnowGpuRequests.push_back(request);
+    }
+    g_snowComputeStatus = "Snow GPU Compute queued on main thread";
+
+    SnowGpuRequestResult result = future.get();
+    if (!result.success)
+    {
+        if (error) *error = result.error;
+        return false;
+    }
+    grid = std::move(result.grid);
+    return true;
+}
+
+void ProcessPendingSnowGpuRequests()
+{
+    if (std::this_thread::get_id() != g_mainThreadId)
+    {
+        return;
+    }
+
+    std::vector<std::shared_ptr<SnowGpuRequest>> requests;
+    {
+        std::lock_guard<std::mutex> lock(g_snowGpuRequestMutex);
+        requests.swap(g_pendingSnowGpuRequests);
+    }
+
+    for (const std::shared_ptr<SnowGpuRequest>& request : requests)
+    {
+        SnowGpuRequestResult result;
+        result.grid = std::move(request->grid);
+        result.success = RunSnowComputeImmediate(result.grid, request->settings, &result.error);
+        request->promise.set_value(std::move(result));
+    }
+}
+
 // Mirrors the cbuffer in shaders/sky.hlsl. Packed manually to match HLSL's
 // 16-byte alignment rules so we can splat it as 32-bit root constants.
 struct SkyShaderConstants
@@ -6652,6 +7084,7 @@ void WaitForAsyncEvaluationForShutdown()
         ProcessPendingSedimentGpuRequests();
         ProcessPendingRockGpuRequests();
         ProcessPendingMaskFluvialGpuRequests();
+        ProcessPendingSnowGpuRequests();
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 
@@ -10250,7 +10683,18 @@ bool DrawSnowProperties(rock::Node& editableNode)
     sn.slopeLimitMinDeg = std::clamp(sn.slopeLimitMinDeg, 0.0f, 89.9f);
     sn.slopeLimitMaxDeg = std::clamp(std::max(sn.slopeLimitMaxDeg, sn.slopeLimitMinDeg), 0.0f, 89.9f);
     sn.maskMaxSnow = std::clamp(sn.maskMaxSnow, 0.001f, 1000.0f);
+    sn.smoothingIterations = std::clamp(sn.smoothingIterations, 0, 16);
 
+    {
+        int backendInt = static_cast<int>(sn.backend);
+        if (DrawPropertyComboRow("Backend", "SnowBackend", &backendInt, "CPU\0GPU\0\0", "実行バックエンド。GPU (D3D12 compute) は CPU 比で 5-15 倍程度高速。シェーダーコンパイル/ディスパッチ失敗時は CPU に自動フォールバック。CPU は決定論的でデバッグ向き。", static_cast<int>(rock::SnowSettings{}.backend)))
+        {
+            sn.backend = static_cast<rock::SnowBackend>(std::clamp(backendInt,
+                static_cast<int>(rock::SnowBackend::CpuReference),
+                static_cast<int>(rock::SnowBackend::GpuCompute)));
+            EvaluateGraph();
+        }
+    }
     if (DrawPropertyFloatRow("Emission Amount (m)", "SnowEmissionAmount", &sn.emissionAmount, 0.0f, 50.0f, rock::SnowSettings{}.emissionAmount, "Snow emission amount changed", true, "平地 (slope <= Slope Limit Min) に積もる雪の最大厚み (m)。地形の高さが全体的にこの値だけ持ち上がる感覚です。", "%.2f"))
     {
         EvaluateGraph();
@@ -10263,6 +10707,10 @@ bool DrawSnowProperties(rock::Node& editableNode)
     if (DrawPropertyFloatRow("Slope Limit Max (deg)", "SnowSlopeLimitMax", &sn.slopeLimitMaxDeg, 0.0f, 89.9f, rock::SnowSettings{}.slopeLimitMaxDeg, "Snow slope limit max changed", true, "この角度以上では雪はまったく積もらない (剥き出しの岩肌)。Min と Max の間は smoothstep で滑らかに遷移します。Min と Max の差を広げるほど積雪境界がぼやけます。", "%.1f"))
     {
         if (sn.slopeLimitMaxDeg < sn.slopeLimitMinDeg) sn.slopeLimitMinDeg = sn.slopeLimitMaxDeg;
+        EvaluateGraph();
+    }
+    if (DrawPropertyIntRow("Smoothing Iterations", "SnowSmoothingIterations", &sn.smoothingIterations, 0, 16, rock::SnowSettings{}.smoothingIterations, "Snow smoothing iterations changed", true, "雪の表面を反復的に「平滑化 + 溝埋め」する回数。各反復で snowSurface = heights + thickness の 3x3 box blur を取り、max(snowSurface, blurred) でセルを更新します。これによりスロープ遷移域の per-cell な厚み揺らぎが消え、また周囲より低いセル (= 溝の底) は雪が増えて埋まります。0 で平滑化なし、1-3 が見栄え良し。"))
+    {
         EvaluateGraph();
     }
     if (DrawPropertyFloatRow("Mask Max Snow (m)", "SnowMaskMaxSnow", &sn.maskMaxSnow, 0.001f, 50.0f, rock::SnowSettings{}.maskMaxSnow, "Snow mask max snow changed", true, "Snow mask 出力の正規化基準 (m)。`雪厚 / Mask Max Snow` を [0, 1] にクランプして mask に書きます。Emission Amount と同じ値にすれば満雪域が真っ白に出ます。下げるとうっすらした雪も明るく見えるようになります。", "%.2f"))
@@ -11278,6 +11726,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         rock::SetSedimentGpuEvaluator(RunSedimentCompute);
         rock::SetRockGpuEvaluator(RunRockCompute);
         rock::SetMaskFluvialGpuEvaluator(RunMaskFluvialCompute);
+        rock::SetSnowGpuEvaluator(RunSnowCompute);
 
         ShowWindow(g_hwnd, showCommand);
         UpdateWindow(g_hwnd);
@@ -11340,6 +11789,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
             ProcessPendingSedimentGpuRequests();
             ProcessPendingRockGpuRequests();
             ProcessPendingMaskFluvialGpuRequests();
+            ProcessPendingSnowGpuRequests();
             PollAsyncEvaluation();
             DrawUi();
             ImGui::Render();
@@ -11359,6 +11809,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         rock::SetSedimentGpuEvaluator(nullptr);
         rock::SetRockGpuEvaluator(nullptr);
         rock::SetMaskFluvialGpuEvaluator(nullptr);
+        rock::SetSnowGpuEvaluator(nullptr);
         CleanupD3D();
         DestroyWindow(g_hwnd);
         UnregisterClassW(wc.lpszClassName, wc.hInstance);
