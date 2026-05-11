@@ -4,28 +4,27 @@ Terrain Editor のノード関連ドキュメントをまとめるフォルダ�
 
 ## Heightfield 系ノード
 
-| ノード | ドキュメント |
-| --- | --- |
-| Heightmap Load | [heightfield/heightmap_load/heightmap_load_node.md](heightfield/heightmap_load/heightmap_load_node.md) |
-| Shape | [heightfield/shape/shape_node.md](heightfield/shape/shape_node.md) |
-| Heightmap Blur | [heightfield/heightmap_blur/heightmap_blur_node.md](heightfield/heightmap_blur/heightmap_blur_node.md) |
-| Multi-Scale Erosion | [heightfield/multi_scale_erosion/multi_scale_erosion_node.md](heightfield/multi_scale_erosion/multi_scale_erosion_node.md) |
-| Rock | [heightfield/rock/rock_node.md](heightfield/rock/rock_node.md) |
-| Sediment | [heightfield/sediment/sediment_node.md](heightfield/sediment/sediment_node.md) |
-| Snow | [heightfield/snow/snow_node.md](heightfield/snow/snow_node.md) |
+| ノード | パラメータ | アルゴリズム入門 |
+| --- | --- | --- |
+| Heightmap Load | [heightmap_load_node.md](heightfield/heightmap_load/heightmap_load_node.md) | [アルゴリズム入門](heightfield/heightmap_load/heightmap_load_algorithm_guide.md) |
+| Shape | [shape_node.md](heightfield/shape/shape_node.md) | [アルゴリズム入門](heightfield/shape/shape_algorithm_guide.md) |
+| Heightmap Blur | [heightmap_blur_node.md](heightfield/heightmap_blur/heightmap_blur_node.md) | [アルゴリズム入門](heightfield/heightmap_blur/heightmap_blur_algorithm_guide.md) |
+| Multi-Scale Erosion | [multi_scale_erosion_node.md](heightfield/multi_scale_erosion/multi_scale_erosion_node.md) | [アルゴリズム入門](heightfield/multi_scale_erosion/multi_scale_erosion_algorithm_guide.md) |
+| Rock | [rock_node.md](heightfield/rock/rock_node.md) | [アルゴリズム入門](heightfield/rock/rock_algorithm_guide.md) |
+| Sediment | [sediment_node.md](heightfield/sediment/sediment_node.md) | [アルゴリズム入門](heightfield/sediment/sediment_algorithm_guide.md) |
+| Snow | [snow_node.md](heightfield/snow/snow_node.md) | [アルゴリズム入門](heightfield/snow/snow_algorithm_guide.md) |
 
 ## Mask 系ノード
 
-| ノード | ドキュメント |
-| --- | --- |
-| Mask Noise | [mask/mask_noise/mask_noise_node.md](mask/mask_noise/mask_noise_node.md) |
-| Mask Blend | [mask/mask_blend/mask_blend_node.md](mask/mask_blend/mask_blend_node.md) |
-| Mask Fluvial | [mask/mask_fluvial/mask_fluvial_node.md](mask/mask_fluvial/mask_fluvial_node.md) |
+| ノード | パラメータ | アルゴリズム入門 |
+| --- | --- | --- |
+| Mask Noise | [mask_noise_node.md](mask/mask_noise/mask_noise_node.md) | [アルゴリズム入門](mask/mask_noise/mask_noise_algorithm_guide.md) |
+| Mask Blend | [mask_blend_node.md](mask/mask_blend/mask_blend_node.md) | [アルゴリズム入門](mask/mask_blend/mask_blend_algorithm_guide.md) |
+| Mask Fluvial | [mask_fluvial_node.md](mask/mask_fluvial/mask_fluvial_node.md) | [アルゴリズム入門](mask/mask_fluvial/mask_fluvial_algorithm_guide.md) |
 
 ## 関連資料
 
 | 資料 | 内容 |
 | --- | --- |
 | [node_candidates.md](node_candidates.md) | 今後追加したいノード候補 |
-| [heightfield/multi_scale_erosion/multi_scale_erosion_algorithm_guide.md](heightfield/multi_scale_erosion/multi_scale_erosion_algorithm_guide.md) | Multi-Scale Erosion のアルゴリズム入門 |
 | [heightfield/fluvial_erosion/](heightfield/fluvial_erosion/) | 旧 Fluvial Erosion / KTT 参考資料 |
