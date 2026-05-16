@@ -7112,7 +7112,8 @@ void EvaluateGraph()
 }
 
 // ドラッグサンプル列を間引き、グラデーションストップとして Colorize ノードに投影する。
-// 隣接サンプル間の色差が colorThreshold 以下の点を除去し、残った点を 0..1 に線形配置する。
+// 隣接サンプル間の色差が colorThreshold 以下の点を除去し、
+// 最大ストップ数に収まるよう再サンプリングして 0..1 に線形配置する。
 static void ProcessDragSamples(rock::GraphId nodeId, const std::vector<std::array<float, 3>>& samples)
 {
     if (samples.empty()) return;
@@ -7143,6 +7144,19 @@ static void ProcessDragSamples(rock::GraphId nodeId, const std::vector<std::arra
     if (thinned.size() < 2)
     {
         thinned = {samples.front(), samples.back()};
+    }
+
+    constexpr size_t maxGradientStops = 32;
+    if (thinned.size() > maxGradientStops)
+    {
+        std::vector<std::array<float, 3>> capped;
+        capped.reserve(maxGradientStops);
+        for (size_t i = 0; i < maxGradientStops; ++i)
+        {
+            const size_t idx = (i * (thinned.size() - 1) + (maxGradientStops - 1) / 2) / (maxGradientStops - 1);
+            capped.push_back(thinned[idx]);
+        }
+        thinned = std::move(capped);
     }
 
     // --- グラデーションストップとして投影 ---
