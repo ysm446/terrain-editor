@@ -7164,17 +7164,19 @@ static void ProcessDragSamples(rock::GraphId nodeId, const std::vector<std::arra
 }
 
 // カーソル位置のスクリーンピクセル色を取得する。
-// SetThreadDpiAwarenessContext(UNAWARE) で一時的にスレッドを DPI 非対応モードにすることで
-// GetCursorPos と GetDC(NULL)+GetPixel が同じ論理座標系で動作することを保証する。
-// これにより 100% / 150% / 200% 等どの DPI スケーリング環境でも座標が一致する。
+// アプリ全体は DPI-unaware のまま Windows の自動拡大に任せる。
+// ピッカーだけ Per-Monitor aware に切り替え、GetPhysicalCursorPos の物理座標を
+// GetDC(NULL)+GetPixel に渡して DPI スケーリング環境でも読み取り位置を揃える。
 static void SampleScreenPixel(float& r, float& g, float& b)
 {
-    // DPI 非対応コンテキストに切り替え、座標系を統一する
     DPI_AWARENESS_CONTEXT prevCtx =
-        SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_UNAWARE);
+        SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
     POINT pt{};
-    GetCursorPos(&pt);
+    if (!GetPhysicalCursorPos(&pt))
+    {
+        GetCursorPos(&pt);
+    }
     HDC hdc = GetDC(nullptr);
     COLORREF cr = GetPixel(hdc, pt.x, pt.y);
     ReleaseDC(nullptr, hdc);
