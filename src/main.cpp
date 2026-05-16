@@ -1948,6 +1948,7 @@ nlohmann::json MakeSnowSettingsJson(const rock::Node& node)
             {"slopeLimitMaxDeg", node.snow.slopeLimitMaxDeg},
             {"maskMaxSnow", node.snow.maskMaxSnow},
             {"smoothingIterations", node.snow.smoothingIterations},
+            {"fillRadius", node.snow.fillRadius},
             {"backend", static_cast<int>(node.snow.backend)},
         }},
     };
@@ -2262,6 +2263,7 @@ void ReadSnowSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     node.snow.slopeLimitMaxDeg = std::clamp(std::max(nodeSnowJson.value("slopeLimitMaxDeg", node.snow.slopeLimitMaxDeg), node.snow.slopeLimitMinDeg), 0.0f, 89.9f);
     node.snow.maskMaxSnow = std::clamp(nodeSnowJson.value("maskMaxSnow", node.snow.maskMaxSnow), 0.001f, 1000.0f);
     node.snow.smoothingIterations = std::clamp(nodeSnowJson.value("smoothingIterations", node.snow.smoothingIterations), 0, 16);
+    node.snow.fillRadius = std::clamp(nodeSnowJson.value("fillRadius", node.snow.fillRadius), 1, 8);
     {
         const int backendInt = std::clamp(nodeSnowJson.value("backend", static_cast<int>(node.snow.backend)),
                                            static_cast<int>(rock::SnowBackend::CpuReference),
@@ -2319,6 +2321,7 @@ nlohmann::json MakeProjectSettingsJson()
         {"display", {
             {"mode", displayMode},
             {"showFps", g_ui.showFps},
+            {"cloudsEnabled", clouds.enabled},
         }},
         {"preview", {
             {"lightingMode", preview.lightingMode},
@@ -2602,18 +2605,17 @@ void ReadDisplaySettingsJson(const nlohmann::json& settingsJson,
     }
 
     g_ui.showFps = displayJson.value("showFps", g_ui.showFps);
+    clouds.enabled = displayJson.value("cloudsEnabled", clouds.enabled);
     const int displayMode = std::clamp(displayJson.value("mode", -1), -1, 2);
     if (displayMode == 0)
     {
         preview.lightingMode = 0;
         sky.mode = rock::SkyMode::SolidColor;
-        clouds.enabled = false;
     }
     else if (displayMode == 1)
     {
         preview.lightingMode = 1;
         sky.mode = rock::SkyMode::SolidColor;
-        clouds.enabled = false;
     }
     else if (displayMode == 2)
     {
@@ -5374,9 +5376,14 @@ struct SnowShaderConstants
     float invRange;
     float maskMaxSnow;
     UINT  smoothDirection;
-    float pad0;
+    UINT  fillRadius;
+
+    UINT  pad0;
+    UINT  pad1;
+    UINT  pad2;
+    UINT  pad3;
 };
-static_assert(sizeof(SnowShaderConstants) == 8 * sizeof(UINT), "SnowShaderConstants must be 8 DWORDs");
+static_assert(sizeof(SnowShaderConstants) == 12 * sizeof(UINT), "SnowShaderConstants must be 12 DWORDs");
 
 bool EnsureSnowComputePipeline(std::string* error)
 {
@@ -5405,7 +5412,7 @@ bool EnsureSnowComputePipeline(std::string* error)
     rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     rootParams[0].Constants.ShaderRegister = 0;
     rootParams[0].Constants.RegisterSpace = 0;
-    rootParams[0].Constants.Num32BitValues = 8;
+    rootParams[0].Constants.Num32BitValues = 12;
     rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
@@ -5623,9 +5630,13 @@ bool RunSnowComputeImmediate(rock::HeightfieldGrid& grid, const rock::SnowSettin
     k.invRange          = 1.0f / std::max(maxTan - minTan, 1e-6f);
     k.maskMaxSnow       = std::max(1e-4f, settings.maskMaxSnow);
     k.smoothDirection   = 0u;
-    k.pad0              = 0.0f;
+    k.fillRadius        = static_cast<UINT>(std::clamp(settings.fillRadius, 1, 8));
+    k.pad0              = 0u;
+    k.pad1              = 0u;
+    k.pad2              = 0u;
+    k.pad3              = 0u;
     auto setConstants = [&]() {
-        commandList->SetComputeRoot32BitConstants(0, 8, &k, 0);
+        commandList->SetComputeRoot32BitConstants(0, 12, &k, 0);
     };
     setConstants();
 
@@ -7113,7 +7124,7 @@ void EvaluateGraph()
 
 // ドラッグサンプル列を間引き、グラデーションストップとして Colorize ノードに投影する。
 // 隣接サンプル間の色差が colorThreshold 以下の点を除去し、
-// 最大ストップ数に収まるよう再サンプリングして 0..1 に線形配置する。
+// 色変化の大きい点を優先して最大ストップ数に収め、元サンプル位置を保って配置する。
 static void ProcessDragSamples(rock::GraphId nodeId, const std::vector<std::array<float, 3>>& samples)
 {
     if (samples.empty()) return;
@@ -7121,40 +7132,90 @@ static void ProcessDragSamples(rock::GraphId nodeId, const std::vector<std::arra
     rock::Node* node = g_graph.FindMutableNode(nodeId);
     if (node == nullptr || node->kind != rock::NodeKind::Colorize) return;
 
+    struct DragSamplePoint
+    {
+        std::array<float, 3> color{};
+        float position = 0.0f;
+    };
+
+    auto samplePosition = [&](size_t index) {
+        return samples.size() <= 1 ? 0.0f : static_cast<float>(index) / static_cast<float>(samples.size() - 1);
+    };
+
     // --- 間引き (Douglas-Peucker 的な閾値フィルタ) ---
     // 隣接するサンプル間の色差が閾値未満なら省略。最初と最後は必ず保持。
     const float colorThreshold = 0.04f; // ~10/255 相当
-    std::vector<std::array<float, 3>> thinned;
-    thinned.push_back(samples.front());
+    std::vector<DragSamplePoint> thinned;
+    thinned.push_back({samples.front(), 0.0f});
     for (size_t i = 1; i + 1 < samples.size(); ++i)
     {
-        const auto& prev = thinned.back();
+        const auto& prev = thinned.back().color;
         const auto& cur  = samples[i];
         float dr = cur[0] - prev[0];
         float dg = cur[1] - prev[1];
         float db = cur[2] - prev[2];
         if (std::sqrt(dr*dr + dg*dg + db*db) >= colorThreshold)
         {
-            thinned.push_back(cur);
+            thinned.push_back({cur, samplePosition(i)});
         }
     }
-    thinned.push_back(samples.back());
+    thinned.push_back({samples.back(), 1.0f});
 
     // 最低 2 ストップを保証
     if (thinned.size() < 2)
     {
-        thinned = {samples.front(), samples.back()};
+        thinned = {{samples.front(), 0.0f}, {samples.back(), 1.0f}};
     }
 
     constexpr size_t maxGradientStops = 32;
     if (thinned.size() > maxGradientStops)
     {
-        std::vector<std::array<float, 3>> capped;
-        capped.reserve(maxGradientStops);
-        for (size_t i = 0; i < maxGradientStops; ++i)
+        std::vector<size_t> kept = {0, thinned.size() - 1};
+        kept.reserve(maxGradientStops);
+        auto colorError = [&](size_t left, size_t mid, size_t right) {
+            const float span = static_cast<float>(right - left);
+            const float t = span > 0.0f ? static_cast<float>(mid - left) / span : 0.0f;
+            const auto& a = thinned[left].color;
+            const auto& b = thinned[right].color;
+            const auto& c = thinned[mid].color;
+            const float er = c[0] - (a[0] + (b[0] - a[0]) * t);
+            const float eg = c[1] - (a[1] + (b[1] - a[1]) * t);
+            const float eb = c[2] - (a[2] + (b[2] - a[2]) * t);
+            return er * er + eg * eg + eb * eb;
+        };
+
+        while (kept.size() < maxGradientStops)
         {
-            const size_t idx = (i * (thinned.size() - 1) + (maxGradientStops - 1) / 2) / (maxGradientStops - 1);
-            capped.push_back(thinned[idx]);
+            std::sort(kept.begin(), kept.end());
+            size_t bestIndex = 0;
+            float bestError = 0.0f;
+            for (size_t segment = 0; segment + 1 < kept.size(); ++segment)
+            {
+                const size_t left = kept[segment];
+                const size_t right = kept[segment + 1];
+                for (size_t i = left + 1; i < right; ++i)
+                {
+                    const float error = colorError(left, i, right);
+                    if (error > bestError)
+                    {
+                        bestError = error;
+                        bestIndex = i;
+                    }
+                }
+            }
+            if (bestIndex == 0)
+            {
+                break;
+            }
+            kept.push_back(bestIndex);
+        }
+
+        std::sort(kept.begin(), kept.end());
+        std::vector<DragSamplePoint> capped;
+        capped.reserve(kept.size());
+        for (const size_t index : kept)
+        {
+            capped.push_back(thinned[index]);
         }
         thinned = std::move(capped);
     }
@@ -7165,10 +7226,10 @@ static void ProcessDragSamples(rock::GraphId nodeId, const std::vector<std::arra
     for (int i = 0; i < n; ++i)
     {
         rock::ColorStop stop;
-        stop.position = (n == 1) ? 0.0f : static_cast<float>(i) / static_cast<float>(n - 1);
-        stop.r = thinned[i][0];
-        stop.g = thinned[i][1];
-        stop.b = thinned[i][2];
+        stop.position = std::clamp(thinned[i].position, 0.0f, 1.0f);
+        stop.r = thinned[i].color[0];
+        stop.g = thinned[i].color[1];
+        stop.b = thinned[i].color[2];
         node->colorize.stops.push_back(stop);
     }
 
@@ -7917,7 +7978,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.skyGroundAlbedo != g_graph.Settings().sky.groundAlbedo ||
         g_gpuMeshPreview.skySunSizeDegrees != g_graph.Settings().sky.sunSizeDegrees ||
         g_gpuMeshPreview.skySunGlowStrength != g_graph.Settings().sky.sunGlowStrength ||
-        g_gpuMeshPreview.cloudsEnabled != (g_graph.Settings().clouds.enabled ? 1 : 0) ||
+        g_gpuMeshPreview.cloudsEnabled != ((g_graph.Settings().sky.mode == rock::SkyMode::Atmospheric && g_graph.Settings().clouds.enabled) ? 1 : 0) ||
         g_gpuMeshPreview.cloudSeed != g_graph.Settings().clouds.seed ||
         g_gpuMeshPreview.cloudCoverage != g_graph.Settings().clouds.coverage ||
         g_gpuMeshPreview.cloudDensityMultiplier != g_graph.Settings().clouds.densityMultiplier ||
@@ -7938,7 +7999,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.cloudLightStepMeters != g_graph.Settings().clouds.lightStepMeters ||
         g_gpuMeshPreview.cloudPhaseEccentricity != g_graph.Settings().clouds.phaseEccentricity ||
         g_gpuMeshPreview.meshBackend != static_cast<int>(g_graph.Settings().preview.meshBackend) ||
-        (g_graph.Settings().clouds.enabled && g_graph.Settings().clouds.windSpeedMetersPerSec > 0.0f) ||
+        (g_graph.Settings().sky.mode == rock::SkyMode::Atmospheric && g_graph.Settings().clouds.enabled && g_graph.Settings().clouds.windSpeedMetersPerSec > 0.0f) ||
         (showGrid && !g_gpuMeshPreview.gridVertexBuffer) ||
         g_gpuMeshPreview.colorState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     if (!meshDirty && !viewportDirty) return true;
@@ -8321,7 +8382,9 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         const float shadowSizeZ = (boundsMax.z - boundsMin.z) + shadowMargin * 2.0f;
 
         bool cloudShadowReady = false;
-        if (cloudSettingsForShadow.enabled && cloudSettingsForShadow.shadowStrength > 0.001f)
+        if (g_graph.Settings().sky.mode == rock::SkyMode::Atmospheric &&
+            cloudSettingsForShadow.enabled &&
+            cloudSettingsForShadow.shadowStrength > 0.001f)
         {
             std::string ignored;
             if (EnsureCloudVolume(cloudSettingsForShadow.seed, &ignored))
@@ -8512,7 +8575,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         // terrain and is occluded by closer terrain. Alpha-blended over the
         // already-rendered scene with SRC_ALPHA / INV_SRC_ALPHA.
         const rock::CloudSettings& cloudSettings = g_graph.Settings().clouds;
-        if (cloudSettings.enabled)
+        if (g_graph.Settings().sky.mode == rock::SkyMode::Atmospheric && cloudSettings.enabled)
         {
             D3D12_RESOURCE_BARRIER depthToSrv{};
             depthToSrv.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -8624,7 +8687,8 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.skyGroundAlbedo = g_graph.Settings().sky.groundAlbedo;
         g_gpuMeshPreview.skySunSizeDegrees = g_graph.Settings().sky.sunSizeDegrees;
         g_gpuMeshPreview.skySunGlowStrength = g_graph.Settings().sky.sunGlowStrength;
-        g_gpuMeshPreview.cloudsEnabled = g_graph.Settings().clouds.enabled ? 1 : 0;
+        g_gpuMeshPreview.cloudsEnabled =
+            (g_graph.Settings().sky.mode == rock::SkyMode::Atmospheric && g_graph.Settings().clouds.enabled) ? 1 : 0;
         g_gpuMeshPreview.cloudSeed = g_graph.Settings().clouds.seed;
         g_gpuMeshPreview.cloudCoverage = g_graph.Settings().clouds.coverage;
         g_gpuMeshPreview.cloudDensityMultiplier = g_graph.Settings().clouds.densityMultiplier;
@@ -8726,12 +8790,10 @@ void ApplyViewportDisplayMode(rock::GraphSettings& settings, ViewportDisplayMode
     case ViewportDisplayMode::Simple:
         settings.preview.lightingMode = 0;
         settings.sky.mode = rock::SkyMode::SolidColor;
-        settings.clouds.enabled = false;
         break;
     case ViewportDisplayMode::Pbr:
         settings.preview.lightingMode = 1;
         settings.sky.mode = rock::SkyMode::SolidColor;
-        settings.clouds.enabled = false;
         break;
     case ViewportDisplayMode::Sky:
         settings.preview.lightingMode = 1;
@@ -10771,53 +10833,94 @@ bool DrawColorizeProperties(rock::Node& editableNode)
 
     // ストップハンドル (三角形マーカー)
     static int s_selectedStop = 0;
+    static int s_draggingStop = -1;
     if (s_selectedStop >= static_cast<int>(cs.stops.size())) s_selectedStop = 0;
+    if (s_draggingStop >= static_cast<int>(cs.stops.size())) s_draggingStop = -1;
 
     // インビジブルボタンでバークリックを検出 (ストップ追加 / 選択)
     ImGui::SetCursorScreenPos(barMin);
-    ImGui::InvisibleButton("##gradbar", ImVec2(barWidth, barHeight));
+    ImGui::InvisibleButton("##gradbar", ImVec2(barWidth, barHeight + 12.0f));
     if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
     {
         const float clickX = ImGui::GetIO().MousePos.x;
         const float t = std::clamp((clickX - barMin.x) / barWidth, 0.0f, 1.0f);
-        // 最も近いストップを選択、または新規追加 (Ctrl クリック)
-        if (ImGui::GetIO().KeyCtrl)
+        float bestDist = FLT_MAX;
+        int nearestStop = 0;
+        for (int i = 0; i < static_cast<int>(cs.stops.size()); ++i)
         {
-            // 既存ストップと重複していなければ追加
-            bool tooClose = false;
-            for (const auto& s : cs.stops)
-                if (std::abs(s.position - t) < 0.005f) { tooClose = true; break; }
-            if (!tooClose)
+            const float dist = std::abs(cs.stops[i].position - t);
+            if (dist < bestDist)
             {
-                // 追加時の色: 隣接ストップ間を線形補間
-                float r = 1.0f, g = 1.0f, b = 1.0f;
-                for (size_t si = 0; si + 1 < cs.stops.size(); ++si)
-                {
-                    if (t <= cs.stops[si+1].position)
-                    {
-                        float span = cs.stops[si+1].position - cs.stops[si].position;
-                        float a = span > 0.0f ? (t - cs.stops[si].position) / span : 0.0f;
-                        r = cs.stops[si].r + a * (cs.stops[si+1].r - cs.stops[si].r);
-                        g = cs.stops[si].g + a * (cs.stops[si+1].g - cs.stops[si].g);
-                        b = cs.stops[si].b + a * (cs.stops[si+1].b - cs.stops[si].b);
-                        break;
-                    }
-                }
-                cs.stops.push_back({t, r, g, b});
-                std::sort(cs.stops.begin(), cs.stops.end(), [](const rock::ColorStop& a, const rock::ColorStop& b){ return a.position < b.position; });
-                changed = true;
+                bestDist = dist;
+                nearestStop = i;
             }
+        }
+        auto addStopAt = [&]() {
+            // 追加時の色: 隣接ストップ間を線形補間
+            float r = 1.0f, g = 1.0f, b = 1.0f;
+            for (size_t si = 0; si + 1 < cs.stops.size(); ++si)
+            {
+                if (t <= cs.stops[si+1].position)
+                {
+                    const float span = cs.stops[si+1].position - cs.stops[si].position;
+                    const float a = span > 0.0f ? (t - cs.stops[si].position) / span : 0.0f;
+                    r = cs.stops[si].r + a * (cs.stops[si+1].r - cs.stops[si].r);
+                    g = cs.stops[si].g + a * (cs.stops[si+1].g - cs.stops[si].g);
+                    b = cs.stops[si].b + a * (cs.stops[si+1].b - cs.stops[si].b);
+                    break;
+                }
+            }
+            cs.stops.push_back({t, r, g, b});
+            std::sort(cs.stops.begin(), cs.stops.end(), [](const rock::ColorStop& a, const rock::ColorStop& b){ return a.position < b.position; });
+            float newBestDist = FLT_MAX;
+            for (int i = 0; i < static_cast<int>(cs.stops.size()); ++i)
+            {
+                const float dist = std::abs(cs.stops[i].position - t);
+                if (dist < newBestDist)
+                {
+                    newBestDist = dist;
+                    s_selectedStop = i;
+                }
+            }
+            s_draggingStop = s_selectedStop;
+            changed = true;
+        };
+
+        const float pickRadius = std::max(0.006f, 8.0f / std::max(barWidth, 1.0f));
+        if (bestDist <= pickRadius)
+        {
+            // 最も近いストップを選択
+            s_selectedStop = nearestStop;
+            s_draggingStop = s_selectedStop;
         }
         else
         {
-            // 最も近いストップを選択
-            float bestDist = FLT_MAX;
-            for (int i = 0; i < static_cast<int>(cs.stops.size()); ++i)
+            addStopAt();
+        }
+    }
+    if (s_draggingStop >= 0 && ImGui::IsMouseDown(ImGuiMouseButton_Left))
+    {
+        const float mouseX = ImGui::GetIO().MousePos.x;
+        const float newPosition = std::clamp((mouseX - barMin.x) / barWidth, 0.0f, 1.0f);
+        cs.stops[s_draggingStop].position = newPosition;
+        std::sort(cs.stops.begin(), cs.stops.end(), [](const rock::ColorStop& a, const rock::ColorStop& b){ return a.position < b.position; });
+        float bestDist = FLT_MAX;
+        for (int i = 0; i < static_cast<int>(cs.stops.size()); ++i)
+        {
+            const float dist = std::abs(cs.stops[i].position - newPosition);
+            if (dist < bestDist)
             {
-                float dist = std::abs(cs.stops[i].position - t);
-                if (dist < bestDist) { bestDist = dist; s_selectedStop = i; }
+                bestDist = dist;
+                s_selectedStop = i;
             }
         }
+        s_draggingStop = s_selectedStop;
+        changed = true;
+    }
+    if (s_draggingStop >= 0 && ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+    {
+        s_draggingStop = -1;
+        EvaluateGraph();
     }
 
     // ハンドル描画
@@ -10832,40 +10935,77 @@ bool DrawColorizeProperties(rock::Node& editableNode)
     }
     ImGui::SetCursorScreenPos(ImVec2(barMin.x, barMax.y + 14.0f));
 
-    ImGui::TextDisabled("Ctrl+クリックでストップ追加");
+    ImGui::TextDisabled("クリックで追加 / ドラッグで位置変更 / Deleteで削除");
     ImGui::Spacing();
 
     // --- 選択中ストップの編集 ---
     if (s_selectedStop < static_cast<int>(cs.stops.size()))
     {
-        rock::ColorStop& sel = cs.stops[s_selectedStop];
         ImGui::Text("Stop %d", s_selectedStop);
         ImGui::SameLine();
+
+        auto deleteSelectedStop = [&]() {
+            if (cs.stops.size() <= 2 || s_selectedStop < 0 || s_selectedStop >= static_cast<int>(cs.stops.size()))
+            {
+                return false;
+            }
+            cs.stops.erase(cs.stops.begin() + s_selectedStop);
+            s_selectedStop = std::clamp(s_selectedStop - 1, 0, static_cast<int>(cs.stops.size()) - 1);
+            s_draggingStop = -1;
+            return true;
+        };
+
+        bool stopDeleted = false;
         // 削除ボタン (ストップが 2 以上の場合のみ)
         ImGui::BeginDisabled(cs.stops.size() <= 2);
         if (ImGui::SmallButton("削除"))
         {
-            cs.stops.erase(cs.stops.begin() + s_selectedStop);
-            s_selectedStop = std::max(0, s_selectedStop - 1);
-            changed = true;
+            stopDeleted = deleteSelectedStop();
         }
         ImGui::EndDisabled();
+        if (cs.stops.size() > 2 &&
+            s_draggingStop < 0 &&
+            ImGui::IsWindowFocused() &&
+            !ImGui::IsAnyItemActive() &&
+            !ImGui::GetIO().WantTextInput &&
+            ImGui::IsKeyPressed(ImGuiKey_Delete, false))
+        {
+            stopDeleted = deleteSelectedStop();
+        }
+        if (stopDeleted)
+        {
+            changed = true;
+        }
 
-        float posVal = sel.position;
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 8.0f);
-        if (ImGui::SliderFloat("##stopPos", &posVal, 0.0f, 1.0f, "Position %.3f"))
+        if (!stopDeleted)
         {
-            sel.position = posVal;
-            std::sort(cs.stops.begin(), cs.stops.end(), [](const rock::ColorStop& a, const rock::ColorStop& b){ return a.position < b.position; });
-            changed = true;
+            float posVal = cs.stops[s_selectedStop].position;
+            ImGui::SetNextItemWidth(116.0f);
+            if (ImGui::DragFloat("Position", &posVal, 0.001f, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp))
+            {
+                cs.stops[s_selectedStop].position = posVal;
+                std::sort(cs.stops.begin(), cs.stops.end(), [](const rock::ColorStop& a, const rock::ColorStop& b){ return a.position < b.position; });
+                float bestDist = FLT_MAX;
+                for (int i = 0; i < static_cast<int>(cs.stops.size()); ++i)
+                {
+                    const float dist = std::abs(cs.stops[i].position - posVal);
+                    if (dist < bestDist)
+                    {
+                        bestDist = dist;
+                        s_selectedStop = i;
+                    }
+                }
+                changed = true;
+            }
+            rock::ColorStop& selectedStop = cs.stops[s_selectedStop];
+            float col3[3] = {selectedStop.r, selectedStop.g, selectedStop.b};
+            if (ImGui::ColorEdit3("##stopColor", col3, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_DisplayRGB))
+            {
+                selectedStop.r = col3[0]; selectedStop.g = col3[1]; selectedStop.b = col3[2];
+                changed = true;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit()) { EvaluateGraph(); }
         }
-        float col3[3] = {sel.r, sel.g, sel.b};
-        if (ImGui::ColorEdit3("##stopColor", col3, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_DisplayRGB))
-        {
-            sel.r = col3[0]; sel.g = col3[1]; sel.b = col3[2];
-            changed = true;
-        }
-        if (ImGui::IsItemDeactivatedAfterEdit()) { EvaluateGraph(); }
         if (changed && !ImGui::IsAnyItemActive()) { EvaluateGraph(); }
 
         // スクリーンカラーピッカー
@@ -10929,7 +11069,7 @@ bool DrawColorizeProperties(rock::Node& editableNode)
         else
         {
             // ---- 通常時: ピッカーボタン ----
-            if (ImGui::Button("Ctrl で取得", ImVec2(ImGui::GetContentRegionAvail().x - 8.0f, 0)))
+            if (ImGui::Button("Ctrl で取得", ImVec2(128.0f, 30.0f)))
             {
                 g_screenPick.mode    = ScreenPickMode::DragArmed;
                 g_screenPick.nodeId  = editableNode.id;
@@ -10940,7 +11080,7 @@ bool DrawColorizeProperties(rock::Node& editableNode)
             if (ImGui::IsItemHovered())
             {
                 ImGui::SetTooltip("Ctrl を押しながらマウスを移動すると軌跡の色を収集します。\n"
-                    "Ctrl を離した時点で間引きしてグラデーションに線形投影します。\n"
+                    "Ctrl を離した時点で間引きし、収集時の位置を保ってグラデーション化します。\n"
                     "既存のストップはすべて置き換えられます。\n"
                     "他アプリ上でも使用可能。Esc でキャンセル。");
             }
@@ -11214,6 +11354,7 @@ bool DrawSnowProperties(rock::Node& editableNode)
     sn.slopeLimitMaxDeg = std::clamp(std::max(sn.slopeLimitMaxDeg, sn.slopeLimitMinDeg), 0.0f, 89.9f);
     sn.maskMaxSnow = std::clamp(sn.maskMaxSnow, 0.001f, 1000.0f);
     sn.smoothingIterations = std::clamp(sn.smoothingIterations, 0, 16);
+    sn.fillRadius = std::clamp(sn.fillRadius, 1, 8);
 
     {
         int backendInt = static_cast<int>(sn.backend);
@@ -11239,7 +11380,11 @@ bool DrawSnowProperties(rock::Node& editableNode)
         if (sn.slopeLimitMaxDeg < sn.slopeLimitMinDeg) sn.slopeLimitMinDeg = sn.slopeLimitMaxDeg;
         EvaluateGraph();
     }
-    if (DrawPropertyIntRow("Smoothing Iterations", "SnowSmoothingIterations", &sn.smoothingIterations, 0, 16, rock::SnowSettings{}.smoothingIterations, "Snow smoothing iterations changed", true, "雪の表面を反復的に「平滑化 + 溝埋め」する回数。各反復で snowSurface = heights + thickness の 3x3 box blur を取り、max(snowSurface, blurred) でセルを更新します。これによりスロープ遷移域の per-cell な厚み揺らぎが消え、また周囲より低いセル (= 溝の底) は雪が増えて埋まります。0 で平滑化なし、1-3 が見栄え良し。"))
+    if (DrawPropertyIntRow("Smoothing Iterations", "SnowSmoothingIterations", &sn.smoothingIterations, 0, 16, rock::SnowSettings{}.smoothingIterations, "Snow smoothing iterations changed", true, "雪の表面を反復的に「平滑化 + 溝埋め」する回数。各反復で snowSurface = heights + thickness の近傍 blur を取り、max(snowSurface, blurred) でセルを更新します。これによりスロープ遷移域の per-cell な厚み揺らぎが消え、また周囲より低いセル (= 溝の底) は雪が増えて埋まります。0 で平滑化なし、6-8 で積雪面が出やすくなります。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyIntRow("Fill Radius (cells)", "SnowFillRadius", &sn.fillRadius, 1, 8, rock::SnowSettings{}.fillRadius, "Snow fill radius changed", true, "雪面をならす近傍 blur の半径です。1 は従来の 3x3 相当、3-4 で細かい凹凸や隙間を広く埋めます。大きくすると雪原らしく丸まりますが、地形の細部は失われます。"))
     {
         EvaluateGraph();
     }

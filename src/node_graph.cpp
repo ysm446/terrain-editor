@@ -151,6 +151,7 @@ uint64_t HashSnowSettings(const SnowSettings& settings, int resolution)
     HashCombine(hash, HashFloat(settings.slopeLimitMaxDeg));
     HashCombine(hash, HashFloat(settings.maskMaxSnow));
     HashCombine(hash, static_cast<uint64_t>(settings.smoothingIterations));
+    HashCombine(hash, static_cast<uint64_t>(settings.fillRadius));
     HashCombine(hash, static_cast<uint64_t>(settings.backend));
     HashCombine(hash, static_cast<uint64_t>(resolution));
     return hash;
@@ -1999,7 +2000,7 @@ void ApplyRock(HeightfieldGrid& grid, const RockSettings& settings)
 //
 // 仕上げに「snow envelope smoothing」を smoothingIterations 回かける:
 //   surface = heights + thickness
-//   blurred = 3x3 box blur of surface
+//   blurred = box blur of surface (fillRadius cell radius)
 //   surface = max(surface, blurred)   ← 周囲より低いセルだけ持ち上がる
 //   thickness = surface - heights
 // これにより周囲が高いセル (= 溝の底) は雪が増えて埋まり、周囲より高い
@@ -2039,6 +2040,7 @@ void ApplySnow(HeightfieldGrid& grid, const SnowSettings& settings)
     const float invRange = 1.0f / std::max(maxTan - minTan, 1e-6f);
     const float maskMax = std::max(1e-4f, settings.maskMaxSnow);
     const int smoothIters = std::clamp(settings.smoothingIterations, 0, 16);
+    const int fillRadius = std::clamp(settings.fillRadius, 1, 8);
 
     const float terrainSize = std::max(grid.terrainSizeMeters, 1.0f);
     const float cellSize = terrainSize / static_cast<float>(std::max(1, n - 1));
@@ -2073,7 +2075,7 @@ void ApplySnow(HeightfieldGrid& grid, const SnowSettings& settings)
     });
 
     // Phase 2: snow envelope smoothing。
-    //   surface = baseHeights + thickness を 3x3 box blur (Jacobi double-buffer)、
+    //   surface = baseHeights + thickness を近傍 box blur (Jacobi double-buffer)、
     //   max(surface, blurred) で出っ張りを保ちつつ溝を埋める。
     if (smoothIters > 0)
     {
@@ -2090,25 +2092,24 @@ void ApplySnow(HeightfieldGrid& grid, const SnowSettings& settings)
         for (int iter = 0; iter < smoothIters; ++iter)
         {
             ParallelForRows(n, [&](int z) {
-                const int zm = std::max(0, z - 1);
-                const int zp = std::min(n - 1, z + 1);
                 const size_t rowBase = static_cast<size_t>(z) * static_cast<size_t>(n);
-                const size_t rowAbove = static_cast<size_t>(zm) * static_cast<size_t>(n);
-                const size_t rowBelow = static_cast<size_t>(zp) * static_cast<size_t>(n);
                 for (int x = 0; x < n; ++x)
                 {
-                    const int xm = std::max(0, x - 1);
-                    const int xp = std::min(n - 1, x + 1);
-                    const float s00 = surfA[rowAbove + static_cast<size_t>(xm)];
-                    const float s01 = surfA[rowAbove + static_cast<size_t>(x)];
-                    const float s02 = surfA[rowAbove + static_cast<size_t>(xp)];
-                    const float s10 = surfA[rowBase + static_cast<size_t>(xm)];
+                    float sum = 0.0f;
+                    int count = 0;
+                    for (int oz = -fillRadius; oz <= fillRadius; ++oz)
+                    {
+                        const int sz = std::clamp(z + oz, 0, n - 1);
+                        const size_t sampleRow = static_cast<size_t>(sz) * static_cast<size_t>(n);
+                        for (int ox = -fillRadius; ox <= fillRadius; ++ox)
+                        {
+                            const int sx = std::clamp(x + ox, 0, n - 1);
+                            sum += surfA[sampleRow + static_cast<size_t>(sx)];
+                            ++count;
+                        }
+                    }
                     const float s11 = surfA[rowBase + static_cast<size_t>(x)];
-                    const float s12 = surfA[rowBase + static_cast<size_t>(xp)];
-                    const float s20 = surfA[rowBelow + static_cast<size_t>(xm)];
-                    const float s21 = surfA[rowBelow + static_cast<size_t>(x)];
-                    const float s22 = surfA[rowBelow + static_cast<size_t>(xp)];
-                    const float blurred = (s00 + s01 + s02 + s10 + s11 + s12 + s20 + s21 + s22) * (1.0f / 9.0f);
+                    const float blurred = sum / static_cast<float>(std::max(1, count));
                     surfB[rowBase + static_cast<size_t>(x)] = std::max(s11, blurred);
                 }
             });

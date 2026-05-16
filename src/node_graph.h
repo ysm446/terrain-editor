@@ -276,14 +276,14 @@ struct SnowSettings
     float slopeLimitMaxDeg = 60.0f;    // この角度以上では雪はまったく積もらない。間は smoothstep。
     float maskMaxSnow = 1.0f;          // m. mask 出力の正規化基準 (snow >= この値 → mask = 1.0)。
     // 雪の表面を反復的に「平滑化 + 溝埋め」する反復数。各反復で
-    // snowSurface = heights + thickness の 3x3 box blur を取り、
+    // snowSurface = heights + thickness の近傍 box blur を取り、
     // max(snowSurface, blurred) でセルを更新する。これにより:
     //   - 周囲より低いセル (= 溝の底) は雪が増えて埋まる
     //   - 周囲より高いセル (= 出っ張り) は変わらない
     //   - スロープ遷移域の per-cell な thickness 揺らぎが消える
-    // 結果として「雪の envelope」が次第に滑らかになる。0 = 平滑化なし
-    // (旧挙動)、1-3 が見栄え良し。
-    int smoothingIterations = 2;
+    // 結果として「雪の envelope」が次第に滑らかになる。0 = 平滑化なし。
+    int smoothingIterations = 8;
+    int fillRadius = 3; // cell. 近傍 blur の半径。大きいほど隙間や細かい凹凸を広く埋める。
     SnowBackend backend = SnowBackend::GpuCompute;
 };
 

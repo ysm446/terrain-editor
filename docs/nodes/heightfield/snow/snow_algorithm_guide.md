@@ -67,7 +67,7 @@ Envelope Smoothing はこのばらつきを物理的に意味のある方向へ�
 surface[i] = baseHeights[i] + thickness[i]   ← 雪面の高さ
 
 各反復:
-    blurred[i] = 3×3 box blur of surface      ← 近傍平均
+    blurred[i] = box blur of surface          ← Fill Radius に応じた近傍平均
     surface[i] = max(surface[i], blurred[i])  ← 出っ張りは保ち、窪みを埋める
 ```
 
@@ -86,8 +86,8 @@ Jacobi 二重バッファで並列実行されるため、反復内のセル間�
 | 反復数 | 効果 |
 | --- | --- |
 | 0 | ならしなし。スロープ遷移域に細かいムラが残ることがある |
-| 1〜2 | 遷移域のムラがほぼ消え、雪面が自然に見える (推奨) |
-| 4〜8 | 窪みや谷が深く埋まる。積雪が多い表現に |
+| 1〜2 | 遷移域のムラが薄くなる |
+| 4〜8 | 窪みや谷が深く埋まる。積雪が多い表現に (推奨) |
 | 16 | ほぼ全体が均された厚い雪の平原になる |
 
 ## Phase 3 — 高さとマスクへの書き込み
@@ -108,7 +108,8 @@ mask[i] = clamp(thickness[i] / maskMaxSnow, 0, 1)
 | `Emission Amount (m)` | 最大積雪量。なだらかな平地にこの厚さで積もる |
 | `Slope Limit Min (deg)` | この傾斜以下では全量積もる |
 | `Slope Limit Max (deg)` | この傾斜以上では積もらない |
-| `Smoothing Iterations` | Envelope smoothing の反復数。0 = なし、2 = デフォルト |
+| `Smoothing Iterations` | Envelope smoothing の反復数。0 = なし、8 = デフォルト |
+| `Fill Radius (cells)` | 1 回の smoothing で参照する近傍半径。1 = 3×3、3-4 = 細かい凹凸を広く埋める |
 | `Mask Max Snow (m)` | マスクが 1.0 (白) になる積雪厚さ |
 
 ## よくある使い方と設定例
@@ -119,7 +120,8 @@ mask[i] = clamp(thickness[i] / maskMaxSnow, 0, 1)
 Emission Amount: 2.0 m
 Slope Limit Min: 50°
 Slope Limit Max: 60°
-Smoothing Iterations: 2
+Smoothing Iterations: 6
+Fill Radius: 3
 ```
 
 急崖 (60° 以上) には雪が付かず、なだらかな稜線や高原に積雪します。
@@ -132,6 +134,7 @@ Emission Amount: 3.0 m
 Slope Limit Min: 40°
 Slope Limit Max: 55°
 Smoothing Iterations: 6〜8
+Fill Radius: 3〜4
 ```
 
 Smoothing を多くかけると谷や窪みが積雪で埋まり、深雪らしい丸みが出ます。
@@ -142,7 +145,8 @@ Smoothing を多くかけると谷や窪みが積雪で埋まり、深雪らし�
 Emission Amount: 1.0 m
 Slope Limit Min: 30°
 Slope Limit Max: 45°
-Smoothing Iterations: 2
+Smoothing Iterations: 6
+Fill Radius: 2〜3
 ```
 
 谷の側壁には積もらず、平坦な頂部のみ白くなります。
@@ -159,6 +163,22 @@ Smoothing Iterations: 2
 
 Phase 1 の per-cell なばらつきが残っています。
 `Smoothing Iterations` を 2 以上にすれば解消します。
+
+### Emission Amount を上げると emboss 感が強くなる
+
+現在の初期厚みは `thickness = emissionAmount × snowFraction(slope)` で決まります。
+`snowFraction` は slope に強く依存するため、`Emission Amount` を上げると、緩いセルは大きく持ち上がり、急なセルはあまり持ち上がりません。
+その差分が元地形の細かい傾斜差を増幅し、結果として「雪が覆った」というより、地形の凹凸が embossed されたように見えることがあります。
+
+Phase 2 の envelope smoothing は `surface = max(surface, blurred)` なので、低い窪みは埋めますが、高く出た凸部や ridge は削りません。
+そのため emission が大きいほど、残った凸部と周囲の厚み差が目立ちやすくなります。
+
+今後の改善候補:
+
+- slope 判定に使う高さを事前に軽く blur し、細かいノイズ状の傾斜に反応しすぎないようにする。
+- `thickness` 自体を smoothing してから `baseHeights` に足し、雪の層の高周波成分を減らす。
+- `max(surface, blurred)` だけでなく、雪面を一定量 blurred 側へ寄せる `Surface Smooth Strength` のような制御を追加する。
+- `Slope Limit Min/Max` の幅を広げ、積もる/積もらない境界が硬く出ないようにする。
 
 ### 谷や窪みが埋まりすぎて地形の起伏が失われる
 

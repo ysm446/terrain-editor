@@ -43,6 +43,8 @@
 - `Colorize` の `Heightmap` は、地形形状を見ながら色を調整するためのプレビュー用途を主目的にする。
 - `Colorize` は、まずアプリ内のプレビューや画像領域から色をピックする仕様を優先する。OS 全体の画面色取得は環境依存が大きいため、必要になったら別途検討する。
 - マウス軌道から拾った色は、距離または時系列でサンプルし、重複色の間引き、平滑化、グラデーションキー化を行う案を検討する。
+- `Snow` ノードは、`Emission Amount` を上げたときに slope 由来の厚み差が増幅され、地形の細かい凹凸が emboss のように強調される課題を改善する。
+- `Snow` の改善候補として、slope 判定用 height の事前 blur、`thickness` 自体の smoothing、雪面を blurred 側へ寄せる `Surface Smooth Strength`、`Slope Limit Min/Max` 幅の調整 UI を検討する。
 
 ## 保留メモ
 
