@@ -25,6 +25,7 @@ enum class NodeKind
     Rock = 12,
     Sediment = 13,
     Snow = 14,
+    Colorize = 15,
 };
 
 enum class PinKind
@@ -38,6 +39,7 @@ enum class ValueType
     Mesh = 1,
     HeightField = 2,
     Mask = 3,
+    ColorTexture = 4,
 };
 
 enum class MultiScaleErosionBackend
@@ -149,6 +151,7 @@ enum class PreviewStage
     Rock = 11,
     Sediment = 12,
     Snow = 13,
+    Colorize = 14,
 };
 
 enum class HeightfieldPreviewField
@@ -284,6 +287,31 @@ struct SnowSettings
     SnowBackend backend = SnowBackend::GpuCompute;
 };
 
+// カラーグラデーションの色ストップ。position は 0..1 の範囲でグラデーション上の位置を指定する。
+struct ColorStop
+{
+    float position = 0.0f;
+    float r = 0.0f;
+    float g = 0.0f;
+    float b = 0.0f;
+};
+
+// RGBA8 カラーテクスチャ出力。resolution x resolution の正方グリッドで、
+// pixels は row-major 順で各ピクセル 4 バイト (R, G, B, A) を保持する。
+struct ColorGrid
+{
+    int resolution = 0;
+    std::vector<uint8_t> pixels; // RGBA8, row-major
+};
+
+// Heightmap (optional) + Mask (optional) + Gradient Mask → Color Texture.
+// Gradient Mask の各ピクセル値 (0..1) をグラデーション上の参照位置として色を決定し、
+// Mask で適用強度 (アルファ) を制御する。Heightmap は 3D プレビュー用の地形形状にのみ使用。
+struct ColorizeSettings
+{
+    std::vector<ColorStop> stops = {{0.0f, 0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f, 1.0f}};
+};
+
 // Heightfield -> mask. Performs D8 (or MFD) flow accumulation on the
 // input heights and emits a mask. The default Log curve produces the
 // classic continuous dendritic drainage tree (every cell visible, fine
@@ -365,6 +393,7 @@ struct Node
     RockSettings rock;
     SedimentSettings sediment;
     SnowSettings snow;
+    ColorizeSettings colorize;
 };
 
 struct Link
@@ -464,6 +493,9 @@ struct MeshVertex
     float ny = 1.0f;
     float nz = 0.0f;
     float mask = 0.0f;
+    float r = 0.0f;
+    float g = 0.0f;
+    float b = 0.0f;
 };
 
 struct MeshTriangle
@@ -556,6 +588,8 @@ struct EvaluationSummary
     std::string previewMessage;
     HeightfieldGrid previewHeightfield;
     MeshData previewMesh;
+    ColorGrid previewColorGrid;
+    bool previewIsColor = false;
 };
 
 class NodeGraph
@@ -631,11 +665,23 @@ private:
         MaskGrid grid;
     };
 
+    struct ColorNodeCache
+    {
+        bool valid = false;
+        uint64_t inputHash = 0;
+        uint64_t parameterHash = 0;
+        uint64_t outputHash = 0;
+        ColorGrid grid;
+    };
+
+    ColorGrid EvaluateColorGridForNodeCached(const Node& node, int depth, uint64_t* outputHash);
+
     std::vector<Node> nodes_;
     std::vector<Link> links_;
     GraphSettings settings_;
     std::unordered_map<GraphId, HeightfieldNodeCache> heightfieldCache_;
     std::unordered_map<GraphId, MaskNodeCache> maskCache_;
+    std::unordered_map<GraphId, ColorNodeCache> colorCache_;
     EvaluationSummary evaluation_;
     GraphId nextGraphId_ = 1;
 };
@@ -647,6 +693,7 @@ std::string_view ToString(PreviewStage stage);
 std::string_view ToString(ValueType type);
 PreviewStage PreviewStageFor(NodeKind kind);
 bool IsMaskOnlyNodeKind(NodeKind kind);
+bool IsColorOnlyNodeKind(NodeKind kind);
 void SetMultiScaleErosionGpuEvaluator(MultiScaleErosionGpuEvaluator evaluator);
 void SetMaskNoiseGpuEvaluator(MaskNoiseGpuEvaluator evaluator);
 void SetSedimentGpuEvaluator(SedimentGpuEvaluator evaluator);

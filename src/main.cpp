@@ -115,6 +115,29 @@ UINT g_width = 1600;
 UINT g_height = 900;
 bool g_running = true;
 
+// スクリーンカラーピッカー状態
+// 2 モードを持つ:
+//   SingleClick: 左クリック 1 回で選択中ストップの色を更新
+//   Drag: ドラッグ中に収集した色列を間引き、線形にグラデーションへ投影
+// どちらも SetCapture を使わないため他アプリ上の色も取得可能。
+enum class ScreenPickMode
+{
+    Idle,
+    DragArmed,     // Ctrl 押下待ち
+    DragCollecting,// Ctrl 押しながらマウス移動でサンプリング中
+};
+
+struct ScreenColorPick
+{
+    ScreenPickMode mode = ScreenPickMode::Idle;
+    rock::GraphId nodeId = 0;
+    float previewR = 1.0f;
+    float previewG = 1.0f;
+    float previewB = 1.0f;
+    bool prevCtrl = false;                        // Ctrl キーエッジ検出用
+    std::vector<std::array<float, 3>> dragSamples;// Drag 用サンプル列 (RGB)
+} g_screenPick;
+
 ComPtr<ID3D12Device> g_device;
 ComPtr<ID3D12CommandQueue> g_commandQueue;
 ComPtr<IDXGISwapChain3> g_swapChain;
@@ -290,7 +313,7 @@ struct MeshPreviewConstants
     float shadowBias;
     float shadowEnabled;
     float maskShadingMode;  // 0 = Grayscale, 1 = GrayOrange, 2 = GrayscaleHatched
-    float padding0;
+    float colorTextureMode; // 1 = use per-vertex color (Colorize node), 0 = use albedoColor
     float lightRight[4];
     float lightUp[4];
     float lightForward[4];
@@ -1930,6 +1953,16 @@ nlohmann::json MakeSnowSettingsJson(const rock::Node& node)
     };
 }
 
+nlohmann::json MakeColorizeSettingsJson(const rock::Node& node)
+{
+    nlohmann::json stopsArr = nlohmann::json::array();
+    for (const rock::ColorStop& s : node.colorize.stops)
+    {
+        stopsArr.push_back({{"position", s.position}, {"r", s.r}, {"g", s.g}, {"b", s.b}});
+    }
+    return {{"colorize", {{"stops", stopsArr}}}};
+}
+
 nlohmann::json MakeRockSettingsJson(const rock::Node& node)
 {
     return {
@@ -1978,6 +2011,7 @@ nlohmann::json MakeNodeSettingsJson(const rock::Node& node)
     nodeJson.update(MakeRockSettingsJson(node));
     nodeJson.update(MakeSedimentSettingsJson(node));
     nodeJson.update(MakeSnowSettingsJson(node));
+    nodeJson.update(MakeColorizeSettingsJson(node));
     return nodeJson;
 }
 
@@ -2037,6 +2071,8 @@ std::optional<rock::PreviewStage> ReadSerializedPreviewStage(const nlohmann::jso
     case rock::PreviewStage::MaskFluvial:
     case rock::PreviewStage::Rock:
     case rock::PreviewStage::Sediment:
+    case rock::PreviewStage::Snow:
+    case rock::PreviewStage::Colorize:
         return stage;
     default:
         return std::nullopt;
@@ -2234,6 +2270,30 @@ void ReadSnowSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     }
 }
 
+void ReadColorizeSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
+{
+    const nlohmann::json colorizeJson = nodeJson.value("colorize", nlohmann::json::object());
+    if (!colorizeJson.contains("stops") || !colorizeJson["stops"].is_array())
+    {
+        return;
+    }
+    node.colorize.stops.clear();
+    for (const auto& stopJson : colorizeJson["stops"])
+    {
+        rock::ColorStop s;
+        s.position = std::clamp(stopJson.value("position", 0.0f), 0.0f, 1.0f);
+        s.r = std::clamp(stopJson.value("r", 0.0f), 0.0f, 1.0f);
+        s.g = std::clamp(stopJson.value("g", 0.0f), 0.0f, 1.0f);
+        s.b = std::clamp(stopJson.value("b", 0.0f), 0.0f, 1.0f);
+        node.colorize.stops.push_back(s);
+    }
+    // デフォルトに戻す (stops が空になった場合)
+    if (node.colorize.stops.empty())
+    {
+        node.colorize.stops = {{0.0f, 0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f, 1.0f}};
+    }
+}
+
 void ReadNodeSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
 {
     ReadBasicHeightfieldSettingsJson(nodeJson, node);
@@ -2242,6 +2302,7 @@ void ReadNodeSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     ReadRockSettingsJson(nodeJson, node);
     ReadSedimentSettingsJson(nodeJson, node);
     ReadSnowSettingsJson(nodeJson, node);
+    ReadColorizeSettingsJson(nodeJson, node);
 }
 
 nlohmann::json MakeProjectSettingsJson()
@@ -2591,10 +2652,13 @@ void ReadSerializedPinsJson(const nlohmann::json& pinsJson,
         pin.id = pinJson.value("id", 0);
         pin.nodeId = nodeId;
         pin.kind = pinKind;
-        const int serializedValueType = std::clamp(pinJson.value("valueType", static_cast<int>(rock::ValueType::HeightField)), 0, 3);
-        pin.valueType = serializedValueType == static_cast<int>(rock::ValueType::Mask)
-            ? rock::ValueType::Mask
-            : rock::ValueType::HeightField;
+        const int serializedValueType = pinJson.value("valueType", static_cast<int>(rock::ValueType::HeightField));
+        if (serializedValueType == static_cast<int>(rock::ValueType::Mask))
+            pin.valueType = rock::ValueType::Mask;
+        else if (serializedValueType == static_cast<int>(rock::ValueType::ColorTexture))
+            pin.valueType = rock::ValueType::ColorTexture;
+        else
+            pin.valueType = rock::ValueType::HeightField;
         pin.label = pinJson.value("label", std::string(rock::ToString(pin.valueType)));
         // 旧プロジェクトでは入力 / 出力どちらの heightfield ピンも `HeightField`
         // と保存されていた可能性があるが、現在は両方とも `Heightmap` に統一
@@ -2892,12 +2956,13 @@ bool EnsureMeshPreviewPipeline(std::string* error)
         {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0,  0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
         {"NORMAL",   0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
         {"TEXCOORD", 0, DXGI_FORMAT_R32_FLOAT,       0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 2, DXGI_FORMAT_R32G32B32_FLOAT, 0, 28, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
     };
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
     psoDesc.pRootSignature = g_meshPreviewRootSignature.Get();
     psoDesc.VS = {vsBlob->GetBufferPointer(), vsBlob->GetBufferSize()};
-    psoDesc.InputLayout = {inputLayout, 3};
+    psoDesc.InputLayout = {inputLayout, 4};
     psoDesc.SampleMask = UINT_MAX;
     psoDesc.SampleDesc.Count = 1;
     psoDesc.NumRenderTargets = 1;
@@ -6967,7 +7032,9 @@ bool IsTerrainNodeKind(rock::NodeKind kind)
         kind == rock::NodeKind::MaskBlend ||
         kind == rock::NodeKind::MaskFluvial ||
         kind == rock::NodeKind::Rock ||
-        kind == rock::NodeKind::Sediment;
+        kind == rock::NodeKind::Sediment ||
+        kind == rock::NodeKind::Snow ||
+        kind == rock::NodeKind::Colorize;
 }
 
 int CurrentPreviewMeshResolution()
@@ -7042,6 +7109,150 @@ void EvaluateGraph()
     }
 
     StartAsyncEvaluation();
+}
+
+// ドラッグサンプル列を間引き、グラデーションストップとして Colorize ノードに投影する。
+// 隣接サンプル間の色差が colorThreshold 以下の点を除去し、残った点を 0..1 に線形配置する。
+static void ProcessDragSamples(rock::GraphId nodeId, const std::vector<std::array<float, 3>>& samples)
+{
+    if (samples.empty()) return;
+
+    rock::Node* node = g_graph.FindMutableNode(nodeId);
+    if (node == nullptr || node->kind != rock::NodeKind::Colorize) return;
+
+    // --- 間引き (Douglas-Peucker 的な閾値フィルタ) ---
+    // 隣接するサンプル間の色差が閾値未満なら省略。最初と最後は必ず保持。
+    const float colorThreshold = 0.04f; // ~10/255 相当
+    std::vector<std::array<float, 3>> thinned;
+    thinned.push_back(samples.front());
+    for (size_t i = 1; i + 1 < samples.size(); ++i)
+    {
+        const auto& prev = thinned.back();
+        const auto& cur  = samples[i];
+        float dr = cur[0] - prev[0];
+        float dg = cur[1] - prev[1];
+        float db = cur[2] - prev[2];
+        if (std::sqrt(dr*dr + dg*dg + db*db) >= colorThreshold)
+        {
+            thinned.push_back(cur);
+        }
+    }
+    thinned.push_back(samples.back());
+
+    // 最低 2 ストップを保証
+    if (thinned.size() < 2)
+    {
+        thinned = {samples.front(), samples.back()};
+    }
+
+    // --- グラデーションストップとして投影 ---
+    node->colorize.stops.clear();
+    const int n = static_cast<int>(thinned.size());
+    for (int i = 0; i < n; ++i)
+    {
+        rock::ColorStop stop;
+        stop.position = (n == 1) ? 0.0f : static_cast<float>(i) / static_cast<float>(n - 1);
+        stop.r = thinned[i][0];
+        stop.g = thinned[i][1];
+        stop.b = thinned[i][2];
+        node->colorize.stops.push_back(stop);
+    }
+
+    g_graph.MarkDirty("Drag color sampled");
+    EvaluateGraph();
+    SetForegroundWindow(g_hwnd);
+}
+
+// カーソル位置のスクリーンピクセル色を取得する。
+// SetThreadDpiAwarenessContext(UNAWARE) で一時的にスレッドを DPI 非対応モードにすることで
+// GetCursorPos と GetDC(NULL)+GetPixel が同じ論理座標系で動作することを保証する。
+// これにより 100% / 150% / 200% 等どの DPI スケーリング環境でも座標が一致する。
+static void SampleScreenPixel(float& r, float& g, float& b)
+{
+    // DPI 非対応コンテキストに切り替え、座標系を統一する
+    DPI_AWARENESS_CONTEXT prevCtx =
+        SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_UNAWARE);
+
+    POINT pt{};
+    GetCursorPos(&pt);
+    HDC hdc = GetDC(nullptr);
+    COLORREF cr = GetPixel(hdc, pt.x, pt.y);
+    ReleaseDC(nullptr, hdc);
+
+    SetThreadDpiAwarenessContext(prevCtx);
+
+    if (cr == CLR_INVALID) { return; }
+    r = GetRValue(cr) / 255.0f;
+    g = GetGValue(cr) / 255.0f;
+    b = GetBValue(cr) / 255.0f;
+}
+
+// スクリーンカラーピッカーのフレーム更新。毎フレーム ImGui::NewFrame 直後に呼ぶ。
+// Ctrl を押しながらマウスを移動すると色を収集し、Ctrl を離した瞬間にグラデーションへ投影。
+void UpdateScreenColorPick()
+{
+    if (g_screenPick.mode == ScreenPickMode::Idle) return;
+
+    SampleScreenPixel(g_screenPick.previewR, g_screenPick.previewG, g_screenPick.previewB);
+
+    const bool ctrlDown    = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+    const bool ctrlRising  = ctrlDown  && !g_screenPick.prevCtrl;
+    const bool ctrlFalling = !ctrlDown &&  g_screenPick.prevCtrl;
+    g_screenPick.prevCtrl = ctrlDown;
+
+    // Escape でどのモードからもキャンセル
+    if (GetAsyncKeyState(VK_ESCAPE) & 0x8000)
+    {
+        g_screenPick.mode = ScreenPickMode::Idle;
+        g_screenPick.dragSamples.clear();
+        return;
+    }
+
+    switch (g_screenPick.mode)
+    {
+    case ScreenPickMode::DragArmed:
+        // Ctrl 押下でサンプリング開始。初期位置は自アプリのグレー UI 上であることが多いため
+        // 最初のサンプルは追加せず、移動後の色変化から収集を始める。
+        if (ctrlRising)
+        {
+            g_screenPick.mode = ScreenPickMode::DragCollecting;
+            g_screenPick.dragSamples.clear();
+        }
+        break;
+
+    case ScreenPickMode::DragCollecting:
+        if (ctrlDown)
+        {
+            // Ctrl 押し中: サンプルが空なら無条件追加、以降は色変化が一定以上のときだけ追加
+            if (g_screenPick.dragSamples.empty())
+            {
+                g_screenPick.dragSamples.push_back({g_screenPick.previewR, g_screenPick.previewG, g_screenPick.previewB});
+            }
+            else
+            {
+                const auto& last = g_screenPick.dragSamples.back();
+                float dr = g_screenPick.previewR - last[0];
+                float dg = g_screenPick.previewG - last[1];
+                float db = g_screenPick.previewB - last[2];
+                if (std::sqrt(dr*dr + dg*dg + db*db) >= 0.008f)
+                {
+                    g_screenPick.dragSamples.push_back({g_screenPick.previewR, g_screenPick.previewG, g_screenPick.previewB});
+                }
+            }
+        }
+        else if (ctrlFalling)
+        {
+            // Ctrl 離し: 最終色を追加してサンプル列を間引きグラデーションへ投影
+            g_screenPick.dragSamples.push_back({g_screenPick.previewR, g_screenPick.previewG, g_screenPick.previewB});
+            ProcessDragSamples(g_screenPick.nodeId, g_screenPick.dragSamples);
+            g_screenPick.dragSamples.clear();
+            g_screenPick.mode = ScreenPickMode::Idle;
+        }
+        break;
+
+    default:
+        break;
+    }
 }
 
 void PollAsyncEvaluation()
@@ -7845,6 +8056,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         constants.farPlane   = 20000.0f;
         constants.maskPreview = g_graph.Evaluation().previewShowsMask ? 1.0f : 0.0f;
         constants.maskShadingMode = static_cast<float>(g_graph.Settings().preview.maskShading);
+        constants.colorTextureMode = g_graph.Evaluation().previewIsColor ? 1.0f : 0.0f;
         constants.lightingMode = static_cast<float>(g_graph.Settings().preview.lightingMode);
         const float azimuth = g_graph.Settings().preview.sunAzimuthDegrees * 3.1415926535f / 180.0f;
         const float elevation = g_graph.Settings().preview.sunElevationDegrees * 3.1415926535f / 180.0f;
@@ -8732,10 +8944,55 @@ void DrawHeightfieldMapPreview(const ImVec2& min, const ImVec2& max)
             return "Heightmap";
         }
     };
-    const std::string title = maskPreview
-        ? "2D View: " + std::string(heightfieldFieldName(evaluation.previewField))
-        : "2D View: Heightmap";
+    const bool colorPreview = evaluation.previewIsColor;
+    const std::string title = colorPreview
+        ? "2D View: Color Texture"
+        : (maskPreview
+            ? "2D View: " + std::string(heightfieldFieldName(evaluation.previewField))
+            : "2D View: Heightmap");
     drawList->AddText(ImVec2(min.x + 16.0f, min.y + 14.0f), ThemeColor("accentText", ImVec4(0.86f, 0.88f, 0.85f, 1.0f)), title.c_str());
+
+    // Color texture preview: RGBA 直接描画
+    if (colorPreview)
+    {
+        const rock::ColorGrid& cg = evaluation.previewColorGrid;
+        if (cg.resolution < 2 || static_cast<int>(cg.pixels.size()) < cg.resolution * cg.resolution * 4)
+        {
+            drawList->AddText(ImVec2(min.x + 16.0f, min.y + 42.0f), ThemeColor("mutedText", ImVec4(0.54f, 0.59f, 0.56f, 1.0f)), "Gradient Mask を接続してください。");
+            return;
+        }
+        const float availableWidth = std::max(1.0f, max.x - min.x - 32.0f);
+        const float availableHeight = std::max(1.0f, max.y - min.y - 76.0f);
+        const float mapSize = std::max(1.0f, std::min(availableWidth, availableHeight)) * std::clamp(g_mapViewport.zoom, 0.05f, 64.0f);
+        const ImVec2 mapMin(
+            min.x + 16.0f + (std::max(1.0f, std::min(availableWidth, availableHeight)) - mapSize) * 0.5f + g_mapViewport.pan.x,
+            min.y + 52.0f + (std::max(1.0f, std::min(availableWidth, availableHeight)) - mapSize) * 0.5f + g_mapViewport.pan.y);
+        const ImVec2 mapMax(mapMin.x + mapSize, mapMin.y + mapSize);
+        drawList->PushClipRect(ImVec2(min.x + 1.0f, min.y + 42.0f), ImVec2(max.x - 1.0f, max.y - 1.0f), true);
+        drawList->AddRectFilled(mapMin, mapMax, IM_COL32(18, 20, 20, 255));
+        const int res = cg.resolution;
+        const int maxVisibleSamples = std::clamp(static_cast<int>(std::ceil(mapSize)), 2, 1024);
+        const int samples = std::clamp(std::min(res, maxVisibleSamples), 2, res);
+        const float cellSize = mapSize / static_cast<float>(samples);
+        for (int z = 0; z < samples; ++z)
+        {
+            const int srcZ = res - 1 - (samples > 1 ? static_cast<int>(std::lround(static_cast<float>(z) * static_cast<float>(res - 1) / static_cast<float>(samples - 1))) : 0);
+            for (int x = 0; x < samples; ++x)
+            {
+                const int srcX = samples > 1 ? static_cast<int>(std::lround(static_cast<float>(x) * static_cast<float>(res - 1) / static_cast<float>(samples - 1))) : 0;
+                const size_t idx = (static_cast<size_t>(srcZ) * static_cast<size_t>(res) + static_cast<size_t>(srcX)) * 4;
+                const ImVec2 cellMin(mapMin.x + static_cast<float>(x) * cellSize, mapMin.y + static_cast<float>(z) * cellSize);
+                const ImVec2 cellMax(mapMin.x + static_cast<float>(x + 1) * cellSize + 0.5f, mapMin.y + static_cast<float>(z + 1) * cellSize + 0.5f);
+                drawList->AddRectFilled(cellMin, cellMax, IM_COL32(cg.pixels[idx], cg.pixels[idx+1], cg.pixels[idx+2], 255));
+            }
+        }
+        drawList->AddRect(mapMin, mapMax, ThemeColor("border", ImVec4(0.20f, 0.23f, 0.22f, 0.85f)));
+        drawList->PopClipRect();
+        char info[128]{};
+        std::snprintf(info, sizeof(info), "%d x %d / zoom %.2fx", res, res, g_mapViewport.zoom);
+        drawList->AddText(ImVec2(min.x + 16.0f, max.y - 28.0f), ThemeColor("mutedText", ImVec4(0.54f, 0.59f, 0.56f, 1.0f)), info);
+        return;
+    }
 
     if (!canDrawMap)
     {
@@ -8830,6 +9087,8 @@ ImVec4 NodeAccentColor(rock::NodeKind kind)
     case rock::NodeKind::MaskBlend:
     case rock::NodeKind::MaskFluvial:
         return maskOrange;
+    case rock::NodeKind::Colorize:
+        return ImVec4(0.72f, 0.38f, 0.92f, 1.0f); // 紫 (カラー系)
     default:
         return ImVec4(0.75f, 0.75f, 0.75f, 1.0f);
     }
@@ -8859,6 +9118,8 @@ ImVec2 InitialNodePosition(rock::NodeKind kind)
         return ImVec2(880.0f, 520.0f);
     case rock::NodeKind::Snow:
         return ImVec2(880.0f, 660.0f);
+    case rock::NodeKind::Colorize:
+        return ImVec2(1160.0f, 380.0f);
     default:
         return ImVec2(40.0f, 64.0f);
     }
@@ -9589,6 +9850,11 @@ void DrawNodeGraph()
             addNodeMenuItem(rock::NodeKind::MaskNoise);
             addNodeMenuItem(rock::NodeKind::MaskBlend);
             addNodeMenuItem(rock::NodeKind::MaskFluvial);
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("カラー"))
+        {
+            addNodeMenuItem(rock::NodeKind::Colorize);
             ImGui::EndMenu();
         }
         ImGui::EndPopup();
@@ -10422,6 +10688,254 @@ bool DrawMaskBlendProperties(rock::Node& editableNode)
     return true;
 }
 
+// グラデーションバーを ImDrawList で描画するヘルパー。stops は position 昇順でソート済み前提。
+static void DrawGradientBar(ImDrawList* dl, ImVec2 barMin, ImVec2 barMax, const std::vector<rock::ColorStop>& stops)
+{
+    if (stops.empty()) { dl->AddRectFilled(barMin, barMax, IM_COL32(0,0,0,255)); return; }
+    const float w = barMax.x - barMin.x;
+    const int segments = static_cast<int>(w);
+    for (int i = 0; i < segments; ++i)
+    {
+        const float t0 = static_cast<float>(i) / static_cast<float>(segments);
+        const float t1 = static_cast<float>(i + 1) / static_cast<float>(segments);
+        // sample at midpoint
+        float t = (t0 + t1) * 0.5f;
+        // SampleColorGradient-like inline
+        float r = stops.back().r, g = stops.back().g, b = stops.back().b;
+        if (t <= stops.front().position) { r = stops.front().r; g = stops.front().g; b = stops.front().b; }
+        else
+        {
+            for (size_t si = 0; si + 1 < stops.size(); ++si)
+            {
+                if (t <= stops[si+1].position)
+                {
+                    float span = stops[si+1].position - stops[si].position;
+                    float a = span > 0.0f ? (t - stops[si].position) / span : 0.0f;
+                    r = stops[si].r + a * (stops[si+1].r - stops[si].r);
+                    g = stops[si].g + a * (stops[si+1].g - stops[si].g);
+                    b = stops[si].b + a * (stops[si+1].b - stops[si].b);
+                    break;
+                }
+            }
+        }
+        const ImVec2 p0(barMin.x + t0 * w, barMin.y);
+        const ImVec2 p1(barMin.x + t1 * w, barMax.y);
+        dl->AddRectFilled(p0, p1, IM_COL32(
+            static_cast<int>(std::clamp(r * 255.0f, 0.0f, 255.0f)),
+            static_cast<int>(std::clamp(g * 255.0f, 0.0f, 255.0f)),
+            static_cast<int>(std::clamp(b * 255.0f, 0.0f, 255.0f)),
+            255));
+    }
+}
+
+bool DrawColorizeProperties(rock::Node& editableNode)
+{
+    rock::ColorizeSettings& cs = editableNode.colorize;
+
+    // stops を position 昇順に保つ
+    std::sort(cs.stops.begin(), cs.stops.end(), [](const rock::ColorStop& a, const rock::ColorStop& b) {
+        return a.position < b.position;
+    });
+    // 最低 2 ストップを保証
+    if (cs.stops.empty()) { cs.stops = {{0.0f, 0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f, 1.0f}}; }
+    else if (cs.stops.size() == 1) { cs.stops.push_back({1.0f, 1.0f, 1.0f, 1.0f}); }
+
+    bool changed = false;
+
+    // --- グラデーションバー ---
+    ImGui::Spacing();
+    ImGui::Indent(8.0f);
+    const float barHeight = 24.0f;
+    const float barWidth = ImGui::GetContentRegionAvail().x - 16.0f;
+    const ImVec2 barMin = ImGui::GetCursorScreenPos();
+    const ImVec2 barMax(barMin.x + barWidth, barMin.y + barHeight);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    DrawGradientBar(dl, barMin, barMax, cs.stops);
+    dl->AddRect(barMin, barMax, IM_COL32(80, 80, 80, 255));
+
+    // ストップハンドル (三角形マーカー)
+    static int s_selectedStop = 0;
+    if (s_selectedStop >= static_cast<int>(cs.stops.size())) s_selectedStop = 0;
+
+    // インビジブルボタンでバークリックを検出 (ストップ追加 / 選択)
+    ImGui::SetCursorScreenPos(barMin);
+    ImGui::InvisibleButton("##gradbar", ImVec2(barWidth, barHeight));
+    if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+    {
+        const float clickX = ImGui::GetIO().MousePos.x;
+        const float t = std::clamp((clickX - barMin.x) / barWidth, 0.0f, 1.0f);
+        // 最も近いストップを選択、または新規追加 (Ctrl クリック)
+        if (ImGui::GetIO().KeyCtrl)
+        {
+            // 既存ストップと重複していなければ追加
+            bool tooClose = false;
+            for (const auto& s : cs.stops)
+                if (std::abs(s.position - t) < 0.005f) { tooClose = true; break; }
+            if (!tooClose)
+            {
+                // 追加時の色: 隣接ストップ間を線形補間
+                float r = 1.0f, g = 1.0f, b = 1.0f;
+                for (size_t si = 0; si + 1 < cs.stops.size(); ++si)
+                {
+                    if (t <= cs.stops[si+1].position)
+                    {
+                        float span = cs.stops[si+1].position - cs.stops[si].position;
+                        float a = span > 0.0f ? (t - cs.stops[si].position) / span : 0.0f;
+                        r = cs.stops[si].r + a * (cs.stops[si+1].r - cs.stops[si].r);
+                        g = cs.stops[si].g + a * (cs.stops[si+1].g - cs.stops[si].g);
+                        b = cs.stops[si].b + a * (cs.stops[si+1].b - cs.stops[si].b);
+                        break;
+                    }
+                }
+                cs.stops.push_back({t, r, g, b});
+                std::sort(cs.stops.begin(), cs.stops.end(), [](const rock::ColorStop& a, const rock::ColorStop& b){ return a.position < b.position; });
+                changed = true;
+            }
+        }
+        else
+        {
+            // 最も近いストップを選択
+            float bestDist = FLT_MAX;
+            for (int i = 0; i < static_cast<int>(cs.stops.size()); ++i)
+            {
+                float dist = std::abs(cs.stops[i].position - t);
+                if (dist < bestDist) { bestDist = dist; s_selectedStop = i; }
+            }
+        }
+    }
+
+    // ハンドル描画
+    for (int i = 0; i < static_cast<int>(cs.stops.size()); ++i)
+    {
+        const float hx = barMin.x + cs.stops[i].position * barWidth;
+        const float hy = barMax.y + 2.0f;
+        const ImVec2 tri[3] = {{hx - 5, hy}, {hx + 5, hy}, {hx, hy + 8}};
+        const ImU32 col = (i == s_selectedStop) ? IM_COL32(255, 220, 80, 255) : IM_COL32(200, 200, 200, 255);
+        dl->AddTriangleFilled(tri[0], tri[1], tri[2], col);
+        dl->AddTriangle(tri[0], tri[1], tri[2], IM_COL32(0, 0, 0, 200));
+    }
+    ImGui::SetCursorScreenPos(ImVec2(barMin.x, barMax.y + 14.0f));
+
+    ImGui::TextDisabled("Ctrl+クリックでストップ追加");
+    ImGui::Spacing();
+
+    // --- 選択中ストップの編集 ---
+    if (s_selectedStop < static_cast<int>(cs.stops.size()))
+    {
+        rock::ColorStop& sel = cs.stops[s_selectedStop];
+        ImGui::Text("Stop %d", s_selectedStop);
+        ImGui::SameLine();
+        // 削除ボタン (ストップが 2 以上の場合のみ)
+        ImGui::BeginDisabled(cs.stops.size() <= 2);
+        if (ImGui::SmallButton("削除"))
+        {
+            cs.stops.erase(cs.stops.begin() + s_selectedStop);
+            s_selectedStop = std::max(0, s_selectedStop - 1);
+            changed = true;
+        }
+        ImGui::EndDisabled();
+
+        float posVal = sel.position;
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 8.0f);
+        if (ImGui::SliderFloat("##stopPos", &posVal, 0.0f, 1.0f, "Position %.3f"))
+        {
+            sel.position = posVal;
+            std::sort(cs.stops.begin(), cs.stops.end(), [](const rock::ColorStop& a, const rock::ColorStop& b){ return a.position < b.position; });
+            changed = true;
+        }
+        float col3[3] = {sel.r, sel.g, sel.b};
+        if (ImGui::ColorEdit3("##stopColor", col3, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_DisplayRGB))
+        {
+            sel.r = col3[0]; sel.g = col3[1]; sel.b = col3[2];
+            changed = true;
+        }
+        if (ImGui::IsItemDeactivatedAfterEdit()) { EvaluateGraph(); }
+        if (changed && !ImGui::IsAnyItemActive()) { EvaluateGraph(); }
+
+        // スクリーンカラーピッカー
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        const bool myPicking = (g_screenPick.nodeId == editableNode.id &&
+                                g_screenPick.mode != ScreenPickMode::Idle);
+
+        if (myPicking)
+        {
+            // ---- ピッキング中 UI ----
+            const ImVec4 previewCol(g_screenPick.previewR, g_screenPick.previewG, g_screenPick.previewB, 1.0f);
+
+            if (g_screenPick.mode == ScreenPickMode::DragArmed)
+            {
+                ImGui::ColorButton("##pickPreview", previewCol, ImGuiColorEditFlags_NoBorder, ImVec2(22, 22));
+                ImGui::SameLine();
+                ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.2f, 1.0f), "Ctrl 待機中...");
+                ImGui::TextDisabled("取得したい色の上で Ctrl を押しながら移動してください");
+            }
+            else // DragCollecting
+            {
+                const int cnt = static_cast<int>(g_screenPick.dragSamples.size());
+                ImGui::ColorButton("##pickPreview", previewCol, ImGuiColorEditFlags_NoBorder, ImVec2(22, 22));
+                ImGui::SameLine();
+                ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1.0f), "収集中... %d サンプル", cnt);
+
+                // ミニプレビューグラデーション (収集済みサンプルを縮小表示)
+                if (cnt >= 2)
+                {
+                    const float miniW = ImGui::GetContentRegionAvail().x - 8.0f;
+                    const float miniH = 10.0f;
+                    const ImVec2 mMin = ImGui::GetCursorScreenPos();
+                    const ImVec2 mMax(mMin.x + miniW, mMin.y + miniH);
+                    ImDrawList* mDl = ImGui::GetWindowDrawList();
+                    const int segs = std::min(cnt, static_cast<int>(miniW));
+                    for (int si = 0; si < segs; ++si)
+                    {
+                        const size_t idx = static_cast<size_t>(si) * static_cast<size_t>(cnt - 1) / static_cast<size_t>(std::max(1, segs - 1));
+                        const auto& sc = g_screenPick.dragSamples[std::min(idx, g_screenPick.dragSamples.size()-1)];
+                        const ImVec2 sp0(mMin.x + static_cast<float>(si) * miniW / static_cast<float>(segs), mMin.y);
+                        const ImVec2 sp1(mMin.x + static_cast<float>(si + 1) * miniW / static_cast<float>(segs), mMax.y);
+                        mDl->AddRectFilled(sp0, sp1, IM_COL32(
+                            static_cast<int>(sc[0]*255), static_cast<int>(sc[1]*255), static_cast<int>(sc[2]*255), 255));
+                    }
+                    mDl->AddRect(mMin, mMax, IM_COL32(80,80,80,255));
+                    ImGui::Dummy(ImVec2(miniW, miniH + 2.0f));
+                }
+                ImGui::TextDisabled("Ctrl を離すとグラデーションに投影します");
+            }
+
+            ImGui::Spacing();
+            if (ImGui::SmallButton("Esc でキャンセル"))
+            {
+                g_screenPick.mode = ScreenPickMode::Idle;
+                g_screenPick.dragSamples.clear();
+            }
+        }
+        else
+        {
+            // ---- 通常時: ピッカーボタン ----
+            if (ImGui::Button("Ctrl で取得", ImVec2(ImGui::GetContentRegionAvail().x - 8.0f, 0)))
+            {
+                g_screenPick.mode    = ScreenPickMode::DragArmed;
+                g_screenPick.nodeId  = editableNode.id;
+                g_screenPick.dragSamples.clear();
+                // ボタン離し直後の Ctrl 状態を初期値にしてフォルスエッジを防ぐ
+                g_screenPick.prevCtrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("Ctrl を押しながらマウスを移動すると軌跡の色を収集します。\n"
+                    "Ctrl を離した時点で間引きしてグラデーションに線形投影します。\n"
+                    "既存のストップはすべて置き換えられます。\n"
+                    "他アプリ上でも使用可能。Esc でキャンセル。");
+            }
+        }
+    }
+
+    ImGui::Unindent(8.0f);
+    ImGui::Spacing();
+    return true;
+}
+
 bool DrawMaskFluvialProperties(rock::Node& editableNode)
 {
     if (!ImGui::BeginTable("MaskFluvialRows", 2, ImGuiTableFlags_SizingStretchProp))
@@ -10788,6 +11302,11 @@ void DrawPropertiesPanel()
     }
 
     if (selectedNode->kind == rock::NodeKind::Snow && DrawSnowProperties(*editableNode))
+    {
+        return;
+    }
+
+    if (selectedNode->kind == rock::NodeKind::Colorize && DrawColorizeProperties(*editableNode))
     {
         return;
     }
@@ -11784,6 +12303,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
             ImGui_ImplDX12_NewFrame();
             ImGui_ImplWin32_NewFrame();
             ImGui::NewFrame();
+            UpdateScreenColorPick();
             ProcessPendingMseGpuRequests();
             ProcessPendingMaskNoiseGpuRequests();
             ProcessPendingSedimentGpuRequests();

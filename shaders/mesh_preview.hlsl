@@ -21,7 +21,7 @@ cbuffer Constants : register(b0)
     float shadowBias;
     float shadowEnabled;
     float maskShadingMode;  // 0 = Grayscale, 1 = GrayOrange, 2 = GrayscaleHatched
-    float padding;
+    float colorTextureMode; // 1 = use per-vertex color (Colorize node), 0 = use albedoColor
     float4 lightRight;
     float4 lightUp;
     float4 lightForward;
@@ -92,6 +92,7 @@ struct VSIn
     float3 pos : POSITION;
     float3 nor : NORMAL;
     float mask : TEXCOORD0;
+    float3 color : TEXCOORD2;
 };
 
 struct VSOut
@@ -100,6 +101,7 @@ struct VSOut
     float3 worldNor : NORMAL;
     float3 worldPos : TEXCOORD0;
     float mask : TEXCOORD1;
+    float3 vertexColor : TEXCOORD2;
 };
 
 VSOut VSMain(VSIn i)
@@ -118,6 +120,7 @@ VSOut VSMain(VSIn i)
     o.worldNor = i.nor;
     o.worldPos = i.pos;
     o.mask = i.mask;
+    o.vertexColor = i.color;
     return o;
 }
 
@@ -184,6 +187,7 @@ VSOut VSDisplacement(uint vid : SV_VertexID)
     o.worldNor = worldNor;
     o.worldPos = worldPos;
     o.mask = maskVal;
+    o.vertexColor = float3(0.0, 0.0, 0.0);
     return o;
 }
 
@@ -313,8 +317,9 @@ float4 PSSurface(VSOut i) : SV_TARGET
     float3 lowland = float3(0.32, 0.38, 0.32);
     float3 highland = float3(0.54, 0.52, 0.46);
     float3 slopeTint = float3(0.43, 0.39, 0.34);
-    float3 baseColor = lerp(lowland, highland, height);
-    baseColor = lerp(baseColor, slopeTint, slope * 0.42);
+    float3 baseColor = (colorTextureMode > 0.5)
+        ? i.vertexColor
+        : lerp(lerp(lowland, highland, height), slopeTint, slope * 0.42);
 
     float3 col = baseColor * light;
     if (lightingMode > 0.5 && maskPreview < 0.5)
@@ -358,7 +363,8 @@ float4 PSSurface(VSOut i) : SV_TARGET
         float3 bounceTint = skyGroundColor.rgb * ambientStrength * shadowAmount * 0.55;
 
         float3 slopeMicroShade = lerp(float3(0.78, 0.80, 0.82), float3(1.06, 1.05, 1.02), viewFacing);
-        col = albedoColor.rgb * (skyAmbient * ambientCloudMix + sunTint + bounceTint) * slopeMicroShade;
+        float3 effectiveAlbedo = (colorTextureMode > 0.5) ? i.vertexColor : albedoColor.rgb;
+        col = effectiveAlbedo * (skyAmbient * ambientCloudMix + sunTint + bounceTint) * slopeMicroShade;
         col = lerp(col, dot(col, float3(0.299, 0.587, 0.114)).xxx, shadowAmount * 0.18);
         col += pow(saturate(ndl), 24.0) * sunIntensity * visibility * cloudShadowFactor * 0.045;
     }

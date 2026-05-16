@@ -156,6 +156,19 @@ uint64_t HashSnowSettings(const SnowSettings& settings, int resolution)
     return hash;
 }
 
+uint64_t HashColorizeSettings(const ColorizeSettings& settings)
+{
+    uint64_t hash = 7450123456789012345ull;
+    for (const ColorStop& stop : settings.stops)
+    {
+        HashCombine(hash, HashFloat(stop.position));
+        HashCombine(hash, HashFloat(stop.r));
+        HashCombine(hash, HashFloat(stop.g));
+        HashCombine(hash, HashFloat(stop.b));
+    }
+    return hash;
+}
+
 uint64_t HashMaskFluvialSettings(const MaskFluvialSettings& settings, int resolution)
 {
     uint64_t hash = 8589869056ull;
@@ -818,6 +831,73 @@ MaskGrid GenerateMaskNoise(const MaskNoiseSettings& settings)
             const float ns = mask_noise::Fbm2D(u * frequency, v * frequency, octaves, lacunarity, persistence, seed);
             grid.values[static_cast<size_t>(z) * static_cast<size_t>(n) + static_cast<size_t>(x)] =
                 std::clamp(ns * 0.5f + 0.5f, 0.0f, 1.0f);
+        }
+    });
+    return grid;
+}
+
+// グラデーションの stops を t (0..1) でサンプリングして RGB を返す。
+// stops は position 順にソートされていること。stops が空の場合は黒を返す。
+static std::array<float, 3> SampleColorGradient(const std::vector<ColorStop>& stops, float t)
+{
+    if (stops.empty())
+    {
+        return {0.0f, 0.0f, 0.0f};
+    }
+    if (t <= stops.front().position)
+    {
+        return {stops.front().r, stops.front().g, stops.front().b};
+    }
+    if (t >= stops.back().position)
+    {
+        return {stops.back().r, stops.back().g, stops.back().b};
+    }
+    for (size_t i = 0; i + 1 < stops.size(); ++i)
+    {
+        if (t <= stops[i + 1].position)
+        {
+            const float span = stops[i + 1].position - stops[i].position;
+            const float alpha = span > 0.0f ? (t - stops[i].position) / span : 0.0f;
+            return {
+                stops[i].r + alpha * (stops[i + 1].r - stops[i].r),
+                stops[i].g + alpha * (stops[i + 1].g - stops[i].g),
+                stops[i].b + alpha * (stops[i + 1].b - stops[i].b),
+            };
+        }
+    }
+    return {stops.back().r, stops.back().g, stops.back().b};
+}
+
+// Gradient Mask の各ピクセルをグラデーション上の参照位置として RGB を決定し、
+// Mask がある場合はアルファとして乗算する。RGBA8 ColorGrid を返す。
+static ColorGrid GenerateColorize(
+    const ColorizeSettings& settings,
+    const MaskGrid& gradientMask,
+    const MaskGrid* mask)
+{
+    ColorGrid grid;
+    if (gradientMask.resolution <= 0)
+    {
+        return grid;
+    }
+    grid.resolution = gradientMask.resolution;
+    const int res = grid.resolution;
+    const size_t n = static_cast<size_t>(res) * static_cast<size_t>(res);
+    grid.pixels.resize(n * 4);
+
+    const bool hasMask = (mask != nullptr && mask->resolution == res);
+    const std::vector<ColorStop>& stops = settings.stops;
+    ParallelForRows(res, [&](int z) {
+        for (int x = 0; x < res; ++x)
+        {
+            const size_t i = static_cast<size_t>(z) * static_cast<size_t>(res) + static_cast<size_t>(x);
+            const float t = std::clamp(gradientMask.values[i], 0.0f, 1.0f);
+            const auto [r, g, b] = SampleColorGradient(stops, t);
+            const float a = hasMask ? std::clamp(mask->values[i], 0.0f, 1.0f) : 1.0f;
+            grid.pixels[i * 4 + 0] = static_cast<uint8_t>(std::clamp(r * 255.0f, 0.0f, 255.0f));
+            grid.pixels[i * 4 + 1] = static_cast<uint8_t>(std::clamp(g * 255.0f, 0.0f, 255.0f));
+            grid.pixels[i * 4 + 2] = static_cast<uint8_t>(std::clamp(b * 255.0f, 0.0f, 255.0f));
+            grid.pixels[i * 4 + 3] = static_cast<uint8_t>(std::clamp(a * 255.0f, 0.0f, 255.0f));
         }
     });
     return grid;
@@ -3115,6 +3195,12 @@ GraphId NodeGraph::CreateNode(NodeKind kind)
         AddPin(nodeId, PinKind::Input, ValueType::Mask, "B");
         AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
         break;
+    case NodeKind::Colorize:
+        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
+        AddPin(nodeId, PinKind::Input, ValueType::Mask, "Mask");
+        AddPin(nodeId, PinKind::Input, ValueType::Mask, "Gradient Mask");
+        AddPin(nodeId, PinKind::Output, ValueType::ColorTexture, "Color Texture");
+        break;
     default:
         break;
     }
@@ -3305,6 +3391,7 @@ void NodeGraph::ApplyEvaluationResultFrom(const NodeGraph& evaluatedGraph)
 {
     heightfieldCache_ = evaluatedGraph.heightfieldCache_;
     maskCache_ = evaluatedGraph.maskCache_;
+    colorCache_ = evaluatedGraph.colorCache_;
     evaluation_ = evaluatedGraph.evaluation_;
 }
 
@@ -3468,6 +3555,68 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
     return {};
 }
 
+// Gradient Mask (inputs[2]) と Mask (inputs[1]) を評価して ColorGrid を生成する。
+// inputs[0] (Heightmap) はここでは評価しない (3D プレビュー用に Evaluate() で別途処理)。
+ColorGrid NodeGraph::EvaluateColorGridForNodeCached(const Node& node, int depth, uint64_t* outputHash)
+{
+    if (depth > 16)
+    {
+        if (outputHash != nullptr) { *outputHash = 0; }
+        return {};
+    }
+    if (node.kind != NodeKind::Colorize)
+    {
+        if (outputHash != nullptr) { *outputHash = 0; }
+        return {};
+    }
+
+    // inputs[2] = Gradient Mask
+    uint64_t gradientHash = 0;
+    MaskGrid gradientMask;
+    if (node.inputs.size() >= 3)
+    {
+        const Node* upstream = FindUpstreamForPin(node.inputs[2].id);
+        if (upstream != nullptr)
+        {
+            gradientMask = EvaluateMaskGridForNodeCached(*upstream, depth + 1, &gradientHash);
+        }
+    }
+
+    // inputs[1] = Mask (optional)
+    uint64_t maskHash = 0;
+    MaskGrid maskGrid;
+    bool hasMask = false;
+    if (node.inputs.size() >= 2)
+    {
+        const Node* upstream = FindUpstreamForPin(node.inputs[1].id);
+        if (upstream != nullptr)
+        {
+            maskGrid = EvaluateMaskGridForNodeCached(*upstream, depth + 1, &maskHash);
+            hasMask = (maskGrid.resolution > 0);
+        }
+    }
+
+    uint64_t inputHash = 0;
+    HashCombine(inputHash, gradientHash);
+    HashCombine(inputHash, maskHash);
+    const uint64_t parameterHash = HashColorizeSettings(node.colorize);
+
+    ColorNodeCache& cache = colorCache_[node.id];
+    if (!cache.valid || cache.inputHash != inputHash || cache.parameterHash != parameterHash)
+    {
+        g_currentlyEvaluatingNodeId.store(node.id, std::memory_order_relaxed);
+        cache.grid = GenerateColorize(node.colorize, gradientMask, hasMask ? &maskGrid : nullptr);
+        cache.valid = true;
+        cache.inputHash = inputHash;
+        cache.parameterHash = parameterHash;
+        cache.outputHash = inputHash;
+        HashCombine(cache.outputHash, parameterHash);
+        HashCombine(cache.outputHash, static_cast<uint64_t>(node.id));
+    }
+    if (outputHash != nullptr) { *outputHash = cache.outputHash; }
+    return cache.grid;
+}
+
 HeightfieldGrid NodeGraph::EvaluateMaskAsHeightfield(const Node& node, std::string* message)
 {
     const MaskGrid mask = EvaluateMaskGridForNodeCached(node, 0, nullptr);
@@ -3554,10 +3703,74 @@ void NodeGraph::Evaluate(int previewMeshResolution)
     } progressGuard;
     g_currentlyEvaluatingNodeId.store(0, std::memory_order_relaxed);
 
+    // Colorize preview: evaluate color grid, build geometry from Heightmap input
+    // (or flat plane if no Heightmap), then bake color into vertex colors.
+    evaluation_.previewIsColor = false;
+    evaluation_.previewColorGrid = {};
+    const Node* previewNode = FindNode(evaluation_.previewNodeId);
+    if (previewNode != nullptr && previewNode->kind == NodeKind::Colorize)
+    {
+        evaluation_.previewMessage.clear();
+        ColorGrid colorGrid = EvaluateColorGridForNodeCached(*previewNode, 0, nullptr);
+        evaluation_.previewColorGrid = colorGrid;
+
+        // Geometry: use Heightmap input (inputs[0]) if connected, else flat plane.
+        const Node* hmNode = previewNode->inputs.empty()
+            ? nullptr
+            : FindUpstreamForPin(previewNode->inputs[0].id);
+        HeightfieldGrid heightGrid;
+        if (hmNode != nullptr)
+        {
+            HeightfieldPipeline pipeline = PipelineToNode(*hmNode);
+            evaluation_.previewMesh = BuildMeshFromHeightPipelineCached(
+                pipeline, previewMeshResolution, &evaluation_.previewMessage,
+                HeightfieldPreviewField::Heightmap, &heightGrid);
+        }
+        else
+        {
+            heightGrid.resolution = 64;
+            heightGrid.terrainSizeMeters = 1024.0f;
+            const size_t cellCount = 64 * 64;
+            heightGrid.heights.assign(cellCount, 0.0f);
+            heightGrid.mask.assign(cellCount, 0.0f);
+            evaluation_.previewMesh = BuildFlatMaskMesh(heightGrid, previewMeshResolution);
+        }
+        evaluation_.previewHeightfield = heightGrid;
+
+        // Bake color grid into mesh vertex colors.
+        if (colorGrid.resolution > 0 && !evaluation_.previewMesh.vertices.empty())
+        {
+            const int cres = colorGrid.resolution;
+            const float terrainSize = std::max(heightGrid.terrainSizeMeters, 1.0f);
+            for (MeshVertex& v : evaluation_.previewMesh.vertices)
+            {
+                const float u = v.x / terrainSize + 0.5f;
+                const float t = 0.5f - v.z / terrainSize;
+                const int xi = std::clamp(static_cast<int>(u * static_cast<float>(cres - 1)), 0, cres - 1);
+                const int zi = std::clamp(static_cast<int>(t * static_cast<float>(cres - 1)), 0, cres - 1);
+                const size_t idx = (static_cast<size_t>(zi) * static_cast<size_t>(cres) + static_cast<size_t>(xi)) * 4;
+                v.r = static_cast<float>(colorGrid.pixels[idx + 0]) / 255.0f;
+                v.g = static_cast<float>(colorGrid.pixels[idx + 1]) / 255.0f;
+                v.b = static_cast<float>(colorGrid.pixels[idx + 2]) / 255.0f;
+            }
+        }
+
+        evaluation_.previewIsColor = true;
+        evaluation_.previewShowsMask = false;
+        evaluation_.previewField = HeightfieldPreviewField::Heightmap;
+        ++evaluation_.version;
+        evaluation_.dirty = false;
+        evaluation_.status = std::format(
+            "Colorize preview [{}] -> {} verts / {} tris",
+            evaluation_.previewMessage,
+            evaluation_.previewMesh.vertices.size(),
+            evaluation_.previewMesh.triangles.size());
+        return;
+    }
+
     // Mask-only preview: Mask Noise / Mask Blend live in their own pipeline
     // (no upstream heightfield), so render them on a flat plane with the mask
     // channel populated from the mask graph.
-    const Node* previewNode = FindNode(evaluation_.previewNodeId);
     if (previewNode != nullptr && IsMaskOnlyNodeKind(previewNode->kind))
     {
         evaluation_.previewMessage.clear();
@@ -3734,6 +3947,8 @@ std::string_view ToString(NodeKind kind)
         return "Sediment";
     case NodeKind::Snow:
         return "Snow";
+    case NodeKind::Colorize:
+        return "Colorize";
     default:
         return "Unknown";
     }
@@ -3763,6 +3978,8 @@ std::string_view ToString(PreviewStage stage)
         return "Sediment";
     case PreviewStage::Snow:
         return "Snow";
+    case PreviewStage::Colorize:
+        return "Colorize";
     default:
         return "Unknown";
     }
@@ -3778,6 +3995,8 @@ std::string_view ToString(ValueType type)
         return "Heightmap";
     case ValueType::Mask:
         return "Mask";
+    case ValueType::ColorTexture:
+        return "Color Texture";
     default:
         return "Unknown";
     }
@@ -3807,6 +4026,8 @@ PreviewStage PreviewStageFor(NodeKind kind)
         return PreviewStage::Sediment;
     case NodeKind::Snow:
         return PreviewStage::Snow;
+    case NodeKind::Colorize:
+        return PreviewStage::Colorize;
     default:
         return PreviewStage::Graph;
     }
@@ -3815,6 +4036,11 @@ PreviewStage PreviewStageFor(NodeKind kind)
 bool IsMaskOnlyNodeKind(NodeKind kind)
 {
     return kind == NodeKind::MaskNoise || kind == NodeKind::MaskBlend;
+}
+
+bool IsColorOnlyNodeKind(NodeKind kind)
+{
+    return kind == NodeKind::Colorize;
 }
 
 void SetMultiScaleErosionGpuEvaluator(MultiScaleErosionGpuEvaluator evaluator)
