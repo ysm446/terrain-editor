@@ -21,7 +21,7 @@ cbuffer Constants : register(b0)
     float shadowBias;
     float shadowEnabled;
     float maskShadingMode;  // 0 = Grayscale, 1 = GrayOrange, 2 = GrayscaleHatched
-    float colorTextureMode; // 1 = sample Colorize texture, 0 = use albedoColor
+    float colorTextureMode; // bit 0 = sample Colorize texture, bit 1 = sample mask texture in PS
     float4 lightRight;
     float4 lightUp;
     float4 lightForward;
@@ -297,10 +297,33 @@ float3 DebugShadowColor(float3 worldPos)
     return lerp(float3(0.02, 0.02, 0.025), float3(1.0, 0.95, 0.82), visible) + delta * float3(0.0, 0.18, 0.0);
 }
 
-float2 ColorTextureUv(float3 worldPos)
+float2 TerrainTextureUv(float3 worldPos)
 {
     float terrainSize = max(albedoColor.a, 1.0);
     return float2(worldPos.x / terrainSize + 0.5, 0.5 - worldPos.z / terrainSize);
+}
+
+bool UseColorTexture()
+{
+    return (colorTextureMode - 2.0 * floor(colorTextureMode * 0.5)) > 0.5;
+}
+
+bool UseMaskTexture()
+{
+    return colorTextureMode > 1.5;
+}
+
+float SamplePreviewMask(VSOut i)
+{
+    if (i.mask > 1.5)
+    {
+        return i.mask;
+    }
+    if (UseMaskTexture())
+    {
+        return displacementMask.Sample(linearSampler, TerrainTextureUv(i.worldPos)).r;
+    }
+    return i.mask;
 }
 
 float4 PSSurface(VSOut i) : SV_TARGET
@@ -324,8 +347,8 @@ float4 PSSurface(VSOut i) : SV_TARGET
     float3 lowland = float3(0.32, 0.38, 0.32);
     float3 highland = float3(0.54, 0.52, 0.46);
     float3 slopeTint = float3(0.43, 0.39, 0.34);
-    float3 baseColor = (colorTextureMode > 0.5)
-        ? colorTexture.Sample(linearSampler, ColorTextureUv(i.worldPos)).rgb
+    float3 baseColor = UseColorTexture()
+        ? colorTexture.Sample(linearSampler, TerrainTextureUv(i.worldPos)).rgb
         : lerp(lerp(lowland, highland, height), slopeTint, slope * 0.42);
 
     float3 col = baseColor * light;
@@ -370,8 +393,8 @@ float4 PSSurface(VSOut i) : SV_TARGET
         float3 bounceTint = skyGroundColor.rgb * ambientStrength * shadowAmount * 0.55;
 
         float3 slopeMicroShade = lerp(float3(0.78, 0.80, 0.82), float3(1.06, 1.05, 1.02), viewFacing);
-        float3 effectiveAlbedo = (colorTextureMode > 0.5)
-            ? colorTexture.Sample(linearSampler, ColorTextureUv(i.worldPos)).rgb
+        float3 effectiveAlbedo = UseColorTexture()
+            ? colorTexture.Sample(linearSampler, TerrainTextureUv(i.worldPos)).rgb
             : albedoColor.rgb;
         col = effectiveAlbedo * (skyAmbient * ambientCloudMix + sunTint + bounceTint) * slopeMicroShade;
         col = lerp(col, dot(col, float3(0.299, 0.587, 0.114)).xxx, shadowAmount * 0.18);
@@ -386,7 +409,8 @@ float4 PSSurface(VSOut i) : SV_TARGET
         //   モード 1 (グレー×オレンジ): このモードのベースグレー lowMask
         //     をライティング非依存の一色で塗る (周囲のライティング差に
         //     惑わされず壁面が均一に見える)。
-        if (i.mask > 1.5)
+        float maskSample = SamplePreviewMask(i);
+        if (maskSample > 1.5)
         {
             if (maskShadingMode > 0.5 && maskShadingMode < 1.5)
             {
@@ -394,7 +418,7 @@ float4 PSSurface(VSOut i) : SV_TARGET
             }
             return float4(0.25, 0.25, 0.25, 1.0);
         }
-        float mask = saturate(i.mask);
+        float mask = saturate(maskSample);
         if (maskShadingMode < 0.5)
         {
             // モード 0: 純粋グレースケール (mask=0→黒, mask=1→白)。

@@ -313,7 +313,7 @@ struct MeshPreviewConstants
     float shadowBias;
     float shadowEnabled;
     float maskShadingMode;  // 0 = Grayscale, 1 = GrayOrange, 2 = GrayscaleHatched
-    float colorTextureMode; // 1 = sample Colorize texture, 0 = use albedoColor
+    float colorTextureMode; // bit 0 = sample Colorize texture, bit 1 = sample mask texture in PS
     float lightRight[4];
     float lightUp[4];
     float lightForward[4];
@@ -8776,8 +8776,17 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             EnsureGridPreviewBuffer();
         }
 
-        bool displacementReady = false;
         const rock::HeightfieldGrid& previewGrid = g_graph.Evaluation().previewHeightfield;
+        bool previewGridTexturesReady = false;
+        if (previewGrid.resolution >= 2)
+        {
+            std::string ignoredErr;
+            previewGridTexturesReady =
+                EnsureDisplacementHeightTextures(previewGrid.resolution, &ignoredErr) &&
+                EnsureDummyCloudShadowTexture(&ignoredErr);
+        }
+
+        bool displacementReady = false;
         if (useDisplacement && previewGrid.resolution >= 2)
         {
             std::string ignoredErr;
@@ -8786,9 +8795,9 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             // the first cloudy frame. The displacement root signature
             // requires them bound, so force initialisation here regardless
             // of whether clouds are enabled this frame.
-            if (EnsureMeshPreviewDisplacementPipeline(&ignoredErr) &&
+            if (previewGridTexturesReady &&
+                EnsureMeshPreviewDisplacementPipeline(&ignoredErr) &&
                 EnsureDisplacementGridIndexBuffers(previewMeshResolution, &ignoredErr) &&
-                EnsureDisplacementHeightTextures(previewGrid.resolution, &ignoredErr) &&
                 EnsureCloudShadowMeshCb(&ignoredErr) &&
                 EnsureDummyCloudShadowTexture(&ignoredErr))
             {
@@ -8807,15 +8816,14 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         ThrowIfFailed(g_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)), "Mesh preview allocator failed");
         ThrowIfFailed(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&commandList)), "Mesh preview CL failed");
 
-        if (displacementReady)
+        bool previewGridTextureUploaded = false;
+        if (previewGridTexturesReady)
         {
             std::string ignoredErr;
-            // Upload only when the underlying graph has changed (cache key
-            // is the evaluation version). Skipped on view-only redraws.
-            UploadDisplacementHeightfield(commandList.Get(), previewGrid, currentVersion, &ignoredErr);
-            // CBV upload buffer: copy MeshPreviewConstants into it. The
-            // contents are filled below from `constants` so we defer this
-            // to just before the surface draw.
+            // Upload only when the underlying graph has changed. CPU mesh
+            // previews also sample this mask texture in the pixel shader,
+            // while the displacement backend uses height + mask in the VS.
+            previewGridTextureUploaded = UploadDisplacementHeightfield(commandList.Get(), previewGrid, currentVersion, &ignoredErr);
         }
         bool colorTextureReady = false;
         if (g_graph.Evaluation().previewIsColor)
@@ -8884,7 +8892,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         constants.farPlane   = 20000.0f;
         constants.maskPreview = g_graph.Evaluation().previewShowsMask ? 1.0f : 0.0f;
         constants.maskShadingMode = static_cast<float>(g_graph.Settings().preview.maskShading);
-        constants.colorTextureMode = colorTextureReady ? 1.0f : 0.0f;
+        constants.colorTextureMode = (colorTextureReady ? 1.0f : 0.0f) + (previewGridTextureUploaded ? 2.0f : 0.0f);
         constants.lightingMode = static_cast<float>(g_graph.Settings().preview.lightingMode);
         const float azimuth = g_graph.Settings().preview.sunAzimuthDegrees * 3.1415926535f / 180.0f;
         const float elevation = g_graph.Settings().preview.sunElevationDegrees * 3.1415926535f / 180.0f;
@@ -8896,7 +8904,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         constants.albedoColor[0] = g_graph.Settings().preview.pbrAlbedo[0];
         constants.albedoColor[1] = g_graph.Settings().preview.pbrAlbedo[1];
         constants.albedoColor[2] = g_graph.Settings().preview.pbrAlbedo[2];
-        constants.albedoColor[3] = colorTextureReady ? std::max(previewGrid.terrainSizeMeters, 1.0f) : 1.0f;
+        constants.albedoColor[3] = std::max(previewGrid.terrainSizeMeters, 1.0f);
         constants.sunIntensity = g_graph.Settings().preview.sunIntensity;
         constants.ambientStrength = g_graph.Settings().preview.ambientStrength;
         constants.shadowStrength = g_graph.Settings().preview.shadowStrength;

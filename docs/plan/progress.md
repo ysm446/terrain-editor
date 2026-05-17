@@ -13,6 +13,7 @@
 
 ## 2026-05-17
 
+- マスクプレビューの 3D 表示で、CPU Mesh 経路も頂点 mask 値ではなく mask テクスチャーをピクセルシェーダーでサンプルするようにした。
 - `Mask Curvature` ノードを追加。
 - 入力 `Heightmap` から局所平均との差分を計算し、`Ridges`、`Valleys`、`Absolute` の曲率マスクを出力できるようにした。
 - `Radius`、`Sensitivity (m)`、`Threshold (%)`、`Gamma` で検出スケールと出力カーブを調整できるようにした。

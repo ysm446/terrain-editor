@@ -2,6 +2,10 @@
 
 ## 未リリース
 
+## 3.17.18 - 2026-05-17 19:22
+
+- マスクプレビューの 3D 表示で、CPU Mesh 経路でも頂点に焼き込んだ mask 値ではなく、評価済みの mask テクスチャーをピクセルシェーダーでサンプルするようにしました。マスクの細かさがプレビューメッシュ解像度ではなく Simulation Resolution に従うため、`Mask Noise`、`Mask Blend`、`Mask Slope`、`Mask Curvature`、`Mask Fluvial` などの表示がより細かく安定します。
+
 ## 3.17.17 - 2026-05-17 18:31
 
 - `Rock` ノードに `Orientation Rule` (`Flat` / `Follow Ground` / `Slope Oriented`) と `Layer Count` を追加しました。`Flat` は従来通り水平基準で加算し、`Follow Ground` は入力 Heightmap の勾配から斜面距離と法線の上向き成分を使って岩を地形に沿わせ、`Slope Oriented` は岩の回転を斜面方向へ寄せます。`Layer Count` は別シードの岩散布レイヤーを重ねて、密度と不規則さを増やします。
