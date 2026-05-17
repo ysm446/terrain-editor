@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
+#include <cstdlib>
 #include <cfloat>
 #include <cstdint>
 #include <cstring>
@@ -21,6 +22,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -496,6 +498,7 @@ struct GpuMeshPreview
     float cloudHorizontalScale = 0.0f;
     float cloudAbsorption = 0.0f;
     std::array<float, 3> cloudColor = {};
+    int cloudAnimate = -1;
     float cloudWindDirectionDegrees = 0.0f;
     float cloudWindSpeed = 0.0f;
     int cloudQualitySamples = 0;
@@ -2191,6 +2194,14 @@ nlohmann::json MakeMaskSettingsJson(const rock::Node& node)
             {"gamma", node.maskSlope.gamma},
             {"invert", node.maskSlope.invert},
         }},
+        {"maskHeight", {
+            {"useFullRange", node.maskHeight.useFullRange},
+            {"heightMinMeters", node.maskHeight.heightMinMeters},
+            {"heightMaxMeters", node.maskHeight.heightMaxMeters},
+            {"featherMeters", node.maskHeight.featherMeters},
+            {"gamma", node.maskHeight.gamma},
+            {"invert", node.maskHeight.invert},
+        }},
         {"maskBlend", {
             {"mode", static_cast<int>(node.maskBlend.mode)},
             {"intensity", node.maskBlend.intensity},
@@ -2336,6 +2347,7 @@ std::optional<rock::PreviewStage> ReadSerializedPreviewStage(const nlohmann::jso
     case rock::PreviewStage::MaskBlend:
     case rock::PreviewStage::MaskLevels:
     case rock::PreviewStage::MaskSlope:
+    case rock::PreviewStage::MaskHeight:
     case rock::PreviewStage::MaskCurvature:
     case rock::PreviewStage::MaskFluvial:
     case rock::PreviewStage::Rock:
@@ -2406,6 +2418,7 @@ void ReadMaskSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     const nlohmann::json nodeMaskCurvatureJson = nodeJson.value("maskCurvature", nlohmann::json::object());
     const nlohmann::json nodeMaskLevelsJson = nodeJson.value("maskLevels", nlohmann::json::object());
     const nlohmann::json nodeMaskSlopeJson = nodeJson.value("maskSlope", nlohmann::json::object());
+    const nlohmann::json nodeMaskHeightJson = nodeJson.value("maskHeight", nlohmann::json::object());
 
     node.maskNoise.seed = std::clamp(nodeMaskNoiseJson.value("seed", node.maskNoise.seed), 0, 999999);
     node.maskNoise.octaves = std::clamp(nodeMaskNoiseJson.value("octaves", node.maskNoise.octaves), 1, 12);
@@ -2448,6 +2461,16 @@ void ReadMaskSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     }
     node.maskSlope.gamma = std::clamp(nodeMaskSlopeJson.value("gamma", node.maskSlope.gamma), 0.05f, 8.0f);
     node.maskSlope.invert = nodeMaskSlopeJson.value("invert", node.maskSlope.invert);
+    node.maskHeight.useFullRange = nodeMaskHeightJson.value("useFullRange", node.maskHeight.useFullRange);
+    node.maskHeight.heightMinMeters = std::clamp(nodeMaskHeightJson.value("heightMinMeters", node.maskHeight.heightMinMeters), -100000.0f, 100000.0f);
+    node.maskHeight.heightMaxMeters = std::clamp(nodeMaskHeightJson.value("heightMaxMeters", node.maskHeight.heightMaxMeters), -100000.0f, 100000.0f);
+    if (node.maskHeight.heightMaxMeters < node.maskHeight.heightMinMeters)
+    {
+        std::swap(node.maskHeight.heightMinMeters, node.maskHeight.heightMaxMeters);
+    }
+    node.maskHeight.featherMeters = std::clamp(nodeMaskHeightJson.value("featherMeters", node.maskHeight.featherMeters), 0.0f, 100000.0f);
+    node.maskHeight.gamma = std::clamp(nodeMaskHeightJson.value("gamma", node.maskHeight.gamma), 0.05f, 8.0f);
+    node.maskHeight.invert = nodeMaskHeightJson.value("invert", node.maskHeight.invert);
     {
         const int algoInt = std::clamp(nodeMaskFluvialJson.value("algorithm", static_cast<int>(node.maskFluvial.algorithm)),
                                         static_cast<int>(rock::FlowAccumulationAlgorithm::D8),
@@ -2686,6 +2709,7 @@ nlohmann::json MakeProjectSettingsJson()
             {"horizontalScale", clouds.horizontalScale},
             {"absorption", clouds.absorption},
             {"color", {clouds.color[0], clouds.color[1], clouds.color[2]}},
+            {"animate", clouds.animate},
             {"windDirectionDegrees", clouds.windDirectionDegrees},
             {"windSpeedMetersPerSec", clouds.windSpeedMetersPerSec},
             {"qualitySamples", clouds.qualitySamples},
@@ -2888,6 +2912,9 @@ void ReadCloudSettingsJson(const nlohmann::json& settingsJson, rock::CloudSettin
     clouds.horizontalScale = std::clamp(cloudsJson.value("horizontalScale", clouds.horizontalScale), 50.0f, 100000.0f);
     clouds.absorption = std::clamp(cloudsJson.value("absorption", clouds.absorption), 0.0f, 2.0f);
     ReadColor3Json(cloudsJson, "color", clouds.color, 8.0f);
+    const bool legacyAnimatedClouds = !cloudsJson.contains("animate") &&
+        cloudsJson.value("windSpeedMetersPerSec", clouds.windSpeedMetersPerSec) > 0.0f;
+    clouds.animate = cloudsJson.value("animate", legacyAnimatedClouds ? true : clouds.animate);
     clouds.windDirectionDegrees = std::clamp(cloudsJson.value("windDirectionDegrees", clouds.windDirectionDegrees), 0.0f, 360.0f);
     clouds.windSpeedMetersPerSec = std::clamp(cloudsJson.value("windSpeedMetersPerSec", clouds.windSpeedMetersPerSec), 0.0f, 500.0f);
     clouds.qualitySamples = std::clamp(cloudsJson.value("qualitySamples", clouds.qualitySamples), 8, 128);
@@ -8309,6 +8336,7 @@ bool IsTerrainNodeKind(rock::NodeKind kind)
         kind == rock::NodeKind::MaskBlend ||
         kind == rock::NodeKind::MaskLevels ||
         kind == rock::NodeKind::MaskSlope ||
+        kind == rock::NodeKind::MaskHeight ||
         kind == rock::NodeKind::MaskCurvature ||
         kind == rock::NodeKind::MaskFluvial ||
         kind == rock::NodeKind::Rock ||
@@ -9288,6 +9316,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.cloudHorizontalScale != g_graph.Settings().clouds.horizontalScale ||
         g_gpuMeshPreview.cloudAbsorption != g_graph.Settings().clouds.absorption ||
         g_gpuMeshPreview.cloudColor != g_graph.Settings().clouds.color ||
+        g_gpuMeshPreview.cloudAnimate != (g_graph.Settings().clouds.animate ? 1 : 0) ||
         g_gpuMeshPreview.cloudWindDirectionDegrees != g_graph.Settings().clouds.windDirectionDegrees ||
         g_gpuMeshPreview.cloudWindSpeed != g_graph.Settings().clouds.windSpeedMetersPerSec ||
         g_gpuMeshPreview.cloudQualitySamples != g_graph.Settings().clouds.qualitySamples ||
@@ -9314,7 +9343,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.dofApertureBlades != g_graph.Settings().preview.dofApertureBlades ||
         g_gpuMeshPreview.dofApertureRotationDegrees != g_graph.Settings().preview.dofApertureRotationDegrees ||
         g_gpuMeshPreview.dofHighlightBoost != g_graph.Settings().preview.dofHighlightBoost ||
-        (g_graph.Settings().sky.mode == rock::SkyMode::Atmospheric && g_graph.Settings().clouds.enabled && g_graph.Settings().clouds.windSpeedMetersPerSec > 0.0f) ||
+        (g_graph.Settings().sky.mode == rock::SkyMode::Atmospheric && g_graph.Settings().clouds.enabled && g_graph.Settings().clouds.animate && g_graph.Settings().clouds.windSpeedMetersPerSec > 0.0f) ||
         (showGrid && !g_gpuMeshPreview.gridVertexBuffer) ||
         g_gpuMeshPreview.colorState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE ||
         (useDepthOfField && g_gpuMeshPreview.postState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -9796,8 +9825,9 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         const rock::CloudSettings& cloudSettingsForShadow = g_graph.Settings().clouds;
         const float windRad = cloudSettingsForShadow.windDirectionDegrees * 3.14159265358979323846f / 180.0f;
         const float seconds = static_cast<float>(std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count());
-        const float windOffsetX = std::cos(windRad) * cloudSettingsForShadow.windSpeedMetersPerSec * seconds;
-        const float windOffsetZ = std::sin(windRad) * cloudSettingsForShadow.windSpeedMetersPerSec * seconds;
+        const float cloudWindSpeed = cloudSettingsForShadow.animate ? cloudSettingsForShadow.windSpeedMetersPerSec : 0.0f;
+        const float windOffsetX = std::cos(windRad) * cloudWindSpeed * seconds;
+        const float windOffsetZ = std::sin(windRad) * cloudWindSpeed * seconds;
 
         // Expand the shadow footprint a bit beyond the mesh so projected
         // shadows don't get clamped to the mesh edges.
@@ -10351,6 +10381,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.cloudHorizontalScale = g_graph.Settings().clouds.horizontalScale;
         g_gpuMeshPreview.cloudAbsorption = g_graph.Settings().clouds.absorption;
         g_gpuMeshPreview.cloudColor = g_graph.Settings().clouds.color;
+        g_gpuMeshPreview.cloudAnimate = g_graph.Settings().clouds.animate ? 1 : 0;
         g_gpuMeshPreview.cloudWindDirectionDegrees = g_graph.Settings().clouds.windDirectionDegrees;
         g_gpuMeshPreview.cloudWindSpeed = g_graph.Settings().clouds.windSpeedMetersPerSec;
         g_gpuMeshPreview.cloudQualitySamples = g_graph.Settings().clouds.qualitySamples;
@@ -10562,6 +10593,10 @@ void DrawViewportDisplayMenu(const ImVec2& min)
         {
             ImGui::Spacing();
             if (drawSmallToggle("ViewportCloudToggle", "雲を描画", &settings.clouds.enabled))
+            {
+                SaveAppSettingsSilently();
+            }
+            if (settings.clouds.enabled && drawSmallToggle("ViewportCloudAnimateToggle", "雲を動かす", &settings.clouds.animate))
             {
                 SaveAppSettingsSilently();
             }
@@ -10859,6 +10894,7 @@ ImVec4 NodeAccentColor(rock::NodeKind kind)
     case rock::NodeKind::MaskBlend:
     case rock::NodeKind::MaskLevels:
     case rock::NodeKind::MaskSlope:
+    case rock::NodeKind::MaskHeight:
     case rock::NodeKind::MaskCurvature:
     case rock::NodeKind::MaskFluvial:
         return maskOrange;
@@ -10887,6 +10923,8 @@ ImVec2 InitialNodePosition(rock::NodeKind kind)
         return ImVec2(320.0f, 520.0f);
     case rock::NodeKind::MaskLevels:
         return ImVec2(600.0f, 520.0f);
+    case rock::NodeKind::MaskHeight:
+        return ImVec2(600.0f, 590.0f);
     case rock::NodeKind::MaskSlope:
         return ImVec2(600.0f, 660.0f);
     case rock::NodeKind::MaskCurvature:
@@ -11633,6 +11671,7 @@ void DrawNodeGraph()
             addNodeMenuItem(rock::NodeKind::MaskNoise);
             addNodeMenuItem(rock::NodeKind::MaskBlend);
             addNodeMenuItem(rock::NodeKind::MaskLevels);
+            addNodeMenuItem(rock::NodeKind::MaskHeight);
             addNodeMenuItem(rock::NodeKind::MaskSlope);
             addNodeMenuItem(rock::NodeKind::MaskCurvature);
             addNodeMenuItem(rock::NodeKind::MaskFluvial);
@@ -11793,9 +11832,134 @@ bool DrawResetToDefaultButton(const char* id, bool isDefaultValue, const char* d
     return pressed;
 }
 
-bool DrawPropertyFloatRow(const char* label, const char* id, float* value, float minValue, float maxValue, float defaultValue, const char* dirtyReason, bool recordUndo = true, const char* tooltip = nullptr, const char* format = "%.3f", ImGuiSliderFlags sliderFlags = 0)
+struct NumericTextInputState
+{
+    std::string text;
+    bool active = false;
+};
+
+std::unordered_map<ImGuiID, NumericTextInputState> g_numericTextInputs;
+
+std::string FormatFloatInputText(float value, const char* format)
+{
+    char buffer[64]{};
+    std::snprintf(buffer, sizeof(buffer), format ? format : "%.3f", value);
+    return buffer;
+}
+
+bool ParseFloatInputText(const char* text, float* outValue)
+{
+    if (!text || !outValue)
+    {
+        return false;
+    }
+    char* end = nullptr;
+    const float parsed = std::strtof(text, &end);
+    if (end == text)
+    {
+        return false;
+    }
+    while (*end == ' ' || *end == '\t')
+    {
+        ++end;
+    }
+    if (*end != '\0')
+    {
+        return false;
+    }
+    *outValue = parsed;
+    return true;
+}
+
+bool ParseIntInputText(const char* text, int* outValue)
+{
+    if (!text || !outValue)
+    {
+        return false;
+    }
+    char* end = nullptr;
+    const long parsed = std::strtol(text, &end, 10);
+    if (end == text)
+    {
+        return false;
+    }
+    while (*end == ' ' || *end == '\t')
+    {
+        ++end;
+    }
+    if (*end != '\0')
+    {
+        return false;
+    }
+    *outValue = static_cast<int>(parsed);
+    return true;
+}
+
+bool DrawEnterCommitFloatInput(const char* id, float* value, const char* format)
+{
+    const ImGuiID inputId = ImGui::GetID(id);
+    NumericTextInputState& state = g_numericTextInputs[inputId];
+    if (!state.active)
+    {
+        state.text = FormatFloatInputText(*value, format);
+    }
+
+    char buffer[64]{};
+    strncpy_s(buffer, state.text.c_str(), _TRUNCATE);
+    const bool enterPressed = ImGui::InputText(id, buffer, IM_ARRAYSIZE(buffer),
+        ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CharsScientific);
+    state.text = buffer;
+    state.active = ImGui::IsItemActive();
+
+    if (!enterPressed)
+    {
+        return false;
+    }
+    float parsed = *value;
+    if (!ParseFloatInputText(buffer, &parsed))
+    {
+        return false;
+    }
+    *value = parsed;
+    state.text = FormatFloatInputText(*value, format);
+    return true;
+}
+
+bool DrawEnterCommitIntInput(const char* id, int* value)
+{
+    const ImGuiID inputId = ImGui::GetID(id);
+    NumericTextInputState& state = g_numericTextInputs[inputId];
+    if (!state.active)
+    {
+        state.text = std::to_string(*value);
+    }
+
+    char buffer[32]{};
+    strncpy_s(buffer, state.text.c_str(), _TRUNCATE);
+    const bool enterPressed = ImGui::InputText(id, buffer, IM_ARRAYSIZE(buffer),
+        ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CharsDecimal);
+    state.text = buffer;
+    state.active = ImGui::IsItemActive();
+
+    if (!enterPressed)
+    {
+        return false;
+    }
+    int parsed = *value;
+    if (!ParseIntInputText(buffer, &parsed))
+    {
+        return false;
+    }
+    *value = parsed;
+    state.text = std::to_string(*value);
+    return true;
+}
+
+bool DrawPropertyFloatRow(const char* label, const char* id, float* value, float minValue, float maxValue, float defaultValue, const char* dirtyReason, bool recordUndo = true, const char* tooltip = nullptr, const char* format = "%.3f", ImGuiSliderFlags sliderFlags = 0, float inputMinValue = std::numeric_limits<float>::quiet_NaN(), float inputMaxValue = std::numeric_limits<float>::quiet_NaN())
 {
     bool editEnded = false;
+    const float inputMin = std::isnan(inputMinValue) ? minValue : inputMinValue;
+    const float inputMax = std::isnan(inputMaxValue) ? maxValue : inputMaxValue;
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
     bool differsFromDefault = FloatDiffersFromDefault(*value, defaultValue);
@@ -11823,16 +11987,62 @@ bool DrawPropertyFloatRow(const char* label, const char* id, float* value, float
 
     ImGui::SameLine();
     ImGui::SetNextItemWidth(inputWidth);
-    if (ImGui::InputFloat("##number", value, 0.0f, 0.0f, format))
+    if (DrawEnterCommitFloatInput("##number", value, format))
     {
-        *value = std::clamp(*value, minValue, maxValue);
+        *value = std::clamp(*value, inputMin, inputMax);
         g_graph.MarkDirty(dirtyReason);
+        editEnded = true;
     }
     if (recordUndo && ImGui::IsItemActivated())
     {
         BeginPropertyUndoEdit();
     }
-    editEnded = editEnded || ImGui::IsItemDeactivatedAfterEdit();
+    differsFromDefault = FloatDiffersFromDefault(*value, defaultValue);
+    const std::string defaultValueText = FormatDefaultFloat(defaultValue, format);
+    if (DrawResetToDefaultButton("reset", !differsFromDefault, defaultValueText.c_str()))
+    {
+        if (recordUndo)
+        {
+            PushUndoSnapshot();
+        }
+        *value = std::clamp(defaultValue, inputMin, inputMax);
+        g_graph.MarkDirty(dirtyReason);
+        editEnded = true;
+    }
+    ImGui::PopID();
+    if (recordUndo && editEnded)
+    {
+        CommitPropertyUndoEdit();
+    }
+    return editEnded;
+}
+
+bool DrawPropertyFloatInputRow(const char* label, const char* id, float* value, float minValue, float maxValue, float defaultValue, const char* dirtyReason, bool recordUndo = true, const char* tooltip = nullptr, const char* format = "%.3f")
+{
+    bool editEnded = false;
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    bool differsFromDefault = FloatDiffersFromDefault(*value, defaultValue);
+    DrawPropertyLabel(label, tooltip, differsFromDefault);
+    ImGui::TableSetColumnIndex(1);
+
+    ImGui::PushID(id);
+    const float availableWidth = ImGui::GetContentRegionAvail().x;
+    const float resetWidth = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x;
+    const float inputWidth = std::max(80.0f, availableWidth - resetWidth - ImGui::GetStyle().ItemInnerSpacing.x);
+    ImGui::SetNextItemWidth(inputWidth);
+    if (DrawEnterCommitFloatInput("##number", value, format))
+    {
+        *value = std::clamp(*value, minValue, maxValue);
+        g_graph.MarkDirty(dirtyReason);
+        editEnded = true;
+    }
+    if (recordUndo && ImGui::IsItemActivated())
+    {
+        BeginPropertyUndoEdit();
+    }
+
+    ImGui::SameLine();
     differsFromDefault = FloatDiffersFromDefault(*value, defaultValue);
     const std::string defaultValueText = FormatDefaultFloat(defaultValue, format);
     if (DrawResetToDefaultButton("reset", !differsFromDefault, defaultValueText.c_str()))
@@ -11860,10 +12070,8 @@ bool DrawPropertyPercentRow(const char* label, const char* id, float* value, flo
     const float maxPercent = maxValue * 100.0f;
     const float defaultPercent = defaultValue * 100.0f;
     const bool editEnded = DrawPropertyFloatRow(label, id, &percentValue, minPercent, maxPercent, defaultPercent, dirtyReason, true, tooltip);
-    // 値そのものは入力中も継続更新する (スライダー / テキストフィールドが
-    // 表示値とずれないようにするため) が、戻り値は editEnded だけにする —
-    // そうしないと毎キー入力 / 毎フレームで呼び出し側の EvaluateGraph が
-    // 走ってしまう。Float / Int 行と挙動を揃える。
+    // Text input commits on Enter through DrawPropertyFloatRow. Slider edits
+    // still update directly so the on-screen control stays responsive.
     const float nextValue = std::clamp(percentValue / 100.0f, minValue, maxValue);
     if (nextValue != *value)
     {
@@ -11902,16 +12110,16 @@ bool DrawPropertyIntRow(const char* label, const char* id, int* value, int minVa
 
     ImGui::SameLine();
     ImGui::SetNextItemWidth(inputWidth);
-    if (ImGui::InputInt("##number", value, 0, 0))
+    if (DrawEnterCommitIntInput("##number", value))
     {
         *value = std::clamp(*value, minValue, maxValue);
         g_graph.MarkDirty(dirtyReason);
+        editEnded = true;
     }
     if (recordUndo && ImGui::IsItemActivated())
     {
         BeginPropertyUndoEdit();
     }
-    editEnded = editEnded || ImGui::IsItemDeactivatedAfterEdit();
     differsFromDefault = *value != defaultValue;
     const std::string defaultValueText = std::to_string(defaultValue);
     if (DrawResetToDefaultButton("reset", !differsFromDefault, defaultValueText.c_str()))
@@ -12134,7 +12342,7 @@ bool DrawCameraFloatRow(const char* label, const char* id, float* value, float m
     changed = ImGui::SliderFloat("##slider", value, minValue, maxValue, format) || changed;
     ImGui::SameLine();
     ImGui::SetNextItemWidth(inputWidth);
-    if (ImGui::InputFloat("##number", value, 0.0f, 0.0f, format))
+    if (DrawEnterCommitFloatInput("##number", value, format))
     {
         *value = std::clamp(*value, minValue, maxValue);
         changed = true;
@@ -12483,6 +12691,59 @@ bool DrawMaskLevelsProperties(rock::Node& editableNode)
         EvaluateGraph();
     }
     if (DrawPropertyBoolRow("Invert", "MaskLevelsInvert", &ml.invert, "Mask levels invert toggled", "出力マスクを反転します。", rock::MaskLevelsSettings{}.invert))
+    {
+        EvaluateGraph();
+    }
+
+    ImGui::EndTable();
+    return true;
+}
+
+bool DrawMaskHeightProperties(rock::Node& editableNode)
+{
+    if (!ImGui::BeginTable("MaskHeightRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        return false;
+    }
+
+    ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 200.0f);
+    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+    rock::MaskHeightSettings& mh = editableNode.maskHeight;
+    mh.heightMinMeters = std::clamp(mh.heightMinMeters, -100000.0f, 100000.0f);
+    mh.heightMaxMeters = std::clamp(mh.heightMaxMeters, -100000.0f, 100000.0f);
+    if (mh.heightMaxMeters < mh.heightMinMeters)
+    {
+        std::swap(mh.heightMinMeters, mh.heightMaxMeters);
+    }
+    mh.featherMeters = std::clamp(mh.featherMeters, 0.0f, 100000.0f);
+    mh.gamma = std::clamp(mh.gamma, 0.05f, 8.0f);
+
+    if (DrawPropertyBoolRow("Use Full Range", "MaskHeightUseFullRange", &mh.useFullRange, "Mask height full range toggled", "入力 Heightmap の最低標高を 0、最高標高を 1 として、標高全体をグラデーションの mask にします。", rock::MaskHeightSettings{}.useFullRange))
+    {
+        EvaluateGraph();
+    }
+    if (!mh.useFullRange)
+    {
+        if (DrawPropertyFloatInputRow("Height Min (m)", "MaskHeightMinMeters", &mh.heightMinMeters, -100000.0f, 100000.0f, rock::MaskHeightSettings{}.heightMinMeters, "Mask height min changed", true, "この標高より低い部分を黒にします。地形の実スケールに合わせたメートル単位です。", "%.2f"))
+        {
+            if (mh.heightMaxMeters < mh.heightMinMeters) mh.heightMaxMeters = mh.heightMinMeters;
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatInputRow("Height Max (m)", "MaskHeightMaxMeters", &mh.heightMaxMeters, -100000.0f, 100000.0f, rock::MaskHeightSettings{}.heightMaxMeters, "Mask height max changed", true, "この標高より高い部分を黒にします。Min との差が抽出する標高帯になります。", "%.2f"))
+        {
+            if (mh.heightMaxMeters < mh.heightMinMeters) mh.heightMinMeters = mh.heightMaxMeters;
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Feather (m)", "MaskHeightFeatherMeters", &mh.featherMeters, 0.0f, 1000.0f, rock::MaskHeightSettings{}.featherMeters, "Mask height feather changed", true, "標高帯の境界をメートル単位でぼかします。スライダーは 0..1000m、数値入力ではより大きい値も指定できます。", "%.2f", 0, 0.0f, 100000.0f))
+        {
+            EvaluateGraph();
+        }
+    }
+    if (DrawPropertyFloatRow("Gamma", "MaskHeightGamma", &mh.gamma, 0.05f, 8.0f, rock::MaskHeightSettings{}.gamma, "Mask height gamma changed", true, "出力 mask のカーブです。1 未満で境界の弱い値を明るく、1 より大きいと中心の強い値を強調します。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyBoolRow("Invert", "MaskHeightInvert", &mh.invert, "Mask height invert toggled", "出力マスクを反転します。指定標高帯の外側を使うときに便利です。", rock::MaskHeightSettings{}.invert))
     {
         EvaluateGraph();
     }
@@ -13305,6 +13566,11 @@ void DrawPropertiesPanel()
         return;
     }
 
+    if (selectedNode->kind == rock::NodeKind::MaskHeight && DrawMaskHeightProperties(*editableNode))
+    {
+        return;
+    }
+
     if (selectedNode->kind == rock::NodeKind::MaskSlope && DrawMaskSlopeProperties(*editableNode))
     {
         return;
@@ -13577,8 +13843,12 @@ void DrawSkySettingsPanel()
                 DrawPropertyFloatRow("Field Falloff (m)", "CloudFieldFalloff", &clouds.fieldFalloff, 50.0f, 20000.0f, rock::CloudSettings{}.fieldFalloff, "Cloud field falloff changed", false, "フィールド端のフェードアウト幅。大きいほど雲がじわっと消え、小さいと境界がくっきりします。", "%.0f");
                 DrawPropertyFloatRow("Absorption", "CloudAbsorption", &clouds.absorption, 0.0f, 0.5f, rock::CloudSettings{}.absorption, "Cloud absorption changed", false, "Beer-Lambert の吸収係数。大きいほど雲がはっきり不透明になります。", "%.4f");
                 DrawColorRgbRow("Cloud Color", "CloudColor", clouds.color, rock::CloudSettings{}.color);
-                DrawPropertyFloatRow("Wind Direction (deg)", "CloudWindDir", &clouds.windDirectionDegrees, 0.0f, 360.0f, rock::CloudSettings{}.windDirectionDegrees, "Cloud wind direction changed", false, "風の向き(度、北=0、東=90)。Wind Speed > 0 のときに雲が流れる方向。", "%.0f");
-                DrawPropertyFloatRow("Wind Speed (m/s)", "CloudWindSpeed", &clouds.windSpeedMetersPerSec, 0.0f, 200.0f, rock::CloudSettings{}.windSpeedMetersPerSec, "Cloud wind speed changed", false, "雲が流れる速度 (m/s)。0 で静止。動かすとフレーム毎にビューポートが再描画され負荷が増えます。");
+                DrawPropertyBoolRow("雲を動かす", "CloudAnimate", &clouds.animate, "Cloud animation toggled", "ON のときだけ風向きと速度を使って雲を流します。OFF では速度の設定値を保持したまま静止表示します。", rock::CloudSettings{}.animate, true);
+                if (clouds.animate)
+                {
+                    DrawPropertyFloatRow("Wind Speed (m/s)", "CloudWindSpeed", &clouds.windSpeedMetersPerSec, 0.0f, 200.0f, rock::CloudSettings{}.windSpeedMetersPerSec, "Cloud wind speed changed", false, "雲が流れる速度 (m/s)。動かすとフレーム毎にビューポートが再描画され負荷が増えます。");
+                    DrawPropertyFloatRow("Wind Direction (deg)", "CloudWindDir", &clouds.windDirectionDegrees, 0.0f, 360.0f, rock::CloudSettings{}.windDirectionDegrees, "Cloud wind direction changed", false, "雲が流れる向きです。度数で指定します。北=0、東=90。", "%.0f");
+                }
                 DrawPropertyIntRow("Quality (samples)", "CloudQuality", &clouds.qualitySamples, 8, 96, rock::CloudSettings{}.qualitySamples, "Cloud quality changed", false, "1 ピクセルあたりのレイマーチサンプル数。大きいほど雲のディテールが上がりますが負荷も増えます。32 が標準、低スペックなら 16、高品質なら 64。");
                 DrawPropertyFloatRow("Shadow Strength", "CloudShadowStrength", &clouds.shadowStrength, 0.0f, 1.0f, rock::CloudSettings{}.shadowStrength, "Cloud shadow strength changed", false, "雲が地形に落とす影の強さ。0 で影無し、1 で完全に暗くなります。太陽方向に projection した雲の透過率を地形シェーダーで乗算します。");
                 if (DrawShadowResolutionPresetRow("Shadow Resolution", "CloudShadowResolution", &clouds.shadowResolution, rock::CloudSettings{}.shadowResolution, "Cloud shadow resolution changed", false, "雲影テクスチャの解像度 (片辺ピクセル数)。1024 で約 1MB。大きいほど影の輪郭が細かくなりますが生成負荷が増えます。"))

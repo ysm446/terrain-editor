@@ -21,6 +21,7 @@ Terrain Editor のノード関連ドキュメントをまとめるフォルダ�
 | Mask Noise | [mask_noise_node.md](mask/mask_noise/mask_noise_node.md) | [アルゴリズム入門](mask/mask_noise/mask_noise_algorithm_guide.md) |
 | Mask Blend | [mask_blend_node.md](mask/mask_blend/mask_blend_node.md) | [アルゴリズム入門](mask/mask_blend/mask_blend_algorithm_guide.md) |
 | Mask Levels | [mask_levels_node.md](mask/mask_levels/mask_levels_node.md) | [アルゴリズム入門](mask/mask_levels/mask_levels_algorithm_guide.md) |
+| Mask Height | [mask_height_node.md](mask/mask_height/mask_height_node.md) | [アルゴリズム入門](mask/mask_height/mask_height_algorithm_guide.md) |
 | Mask Slope | [mask_slope_node.md](mask/mask_slope/mask_slope_node.md) | [アルゴリズム入門](mask/mask_slope/mask_slope_algorithm_guide.md) |
 | Mask Curvature | [mask_curvature_node.md](mask/mask_curvature/mask_curvature_node.md) | [アルゴリズム入門](mask/mask_curvature/mask_curvature_algorithm_guide.md) |
 | Mask Fluvial | [mask_fluvial_node.md](mask/mask_fluvial/mask_fluvial_node.md) | [アルゴリズム入門](mask/mask_fluvial/mask_fluvial_algorithm_guide.md) |

@@ -139,6 +139,19 @@ uint64_t HashMaskSlopeSettings(const MaskSlopeSettings& settings, int resolution
     return hash;
 }
 
+uint64_t HashMaskHeightSettings(const MaskHeightSettings& settings, int resolution)
+{
+    uint64_t hash = 10723151780598845931ull;
+    HashCombine(hash, static_cast<uint64_t>(settings.useFullRange ? 1 : 0));
+    HashCombine(hash, HashFloat(settings.heightMinMeters));
+    HashCombine(hash, HashFloat(settings.heightMaxMeters));
+    HashCombine(hash, HashFloat(settings.featherMeters));
+    HashCombine(hash, HashFloat(settings.gamma));
+    HashCombine(hash, static_cast<uint64_t>(settings.invert ? 1 : 0));
+    HashCombine(hash, static_cast<uint64_t>(resolution));
+    return hash;
+}
+
 uint64_t HashRockSettings(const RockSettings& settings, int resolution)
 {
     uint64_t hash = 6364136223846793005ull;
@@ -1258,6 +1271,72 @@ void ApplyMaskSlope(HeightfieldGrid& grid, const MaskSlopeSettings& settings)
                 value = 1.0f - value;
             }
             grid.mask[rowBase + static_cast<size_t>(x)] = value;
+        }
+    });
+}
+
+void ApplyMaskHeight(HeightfieldGrid& grid, const MaskHeightSettings& settings)
+{
+    const int n = grid.resolution;
+    const size_t cellCount = static_cast<size_t>(n) * static_cast<size_t>(n);
+    if (n < 1 || grid.heights.size() < cellCount)
+    {
+        return;
+    }
+
+    float minMeters = settings.heightMinMeters;
+    float maxMeters = settings.heightMaxMeters;
+    if (maxMeters < minMeters)
+    {
+        std::swap(minMeters, maxMeters);
+    }
+
+    const auto smoothstep = [](float edge0, float edge1, float x) {
+        const float range = std::max(edge1 - edge0, 0.0001f);
+        const float t = std::clamp((x - edge0) / range, 0.0f, 1.0f);
+        return t * t * (3.0f - 2.0f * t);
+    };
+    const float feather = std::max(settings.featherMeters, 0.0f);
+    const float gamma = std::clamp(settings.gamma, 0.05f, 8.0f);
+    const float exponent = 1.0f / gamma;
+    float fullRangeMin = 0.0f;
+    float fullRangeInv = 0.0f;
+    if (settings.useFullRange)
+    {
+        const auto [minIt, maxIt] = std::minmax_element(grid.heights.begin(), grid.heights.begin() + static_cast<std::ptrdiff_t>(cellCount));
+        fullRangeMin = *minIt;
+        const float range = *maxIt - *minIt;
+        fullRangeInv = (range > 0.0001f) ? (1.0f / range) : 0.0f;
+    }
+
+    grid.mask.assign(cellCount, 0.0f);
+    ParallelForRows(n, [&](int z) {
+        const size_t rowBase = static_cast<size_t>(z) * static_cast<size_t>(n);
+        for (int x = 0; x < n; ++x)
+        {
+            const size_t index = rowBase + static_cast<size_t>(x);
+            const float h = grid.heights[index];
+            float value = 0.0f;
+            if (settings.useFullRange)
+            {
+                value = std::clamp((h - fullRangeMin) * fullRangeInv, 0.0f, 1.0f);
+            }
+            else if (feather <= 0.0f)
+            {
+                value = (h >= minMeters && h <= maxMeters) ? 1.0f : 0.0f;
+            }
+            else
+            {
+                const float lower = smoothstep(minMeters - feather, minMeters, h);
+                const float upper = 1.0f - smoothstep(maxMeters, maxMeters + feather, h);
+                value = std::clamp(std::min(lower, upper), 0.0f, 1.0f);
+            }
+            value = std::pow(value, exponent);
+            if (settings.invert)
+            {
+                value = 1.0f - value;
+            }
+            grid.mask[index] = value;
         }
     });
 }
@@ -3120,6 +3199,9 @@ void ApplyHeightfieldOperation(HeightfieldGrid& grid, const HeightfieldPipeline:
     case HeightfieldPipeline::HeightfieldOperation::Kind::MaskSlope:
         ApplyMaskSlope(grid, operation.maskSlope);
         break;
+    case HeightfieldPipeline::HeightfieldOperation::Kind::MaskHeight:
+        ApplyMaskHeight(grid, operation.maskHeight);
+        break;
     case HeightfieldPipeline::HeightfieldOperation::Kind::MaskFluvial:
         ApplyMaskFluvial(grid, operation.maskFluvial);
         break;
@@ -3147,6 +3229,8 @@ uint64_t HashHeightfieldOperation(const HeightfieldPipeline::HeightfieldOperatio
         return HashMaskCurvatureSettings(operation.maskCurvature, resolution);
     case HeightfieldPipeline::HeightfieldOperation::Kind::MaskSlope:
         return HashMaskSlopeSettings(operation.maskSlope, resolution);
+    case HeightfieldPipeline::HeightfieldOperation::Kind::MaskHeight:
+        return HashMaskHeightSettings(operation.maskHeight, resolution);
     case HeightfieldPipeline::HeightfieldOperation::Kind::MaskFluvial:
         return HashMaskFluvialSettings(operation.maskFluvial, resolution);
     case HeightfieldPipeline::HeightfieldOperation::Kind::Rock:
@@ -3181,6 +3265,10 @@ HeightfieldPipeline::HeightfieldOperation MakeHeightfieldOperation(const Node& n
         operation.kind = HeightfieldPipeline::HeightfieldOperation::Kind::MaskSlope;
         operation.maskSlope = node.maskSlope;
         break;
+    case NodeKind::MaskHeight:
+        operation.kind = HeightfieldPipeline::HeightfieldOperation::Kind::MaskHeight;
+        operation.maskHeight = node.maskHeight;
+        break;
     case NodeKind::MaskFluvial:
         operation.kind = HeightfieldPipeline::HeightfieldOperation::Kind::MaskFluvial;
         operation.maskFluvial = node.maskFluvial;
@@ -3212,6 +3300,7 @@ bool IsHeightfieldOperationNode(NodeKind kind)
     case NodeKind::MultiScaleErosion:
     case NodeKind::MaskCurvature:
     case NodeKind::MaskSlope:
+    case NodeKind::MaskHeight:
     case NodeKind::MaskFluvial:
     case NodeKind::Rock:
     case NodeKind::Sediment:
@@ -3567,6 +3656,10 @@ GraphId NodeGraph::CreateNode(NodeKind kind)
         AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
         AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
         break;
+    case NodeKind::MaskHeight:
+        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
+        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
+        break;
     case NodeKind::Rock:
         AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
         AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
@@ -3773,6 +3866,8 @@ HeightfieldPipeline NodeGraph::PipelineFor(PreviewStage stage) const
         return PipelineTo(NodeKind::MaskCurvature);
     case PreviewStage::MaskSlope:
         return PipelineTo(NodeKind::MaskSlope);
+    case PreviewStage::MaskHeight:
+        return PipelineTo(NodeKind::MaskHeight);
     case PreviewStage::MaskFluvial:
         return PipelineTo(NodeKind::MaskFluvial);
     case PreviewStage::Rock:
@@ -3786,6 +3881,7 @@ HeightfieldPipeline NodeGraph::PipelineFor(PreviewStage stage) const
         if (const Node* node = FindFirstNode(NodeKind::Snow)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::Sediment)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::Rock)) { return PipelineToNode(*node); }
+        if (const Node* node = FindFirstNode(NodeKind::MaskHeight)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::MaskSlope)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::MaskCurvature)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::MaskFluvial)) { return PipelineToNode(*node); }
@@ -3916,7 +4012,7 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
         if (outputHash != nullptr) { *outputHash = cache.outputHash; }
         return cache.grid;
     }
-    if (node.kind == NodeKind::MaskCurvature || node.kind == NodeKind::MaskSlope || node.kind == NodeKind::MaskFluvial)
+    if (node.kind == NodeKind::MaskCurvature || node.kind == NodeKind::MaskSlope || node.kind == NodeKind::MaskHeight || node.kind == NodeKind::MaskFluvial)
     {
         // Heightfield-derived mask nodes read a heightfield, so they can't be
         // evaluated through the mask-graph path on their own. Build the
@@ -3938,7 +4034,7 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
         // kinds (Mask Noise / Mask Blend) plus Mask Fluvial, which evaluates
         // through the heightfield cache but is presented here as a MaskGrid.
         const auto isMaskProducer = [](NodeKind kind) {
-            return IsMaskOnlyNodeKind(kind) || kind == NodeKind::MaskCurvature || kind == NodeKind::MaskSlope || kind == NodeKind::MaskFluvial;
+            return IsMaskOnlyNodeKind(kind) || kind == NodeKind::MaskCurvature || kind == NodeKind::MaskSlope || kind == NodeKind::MaskHeight || kind == NodeKind::MaskFluvial;
         };
         uint64_t aHash = 0;
         uint64_t bHash = 0;
@@ -3992,7 +4088,7 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
             if (const Node* upstream = FindUpstreamForPin(node.inputs[0].id))
             {
                 const auto isMaskProducer = [](NodeKind kind) {
-                    return IsMaskOnlyNodeKind(kind) || kind == NodeKind::MaskCurvature || kind == NodeKind::MaskSlope || kind == NodeKind::MaskFluvial;
+                    return IsMaskOnlyNodeKind(kind) || kind == NodeKind::MaskCurvature || kind == NodeKind::MaskSlope || kind == NodeKind::MaskHeight || kind == NodeKind::MaskFluvial;
                 };
                 if (isMaskProducer(upstream->kind))
                 {
@@ -4417,6 +4513,8 @@ std::string_view ToString(NodeKind kind)
         return "Mask Levels";
     case NodeKind::MaskSlope:
         return "Mask Slope";
+    case NodeKind::MaskHeight:
+        return "Mask Height";
     case NodeKind::MaskCurvature:
         return "Mask Curvature";
     case NodeKind::MaskFluvial:
@@ -4454,6 +4552,8 @@ std::string_view ToString(PreviewStage stage)
         return "Mask Levels";
     case PreviewStage::MaskSlope:
         return "Mask Slope";
+    case PreviewStage::MaskHeight:
+        return "Mask Height";
     case PreviewStage::MaskCurvature:
         return "Mask Curvature";
     case PreviewStage::MaskFluvial:
@@ -4508,6 +4608,8 @@ PreviewStage PreviewStageFor(NodeKind kind)
         return PreviewStage::MaskLevels;
     case NodeKind::MaskSlope:
         return PreviewStage::MaskSlope;
+    case NodeKind::MaskHeight:
+        return PreviewStage::MaskHeight;
     case NodeKind::MaskCurvature:
         return PreviewStage::MaskCurvature;
     case NodeKind::MaskFluvial:

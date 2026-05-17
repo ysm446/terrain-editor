@@ -29,6 +29,7 @@ enum class NodeKind
     MaskCurvature = 16,
     MaskLevels = 17,
     MaskSlope = 18,
+    MaskHeight = 19,
 };
 
 enum class PinKind
@@ -185,6 +186,7 @@ enum class PreviewStage
     MaskCurvature = 15,
     MaskLevels = 16,
     MaskSlope = 17,
+    MaskHeight = 18,
 };
 
 enum class HeightfieldPreviewField
@@ -271,6 +273,16 @@ struct MaskSlopeSettings
 {
     float slopeMinDeg = 25.0f;
     float slopeMaxDeg = 60.0f;
+    float gamma = 1.0f;
+    bool invert = false;
+};
+
+struct MaskHeightSettings
+{
+    bool useFullRange = false;
+    float heightMinMeters = 0.0f;
+    float heightMaxMeters = 1000.0f;
+    float featherMeters = 0.0f;
     float gamma = 1.0f;
     bool invert = false;
 };
@@ -458,6 +470,7 @@ struct Node
     MaskCurvatureSettings maskCurvature;
     MaskLevelsSettings maskLevels;
     MaskSlopeSettings maskSlope;
+    MaskHeightSettings maskHeight;
     MaskFluvialSettings maskFluvial;
     RockSettings rock;
     SedimentSettings sediment;
@@ -543,6 +556,7 @@ struct CloudSettings
     float horizontalScale = 4000.0f;
     float absorption = 0.06f;
     std::array<float, 3> color = {1.0f, 1.0f, 1.0f};
+    bool animate = false;
     float windDirectionDegrees = 45.0f;
     float windSpeedMetersPerSec = 0.0f;
     int qualitySamples = 32;
@@ -637,6 +651,7 @@ struct HeightfieldPipeline
             MultiScaleErosion,
             MaskCurvature,
             MaskSlope,
+            MaskHeight,
             MaskFluvial,
             Rock,
             Sediment,
@@ -649,6 +664,7 @@ struct HeightfieldPipeline
         MultiScaleErosionSettings multiScaleErosion;
         MaskCurvatureSettings maskCurvature;
         MaskSlopeSettings maskSlope;
+        MaskHeightSettings maskHeight;
         MaskFluvialSettings maskFluvial;
         RockSettings rock;
         SedimentSettings sediment;
