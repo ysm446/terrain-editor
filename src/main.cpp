@@ -12504,10 +12504,6 @@ void DrawDisplaySettingsPanel()
         {
             SaveAppSettingsSilently();
         }
-        if (DrawPropertyBoolRow("Wireframe", "DisplayWireframe", &settings.preview.showWireframe, "Wireframe visibility changed", nullptr, rock::PreviewSettings{}.showWireframe, true))
-        {
-            SaveAppSettingsSilently();
-        }
         if (DrawPropertyBoolRow("Grid", "DisplayGrid", &settings.preview.showGrid, "Grid visibility changed", nullptr, rock::PreviewSettings{}.showGrid, true))
         {
             SaveAppSettingsSilently();
@@ -12706,8 +12702,24 @@ void DrawCameraPanel()
         g_graph.Settings().preview.gridCellSizeMeters);
 }
 
-void DrawStatsPanel()
+void DrawDebugPanel()
 {
+    rock::GraphSettings& settings = g_graph.Settings();
+    ImGui::SeparatorText("Viewport Debug");
+    if (ImGui::BeginTable("DebugViewportRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 112.0f);
+        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+        if (DrawPropertyBoolRow("Wireframe", "DebugWireframe", &settings.preview.showWireframe, "Wireframe visibility changed",
+                "Shows mesh edges for topology debugging. High viewport resolutions can make this expensive.",
+                rock::PreviewSettings{}.showWireframe, true))
+        {
+            SaveAppSettingsSilently();
+        }
+        ImGui::EndTable();
+    }
+
+    ImGui::Spacing();
     const rock::EvaluationSummary& evaluation = g_graph.Evaluation();
     ImGui::Text("Graph Version: %llu", static_cast<unsigned long long>(evaluation.version));
     ImGui::Text("%s", g_lastEvaluationDuration.c_str());
@@ -13100,14 +13112,9 @@ void DrawUi()
         }
         if (ImGui::BeginMenu("表示"))
         {
-            rock::GraphSettings& settings = g_graph.Settings();
             if (ImGui::MenuItem("Mesh", nullptr, g_ui.meshPreview))
             {
                 g_ui.meshPreview = !g_ui.meshPreview;
-                SaveAppSettingsSilently();
-            }
-            if (ImGui::MenuItem("Wireframe", nullptr, &settings.preview.showWireframe))
-            {
                 SaveAppSettingsSilently();
             }
             ImGui::EndMenu();
@@ -13237,10 +13244,10 @@ void DrawUi()
             EndInspectorTabContent();
             EndStyledTabItem(defaultTabStyle);
         }
-        if (BeginStyledTabItem("統計"))
+        if (BeginStyledTabItem("Debug"))
         {
             BeginInspectorTabContent();
-            DrawStatsPanel();
+            DrawDebugPanel();
             EndInspectorTabContent();
             EndStyledTabItem(defaultTabStyle);
         }
