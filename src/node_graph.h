@@ -487,6 +487,15 @@ struct PreviewSettings
     float tessellationMaxFactor = 8.0f;
     float tessellationNearDistance = 450.0f;
     float tessellationFarDistance = 4500.0f;
+    bool depthOfFieldEnabled = false;
+    float dofFStop = 5.6f;
+    float dofFocusDistanceMeters = 1200.0f;
+    float dofSensorHeightMm = 24.0f;
+    float dofMaxBlurPixels = 14.0f;
+    int dofApertureShape = 0; // 0 circle, 1 triangle, 2 hexagon, 3 octagon, 4 custom blades
+    int dofApertureBlades = 6;
+    float dofApertureRotationDegrees = 0.0f;
+    float dofHighlightBoost = 0.0f;
     float sunAzimuthDegrees = 315.0f;
     float sunElevationDegrees = 38.0f;
     float sunIntensity = 1.05f;

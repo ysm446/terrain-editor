@@ -55,7 +55,8 @@ constexpr float kFullFrameSensorHeightMm = 24.0f;
 constexpr float kDefaultViewportPitch = 0.72f;
 constexpr float kDefaultViewportFovDegrees = 45.0f;
 constexpr float kDefaultViewportOrbitDistance = 1800.0f;
-constexpr float kDefaultViewportZoom = 1.0f;
+constexpr float kMaxViewportOrbitDistance = 100000.0f;
+constexpr float kViewportFarPlane = 200000.0f;
 constexpr std::array<int, 5> kResolutionPresets = {128, 256, 512, 1024, 2048};
 constexpr std::array<int, 4> kShadowResolutionPresets = {512, 1024, 2048, 4096};
 
@@ -310,7 +311,6 @@ struct ViewportState
     float pitch = kDefaultViewportPitch;
     float fovDegrees = kDefaultViewportFovDegrees;
     float orbitDistance = kDefaultViewportOrbitDistance;
-    float zoom = kDefaultViewportZoom;
     ImVec2 pan = ImVec2(0.0f, 0.0f);
 };
 
@@ -320,13 +320,11 @@ void NormalizeLoadedViewport(bool migrateCloseOrbitDistance)
 {
     g_viewport.pitch = std::clamp(g_viewport.pitch, -1.25f, 1.25f);
     g_viewport.fovDegrees = std::clamp(g_viewport.fovDegrees, 15.0f, 90.0f);
-    g_viewport.orbitDistance = std::clamp(g_viewport.orbitDistance, 1.0f, 10000.0f);
-    g_viewport.zoom = std::clamp(g_viewport.zoom, 0.05f, 20.0f);
+    g_viewport.orbitDistance = std::clamp(g_viewport.orbitDistance, 1.0f, kMaxViewportOrbitDistance);
     if (migrateCloseOrbitDistance && g_viewport.orbitDistance <= 40.0f)
     {
         g_viewport.pitch = kDefaultViewportPitch;
         g_viewport.orbitDistance = kDefaultViewportOrbitDistance;
-        g_viewport.zoom = kDefaultViewportZoom;
     }
 }
 
@@ -435,7 +433,6 @@ struct GpuMeshPreview
     float pitch = 0.0f;
     float fovDegrees = 0.0f;
     float orbitDistance = 0.0f;
-    float zoom = 0.0f;
     ImVec2 pan = ImVec2(0.0f, 0.0f);
     uint64_t graphVersion = UINT64_MAX;
     bool showSurface = false;
@@ -454,6 +451,7 @@ struct GpuMeshPreview
     std::array<float, 3> pbrAlbedo = {};
     std::array<float, 3> gridColor = {};
     ComPtr<ID3D12Resource> colorTarget;
+    ComPtr<ID3D12Resource> postTarget;
     ComPtr<ID3D12Resource> depthTarget;
     ComPtr<ID3D12Resource> shadowTarget;
     ComPtr<ID3D12Resource> vertexBuffer;
@@ -461,15 +459,19 @@ struct GpuMeshPreview
     ComPtr<ID3D12Resource> edgeIndexBuffer;
     ComPtr<ID3D12Resource> gridVertexBuffer;
     D3D12_CPU_DESCRIPTOR_HANDLE rtvCpu{};
+    D3D12_CPU_DESCRIPTOR_HANDLE postRtvCpu{};
     D3D12_CPU_DESCRIPTOR_HANDLE dsvCpu{};
     D3D12_CPU_DESCRIPTOR_HANDLE shadowDsvCpu{};
     D3D12_CPU_DESCRIPTOR_HANDLE srvCpu{};
     D3D12_GPU_DESCRIPTOR_HANDLE srvGpu{};
+    D3D12_CPU_DESCRIPTOR_HANDLE postSrvCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE postSrvGpu{};
     D3D12_CPU_DESCRIPTOR_HANDLE shadowSrvCpu{};
     D3D12_GPU_DESCRIPTOR_HANDLE shadowSrvGpu{};
     D3D12_CPU_DESCRIPTOR_HANDLE depthSrvCpu{};
     D3D12_GPU_DESCRIPTOR_HANDLE depthSrvGpu{};
     bool srvAllocated = false;
+    bool postSrvAllocated = false;
     bool shadowSrvAllocated = false;
     bool depthSrvAllocated = false;
     UINT vertexCount = 0;
@@ -540,9 +542,19 @@ struct GpuMeshPreview
     float tessellationMaxFactor = 0.0f;
     float tessellationNearDistance = 0.0f;
     float tessellationFarDistance = 0.0f;
+    bool depthOfFieldEnabled = false;
+    float dofFStop = 0.0f;
+    float dofFocusDistanceMeters = 0.0f;
+    float dofSensorHeightMm = 0.0f;
+    float dofMaxBlurPixels = 0.0f;
+    int dofApertureShape = -1;
+    int dofApertureBlades = 0;
+    float dofApertureRotationDegrees = 0.0f;
+    float dofHighlightBoost = 0.0f;
     PreviewRenderStats renderStats;
 
     D3D12_RESOURCE_STATES colorState = D3D12_RESOURCE_STATE_COMMON;
+    D3D12_RESOURCE_STATES postState = D3D12_RESOURCE_STATE_COMMON;
     D3D12_RESOURCE_STATES shadowState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     D3D12_RESOURCE_STATES depthState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
 };
@@ -620,6 +632,10 @@ ComPtr<ID3D12RootSignature> g_cloudShadowRootSignature;
 ComPtr<ID3D12PipelineState> g_cloudShadowPso;
 bool g_cloudPipelinesReady = false;
 std::string g_cloudPipelineStatus = "Cloud pipelines not initialized";
+ComPtr<ID3D12RootSignature> g_dofRootSignature;
+ComPtr<ID3D12PipelineState> g_dofPso;
+bool g_dofPipelineReady = false;
+std::string g_dofPipelineStatus = "Depth of Field pipeline not initialized";
 
 struct GpuClouds
 {
@@ -1114,7 +1130,13 @@ void CleanupD3D()
         FreeSrvDescriptor(nullptr, g_gpuMeshPreview.srvCpu, g_gpuMeshPreview.srvGpu);
         g_gpuMeshPreview.srvAllocated = false;
     }
+    if (g_gpuMeshPreview.postSrvAllocated)
+    {
+        FreeSrvDescriptor(nullptr, g_gpuMeshPreview.postSrvCpu, g_gpuMeshPreview.postSrvGpu);
+        g_gpuMeshPreview.postSrvAllocated = false;
+    }
     g_gpuMeshPreview.colorTarget.Reset();
+    g_gpuMeshPreview.postTarget.Reset();
     g_gpuMeshPreview.depthTarget.Reset();
     g_gpuMeshPreview.vertexBuffer.Reset();
     g_gpuMeshPreview.indexBuffer.Reset();
@@ -1203,6 +1225,9 @@ void CleanupD3D()
     g_cloudShadowPso.Reset();
     g_cloudShadowRootSignature.Reset();
     g_cloudPipelinesReady = false;
+    g_dofPso.Reset();
+    g_dofRootSignature.Reset();
+    g_dofPipelineReady = false;
     if (g_gpuClouds.meshCbUploadBuffer && g_gpuClouds.meshCbMapped)
     {
         g_gpuClouds.meshCbUploadBuffer->Unmap(0, nullptr);
@@ -1309,6 +1334,11 @@ std::filesystem::path CloudRenderShaderPath()
 std::filesystem::path CloudShadowShaderPath()
 {
     return ShaderPath("cloud_shadow.hlsl");
+}
+
+std::filesystem::path DepthOfFieldShaderPath()
+{
+    return ShaderPath("depth_of_field.hlsl");
 }
 
 void EvaluateGraph();
@@ -1623,7 +1653,6 @@ bool SaveAppSettings(std::string* error = nullptr)
             {"pitch", g_viewport.pitch},
             {"fovDegrees", g_viewport.fovDegrees},
             {"orbitDistance", g_viewport.orbitDistance},
-            {"zoom", g_viewport.zoom},
             {"pan", {g_viewport.pan.x, g_viewport.pan.y}},
         };
         root["mapViewport"] = {
@@ -1785,7 +1814,6 @@ bool LoadAppSettings(std::string* error = nullptr)
         g_viewport.pitch = viewportJson.value("pitch", g_viewport.pitch);
         g_viewport.fovDegrees = viewportJson.value("fovDegrees", g_viewport.fovDegrees);
         g_viewport.orbitDistance = viewportJson.value("orbitDistance", g_viewport.orbitDistance);
-        g_viewport.zoom = viewportJson.value("zoom", g_viewport.zoom);
         const std::string savedAppVersion = root.value("appVersion", std::string());
         NormalizeLoadedViewport(savedAppVersion != TERRAIN_EDITOR_VERSION_STRING);
         if (viewportJson.contains("pan") && viewportJson["pan"].is_array() && viewportJson["pan"].size() == 2)
@@ -2621,6 +2649,15 @@ nlohmann::json MakeProjectSettingsJson()
             {"tessellationMaxFactor", preview.tessellationMaxFactor},
             {"tessellationNearDistance", preview.tessellationNearDistance},
             {"tessellationFarDistance", preview.tessellationFarDistance},
+            {"depthOfFieldEnabled", preview.depthOfFieldEnabled},
+            {"dofFStop", preview.dofFStop},
+            {"dofFocusDistanceMeters", preview.dofFocusDistanceMeters},
+            {"dofSensorHeightMm", preview.dofSensorHeightMm},
+            {"dofMaxBlurPixels", preview.dofMaxBlurPixels},
+            {"dofApertureShape", preview.dofApertureShape},
+            {"dofApertureBlades", preview.dofApertureBlades},
+            {"dofApertureRotationDegrees", preview.dofApertureRotationDegrees},
+            {"dofHighlightBoost", preview.dofHighlightBoost},
             {"showGrid", preview.showGrid},
             {"gridCellCount", preview.gridCellCount},
             {"gridCellSizeMeters", preview.gridCellSizeMeters},
@@ -2671,7 +2708,6 @@ nlohmann::json MakeViewportJson()
         {"pitch", g_viewport.pitch},
         {"fovDegrees", g_viewport.fovDegrees},
         {"orbitDistance", g_viewport.orbitDistance},
-        {"zoom", g_viewport.zoom},
         {"pan", {g_viewport.pan.x, g_viewport.pan.y}},
     };
 }
@@ -2889,6 +2925,15 @@ void ReadPreviewSettingsJson(const nlohmann::json& settingsJson, rock::PreviewSe
     preview.tessellationMaxFactor = std::clamp(previewJson.value("tessellationMaxFactor", preview.tessellationMaxFactor), preview.tessellationMinFactor, 64.0f);
     preview.tessellationNearDistance = std::clamp(previewJson.value("tessellationNearDistance", preview.tessellationNearDistance), 1.0f, 100000.0f);
     preview.tessellationFarDistance = std::clamp(previewJson.value("tessellationFarDistance", preview.tessellationFarDistance), preview.tessellationNearDistance + 1.0f, 200000.0f);
+    preview.depthOfFieldEnabled = previewJson.value("depthOfFieldEnabled", preview.depthOfFieldEnabled);
+    preview.dofFStop = std::clamp(previewJson.value("dofFStop", preview.dofFStop), 0.7f, 32.0f);
+    preview.dofFocusDistanceMeters = std::clamp(previewJson.value("dofFocusDistanceMeters", preview.dofFocusDistanceMeters), 0.1f, 20000.0f);
+    preview.dofSensorHeightMm = std::clamp(previewJson.value("dofSensorHeightMm", preview.dofSensorHeightMm), 4.0f, 80.0f);
+    preview.dofMaxBlurPixels = std::clamp(previewJson.value("dofMaxBlurPixels", preview.dofMaxBlurPixels), 0.0f, 64.0f);
+    preview.dofApertureShape = std::clamp(previewJson.value("dofApertureShape", preview.dofApertureShape), 0, 4);
+    preview.dofApertureBlades = std::clamp(previewJson.value("dofApertureBlades", preview.dofApertureBlades), 3, 12);
+    preview.dofApertureRotationDegrees = std::clamp(previewJson.value("dofApertureRotationDegrees", preview.dofApertureRotationDegrees), -180.0f, 180.0f);
+    preview.dofHighlightBoost = std::clamp(previewJson.value("dofHighlightBoost", preview.dofHighlightBoost), 0.0f, 4.0f);
     preview.showGrid = previewJson.value("showGrid", preview.showGrid);
     preview.gridCellCount = std::clamp(previewJson.value("gridCellCount", preview.gridCellCount), 1, 200);
     preview.gridCellSizeMeters = std::clamp(previewJson.value("gridCellSizeMeters", preview.gridCellSizeMeters), 1.0f, 10000.0f);
@@ -3055,7 +3100,6 @@ void ReadViewportJson(const nlohmann::json& root)
     g_viewport.pitch = viewportJson.value("pitch", g_viewport.pitch);
     g_viewport.fovDegrees = viewportJson.value("fovDegrees", g_viewport.fovDegrees);
     g_viewport.orbitDistance = viewportJson.value("orbitDistance", g_viewport.orbitDistance);
-    g_viewport.zoom = viewportJson.value("zoom", g_viewport.zoom);
     const std::string savedAppVersion = root.value("appVersion", std::string());
     NormalizeLoadedViewport(savedAppVersion != TERRAIN_EDITOR_VERSION_STRING);
     if (viewportJson.contains("pan") && viewportJson["pan"].is_array() && viewportJson["pan"].size() == 2)
@@ -6864,6 +6908,146 @@ struct SkyShaderConstants
 };
 static_assert(sizeof(SkyShaderConstants) == 32 * sizeof(UINT), "SkyShaderConstants must be 32 DWORDs");
 
+struct DepthOfFieldShaderConstants
+{
+    float focusDistance;
+    float focalLengthMm;
+    float fStop;
+    float sensorHeightMm;
+    float maxBlurPixels;
+    float nearPlane;
+    float farPlane;
+    float apertureShape;
+    float apertureBlades;
+    float apertureRotationRadians;
+    float highlightBoost;
+    float pad0;
+};
+static_assert(sizeof(DepthOfFieldShaderConstants) == 12 * sizeof(UINT));
+
+bool EnsureDepthOfFieldPipeline(std::string* error)
+{
+    if (g_dofPipelineReady && g_dofRootSignature && g_dofPso)
+    {
+        return true;
+    }
+    if (!g_device)
+    {
+        if (error) *error = "D3D12 device is not available";
+        g_dofPipelineStatus = "Depth of Field pipeline unavailable";
+        return false;
+    }
+
+    D3D12_DESCRIPTOR_RANGE colorRange{};
+    colorRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    colorRange.NumDescriptors = 1;
+    colorRange.BaseShaderRegister = 0;
+    colorRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_DESCRIPTOR_RANGE depthRange{};
+    depthRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    depthRange.NumDescriptors = 1;
+    depthRange.BaseShaderRegister = 1;
+    depthRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_ROOT_PARAMETER rootParams[3]{};
+    rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    rootParams[0].Constants.ShaderRegister = 0;
+    rootParams[0].Constants.Num32BitValues = 12;
+    rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[1].DescriptorTable.pDescriptorRanges = &colorRange;
+    rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    rootParams[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[2].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[2].DescriptorTable.pDescriptorRanges = &depthRange;
+    rootParams[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    D3D12_STATIC_SAMPLER_DESC sampler{};
+    sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.ShaderRegister = 0;
+    sampler.RegisterSpace = 0;
+    sampler.MaxLOD = D3D12_FLOAT32_MAX;
+    sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    D3D12_ROOT_SIGNATURE_DESC rsDesc{};
+    rsDesc.NumParameters = 3;
+    rsDesc.pParameters = rootParams;
+    rsDesc.NumStaticSamplers = 1;
+    rsDesc.pStaticSamplers = &sampler;
+    rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+
+    ComPtr<ID3DBlob> sigBlob, errBlob;
+    HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
+    if (FAILED(hr))
+    {
+        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Serialize DOF root signature failed";
+        g_dofPipelineStatus = "Depth of Field root signature failed";
+        return false;
+    }
+    hr = g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_dofRootSignature));
+    if (FAILED(hr))
+    {
+        if (error) *error = "Create DOF root signature failed";
+        g_dofPipelineStatus = "Depth of Field root signature failed";
+        return false;
+    }
+
+    const std::filesystem::path shaderPath = DepthOfFieldShaderPath();
+    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
+#if defined(_DEBUG)
+    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+#endif
+
+    auto compileEntry = [&](const char* entryPoint, const char* target, ComPtr<ID3DBlob>& outBlob) -> bool {
+        errBlob.Reset();
+        const HRESULT compileHr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE,
+                                                     entryPoint, target, compileFlags, 0, &outBlob, &errBlob);
+        if (FAILED(compileHr))
+        {
+            if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile DOF shader failed";
+            return false;
+        }
+        return true;
+    };
+
+    ComPtr<ID3DBlob> vsBlob, psBlob;
+    if (!compileEntry("DofVS", "vs_5_0", vsBlob)) { g_dofPipelineStatus = "Depth of Field VS compile failed"; return false; }
+    if (!compileEntry("DofPS", "ps_5_0", psBlob)) { g_dofPipelineStatus = "Depth of Field PS compile failed"; return false; }
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
+    psoDesc.pRootSignature = g_dofRootSignature.Get();
+    psoDesc.VS = {vsBlob->GetBufferPointer(), vsBlob->GetBufferSize()};
+    psoDesc.PS = {psBlob->GetBufferPointer(), psBlob->GetBufferSize()};
+    psoDesc.SampleMask = UINT_MAX;
+    psoDesc.SampleDesc.Count = 1;
+    psoDesc.NumRenderTargets = 1;
+    psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+    psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    psoDesc.RasterizerState.FrontCounterClockwise = FALSE;
+    psoDesc.DepthStencilState.DepthEnable = FALSE;
+    psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    psoDesc.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+
+    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_dofPso));
+    if (FAILED(hr))
+    {
+        if (error) *error = "Create DOF PSO failed";
+        g_dofPipelineStatus = "Depth of Field PSO failed";
+        return false;
+    }
+
+    g_dofPipelineReady = true;
+    g_dofPipelineStatus = "Depth of Field pipeline ready";
+    return true;
+}
+
 bool EnsureSkyPipeline(std::string* error)
 {
     if (g_skyPipelineReady && g_skyRootSignature && g_skyPso)
@@ -8487,7 +8671,6 @@ void ResetViewport()
     g_viewport.pitch = kDefaultViewportPitch;
     g_viewport.fovDegrees = kDefaultViewportFovDegrees;
     g_viewport.orbitDistance = kDefaultViewportOrbitDistance;
-    g_viewport.zoom = kDefaultViewportZoom;
 }
 
 float CameraFocalLengthMmFromFovYDegrees(float fovYDegrees)
@@ -8528,7 +8711,7 @@ void UpdateViewportInteraction(const ImVec2& min, const ImVec2& max)
     if (hovered && io.MouseWheel != 0.0f)
     {
         g_viewport.orbitDistance *= std::pow(1.12f, -io.MouseWheel);
-        g_viewport.orbitDistance = std::clamp(g_viewport.orbitDistance, 1.0f, 10000.0f);
+        g_viewport.orbitDistance = std::clamp(g_viewport.orbitDistance, 1.0f, kMaxViewportOrbitDistance);
     }
 
     if (ImGui::IsMouseDragging(ImGuiMouseButton_Left) && hovered)
@@ -8590,7 +8773,7 @@ Vec3 Normalize(Vec3 value, Vec3 fallback)
 
 CameraBasis BuildCameraBasis()
 {
-    const float distance = std::clamp(g_viewport.orbitDistance, 1.0f, 10000.0f);
+    const float distance = std::clamp(g_viewport.orbitDistance, 1.0f, kMaxViewportOrbitDistance);
     const float cosPitch = std::cos(g_viewport.pitch);
     const float sinPitch = std::sin(g_viewport.pitch);
     const float cosYaw = std::cos(g_viewport.yaw);
@@ -8657,21 +8840,25 @@ bool EnsureMeshPreviewRenderTarget(int width, int height, std::string* error)
     {
         WaitForLastSubmittedFrame();
         g_gpuMeshPreview.colorTarget.Reset();
+        g_gpuMeshPreview.postTarget.Reset();
         g_gpuMeshPreview.depthTarget.Reset();
         g_gpuMeshPreview.shadowTarget.Reset();
         g_gpuMeshPreview.width = width;
         g_gpuMeshPreview.height = height;
         g_gpuMeshPreview.shadowMapResolution = shadowResolution;
         g_gpuMeshPreview.colorState = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        g_gpuMeshPreview.postState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         g_gpuMeshPreview.shadowState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 
         if (!g_meshPreviewRtvHeap)
         {
             D3D12_DESCRIPTOR_HEAP_DESC desc{};
             desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-            desc.NumDescriptors = 1;
+            desc.NumDescriptors = 2;
             ThrowIfFailed(g_device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&g_meshPreviewRtvHeap)), "Create mesh RTV heap failed");
             g_gpuMeshPreview.rtvCpu = g_meshPreviewRtvHeap->GetCPUDescriptorHandleForHeapStart();
+            g_gpuMeshPreview.postRtvCpu = g_gpuMeshPreview.rtvCpu;
+            g_gpuMeshPreview.postRtvCpu.ptr += g_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
         }
         if (!g_meshPreviewDsvHeap)
         {
@@ -8687,6 +8874,11 @@ bool EnsureMeshPreviewRenderTarget(int width, int height, std::string* error)
         {
             AllocateSrvDescriptor(nullptr, &g_gpuMeshPreview.srvCpu, &g_gpuMeshPreview.srvGpu);
             g_gpuMeshPreview.srvAllocated = true;
+        }
+        if (!g_gpuMeshPreview.postSrvAllocated)
+        {
+            AllocateSrvDescriptor(nullptr, &g_gpuMeshPreview.postSrvCpu, &g_gpuMeshPreview.postSrvGpu);
+            g_gpuMeshPreview.postSrvAllocated = true;
         }
         if (!g_gpuMeshPreview.shadowSrvAllocated)
         {
@@ -8712,6 +8904,23 @@ bool EnsureMeshPreviewRenderTarget(int width, int height, std::string* error)
             srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
             srvDesc.Texture2D.MipLevels = 1;
             g_device->CreateShaderResourceView(g_gpuMeshPreview.colorTarget.Get(), &srvDesc, g_gpuMeshPreview.srvCpu);
+        }
+        {
+            D3D12_CLEAR_VALUE clearVal{};
+            clearVal.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            const D3D12_RESOURCE_DESC desc = Texture2DResourceDesc(
+                static_cast<UINT>(width), static_cast<UINT>(height),
+                DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+            ThrowIfFailed(g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &desc,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &clearVal, IID_PPV_ARGS(&g_gpuMeshPreview.postTarget)),
+                "Create mesh post RT failed");
+            g_device->CreateRenderTargetView(g_gpuMeshPreview.postTarget.Get(), nullptr, g_gpuMeshPreview.postRtvCpu);
+            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+            srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            srvDesc.Texture2D.MipLevels = 1;
+            g_device->CreateShaderResourceView(g_gpuMeshPreview.postTarget.Get(), &srvDesc, g_gpuMeshPreview.postSrvCpu);
         }
         {
             D3D12_CLEAR_VALUE clearVal{};
@@ -8949,7 +9158,7 @@ void DrawMeshPreview(ImDrawList* drawList, const ImVec2& min, const ImVec2& max,
 
     const ImVec2 center((min.x + max.x) * 0.5f + g_viewport.pan.x, (min.y + max.y) * 0.5f + g_viewport.pan.y);
     const float viewportSize = std::min(max.x - min.x, max.y - min.y);
-    const float scale = viewportSize * 1.20f * g_viewport.zoom;
+    const float scale = viewportSize * 1.20f;
 
     for (const rock::MeshTriangle& triangle : mesh.triangles)
     {
@@ -8991,7 +9200,7 @@ void DrawMeshEdgePreview(ImDrawList* drawList, const ImVec2& min, const ImVec2& 
 
     const ImVec2 center((min.x + max.x) * 0.5f + g_viewport.pan.x, (min.y + max.y) * 0.5f + g_viewport.pan.y);
     const float viewportSize = std::min(max.x - min.x, max.y - min.y);
-    const float scale = viewportSize * 1.20f * g_viewport.zoom;
+    const float scale = viewportSize * 1.20f;
 
     for (const rock::MeshEdge& edge : mesh.edges)
     {
@@ -9037,6 +9246,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
     const uint64_t currentVersion = g_graph.Evaluation().version;
     const bool useDisplacement = g_graph.Settings().preview.meshBackend == rock::MeshPreviewBackend::GpuDisplacement;
     const bool useTessellation = useDisplacement && g_graph.Settings().preview.viewportTessellation;
+    const bool useDepthOfField = g_graph.Settings().preview.depthOfFieldEnabled && showSurface;
     const bool meshHasVertices = !mesh.vertices.empty();
     const bool meshDirty = (g_gpuMeshPreview.graphVersion != currentVersion || (meshHasVertices && !g_gpuMeshPreview.vertexBuffer));
     const bool viewportDirty =
@@ -9044,7 +9254,6 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.pitch != g_viewport.pitch ||
         g_gpuMeshPreview.fovDegrees != g_viewport.fovDegrees ||
         g_gpuMeshPreview.orbitDistance != g_viewport.orbitDistance ||
-        g_gpuMeshPreview.zoom != g_viewport.zoom ||
         g_gpuMeshPreview.pan.x != g_viewport.pan.x ||
         g_gpuMeshPreview.pan.y != g_viewport.pan.y ||
         g_gpuMeshPreview.showSurface != showSurface ||
@@ -9096,9 +9305,19 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.tessellationMaxFactor != g_graph.Settings().preview.tessellationMaxFactor ||
         g_gpuMeshPreview.tessellationNearDistance != g_graph.Settings().preview.tessellationNearDistance ||
         g_gpuMeshPreview.tessellationFarDistance != g_graph.Settings().preview.tessellationFarDistance ||
+        g_gpuMeshPreview.depthOfFieldEnabled != useDepthOfField ||
+        g_gpuMeshPreview.dofFStop != g_graph.Settings().preview.dofFStop ||
+        g_gpuMeshPreview.dofFocusDistanceMeters != g_graph.Settings().preview.dofFocusDistanceMeters ||
+        g_gpuMeshPreview.dofSensorHeightMm != g_graph.Settings().preview.dofSensorHeightMm ||
+        g_gpuMeshPreview.dofMaxBlurPixels != g_graph.Settings().preview.dofMaxBlurPixels ||
+        g_gpuMeshPreview.dofApertureShape != g_graph.Settings().preview.dofApertureShape ||
+        g_gpuMeshPreview.dofApertureBlades != g_graph.Settings().preview.dofApertureBlades ||
+        g_gpuMeshPreview.dofApertureRotationDegrees != g_graph.Settings().preview.dofApertureRotationDegrees ||
+        g_gpuMeshPreview.dofHighlightBoost != g_graph.Settings().preview.dofHighlightBoost ||
         (g_graph.Settings().sky.mode == rock::SkyMode::Atmospheric && g_graph.Settings().clouds.enabled && g_graph.Settings().clouds.windSpeedMetersPerSec > 0.0f) ||
         (showGrid && !g_gpuMeshPreview.gridVertexBuffer) ||
-        g_gpuMeshPreview.colorState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        g_gpuMeshPreview.colorState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE ||
+        (useDepthOfField && g_gpuMeshPreview.postState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     if (!meshDirty && !viewportDirty) return true;
 
     try
@@ -9263,7 +9482,14 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             g_gpuMeshPreview.depthState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
         }
 
-        const float clearColor[] = {0.0f, 0.0f, 0.0f, 0.0f};
+        const std::array<float, 3>& viewportBackground = g_graph.Settings().preview.viewportBackground;
+        const bool atmosphericSky = g_graph.Settings().sky.mode == rock::SkyMode::Atmospheric;
+        const float clearColor[] = {
+            atmosphericSky ? 0.0f : viewportBackground[0],
+            atmosphericSky ? 0.0f : viewportBackground[1],
+            atmosphericSky ? 0.0f : viewportBackground[2],
+            1.0f,
+        };
         commandList->ClearRenderTargetView(g_gpuMeshPreview.rtvCpu, clearColor, 0, nullptr);
         commandList->ClearDepthStencilView(g_gpuMeshPreview.dsvCpu, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
         commandList->OMSetRenderTargets(1, &g_gpuMeshPreview.rtvCpu, FALSE, &g_gpuMeshPreview.dsvCpu);
@@ -9277,7 +9503,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         const float fovRad = std::clamp(g_viewport.fovDegrees, 15.0f, 90.0f) * 3.14159265f / 180.0f;
         const float focalLength = 1.0f / std::tan(fovRad * 0.5f);
         const float viewportSize = std::min(viewportWidth, viewportHeight);
-        const float scale = viewportSize * 1.20f * g_viewport.zoom;
+        const float scale = viewportSize * 1.20f;
 
         MeshPreviewConstants constants{};
         constants.cameraPosition[0] = basis.position.x; constants.cameraPosition[1] = basis.position.y; constants.cameraPosition[2] = basis.position.z;
@@ -9289,7 +9515,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         constants.panNdcX    = g_viewport.pan.x * 2.0f / viewportWidth;
         constants.panNdcY    = -g_viewport.pan.y * 2.0f / viewportHeight;
         constants.nearPlane  = 0.05f;
-        constants.farPlane   = 20000.0f;
+        constants.farPlane   = kViewportFarPlane;
         constants.maskPreview = g_graph.Evaluation().previewShowsMask ? 1.0f : 0.0f;
         constants.maskShadingMode = static_cast<float>(g_graph.Settings().preview.maskShading);
         constants.colorTextureMode = (colorTextureReady ? 1.0f : 0.0f) + (previewGridTextureUploaded ? 2.0f : 0.0f);
@@ -9638,6 +9864,13 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             // White sun in flat-sky mode (no atmosphere reddening to simulate).
             const std::array<float, 3> white{1.0f, 1.0f, 1.0f};
             fillColor4(cloudShadowCb.skySunColor, white);
+        }
+
+        bool dofReady = false;
+        if (useDepthOfField)
+        {
+            std::string ignoredErr;
+            dofReady = EnsureDepthOfFieldPipeline(&ignoredErr);
         }
         const std::array<float, 3> sectionColor = colorTextureReady
             ? EstimateSectionColor(g_graph.Evaluation().previewColorGrid, g_graph.Settings().preview.pbrAlbedo)
@@ -10005,6 +10238,74 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         toSrv.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         toSrv.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
         commandList->ResourceBarrier(1, &toSrv);
+        g_gpuMeshPreview.colorState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+
+        if (useDepthOfField && dofReady && g_gpuMeshPreview.postTarget)
+        {
+            if (g_gpuMeshPreview.depthState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)
+            {
+                D3D12_RESOURCE_BARRIER depthToSrv{};
+                depthToSrv.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                depthToSrv.Transition.pResource = g_gpuMeshPreview.depthTarget.Get();
+                depthToSrv.Transition.StateBefore = g_gpuMeshPreview.depthState;
+                depthToSrv.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+                depthToSrv.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                commandList->ResourceBarrier(1, &depthToSrv);
+                g_gpuMeshPreview.depthState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            }
+            if (g_gpuMeshPreview.postState != D3D12_RESOURCE_STATE_RENDER_TARGET)
+            {
+                D3D12_RESOURCE_BARRIER postToRt{};
+                postToRt.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                postToRt.Transition.pResource = g_gpuMeshPreview.postTarget.Get();
+                postToRt.Transition.StateBefore = g_gpuMeshPreview.postState;
+                postToRt.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+                postToRt.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                commandList->ResourceBarrier(1, &postToRt);
+                g_gpuMeshPreview.postState = D3D12_RESOURCE_STATE_RENDER_TARGET;
+            }
+
+            const float clearPost[] = {0.0f, 0.0f, 0.0f, 0.0f};
+            commandList->ClearRenderTargetView(g_gpuMeshPreview.postRtvCpu, clearPost, 0, nullptr);
+            commandList->OMSetRenderTargets(1, &g_gpuMeshPreview.postRtvCpu, FALSE, nullptr);
+            commandList->RSSetViewports(1, &vp);
+            commandList->RSSetScissorRects(1, &scissor);
+
+            DepthOfFieldShaderConstants dof{};
+            dof.focusDistance = std::max(0.1f, g_graph.Settings().preview.dofFocusDistanceMeters);
+            dof.focalLengthMm = std::clamp(CameraFocalLengthMmFromFovYDegrees(g_viewport.fovDegrees), 8.0f, 300.0f);
+            dof.fStop = std::clamp(g_graph.Settings().preview.dofFStop, 0.7f, 32.0f);
+            dof.sensorHeightMm = std::clamp(g_graph.Settings().preview.dofSensorHeightMm, 4.0f, 80.0f);
+            dof.maxBlurPixels = std::clamp(g_graph.Settings().preview.dofMaxBlurPixels, 0.0f, 64.0f);
+            dof.nearPlane = constants.nearPlane;
+            dof.farPlane = constants.farPlane;
+            dof.apertureShape = static_cast<float>(std::clamp(g_graph.Settings().preview.dofApertureShape, 0, 4));
+            dof.apertureBlades = static_cast<float>(std::clamp(g_graph.Settings().preview.dofApertureBlades, 3, 12));
+            dof.apertureRotationRadians = std::clamp(g_graph.Settings().preview.dofApertureRotationDegrees, -180.0f, 180.0f) * 3.1415926535f / 180.0f;
+            dof.highlightBoost = std::clamp(g_graph.Settings().preview.dofHighlightBoost, 0.0f, 4.0f);
+
+            ID3D12DescriptorHeap* heaps[] = {g_srvHeap.Get()};
+            commandList->SetDescriptorHeaps(1, heaps);
+            commandList->SetGraphicsRootSignature(g_dofRootSignature.Get());
+            commandList->SetPipelineState(g_dofPso.Get());
+            commandList->SetGraphicsRoot32BitConstants(0, sizeof(dof) / 4, &dof, 0);
+            commandList->SetGraphicsRootDescriptorTable(1, g_gpuMeshPreview.srvGpu);
+            commandList->SetGraphicsRootDescriptorTable(2, g_gpuMeshPreview.depthSrvGpu);
+            commandList->IASetVertexBuffers(0, 0, nullptr);
+            commandList->IASetIndexBuffer(nullptr);
+            commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            commandList->DrawInstanced(3, 1, 0, 0);
+            recordDraw(3, true);
+
+            D3D12_RESOURCE_BARRIER postToSrv{};
+            postToSrv.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            postToSrv.Transition.pResource = g_gpuMeshPreview.postTarget.Get();
+            postToSrv.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+            postToSrv.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            postToSrv.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            commandList->ResourceBarrier(1, &postToSrv);
+            g_gpuMeshPreview.postState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        }
 
         ThrowIfFailed(commandList->Close(), "Close mesh preview CL failed");
         ID3D12CommandList* cls[] = {commandList.Get()};
@@ -10018,7 +10319,6 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.pitch         = g_viewport.pitch;
         g_gpuMeshPreview.fovDegrees    = g_viewport.fovDegrees;
         g_gpuMeshPreview.orbitDistance = g_viewport.orbitDistance;
-        g_gpuMeshPreview.zoom          = g_viewport.zoom;
         g_gpuMeshPreview.pan           = g_viewport.pan;
         g_gpuMeshPreview.showSurface   = showSurface;
         g_gpuMeshPreview.showWireframe = showWireframe;
@@ -10068,6 +10368,15 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.tessellationMaxFactor = g_graph.Settings().preview.tessellationMaxFactor;
         g_gpuMeshPreview.tessellationNearDistance = g_graph.Settings().preview.tessellationNearDistance;
         g_gpuMeshPreview.tessellationFarDistance = g_graph.Settings().preview.tessellationFarDistance;
+        g_gpuMeshPreview.depthOfFieldEnabled = useDepthOfField && dofReady;
+        g_gpuMeshPreview.dofFStop = g_graph.Settings().preview.dofFStop;
+        g_gpuMeshPreview.dofFocusDistanceMeters = g_graph.Settings().preview.dofFocusDistanceMeters;
+        g_gpuMeshPreview.dofSensorHeightMm = g_graph.Settings().preview.dofSensorHeightMm;
+        g_gpuMeshPreview.dofMaxBlurPixels = g_graph.Settings().preview.dofMaxBlurPixels;
+        g_gpuMeshPreview.dofApertureShape = g_graph.Settings().preview.dofApertureShape;
+        g_gpuMeshPreview.dofApertureBlades = g_graph.Settings().preview.dofApertureBlades;
+        g_gpuMeshPreview.dofApertureRotationDegrees = g_graph.Settings().preview.dofApertureRotationDegrees;
+        g_gpuMeshPreview.dofHighlightBoost = g_graph.Settings().preview.dofHighlightBoost;
         g_gpuMeshPreview.colorState    = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         return true;
     }
@@ -10087,6 +10396,12 @@ void DrawGpuMeshPreview(ImDrawList* drawList, const ImVec2& min, const ImVec2& m
         DrawMeshPreview(drawList, min, max, mesh, showSurface, showWireframe);
         return;
     }
+    const bool usePostImage =
+        g_gpuMeshPreview.depthOfFieldEnabled &&
+        g_dofPipelineReady &&
+        g_gpuMeshPreview.postSrvAllocated &&
+        g_gpuMeshPreview.postState == D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    const D3D12_GPU_DESCRIPTOR_HANDLE imageSrv = usePostImage ? g_gpuMeshPreview.postSrvGpu : g_gpuMeshPreview.srvGpu;
     if (g_gpuMeshPreview.srvAllocated && g_gpuMeshPreview.colorState == D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)
     {
         // Snap the destination rect to integer pixel boundaries so the
@@ -10096,7 +10411,7 @@ void DrawGpuMeshPreview(ImDrawList* drawList, const ImVec2& min, const ImVec2& m
         const ImVec2 snappedMin(std::round(min.x), std::round(min.y));
         const ImVec2 snappedMax(std::round(max.x), std::round(max.y));
         drawList->PushClipRect(min, max, true);
-        drawList->AddImage(static_cast<ImTextureID>(g_gpuMeshPreview.srvGpu.ptr), snappedMin, snappedMax);
+        drawList->AddImage(static_cast<ImTextureID>(imageSrv.ptr), snappedMin, snappedMax);
         drawList->PopClipRect();
     }
 }
@@ -11798,13 +12113,13 @@ bool DrawColorRgbRow(const char* label, const char* id, std::array<float, 3>& va
     return changed;
 }
 
-bool DrawCameraFloatRow(const char* label, const char* id, float* value, float minValue, float maxValue, float defaultValue, const char* format = "%.2f")
+bool DrawCameraFloatRow(const char* label, const char* id, float* value, float minValue, float maxValue, float defaultValue, const char* format = "%.2f", const char* tooltip = nullptr)
 {
     bool changed = false;
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(label);
+    const bool differsFromDefaultBeforeEdit = FloatDiffersFromDefault(*value, defaultValue);
+    DrawPropertyLabel(label, tooltip, differsFromDefaultBeforeEdit);
     ImGui::TableSetColumnIndex(1);
 
     ImGui::PushID(id);
@@ -13286,6 +13601,10 @@ void DrawCameraPanel()
     {
         ResetViewport();
     }
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+    {
+        ImGui::SetTooltip("カメラの向き、距離、パンを既定値に戻します。");
+    }
 
     ImGui::Spacing();
     if (ImGui::BeginTable("CameraRows", 2, ImGuiTableFlags_SizingStretchProp))
@@ -13293,17 +13612,61 @@ void DrawCameraPanel()
         ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 112.0f);
         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
 
-        DrawCameraFloatRow("FOV", "FovDegrees", &g_viewport.fovDegrees, 15.0f, 90.0f, kDefaultViewportFovDegrees, "%.1f");
+        DrawCameraFloatRow("FOV", "FovDegrees", &g_viewport.fovDegrees, 15.0f, 90.0f, kDefaultViewportFovDegrees, "%.1f",
+            "垂直画角です。小さいほど望遠、大きいほど広角になります。焦点距離 (mm) と連動します。");
         float focalLengthMm = CameraFocalLengthMmFromFovYDegrees(g_viewport.fovDegrees);
-        if (DrawCameraFloatRow("焦点距離 (mm)", "FocalLengthMm", &focalLengthMm, 1.0f, 200.0f, CameraFocalLengthMmFromFovYDegrees(kDefaultViewportFovDegrees), "%.1f"))
+        if (DrawCameraFloatRow("焦点距離 (mm)", "FocalLengthMm", &focalLengthMm, 1.0f, 200.0f, CameraFocalLengthMmFromFovYDegrees(kDefaultViewportFovDegrees), "%.1f",
+            "35mm フルサイズ相当のレンズ焦点距離です。画角と DOF のぼけ量の両方に反映されます。"))
         {
             g_viewport.fovDegrees = CameraFovYDegreesFromFocalLengthMm(focalLengthMm);
         }
-        DrawCameraFloatRow("Distance", "OrbitDistance", &g_viewport.orbitDistance, 1.0f, 10000.0f, kDefaultViewportOrbitDistance, "%.1f");
-        DrawCameraFloatRow("Zoom", "ViewportZoom", &g_viewport.zoom, 0.05f, 20.0f, kDefaultViewportZoom, "%.2f");
-        DrawCameraFloatRow("Yaw", "ViewportYaw", &g_viewport.yaw, -3.14159f, 3.14159f, 0.0f, "%.3f");
-        DrawCameraFloatRow("Pitch", "ViewportPitch", &g_viewport.pitch, -1.25f, 1.25f, kDefaultViewportPitch, "%.3f");
+        DrawCameraFloatRow("Distance", "OrbitDistance", &g_viewport.orbitDistance, 1.0f, kMaxViewportOrbitDistance, kDefaultViewportOrbitDistance, "%.1f",
+            "注視点からカメラまでの距離です。マウスホイールのオービット距離と同じ値です。");
+        DrawCameraFloatRow("Yaw", "ViewportYaw", &g_viewport.yaw, -3.14159f, 3.14159f, 0.0f, "%.3f",
+            "カメラの水平回転です。地形を左右から見る向きを調整します。単位はラジアンです。");
+        DrawCameraFloatRow("Pitch", "ViewportPitch", &g_viewport.pitch, -1.25f, 1.25f, kDefaultViewportPitch, "%.3f",
+            "カメラの上下角です。高い視点や低い視点から地形を見る角度を調整します。単位はラジアンです。");
 
+        ImGui::EndTable();
+    }
+
+    ImGui::Spacing();
+    ImGui::SeparatorText("Depth of Field");
+    rock::PreviewSettings& preview = g_graph.Settings().preview;
+    if (ImGui::BeginTable("CameraDofRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 112.0f);
+        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+        DrawPropertyBoolRow("有効", "DofEnabled", &preview.depthOfFieldEnabled, "Depth of Field toggled",
+            "ビューポート表示だけにかかる被写界深度です。地形データや OBJ エクスポートには影響しません。",
+            rock::PreviewSettings{}.depthOfFieldEnabled, true);
+        if (preview.depthOfFieldEnabled)
+        {
+            DrawPropertyFloatRow("F 値", "DofFStop", &preview.dofFStop, 0.7f, 32.0f, rock::PreviewSettings{}.dofFStop, "Depth of Field f-stop changed", false,
+                "絞り値です。小さいほどぼけが強く、大きいほど深くピントが合います。", "%.1f");
+            DrawPropertyFloatRow("フォーカス距離 (m)", "DofFocusDistance", &preview.dofFocusDistanceMeters, 0.1f, 20000.0f, rock::PreviewSettings{}.dofFocusDistanceMeters, "Depth of Field focus distance changed", false,
+                "カメラからピント面までの距離です。Orbit Distance と近い値にすると注視点付近にピントが合います。", "%.1f", ImGuiSliderFlags_Logarithmic);
+            DrawPropertyFloatRow("センサー高さ (mm)", "DofSensorHeight", &preview.dofSensorHeightMm, 4.0f, 80.0f, rock::PreviewSettings{}.dofSensorHeightMm, "Depth of Field sensor height changed", false,
+                "Circle of Confusion の換算に使うセンサー高さです。フルサイズ横位置なら 24mm が標準です。", "%.1f");
+            DrawPropertyFloatRow("最大ぼけ (px)", "DofMaxBlur", &preview.dofMaxBlurPixels, 0.0f, 64.0f, rock::PreviewSettings{}.dofMaxBlurPixels, "Depth of Field max blur changed", false,
+                "表示上の最大ぼけ半径です。現実値ベースの操作感を保ちながら、重くなりすぎるぼけを抑えます。", "%.1f");
+            int apertureShape = std::clamp(preview.dofApertureShape, 0, 4);
+            if (DrawPropertyComboRow("絞り形状", "DofApertureShape", &apertureShape, "丸\0三角形\0六角形\0八角形\0カスタム\0\0",
+                "ぼけのサンプル形状です。多角形にすると絞り羽根由来の角ばったボケになります。", rock::PreviewSettings{}.dofApertureShape))
+            {
+                preview.dofApertureShape = std::clamp(apertureShape, 0, 4);
+                g_graph.MarkDirty("Depth of Field aperture shape changed");
+            }
+            if (preview.dofApertureShape == 4)
+            {
+                DrawPropertyIntRow("絞り羽根", "DofApertureBlades", &preview.dofApertureBlades, 3, 12, rock::PreviewSettings{}.dofApertureBlades, "Depth of Field aperture blades changed", false,
+                    "カスタム多角形ボケの羽根数です。");
+            }
+            DrawPropertyFloatRow("絞り回転 (deg)", "DofApertureRotation", &preview.dofApertureRotationDegrees, -180.0f, 180.0f, rock::PreviewSettings{}.dofApertureRotationDegrees, "Depth of Field aperture rotation changed", false,
+                "多角形ボケの角度です。丸ボケでは見た目にほぼ影響しません。", "%.1f");
+            DrawPropertyFloatRow("ハイライト強調", "DofHighlightBoost", &preview.dofHighlightBoost, 0.0f, 4.0f, rock::PreviewSettings{}.dofHighlightBoost, "Depth of Field highlight boost changed", false,
+                "明るいサンプルを少し強め、点光源や明るい稜線のボケを目立たせます。", "%.2f");
+        }
         ImGui::EndTable();
     }
 
