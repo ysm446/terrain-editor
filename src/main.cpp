@@ -188,6 +188,50 @@ bool g_evaluationPending = false;
 uint64_t g_nextEvaluationRequestId = 0;
 uint64_t g_activeEvaluationRequestId = 0;
 
+std::array<float, 3> EstimateSectionColor(const rock::ColorGrid& colorGrid, const std::array<float, 3>& fallbackAlbedo)
+{
+    const int n = colorGrid.resolution;
+    const size_t expectedPixels = static_cast<size_t>(n) * static_cast<size_t>(n) * 4u;
+    if (n < 2 || colorGrid.pixels.size() < expectedPixels)
+    {
+        return {
+            std::clamp(fallbackAlbedo[0] * 0.45f, 0.0f, 1.0f),
+            std::clamp(fallbackAlbedo[1] * 0.45f, 0.0f, 1.0f),
+            std::clamp(fallbackAlbedo[2] * 0.45f, 0.0f, 1.0f),
+        };
+    }
+
+    constexpr int kSampleGrid = 32;
+    double sumR = 0.0;
+    double sumG = 0.0;
+    double sumB = 0.0;
+    int sampleCount = 0;
+    for (int sy = 0; sy < kSampleGrid; ++sy)
+    {
+        const int y = (kSampleGrid <= 1)
+            ? 0
+            : std::clamp(static_cast<int>(std::round(static_cast<float>(sy) * static_cast<float>(n - 1) / static_cast<float>(kSampleGrid - 1))), 0, n - 1);
+        for (int sx = 0; sx < kSampleGrid; ++sx)
+        {
+            const int x = (kSampleGrid <= 1)
+                ? 0
+                : std::clamp(static_cast<int>(std::round(static_cast<float>(sx) * static_cast<float>(n - 1) / static_cast<float>(kSampleGrid - 1))), 0, n - 1);
+            const size_t src = (static_cast<size_t>(y) * static_cast<size_t>(n) + static_cast<size_t>(x)) * 4u;
+            sumR += static_cast<double>(colorGrid.pixels[src + 0u]) / 255.0;
+            sumG += static_cast<double>(colorGrid.pixels[src + 1u]) / 255.0;
+            sumB += static_cast<double>(colorGrid.pixels[src + 2u]) / 255.0;
+            ++sampleCount;
+        }
+    }
+
+    const float scale = sampleCount > 0 ? 0.52f / static_cast<float>(sampleCount) : 0.45f;
+    return {
+        std::clamp(static_cast<float>(sumR) * scale, 0.04f, 0.85f),
+        std::clamp(static_cast<float>(sumG) * scale, 0.04f, 0.85f),
+        std::clamp(static_cast<float>(sumB) * scale, 0.04f, 0.85f),
+    };
+}
+
 struct ClipboardNode
 {
     rock::Node node;
@@ -375,12 +419,13 @@ struct CloudShadowMeshConstants
     float skyHorizonColor[4];
     float skyGroundColor[4];
     float skySunColor[4];
+    float sectionColor[4];
     float atmosphereDensity;
     float atmosphereMieStrength;
     float pad0;
     float pad1;
 };
-static_assert(sizeof(CloudShadowMeshConstants) == 112);
+static_assert(sizeof(CloudShadowMeshConstants) == 128);
 
 struct GpuMeshPreview
 {
@@ -9594,6 +9639,10 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             const std::array<float, 3> white{1.0f, 1.0f, 1.0f};
             fillColor4(cloudShadowCb.skySunColor, white);
         }
+        const std::array<float, 3> sectionColor = colorTextureReady
+            ? EstimateSectionColor(g_graph.Evaluation().previewColorGrid, g_graph.Settings().preview.pbrAlbedo)
+            : EstimateSectionColor(rock::ColorGrid{}, g_graph.Settings().preview.pbrAlbedo);
+        fillColor4(cloudShadowCb.sectionColor, sectionColor);
         cloudShadowCb.atmosphereDensity =
             (sky.mode == rock::SkyMode::Atmospheric) ? std::clamp(sky.atmosphereDensity, 0.05f, 8.0f) : 0.0f;
         cloudShadowCb.atmosphereMieStrength =

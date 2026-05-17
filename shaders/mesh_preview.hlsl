@@ -46,6 +46,7 @@ cbuffer CloudShadowMeshConstants : register(b1)
     float4 skyHorizonColor;
     float4 skyGroundColor;
     float4 skySunColor;
+    float4 sectionColor;
     float atmosphereDensity;
     float atmosphereMieStrength;
     float atmospherePad0;
@@ -523,6 +524,11 @@ float SamplePreviewMask(VSOut i)
     return i.mask;
 }
 
+bool IsSectionSurface(VSOut i)
+{
+    return i.mask > 1.5 || i.worldNor.y < -0.5;
+}
+
 float4 PSSurface(VSOut i) : SV_TARGET
 {
     float3 n = normalize(i.worldNor);
@@ -539,6 +545,47 @@ float4 PSSurface(VSOut i) : SV_TARGET
     float slope = 1.0 - saturate(n.y);
     float height = saturate(i.worldPos.y / 1800.0 + 0.45);
     float ambient = 0.18;
+
+    if (IsSectionSurface(i))
+    {
+        float3 sectionBaseColor = saturate(sectionColor.rgb);
+        float sectionLight = 0.72 + saturate(dot(n, keyLight)) * 0.18 + saturate(n.y) * 0.10;
+        float3 col = sectionBaseColor * sectionLight;
+        if (lightingMode > 0.5 && maskPreview < 0.5)
+        {
+            float3 L = normalize(sunDirection.xyz);
+            float ndl = saturate(dot(n, L));
+            float visibility = ComputeShadowVisibility(i.worldPos);
+            float cloudVisibility = ComputeCloudShadowVisibility(i.worldPos);
+            float cloudShadowFactor = lerp(1.0, cloudVisibility, cloudShadowStrength);
+            float shadowAmount = (1.0 - visibility) * shadowStrength;
+            float shadowMix = lerp(1.0 - shadowStrength * 0.75, 1.0, visibility);
+
+            float3 skyAmbient = n.y >= 0.0
+                ? lerp(skyHorizonColor.rgb, skyZenithColor.rgb, n.y)
+                : lerp(skyHorizonColor.rgb, skyGroundColor.rgb, -n.y);
+            skyAmbient *= ambientStrength;
+
+            float ambientCloudMix = lerp(1.0, cloudVisibility, cloudShadowStrength * 0.4);
+            float3 sunTint = skySunColor.rgb * ndl * sunIntensity * shadowMix * cloudShadowFactor;
+            float3 bounceTint = skyGroundColor.rgb * ambientStrength * shadowAmount * 0.35;
+            col = sectionBaseColor * (skyAmbient * ambientCloudMix + sunTint + bounceTint);
+            col = lerp(col, dot(col, float3(0.299, 0.587, 0.114)).xxx, shadowAmount * 0.18);
+        }
+        if (atmosphereDensity > 0.001 && maskPreview < 0.5)
+        {
+            float viewDist = length(cameraPosition.xyz - i.worldPos);
+            float fogExtinction = atmosphereDensity * (45e-6 + atmosphereMieStrength * 12e-6);
+            float fogFactor = saturate(1.0 - exp(-viewDist * fogExtinction));
+            float3 viewDir = normalize(i.worldPos - cameraPosition.xyz);
+            float cosSun = saturate(dot(viewDir, sunDirection.xyz));
+            float warmPush = cosSun * saturate(atmosphereMieStrength * 0.12);
+            float3 fogColor = lerp(skyHorizonColor.rgb, skySunColor.rgb, warmPush);
+            col = lerp(col, fogColor, fogFactor);
+        }
+        col = pow(saturate(col), 1.0 / 1.18);
+        return float4(col, 1.0);
+    }
 
     float light = ambient + key * 0.78 + fill * 0.18 + sky + rim * 0.34;
     float3 lowland = float3(0.32, 0.38, 0.32);
