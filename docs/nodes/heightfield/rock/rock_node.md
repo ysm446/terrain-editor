@@ -7,7 +7,7 @@
 | 種類 | 内容 |
 | --- | --- |
 | 入力 | `Heightmap` |
-| 出力 | `Heightmap`(凹凸を加算したハイトフィールド) / `Mask`(岩らしさの 0..1 マスク) |
+| 出力 | `Heightmap`(凹凸を加算したハイトフィールド) / `Mask`(岩らしさの 0..1 マスク) / `Unique Mask`(岩ごとのランダム 0..1 明度) |
 
 ## 主な設定
 
@@ -54,7 +54,7 @@
       - `cellHeight = rockHeight × heightJitterFactor`。`Follow Ground` では法線の上向き成分を掛け、急斜面で垂直方向に盛り上がりすぎないようにする。
    - **ファセット場**: ローカル `(rx, rz)` を `facetScale` 倍した位置 + 岩ごとのランダムオフセットで sub-Voronoi(F1, F2, セル座標)を取り、滑らかバンプ項とフラット面+クレース項を `facetSharpness` でブレンド。岩ごとに独立した面パターンになる。
    - **採用**: `rockH = cellHeight × dome × (1 + bumpiness × surfaceMod)` が `bestRockH` を超えれば更新。
-6. **書き戻し**: `grid.heights[c] += bestRockH`、`grid.mask[c] = bestDome`。
+6. **書き戻し**: `grid.heights[c] += bestRockH`、`grid.mask[c] = bestDome`、`grid.uniqueMask[c] = bestUnique`。`bestUnique` は採用された岩ごとの決定論的なランダム値なので、同じ岩の上ではほぼ一定の 0..1 明度になる。
 
 岩同士が重なる場合の境界線は max 合成によって自然に発生する折れ線になり、明示的な crack 彫り込みは不要(削除済み)。
 
@@ -74,6 +74,7 @@
 ## メモ
 
 - 出力は **加算**(地形がせり上がる)です。`Mask Blend` で他のマスクと合成して、特定領域だけ岩肌を出す使い方が想定。
+- `Unique Mask` は岩ごとの色分け用です。`Colorize` ノードの `Gradient Mask` へ接続すると、グラデーション上の位置が岩単位で変わり、岩ごとに異なる色を割り当てられます。従来の `Mask` は岩の形状や合成強度を表すため、`Colorize` の `Mask` 入力へ使うと岩の外側を残せます。
 - 新規 Rock ノードの既定 `Rock Style` は `Polygonal` です。旧プロジェクトで `style` キーが保存されていない Rock は、読み込み時に `Classic` として扱い、従来の見た目を保ちます。
 - `Rock Style` の多角形は保存済み形状テーブルではなく、Seed とセル座標から毎回決定論的に再生成します。これによりプロジェクトファイルを増やさず、CPU と GPU の結果を揃えやすくしています。
 - `Layer Count` は岩の形状を複製保存するのではなく、別シードのジッタードグリッドを重ねます。計算量はほぼレイヤー数に比例します。
@@ -101,6 +102,7 @@
 | `u0` | `RWStructuredBuffer<float>` | InputHeights (UAV としてアップロード後シェーダー内で読み取り) |
 | `u1` | `RWStructuredBuffer<float>` | OutputHeights = `inputH + bestRockH` |
 | `u2` | `RWStructuredBuffer<float>` | OutputMask = `bestDome` |
+| `u3` | `RWStructuredBuffer<float>` | OutputUniqueMask = 採用された岩ごとのランダム 0..1 値 |
 | `b0` | 32-bit constants × 24 | resolution / seed / 各種クランプ済みパラメータ + 派生値 (`searchRadius` / `maxReach` / `domeExp` / `rockStyle` / `orientationRule` / `layerCount`) |
 
 `searchRadius` / `maxReach` / `domeExp` などの派生値は CPU 側 (`RunRockComputeImmediate`) で事前計算してから CB にパックします。多角形 SDF ループは facetCount = 4..7 のため [loop] + 早期 break で展開しています。

@@ -22,7 +22,8 @@
 3. `Coverage` 未満のハッシュ値を持つセルはスキップする。
 4. 各ピクセルに対して、影響範囲内のすべてのセルを走査し、
    最も高い岩の寄与を `bestRockH` として記録する (最大合成)。
-5. 最終的に `grid.heights[i] += bestRockH`, `grid.mask[i] = bestDome` を書き込む。
+5. 最終的に `grid.heights[i] += bestRockH`, `grid.mask[i] = bestDome`, `grid.uniqueMask[i] = bestUnique` を書き込む。
+   `bestUnique` は採用された岩ごとの 0..1 ランダム値で、`Colorize` の `Gradient Mask` に使うと岩単位の色違いを作れる。
 
 ## 1. ジッター付きボロノイ散布
 

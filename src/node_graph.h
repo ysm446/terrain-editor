@@ -196,6 +196,7 @@ enum class HeightfieldPreviewField
     Flows,
     Age,
     Mask,
+    UniqueMask,
 };
 
 struct Pin
@@ -622,6 +623,7 @@ struct HeightfieldGrid
     float terrainSizeMeters = 1.0f;
     std::vector<float> heights;
     std::vector<float> mask;
+    std::vector<float> uniqueMask;
     std::vector<float> deposits;
     std::vector<float> flows;
     std::vector<float> age;
@@ -744,10 +746,16 @@ private:
     const Node* FindFirstNode(NodeKind kind) const;
     const Node* FindNodeByOutputPin(GraphId pinId) const;
     const Node* FindUpstreamNode(const Node& node) const;
+    struct UpstreamConnection
+    {
+        const Node* node = nullptr;
+        const Pin* outputPin = nullptr;
+    };
+    UpstreamConnection FindUpstreamConnectionForPin(GraphId pinId) const;
     HeightfieldPipeline PipelineTo(NodeKind targetKind) const;
     HeightfieldPipeline PipelineToNode(const Node& targetNode) const;
     HeightfieldGrid EvaluateMaskAsHeightfield(const Node& node, std::string* message);
-    MaskGrid EvaluateMaskGridForNodeCached(const Node& node, int depth, uint64_t* outputHash);
+    MaskGrid EvaluateMaskGridForNodeCached(const Node& node, int depth, uint64_t* outputHash, std::string_view outputLabel = {});
     HeightfieldGrid EvaluateHeightPipelineCached(const HeightfieldPipeline& pipeline, std::string* message, HeightfieldPreviewField previewField, uint64_t* outputHash);
     MeshData BuildMeshFromHeightPipelineCached(const HeightfieldPipeline& pipeline, int resolution, std::string* message, HeightfieldPreviewField previewField = HeightfieldPreviewField::Heightmap, HeightfieldGrid* previewGrid = nullptr);
 

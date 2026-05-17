@@ -3087,6 +3087,48 @@ std::optional<rock::Node> ReadSerializedNodeJson(const nlohmann::json& nodeJson)
     return node;
 }
 
+void MigrateRockUniqueMaskPins(std::vector<rock::Node>& nodes)
+{
+    rock::GraphId nextId = 1;
+    for (const rock::Node& node : nodes)
+    {
+        nextId = std::max(nextId, node.id + 1);
+        for (const rock::Pin& pin : node.inputs)
+        {
+            nextId = std::max(nextId, pin.id + 1);
+        }
+        for (const rock::Pin& pin : node.outputs)
+        {
+            nextId = std::max(nextId, pin.id + 1);
+        }
+    }
+
+    for (rock::Node& node : nodes)
+    {
+        if (node.kind != rock::NodeKind::Rock)
+        {
+            continue;
+        }
+        const bool hasUniqueMask = std::ranges::any_of(node.outputs, [](const rock::Pin& pin) {
+            return pin.kind == rock::PinKind::Output &&
+                   pin.valueType == rock::ValueType::Mask &&
+                   pin.label == "Unique Mask";
+        });
+        if (hasUniqueMask)
+        {
+            continue;
+        }
+
+        rock::Pin pin;
+        pin.id = nextId++;
+        pin.nodeId = node.id;
+        pin.kind = rock::PinKind::Output;
+        pin.valueType = rock::ValueType::Mask;
+        pin.label = "Unique Mask";
+        node.outputs.push_back(std::move(pin));
+    }
+}
+
 void ReadSerializedNodesJson(const nlohmann::json& root)
 {
     const nlohmann::json nodesJson = root.value("nodes", nlohmann::json::array());
@@ -3106,6 +3148,7 @@ void ReadSerializedNodesJson(const nlohmann::json& root)
     }
     if (!nodes.empty())
     {
+        MigrateRockUniqueMaskPins(nodes);
         g_graph.ReplaceNodes(std::move(nodes));
     }
 }
@@ -5774,11 +5817,11 @@ bool EnsureRockComputePipeline(std::string* error)
         return false;
     }
 
-    // 3 UAVs (inputHeights, outputHeights, outputMask) bound as one
-    // descriptor table at u0..u2.
+    // 4 UAVs (inputHeights, outputHeights, outputMask, outputUniqueMask)
+    // bound as one descriptor table at u0..u3.
     D3D12_DESCRIPTOR_RANGE uavRange{};
     uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-    uavRange.NumDescriptors = 3;
+    uavRange.NumDescriptors = 4;
     uavRange.BaseShaderRegister = 0;
     uavRange.RegisterSpace = 0;
     uavRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
@@ -5872,9 +5915,9 @@ bool RunRockComputeImmediate(rock::HeightfieldGrid& grid, const rock::RockSettin
     const D3D12_RESOURCE_DESC fieldGpuDesc = BufferResourceDesc(fieldByteSize, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
     const D3D12_RESOURCE_DESC fieldCpuDesc = BufferResourceDesc(fieldByteSize);
 
-    ComPtr<ID3D12Resource> inputHeightsBuf, outputHeightsBuf, outputMaskBuf;
+    ComPtr<ID3D12Resource> inputHeightsBuf, outputHeightsBuf, outputMaskBuf, outputUniqueMaskBuf;
     ComPtr<ID3D12Resource> uploadHeights;
-    ComPtr<ID3D12Resource> readbackHeights, readbackMask;
+    ComPtr<ID3D12Resource> readbackHeights, readbackMask, readbackUniqueMask;
 
     auto createDefault = [&](ComPtr<ID3D12Resource>& out, const D3D12_RESOURCE_DESC& desc, const char* name) -> bool {
         const HRESULT hrLocal = g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&out));
@@ -5895,9 +5938,11 @@ bool RunRockComputeImmediate(rock::HeightfieldGrid& grid, const rock::RockSettin
     if (!createDefault(inputHeightsBuf,  fieldGpuDesc, "Rock input-heights buffer"))  return false;
     if (!createDefault(outputHeightsBuf, fieldGpuDesc, "Rock output-heights buffer")) return false;
     if (!createDefault(outputMaskBuf,    fieldGpuDesc, "Rock output-mask buffer"))    return false;
+    if (!createDefault(outputUniqueMaskBuf, fieldGpuDesc, "Rock output-unique-mask buffer")) return false;
     if (!createUpload(uploadHeights,     "Rock upload heights"))                      return false;
     if (!createReadback(readbackHeights, "Rock readback heights"))                    return false;
     if (!createReadback(readbackMask,    "Rock readback mask"))                       return false;
+    if (!createReadback(readbackUniqueMask, "Rock readback unique mask"))             return false;
 
     void* mapped = nullptr;
     const D3D12_RANGE emptyReadRange{0, 0};
@@ -5905,7 +5950,7 @@ bool RunRockComputeImmediate(rock::HeightfieldGrid& grid, const rock::RockSettin
     std::memcpy(mapped, grid.heights.data(), fieldByteSize);
     uploadHeights->Unmap(0, nullptr);
 
-    constexpr UINT kDescriptorCount = 3;
+    constexpr UINT kDescriptorCount = 4;
     D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
     heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     heapDesc.NumDescriptors = kDescriptorCount;
@@ -5927,6 +5972,7 @@ bool RunRockComputeImmediate(rock::HeightfieldGrid& grid, const rock::RockSettin
     createUav(inputHeightsBuf.Get(),  static_cast<UINT>(cellCount), 0);
     createUav(outputHeightsBuf.Get(), static_cast<UINT>(cellCount), 1);
     createUav(outputMaskBuf.Get(),    static_cast<UINT>(cellCount), 2);
+    createUav(outputUniqueMaskBuf.Get(), static_cast<UINT>(cellCount), 3);
 
     ComPtr<ID3D12CommandAllocator> allocator;
     ComPtr<ID3D12GraphicsCommandList> commandList;
@@ -6010,10 +6056,10 @@ bool RunRockComputeImmediate(rock::HeightfieldGrid& grid, const rock::RockSettin
     uavBar.UAV.pResource = nullptr;
     commandList->ResourceBarrier(1, &uavBar);
 
-    // Read back outputHeights + outputMask.
-    D3D12_RESOURCE_BARRIER toCopySrc[2]{};
-    ID3D12Resource* copyResources[2] = {outputHeightsBuf.Get(), outputMaskBuf.Get()};
-    for (int i = 0; i < 2; ++i)
+    // Read back outputHeights + outputMask + outputUniqueMask.
+    D3D12_RESOURCE_BARRIER toCopySrc[3]{};
+    ID3D12Resource* copyResources[3] = {outputHeightsBuf.Get(), outputMaskBuf.Get(), outputUniqueMaskBuf.Get()};
+    for (int i = 0; i < 3; ++i)
     {
         toCopySrc[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
         toCopySrc[i].Transition.pResource = copyResources[i];
@@ -6021,9 +6067,10 @@ bool RunRockComputeImmediate(rock::HeightfieldGrid& grid, const rock::RockSettin
         toCopySrc[i].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
         toCopySrc[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     }
-    commandList->ResourceBarrier(2, toCopySrc);
+    commandList->ResourceBarrier(3, toCopySrc);
     commandList->CopyBufferRegion(readbackHeights.Get(), 0, outputHeightsBuf.Get(), 0, fieldByteSize);
     commandList->CopyBufferRegion(readbackMask.Get(),    0, outputMaskBuf.Get(),    0, fieldByteSize);
+    commandList->CopyBufferRegion(readbackUniqueMask.Get(), 0, outputUniqueMaskBuf.Get(), 0, fieldByteSize);
     ThrowIfFailed(commandList->Close(), "Close Rock command list failed");
 
     ID3D12CommandList* lists[] = {commandList.Get()};
@@ -6034,15 +6081,20 @@ bool RunRockComputeImmediate(rock::HeightfieldGrid& grid, const rock::RockSettin
 
     void* mappedHeights = nullptr;
     void* mappedMask = nullptr;
+    void* mappedUniqueMask = nullptr;
     const D3D12_RANGE readRange{0, static_cast<SIZE_T>(fieldByteSize)};
     ThrowIfFailed(readbackHeights->Map(0, &readRange, &mappedHeights), "Map Rock readback (heights) failed");
     ThrowIfFailed(readbackMask->Map(0, &readRange, &mappedMask),       "Map Rock readback (mask) failed");
+    ThrowIfFailed(readbackUniqueMask->Map(0, &readRange, &mappedUniqueMask), "Map Rock readback (unique mask) failed");
     std::memcpy(grid.heights.data(), mappedHeights, fieldByteSize);
     grid.mask.assign(static_cast<size_t>(cellCount), 0.0f);
     std::memcpy(grid.mask.data(), mappedMask, fieldByteSize);
+    grid.uniqueMask.assign(static_cast<size_t>(cellCount), 0.0f);
+    std::memcpy(grid.uniqueMask.data(), mappedUniqueMask, fieldByteSize);
     const D3D12_RANGE emptyWriteRange{0, 0};
     readbackHeights->Unmap(0, &emptyWriteRange);
     readbackMask->Unmap(0, &emptyWriteRange);
+    readbackUniqueMask->Unmap(0, &emptyWriteRange);
 
     g_rockComputeStatus = "Rock GPU Compute evaluated";
     return true;
@@ -12924,7 +12976,7 @@ bool DrawColorizeProperties(rock::Node& editableNode)
     ImGui::Spacing();
     ImGui::Indent(8.0f);
     const float barHeight = 24.0f;
-    const float barWidth = ImGui::GetContentRegionAvail().x - 16.0f;
+    const float barWidth = std::clamp(ImGui::GetContentRegionAvail().x - 16.0f, 160.0f, 520.0f);
     const ImVec2 barMin = ImGui::GetCursorScreenPos();
     const ImVec2 barMax(barMin.x + barWidth, barMin.y + barHeight);
     ImDrawList* dl = ImGui::GetWindowDrawList();

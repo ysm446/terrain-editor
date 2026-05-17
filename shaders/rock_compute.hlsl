@@ -19,6 +19,7 @@
 //     4. Output:
 //          OutputHeights[i] = InputHeights[i] + bestRockH
 //          OutputMask[i]    = bestDome
+//          OutputUniqueMask[i] = per-rock random value for the winning rock
 //
 // Buffer layout (RWStructuredBuffer<float>, row-major float[res*res]):
 //   u0 = InputHeights   (read-only in shader, but UAV so CopyBufferRegion
@@ -26,6 +27,7 @@
 //                        descriptor — same convention as Sediment)
 //   u1 = OutputHeights  (write)
 //   u2 = OutputMask     (write)
+//   u3 = OutputUniqueMask (write)
 
 cbuffer RockConstants : register(b0)
 {
@@ -63,6 +65,7 @@ cbuffer RockConstants : register(b0)
 RWStructuredBuffer<float> InputHeights  : register(u0);
 RWStructuredBuffer<float> OutputHeights : register(u1);
 RWStructuredBuffer<float> OutputMask    : register(u2);
+RWStructuredBuffer<float> OutputUniqueMask : register(u3);
 
 // 32-bit integer mixing hash (Mulberry32-style finaliser). Mirrors
 // rock_node::Hash2 in node_graph.cpp exactly so CPU and GPU produce
@@ -193,6 +196,7 @@ void CSRock(uint3 dispatchThreadID : SV_DispatchThreadID)
 
     float bestRockH = 0.0f;
     float bestDome = 0.0f;
+    float bestUnique = 0.0f;
 
     int sr = searchRadius;
     for (int layer = 0; layer < lc; ++layer)
@@ -331,6 +335,7 @@ void CSRock(uint3 dispatchThreadID : SV_DispatchThreadID)
             {
                 bestRockH = rockH;
                 bestDome = dome;
+                bestUnique = HashFloat01(gx, gz, layerSeed + 131);
             }
         }
         }
@@ -338,4 +343,5 @@ void CSRock(uint3 dispatchThreadID : SV_DispatchThreadID)
 
     OutputHeights[i] = inputH + bestRockH;
     OutputMask[i]    = bestDome;
+    OutputUniqueMask[i] = bestUnique;
 }

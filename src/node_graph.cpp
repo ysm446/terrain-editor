@@ -678,6 +678,10 @@ void SelectHeightfieldPreviewField(HeightfieldGrid& grid, HeightfieldPreviewFiel
     {
         grid.mask = grid.age;
     }
+    else if (previewField == HeightfieldPreviewField::UniqueMask && !grid.uniqueMask.empty())
+    {
+        grid.mask = grid.uniqueMask;
+    }
 }
 
 // Run `fn(z)` for each row z in [0, n). Each iteration must be independent
@@ -1696,6 +1700,7 @@ void ApplyMultiScaleErosionSingleLevel(HeightfieldGrid& grid, const MultiScaleEr
     grid.flows = std::move(streamA);
     grid.deposits = std::move(sedA);
     grid.mask.assign(cellCount, 0.0f);
+    grid.uniqueMask.assign(cellCount, 0.0f);
     grid.age.assign(cellCount, 0.0f);
     NormalizeHeightfieldFields(grid);
 }
@@ -2132,6 +2137,7 @@ void ApplyRock(HeightfieldGrid& grid, const RockSettings& settings)
     }
 
     grid.mask.assign(cellCount, 0.0f);
+    grid.uniqueMask.assign(cellCount, 0.0f);
 
     const float density = std::max(settings.density, 0.1f);
     const float coverage = std::clamp(settings.coverage, 0.0f, 1.0f);
@@ -2206,6 +2212,7 @@ void ApplyRock(HeightfieldGrid& grid, const RockSettings& settings)
             // Track the largest rock contribution at this pixel.
             float bestRockH = 0.0f;
             float bestDome = 0.0f;
+            float bestUnique = 0.0f;
             float gradX = 0.0f;
             float gradZ = 0.0f;
             float slopeLen = 0.0f;
@@ -2401,6 +2408,7 @@ void ApplyRock(HeightfieldGrid& grid, const RockSettings& settings)
                     {
                         bestRockH = rockH;
                         bestDome = dome;
+                        bestUnique = rock_node::HashFloat01(gx, gz, layerSeed + 131);
                     }
                     }
                 }
@@ -2414,6 +2422,7 @@ void ApplyRock(HeightfieldGrid& grid, const RockSettings& settings)
             const size_t idx = static_cast<size_t>(z) * static_cast<size_t>(n) + static_cast<size_t>(x);
             grid.heights[idx] += bestRockH;
             grid.mask[idx] = bestDome;
+            grid.uniqueMask[idx] = bestUnique;
         }
     });
 }
@@ -3664,6 +3673,7 @@ GraphId NodeGraph::CreateNode(NodeKind kind)
         AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
         AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
         AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
+        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Unique Mask");
         break;
     case NodeKind::Sediment:
         AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
@@ -3818,6 +3828,10 @@ bool NodeGraph::SetPreviewPin(GraphId pinId)
         {
             previewField = HeightfieldPreviewField::Age;
         }
+        else if (pin->label == "Unique Mask")
+        {
+            previewField = HeightfieldPreviewField::UniqueMask;
+        }
         else
         {
             previewField = HeightfieldPreviewField::Mask;
@@ -3971,14 +3985,19 @@ const Node* NodeGraph::FindUpstreamNode(const Node& node) const
 
 const Node* NodeGraph::FindUpstreamForPin(GraphId pinId) const
 {
+    return FindUpstreamConnectionForPin(pinId).node;
+}
+
+NodeGraph::UpstreamConnection NodeGraph::FindUpstreamConnectionForPin(GraphId pinId) const
+{
     const auto linkIt = std::find_if(links_.rbegin(), links_.rend(), [pinId](const Link& link) {
         return link.endPin == pinId;
     });
     if (linkIt == links_.rend())
     {
-        return nullptr;
+        return {};
     }
-    return FindNodeByOutputPin(linkIt->startPin);
+    return {FindNodeByOutputPin(linkIt->startPin), FindPin(linkIt->startPin)};
 }
 
 // Recursive descent through Mask Noise / Mask Blend nodes. Mask Blend follows
@@ -3986,7 +4005,7 @@ const Node* NodeGraph::FindUpstreamForPin(GraphId pinId) const
 // FindUpstreamForPin per pin and merge with BlendMaskGrids. Each node's output
 // is cached by (input hash, parameter hash) so unrelated edits do not re-run
 // upstream noise generation.
-MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, uint64_t* outputHash)
+MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, uint64_t* outputHash, std::string_view outputLabel)
 {
     if (depth > 16)
     {
@@ -4012,7 +4031,14 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
         if (outputHash != nullptr) { *outputHash = cache.outputHash; }
         return cache.grid;
     }
-    if (node.kind == NodeKind::MaskCurvature || node.kind == NodeKind::MaskSlope || node.kind == NodeKind::MaskHeight || node.kind == NodeKind::MaskFluvial)
+    if (node.kind == NodeKind::MaskCurvature ||
+        node.kind == NodeKind::MaskSlope ||
+        node.kind == NodeKind::MaskHeight ||
+        node.kind == NodeKind::MaskFluvial ||
+        node.kind == NodeKind::Rock ||
+        node.kind == NodeKind::Sediment ||
+        node.kind == NodeKind::Snow ||
+        node.kind == NodeKind::MultiScaleErosion)
     {
         // Heightfield-derived mask nodes read a heightfield, so they can't be
         // evaluated through the mask-graph path on their own. Build the
@@ -4021,10 +4047,31 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
         // is fully delegated to the heightfield cache.
         HeightfieldPipeline pipeline = PipelineToNode(node);
         uint64_t hash = 0;
-        HeightfieldGrid grid = EvaluateHeightPipelineCached(pipeline, nullptr, HeightfieldPreviewField::Mask, &hash);
+        HeightfieldPreviewField previewField = HeightfieldPreviewField::Mask;
+        if (outputLabel == "Deposits")
+        {
+            previewField = HeightfieldPreviewField::Deposits;
+        }
+        else if (outputLabel == "Flows")
+        {
+            previewField = HeightfieldPreviewField::Flows;
+        }
+        else if (outputLabel == "Age")
+        {
+            previewField = HeightfieldPreviewField::Age;
+        }
+        else if (outputLabel == "Unique Mask")
+        {
+            previewField = HeightfieldPreviewField::UniqueMask;
+        }
+        HeightfieldGrid grid = EvaluateHeightPipelineCached(pipeline, nullptr, previewField, &hash);
         MaskGrid mask;
         mask.resolution = grid.resolution;
         mask.values = std::move(grid.mask);
+        if (!outputLabel.empty())
+        {
+            HashCombine(hash, std::hash<std::string_view>{}(outputLabel));
+        }
         if (outputHash != nullptr) { *outputHash = hash; }
         return mask;
     }
@@ -4034,7 +4081,15 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
         // kinds (Mask Noise / Mask Blend) plus Mask Fluvial, which evaluates
         // through the heightfield cache but is presented here as a MaskGrid.
         const auto isMaskProducer = [](NodeKind kind) {
-            return IsMaskOnlyNodeKind(kind) || kind == NodeKind::MaskCurvature || kind == NodeKind::MaskSlope || kind == NodeKind::MaskHeight || kind == NodeKind::MaskFluvial;
+            return IsMaskOnlyNodeKind(kind) ||
+                kind == NodeKind::MaskCurvature ||
+                kind == NodeKind::MaskSlope ||
+                kind == NodeKind::MaskHeight ||
+                kind == NodeKind::MaskFluvial ||
+                kind == NodeKind::Rock ||
+                kind == NodeKind::Sediment ||
+                kind == NodeKind::Snow ||
+                kind == NodeKind::MultiScaleErosion;
         };
         uint64_t aHash = 0;
         uint64_t bHash = 0;
@@ -4042,21 +4097,23 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
         MaskGrid b;
         if (node.inputs.size() >= 1)
         {
-            if (const Node* upstream = FindUpstreamForPin(node.inputs[0].id))
+            const UpstreamConnection upstream = FindUpstreamConnectionForPin(node.inputs[0].id);
+            if (upstream.node != nullptr)
             {
-                if (isMaskProducer(upstream->kind))
+                if (isMaskProducer(upstream.node->kind))
                 {
-                    a = EvaluateMaskGridForNodeCached(*upstream, depth + 1, &aHash);
+                    a = EvaluateMaskGridForNodeCached(*upstream.node, depth + 1, &aHash, upstream.outputPin ? std::string_view(upstream.outputPin->label) : std::string_view{});
                 }
             }
         }
         if (node.inputs.size() >= 2)
         {
-            if (const Node* upstream = FindUpstreamForPin(node.inputs[1].id))
+            const UpstreamConnection upstream = FindUpstreamConnectionForPin(node.inputs[1].id);
+            if (upstream.node != nullptr)
             {
-                if (isMaskProducer(upstream->kind))
+                if (isMaskProducer(upstream.node->kind))
                 {
-                    b = EvaluateMaskGridForNodeCached(*upstream, depth + 1, &bHash);
+                    b = EvaluateMaskGridForNodeCached(*upstream.node, depth + 1, &bHash, upstream.outputPin ? std::string_view(upstream.outputPin->label) : std::string_view{});
                 }
             }
         }
@@ -4085,15 +4142,21 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
         MaskGrid input;
         if (!node.inputs.empty())
         {
-            if (const Node* upstream = FindUpstreamForPin(node.inputs[0].id))
+            const auto isMaskProducer = [](NodeKind kind) {
+                return IsMaskOnlyNodeKind(kind) ||
+                    kind == NodeKind::MaskCurvature ||
+                    kind == NodeKind::MaskSlope ||
+                    kind == NodeKind::MaskHeight ||
+                    kind == NodeKind::MaskFluvial ||
+                    kind == NodeKind::Rock ||
+                    kind == NodeKind::Sediment ||
+                    kind == NodeKind::Snow ||
+                    kind == NodeKind::MultiScaleErosion;
+            };
+            const UpstreamConnection upstreamConnection = FindUpstreamConnectionForPin(node.inputs[0].id);
+            if (upstreamConnection.node != nullptr && isMaskProducer(upstreamConnection.node->kind))
             {
-                const auto isMaskProducer = [](NodeKind kind) {
-                    return IsMaskOnlyNodeKind(kind) || kind == NodeKind::MaskCurvature || kind == NodeKind::MaskSlope || kind == NodeKind::MaskHeight || kind == NodeKind::MaskFluvial;
-                };
-                if (isMaskProducer(upstream->kind))
-                {
-                    input = EvaluateMaskGridForNodeCached(*upstream, depth + 1, &inputHash);
-                }
+                input = EvaluateMaskGridForNodeCached(*upstreamConnection.node, depth + 1, &inputHash, upstreamConnection.outputPin ? std::string_view(upstreamConnection.outputPin->label) : std::string_view{});
             }
         }
 
@@ -4148,10 +4211,10 @@ ColorGrid NodeGraph::EvaluateColorGridForNodeCached(const Node& node, int depth,
     MaskGrid gradientMask;
     if (gradientInput != nullptr)
     {
-        const Node* upstream = FindUpstreamForPin(gradientInput->id);
-        if (upstream != nullptr)
+        const UpstreamConnection upstream = FindUpstreamConnectionForPin(gradientInput->id);
+        if (upstream.node != nullptr)
         {
-            gradientMask = EvaluateMaskGridForNodeCached(*upstream, depth + 1, &gradientHash);
+            gradientMask = EvaluateMaskGridForNodeCached(*upstream.node, depth + 1, &gradientHash, upstream.outputPin ? std::string_view(upstream.outputPin->label) : std::string_view{});
         }
     }
 
@@ -4160,10 +4223,10 @@ ColorGrid NodeGraph::EvaluateColorGridForNodeCached(const Node& node, int depth,
     bool hasMask = false;
     if (maskInput != nullptr)
     {
-        const Node* upstream = FindUpstreamForPin(maskInput->id);
-        if (upstream != nullptr)
+        const UpstreamConnection upstream = FindUpstreamConnectionForPin(maskInput->id);
+        if (upstream.node != nullptr)
         {
-            maskGrid = EvaluateMaskGridForNodeCached(*upstream, depth + 1, &maskHash);
+            maskGrid = EvaluateMaskGridForNodeCached(*upstream.node, depth + 1, &maskHash, upstream.outputPin ? std::string_view(upstream.outputPin->label) : std::string_view{});
             hasMask = (maskGrid.resolution > 0);
         }
     }
