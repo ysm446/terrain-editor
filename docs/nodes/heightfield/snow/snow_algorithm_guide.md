@@ -67,7 +67,8 @@ Envelope Smoothing はこのばらつきを物理的に意味のある方向へ�
 surface[i] = baseHeights[i] + thickness[i]   ← 雪面の高さ
 
 各反復:
-    blurred[i] = box blur of surface          ← Fill Radius に応じた近傍平均
+    radius = Largest Detail Level (m) / cellSize
+    blurred[i] = separable gaussian blur of surface ← 横方向→縦方向のガウス平均
     surface[i] = max(surface[i], blurred[i])  ← 出っ張りは保ち、窪みを埋める
 ```
 
@@ -109,7 +110,7 @@ mask[i] = clamp(thickness[i] / maskMaxSnow, 0, 1)
 | `Slope Limit Min (deg)` | この傾斜以下では全量積もる |
 | `Slope Limit Max (deg)` | この傾斜以上では積もらない |
 | `Smoothing Iterations` | Envelope smoothing の反復数。0 = なし、8 = デフォルト |
-| `Fill Radius (cells)` | 1 回の smoothing で参照する近傍半径。1 = 3×3、3-4 = 細かい凹凸を広く埋める |
+| `Largest Detail Level (m)` | GeoGen Snow 相当の最大ディテール幅。4/8/16/32/64m から選び、隙間埋めの最大スケールを決める |
 | `Mask Max Snow (m)` | マスクが 1.0 (白) になる積雪厚さ |
 
 ## よくある使い方と設定例
@@ -121,7 +122,7 @@ Emission Amount: 2.0 m
 Slope Limit Min: 50°
 Slope Limit Max: 60°
 Smoothing Iterations: 6
-Fill Radius: 3
+Largest Detail Level: 8 m
 ```
 
 急崖 (60° 以上) には雪が付かず、なだらかな稜線や高原に積雪します。
@@ -134,7 +135,7 @@ Emission Amount: 3.0 m
 Slope Limit Min: 40°
 Slope Limit Max: 55°
 Smoothing Iterations: 6〜8
-Fill Radius: 3〜4
+Largest Detail Level: 16 m
 ```
 
 Smoothing を多くかけると谷や窪みが積雪で埋まり、深雪らしい丸みが出ます。
@@ -146,7 +147,7 @@ Emission Amount: 1.0 m
 Slope Limit Min: 30°
 Slope Limit Max: 45°
 Smoothing Iterations: 6
-Fill Radius: 2〜3
+Largest Detail Level: 4〜8 m
 ```
 
 谷の側壁には積もらず、平坦な頂部のみ白くなります。

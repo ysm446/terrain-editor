@@ -1,16 +1,16 @@
 // Snow compute shader.
 //
 // GPU port of ApplySnow (src/node_graph.cpp). Algorithm matches CPU exactly
-// (modulo float ordering of the radius-controlled box blur).
+// (modulo float ordering of the radius-controlled gaussian blur).
 //
 // Pipeline:
 //   1. CSCopyInputHeights: InputHeights → BaseHeights (UAV).
 //   2. CSComputeThickness: per-cell slope from BaseHeights, smoothstep
 //      between min/max, write thickness into Thickness. Also write
 //      initial SurfA = BaseHeights + Thickness for the smoothing pass.
-//   3. CSEnvelopeSmoothing × smoothingIterations: radius-controlled box blur of the
-//      surface, then max(self, blurred) — preserves peaks, lifts grooves.
-//      Direction flag (smoothDirection) ping-pongs SurfA / SurfB.
+//   3. CSEnvelopeSmoothing x smoothingIterations: radius-controlled separable
+//      gaussian blur of the surface, then max(self, blurred) - preserves
+//      peaks, lifts grooves, and avoids directional streaks.
 //   4. CSApply: thickness = surfFinal - BaseHeights, write OutHeights and
 //      OutMask = clamp(thickness / maskMaxSnow).
 //
@@ -32,7 +32,7 @@ cbuffer SnowConstants : register(b0)
 
     float invRange;        // 1 / (maxTan - minTan)
     float maskMaxSnow;
-    uint  smoothDirection; // 0: SurfA → SurfB, 1: SurfB → SurfA
+    uint  smoothDirection; // 0: horizontal gaussian A->B, 1: vertical gaussian B->A + max(A, blurred)
     uint  fillRadius;
     uint  pad0;
     uint  pad1;
@@ -91,8 +91,8 @@ void CSComputeThickness(uint3 dt : SV_DispatchThreadID)
     SurfA[i] = BaseHeights[i] + thickness;
 }
 
-// Box blur of SurfA/SurfB, then max(self, blurred). smoothDirection toggles
-// which buffer is read / written so we don't need to re-bind UAV slots.
+// Separable gaussian blur. Pass 0 writes horizontal blur to SurfB; pass 1
+// vertically blurs SurfB and applies max(original SurfA, blurred) once.
 [numthreads(8, 8, 1)]
 void CSEnvelopeSmoothing(uint3 dt : SV_DispatchThreadID)
 {
@@ -100,37 +100,48 @@ void CSEnvelopeSmoothing(uint3 dt : SV_DispatchThreadID)
     uint z = dt.y;
     if (x >= resolution || z >= resolution) return;
 
-    int radius = clamp((int)fillRadius, 1, 8);
-    float selfValue = (smoothDirection == 0u)
-        ? SurfA[z * resolution + x]
-        : SurfB[z * resolution + x];
-
+    int radius = clamp((int)fillRadius, 1, 64);
+    float sigma = max(1.0f, (float)radius * 0.5f);
+    float invTwoSigma2 = 1.0f / (2.0f * sigma * sigma);
     float sum = 0.0f;
-    int count = 0;
-    [loop]
-    for (int oz = -radius; oz <= radius; ++oz)
+    float weightSum = 0.0f;
+    if (smoothDirection == 0u)
     {
-        uint sz = (uint)clamp((int)z + oz, 0, (int)resolution - 1);
         [loop]
         for (int ox = -radius; ox <= radius; ++ox)
         {
             uint sx = (uint)clamp((int)x + ox, 0, (int)resolution - 1);
-            sum += (smoothDirection == 0u)
-                ? SurfA[sz * resolution + sx]
-                : SurfB[sz * resolution + sx];
-            ++count;
+            float w = exp(-(float)(ox * ox) * invTwoSigma2);
+            sum += SurfA[z * resolution + sx] * w;
+            weightSum += w;
         }
     }
-    float blurred = sum / max(1.0f, (float)count);
-    float result = max(selfValue, blurred);
+    else
+    {
+        [loop]
+        for (int oz = -radius; oz <= radius; ++oz)
+        {
+            uint sz = (uint)clamp((int)z + oz, 0, (int)resolution - 1);
+            float w = exp(-(float)(oz * oz) * invTwoSigma2);
+            sum += SurfB[sz * resolution + x] * w;
+            weightSum += w;
+        }
+    }
+    float blurred = sum / max(1e-6f, weightSum);
 
     uint i = z * resolution + x;
-    if (smoothDirection == 0u) SurfB[i] = result;
-    else                       SurfA[i] = result;
+    if (smoothDirection == 0u)
+    {
+        SurfB[i] = blurred;
+    }
+    else
+    {
+        SurfA[i] = max(SurfA[i], blurred);
+    }
 }
 
-// Read final surface from SurfA (CPU side ensures even smoothingIterations
-// so the result lands in SurfA), compute thickness, write outputs.
+// Read final surface from SurfA. Each smoothing iteration writes the completed
+// max(original, blurred) surface back to SurfA, so CSApply always reads SurfA.
 [numthreads(8, 8, 1)]
 void CSApply(uint3 dt : SV_DispatchThreadID)
 {

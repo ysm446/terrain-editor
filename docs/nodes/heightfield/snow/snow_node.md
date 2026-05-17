@@ -17,8 +17,8 @@
 | `Slope Limit Min (deg)` | 50.0 | この角度以下では雪が満杯まで積もる (Emission Amount まるごと) |
 | `Slope Limit Max (deg)` | 60.0 | この角度以上では雪はまったく積もらない (剥き出しの岩肌)。Min と Max の間は smoothstep で滑らかに遷移 |
 | `Mask Max Snow (m)` | 1.0 | Snow mask 出力の正規化基準 (`雪厚 / Mask Max Snow` を [0,1] にクランプ)。Emission Amount と同じ値にすれば満雪域が真っ白に出る |
-| `Smoothing Iterations` | 8 | 雪の表面を反復的に平滑化 + 溝埋めする回数。各反復で `surface = heights + thickness` を近傍 box blur し、`max(surface, blurred)` でセル更新。0 = 平滑化なし、6-8 で積雪面が出やすい。詳細はアルゴリズム節参照 |
-| `Fill Radius (cells)` | 3 | Snow envelope smoothing で使う box blur 半径。1 は従来の 3×3 相当、3-4 で細かい凹凸や隙間を広く埋める |
+| `Smoothing Iterations` | 8 | 雪の表面を反復的に平滑化 + 溝埋めする回数。各反復で `surface = heights + thickness` を分離ガウスブラーし、`max(surface, blurred)` でセル更新。0 = 平滑化なし、6-8 で積雪面が出やすい。詳細はアルゴリズム節参照 |
+| `Largest Detail Level (m)` | 8.0 | GeoGen Snow 相当の最大ディテール幅。`4 m` / `8 m` / `16 m` / `32 m` / `64 m` から選び、雪面をならして隙間を埋める最大スケールをメートル単位で制御する |
 | `Backend` | GPU | `CPU` / `GPU` (D3D12 compute shader) を切り替え。既定 GPU。シェーダーコンパイル/ディスパッチ失敗時は CPU に自動フォールバック |
 
 ## アルゴリズム
@@ -37,7 +37,7 @@
 ### Phase 2: snow envelope smoothing (`Smoothing Iterations` 回)
 
 各反復で:
-1. 現在の `surface` を `Fill Radius` に応じた box blur で平均化 (Jacobi double-buffer)。
+1. 現在の `surface` を `Largest Detail Level (m)` から求めた半径で、横方向→縦方向の分離ガウスブラーにより平均化する。
 2. 各セルで `surface[c] = max(surface[c], blurred[c])` で更新。
 
 これにより:
@@ -45,7 +45,7 @@
 - **周囲より高いセル (= 出っ張り)** は `surface` のまま変わらない (`max` が元値を保持)
 - スロープ遷移域の per-cell な thickness 揺らぎが消え、雪が物理的に「積もって流れて埋める」自然な見た目になる
 
-反復するごとに「snow envelope」がさらに滑らかになり、より広い範囲の溝が埋まります。`Smoothing Iterations = 0` で旧挙動 (素のフィルタ)、`6-8` と `Fill Radius = 3` 前後で積雪面が出やすくなります。
+反復するごとに「snow envelope」がさらに滑らかになり、より広い範囲の溝が埋まります。`Smoothing Iterations = 0` で旧挙動 (素のフィルタ)、`6-8` と `Largest Detail Level = 8m` 前後で積雪面が出やすくなります。
 
 ### Phase 3: 出力書き戻し
 
@@ -61,10 +61,10 @@
 | --- | --- |
 | `CSCopyInputHeights` | InputHeights → BaseHeights (UAV) |
 | `CSComputeThickness` | per-cell slope + smoothstep + 初期 SurfA = base + thickness |
-| `CSEnvelopeSmoothing` | `Smoothing Iterations` 回 (smoothDirection で SurfA/SurfB ping-pong)。`Fill Radius` に応じた box blur → max で envelope 更新 |
+| `CSEnvelopeSmoothing` | `Smoothing Iterations` 回。各反復で横方向と縦方向のガウス blur を行い、`Largest Detail Level (m)` から求めた半径で envelope 更新 |
 | `CSApply` | 最終 surface から thickness を求めて OutHeights + OutMask |
 
-CB に `smoothDirection` フラグを入れて UAV ping-pong を回避しています。CPU 側は `Smoothing Iterations` を偶数に丸めて、最終結果が必ず SurfA に着地するようにしています。
+CB に `smoothDirection` フラグを入れて、横方向と縦方向のガウス blur パスを同じ compute shader で切り替えています。方向ごとに `max` せず、ガウス blur が完成した後に一度だけ `max(original, blurred)` するため、十字や斜めの伸びが出にくくなります。
 
 per-pixel 完全並列なので 1024² で **CPU 比 5-15 倍程度高速** の見込み。シェーダーコンパイル / ディスパッチ失敗時は CPU 実装に自動フォールバックします。
 
@@ -80,6 +80,6 @@ per-pixel 完全並列なので 1024² で **CPU 比 5-15 倍程度高速** の�
 ## メモ
 
 - 出力は **加算**。地形がせり上がります。`Mask Blend` で他のマスクと合成して特定領域だけ雪を出す合成も可能です。
-- GeoGen Snow にあるパラメータのうち、本実装では `Emission Amount` / `Slope Limit Min/Max` / `Smoothing Iterations` / `Fill Radius` (envelope smoothing) を採用。`Iterations count` / 風 (Wind direction/intensity/chaos) / `Hardness mask intensity` などは未実装 (粒子シムや反復が前提のものは省略)。必要になったら追加可能。
+- GeoGen Snow にあるパラメータのうち、本実装では `Emission Amount` / `Slope Limit Min/Max` / `Smoothing Iterations` / `Largest Detail Level` (envelope smoothing) を採用。`Iterations count` / 風 (Wind direction/intensity/chaos) / `Hardness mask intensity` などは未実装 (粒子シムや反復が前提のものは省略)。必要になったら追加可能。
 - キャッシュキーは入力ハッシュ + パラメータハッシュ。他ノードの編集や Snow パラメータ変更で該当ノードのみ再評価されます。
 - 出力 mask は満雪域が 1.0、雪なし斜面が 0.0 のグラデーション。マスクシェーディングを `グレースケール` にするとほぼ GeoGen 参考画像と同じ見た目になります。

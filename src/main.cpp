@@ -2249,6 +2249,7 @@ nlohmann::json MakeSnowSettingsJson(const rock::Node& node)
             {"slopeLimitMaxDeg", node.snow.slopeLimitMaxDeg},
             {"maskMaxSnow", node.snow.maskMaxSnow},
             {"smoothingIterations", node.snow.smoothingIterations},
+            {"largestDetailLevelM", node.snow.largestDetailLevelM},
             {"fillRadius", node.snow.fillRadius},
             {"backend", static_cast<int>(node.snow.backend)},
         }},
@@ -2628,6 +2629,7 @@ void ReadSnowSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     node.snow.slopeLimitMaxDeg = std::clamp(std::max(nodeSnowJson.value("slopeLimitMaxDeg", node.snow.slopeLimitMaxDeg), node.snow.slopeLimitMinDeg), 0.0f, 89.9f);
     node.snow.maskMaxSnow = std::clamp(nodeSnowJson.value("maskMaxSnow", node.snow.maskMaxSnow), 0.001f, 1000.0f);
     node.snow.smoothingIterations = std::clamp(nodeSnowJson.value("smoothingIterations", node.snow.smoothingIterations), 0, 16);
+    node.snow.largestDetailLevelM = std::clamp(nodeSnowJson.value("largestDetailLevelM", node.snow.largestDetailLevelM), 1.0f, 1024.0f);
     node.snow.fillRadius = std::clamp(nodeSnowJson.value("fillRadius", node.snow.fillRadius), 1, 8);
     {
         const int backendInt = std::clamp(nodeSnowJson.value("backend", static_cast<int>(node.snow.backend)),
@@ -6869,7 +6871,9 @@ bool RunSnowComputeImmediate(rock::HeightfieldGrid& grid, const rock::SnowSettin
     k.invRange          = 1.0f / std::max(maxTan - minTan, 1e-6f);
     k.maskMaxSnow       = std::max(1e-4f, settings.maskMaxSnow);
     k.smoothDirection   = 0u;
-    k.fillRadius        = static_cast<UINT>(std::clamp(settings.fillRadius, 1, 8));
+    const float cellSizeMeters = k.terrainSizeMeters / static_cast<float>(std::max(1u, resolution - 1u));
+    const float largestDetailM = std::clamp(settings.largestDetailLevelM, cellSizeMeters, k.terrainSizeMeters * 0.5f);
+    k.fillRadius        = static_cast<UINT>(std::clamp(static_cast<int>(std::round(largestDetailM / cellSizeMeters)), 1, 64));
     k.pad0              = 0u;
     k.pad1              = 0u;
     k.pad2              = 0u;
@@ -6891,16 +6895,19 @@ bool RunSnowComputeImmediate(rock::HeightfieldGrid& grid, const rock::SnowSettin
     commandList->Dispatch(groupCount, groupCount, 1);
     uavBarrier();
 
-    // 3. Envelope smoothing iterations (pingpong via smoothDirection).
-    //    CPU side rounds smoothingIterations up to even so the final result
-    //    lands in SurfA (CSApply reads SurfA).
+    // 3. Envelope smoothing iterations. Each iteration builds a separable
+    //    gaussian blur, then applies max(original surface, blurred) once.
     int rawIters = std::clamp(settings.smoothingIterations, 0, 16);
-    int smoothIters = (rawIters % 2 == 0) ? rawIters : (rawIters + 1);
+    int smoothIters = rawIters;
+    commandList->SetPipelineState(g_snowEnvelopeSmoothingPso.Get());
     for (int i = 0; i < smoothIters; ++i)
     {
-        k.smoothDirection = static_cast<UINT>(i & 1);
+        k.smoothDirection = 0u;
         setConstants();
-        commandList->SetPipelineState(g_snowEnvelopeSmoothingPso.Get());
+        commandList->Dispatch(groupCount, groupCount, 1);
+        uavBarrier();
+        k.smoothDirection = 1u;
+        setConstants();
         commandList->Dispatch(groupCount, groupCount, 1);
         uavBarrier();
     }
@@ -13670,6 +13677,7 @@ bool DrawSnowProperties(rock::Node& editableNode)
     sn.slopeLimitMaxDeg = std::clamp(std::max(sn.slopeLimitMaxDeg, sn.slopeLimitMinDeg), 0.0f, 89.9f);
     sn.maskMaxSnow = std::clamp(sn.maskMaxSnow, 0.001f, 1000.0f);
     sn.smoothingIterations = std::clamp(sn.smoothingIterations, 0, 16);
+    sn.largestDetailLevelM = std::clamp(sn.largestDetailLevelM, 1.0f, 1024.0f);
     sn.fillRadius = std::clamp(sn.fillRadius, 1, 8);
 
     {
@@ -13700,13 +13708,30 @@ bool DrawSnowProperties(rock::Node& editableNode)
     {
         EvaluateGraph();
     }
-    if (DrawPropertyIntRow("Fill Radius (cells)", "SnowFillRadius", &sn.fillRadius, 1, 8, rock::SnowSettings{}.fillRadius, "Snow fill radius changed", true, "雪面をならす近傍 blur の半径です。1 は従来の 3x3 相当、3-4 で細かい凹凸や隙間を広く埋めます。大きくすると雪原らしく丸まりますが、地形の細部は失われます。"))
-    {
-        EvaluateGraph();
-    }
     if (DrawPropertyFloatRow("Mask Max Snow (m)", "SnowMaskMaxSnow", &sn.maskMaxSnow, 0.001f, 50.0f, rock::SnowSettings{}.maskMaxSnow, "Snow mask max snow changed", true, "Snow mask 出力の正規化基準 (m)。`雪厚 / Mask Max Snow` を [0, 1] にクランプして mask に書きます。Emission Amount と同じ値にすれば満雪域が真っ白に出ます。下げるとうっすらした雪も明るく見えるようになります。", "%.2f"))
     {
         EvaluateGraph();
+    }
+
+    {
+        constexpr std::array<float, 5> kSnowDetailLevels = {4.0f, 8.0f, 16.0f, 32.0f, 64.0f};
+        int detailIndex = 1;
+        float bestDistance = FLT_MAX;
+        for (int i = 0; i < static_cast<int>(kSnowDetailLevels.size()); ++i)
+        {
+            const float distance = std::abs(sn.largestDetailLevelM - kSnowDetailLevels[static_cast<size_t>(i)]);
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                detailIndex = i;
+            }
+        }
+        if (DrawPropertyComboRow("Largest Detail Level (m)", "SnowLargestDetailLevel", &detailIndex, "4 m\0" "8 m\0" "16 m\0" "32 m\0" "64 m\0" "\0", "GeoGen Snow の Largest detail level 相当です。雪面をならして隙間を埋める最大スケールをメートル単位で選びます。4m は細い隙間まで追いやすく、64m は大きなスケールの積雪面を作ります。", 1))
+        {
+            detailIndex = std::clamp(detailIndex, 0, static_cast<int>(kSnowDetailLevels.size()) - 1);
+            sn.largestDetailLevelM = kSnowDetailLevels[static_cast<size_t>(detailIndex)];
+            EvaluateGraph();
+        }
     }
 
     ImGui::EndTable();

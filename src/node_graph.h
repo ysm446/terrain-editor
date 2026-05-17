@@ -368,7 +368,8 @@ struct SnowSettings
     //   - スロープ遷移域の per-cell な thickness 揺らぎが消える
     // 結果として「雪の envelope」が次第に滑らかになる。0 = 平滑化なし。
     int smoothingIterations = 8;
-    int fillRadius = 3; // cell. 近傍 blur の半径。大きいほど隙間や細かい凹凸を広く埋める。
+    float largestDetailLevelM = 8.0f; // m. GeoGen "Largest detail level". Controls the widest snow envelope smoothing scale.
+    int fillRadius = 3; // Legacy saved setting. Largest Detail Level now drives envelope radius.
     SnowBackend backend = SnowBackend::GpuCompute;
 };
 

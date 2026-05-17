@@ -200,7 +200,7 @@ uint64_t HashSnowSettings(const SnowSettings& settings, int resolution)
     HashCombine(hash, HashFloat(settings.slopeLimitMaxDeg));
     HashCombine(hash, HashFloat(settings.maskMaxSnow));
     HashCombine(hash, static_cast<uint64_t>(settings.smoothingIterations));
-    HashCombine(hash, static_cast<uint64_t>(settings.fillRadius));
+    HashCombine(hash, HashFloat(settings.largestDetailLevelM));
     HashCombine(hash, static_cast<uint64_t>(settings.backend));
     HashCombine(hash, static_cast<uint64_t>(resolution));
     return hash;
@@ -2439,7 +2439,7 @@ void ApplyRock(HeightfieldGrid& grid, const RockSettings& settings)
 //
 // 仕上げに「snow envelope smoothing」を smoothingIterations 回かける:
 //   surface = heights + thickness
-//   blurred = box blur of surface (fillRadius cell radius)
+//   blurred = separable gaussian blur of surface (Largest Detail Level radius)
 //   surface = max(surface, blurred)   ← 周囲より低いセルだけ持ち上がる
 //   thickness = surface - heights
 // これにより周囲が高いセル (= 溝の底) は雪が増えて埋まり、周囲より高い
@@ -2479,10 +2479,11 @@ void ApplySnow(HeightfieldGrid& grid, const SnowSettings& settings)
     const float invRange = 1.0f / std::max(maxTan - minTan, 1e-6f);
     const float maskMax = std::max(1e-4f, settings.maskMaxSnow);
     const int smoothIters = std::clamp(settings.smoothingIterations, 0, 16);
-    const int fillRadius = std::clamp(settings.fillRadius, 1, 8);
 
     const float terrainSize = std::max(grid.terrainSizeMeters, 1.0f);
     const float cellSize = terrainSize / static_cast<float>(std::max(1, n - 1));
+    const float largestDetailM = std::clamp(settings.largestDetailLevelM, cellSize, terrainSize * 0.5f);
+    const int fillRadius = std::clamp(static_cast<int>(std::round(largestDetailM / cellSize)), 1, 64);
     const float invTwoCell = 1.0f / (2.0f * cellSize);
 
     // Phase 1: 元高さから slope を計算し、初期 thickness を求める。
@@ -2514,7 +2515,7 @@ void ApplySnow(HeightfieldGrid& grid, const SnowSettings& settings)
     });
 
     // Phase 2: snow envelope smoothing。
-    //   surface = baseHeights + thickness を近傍 box blur (Jacobi double-buffer)、
+    //   surface = baseHeights + thickness を分離ガウスブラーでならし、
     //   max(surface, blurred) で出っ張りを保ちつつ溝を埋める。
     if (smoothIters > 0)
     {
@@ -2530,29 +2531,42 @@ void ApplySnow(HeightfieldGrid& grid, const SnowSettings& settings)
         });
         for (int iter = 0; iter < smoothIters; ++iter)
         {
+            const float sigma = std::max(1.0f, static_cast<float>(fillRadius) * 0.5f);
+            const float invTwoSigma2 = 1.0f / (2.0f * sigma * sigma);
             ParallelForRows(n, [&](int z) {
                 const size_t rowBase = static_cast<size_t>(z) * static_cast<size_t>(n);
                 for (int x = 0; x < n; ++x)
                 {
                     float sum = 0.0f;
-                    int count = 0;
+                    float weightSum = 0.0f;
+                    for (int ox = -fillRadius; ox <= fillRadius; ++ox)
+                    {
+                        const int sx = std::clamp(x + ox, 0, n - 1);
+                        const float w = std::exp(-static_cast<float>(ox * ox) * invTwoSigma2);
+                        sum += surfA[rowBase + static_cast<size_t>(sx)] * w;
+                        weightSum += w;
+                    }
+                    surfB[rowBase + static_cast<size_t>(x)] = sum / std::max(weightSum, 1e-6f);
+                }
+            });
+            ParallelForRows(n, [&](int z) {
+                const size_t rowBase = static_cast<size_t>(z) * static_cast<size_t>(n);
+                for (int x = 0; x < n; ++x)
+                {
+                    float sum = 0.0f;
+                    float weightSum = 0.0f;
                     for (int oz = -fillRadius; oz <= fillRadius; ++oz)
                     {
                         const int sz = std::clamp(z + oz, 0, n - 1);
-                        const size_t sampleRow = static_cast<size_t>(sz) * static_cast<size_t>(n);
-                        for (int ox = -fillRadius; ox <= fillRadius; ++ox)
-                        {
-                            const int sx = std::clamp(x + ox, 0, n - 1);
-                            sum += surfA[sampleRow + static_cast<size_t>(sx)];
-                            ++count;
-                        }
+                        const float w = std::exp(-static_cast<float>(oz * oz) * invTwoSigma2);
+                        sum += surfB[static_cast<size_t>(sz) * static_cast<size_t>(n) + static_cast<size_t>(x)] * w;
+                        weightSum += w;
                     }
                     const float s11 = surfA[rowBase + static_cast<size_t>(x)];
-                    const float blurred = sum / static_cast<float>(std::max(1, count));
-                    surfB[rowBase + static_cast<size_t>(x)] = std::max(s11, blurred);
+                    const float blurred = sum / std::max(weightSum, 1e-6f);
+                    surfA[rowBase + static_cast<size_t>(x)] = std::max(s11, blurred);
                 }
             });
-            std::swap(surfA, surfB);
         }
         ParallelForRows(n, [&](int z) {
             const size_t rowBase = static_cast<size_t>(z) * static_cast<size_t>(n);
@@ -2564,7 +2578,7 @@ void ApplySnow(HeightfieldGrid& grid, const SnowSettings& settings)
         });
     }
 
-    // Phase 3: 元高さに smoothing 後の thickness を加算 + mask 出力。
+    // Phase 3: write smoothed snow thickness back to height and mask.
     ParallelForRows(n, [&](int z) {
         const size_t rowBase = static_cast<size_t>(z) * static_cast<size_t>(n);
         for (int x = 0; x < n; ++x)
