@@ -141,6 +141,13 @@ enum class MeshPreviewBackend
     GpuDisplacement,
 };
 
+enum class TerrainBoundaryMode
+{
+    None,
+    SectionPolygon,
+    Lines,
+};
+
 // マスクプレビューのシェーディング方式。
 // Grayscale: mask=0 を黒、mask=1 を白とする純粋な白黒ランプ (既定)。
 // GrayOrange: ライティング付きのグレー×オレンジのトーン。
@@ -496,6 +503,7 @@ struct PreviewSettings
     bool showGrid = true;
     int lightingMode = 0;
     MeshPreviewBackend meshBackend = MeshPreviewBackend::CpuMesh;
+    TerrainBoundaryMode terrainBoundaryMode = TerrainBoundaryMode::SectionPolygon;
     bool viewportTessellation = false;
     float tessellationMinFactor = 1.0f;
     float tessellationMaxFactor = 8.0f;

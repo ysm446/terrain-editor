@@ -442,6 +442,7 @@ struct GpuMeshPreview
     bool showGrid = false;
     bool maskPreview = false;
     int maskShading = -1;
+    int terrainBoundaryMode = -1;
     int lightingMode = 0;
     float sunAzimuthDegrees = 0.0f;
     float sunElevationDegrees = 0.0f;
@@ -460,6 +461,7 @@ struct GpuMeshPreview
     ComPtr<ID3D12Resource> indexBuffer;
     ComPtr<ID3D12Resource> edgeIndexBuffer;
     ComPtr<ID3D12Resource> gridVertexBuffer;
+    ComPtr<ID3D12Resource> terrainBoundaryLineVertexBuffer;
     D3D12_CPU_DESCRIPTOR_HANDLE rtvCpu{};
     D3D12_CPU_DESCRIPTOR_HANDLE postRtvCpu{};
     D3D12_CPU_DESCRIPTOR_HANDLE dsvCpu{};
@@ -480,6 +482,8 @@ struct GpuMeshPreview
     UINT triIndexCount = 0;
     UINT edgeIndexCount = 0;
     UINT gridVertexCount = 0;
+    UINT terrainBoundaryLineVertexCount = 0;
+    uint64_t terrainBoundaryLineUploadKey = UINT64_MAX;
     int gridCellCount = 0;
     float gridCellSizeMeters = 0.0f;
     int skyMode = -1;
@@ -1145,7 +1149,10 @@ void CleanupD3D()
     g_gpuMeshPreview.indexBuffer.Reset();
     g_gpuMeshPreview.edgeIndexBuffer.Reset();
     g_gpuMeshPreview.gridVertexBuffer.Reset();
+    g_gpuMeshPreview.terrainBoundaryLineVertexBuffer.Reset();
     g_gpuMeshPreview.gridVertexCount = 0;
+    g_gpuMeshPreview.terrainBoundaryLineVertexCount = 0;
+    g_gpuMeshPreview.terrainBoundaryLineUploadKey = UINT64_MAX;
     g_meshPreviewSurfacePso.Reset();
     g_meshPreviewWirePso.Reset();
     g_meshPreviewGridPso.Reset();
@@ -1610,6 +1617,7 @@ bool SaveAppSettings(std::string* error = nullptr)
             {"previewLod", settings.preview.lod},
             {"lightingMode", settings.preview.lightingMode},
             {"meshBackend", static_cast<int>(settings.preview.meshBackend)},
+            {"terrainBoundaryMode", static_cast<int>(settings.preview.terrainBoundaryMode)},
             {"viewportTessellation", settings.preview.viewportTessellation},
             {"tessellationMinFactor", settings.preview.tessellationMinFactor},
             {"tessellationMaxFactor", settings.preview.tessellationMaxFactor},
@@ -1759,6 +1767,12 @@ bool LoadAppSettings(std::string* error = nullptr)
                 static_cast<int>(rock::MeshPreviewBackend::CpuMesh),
                 static_cast<int>(rock::MeshPreviewBackend::GpuDisplacement));
             settings.preview.meshBackend = static_cast<rock::MeshPreviewBackend>(backendInt);
+        }
+        {
+            const int boundaryInt = std::clamp(visibilityJson.value("terrainBoundaryMode", static_cast<int>(settings.preview.terrainBoundaryMode)),
+                static_cast<int>(rock::TerrainBoundaryMode::None),
+                static_cast<int>(rock::TerrainBoundaryMode::Lines));
+            settings.preview.terrainBoundaryMode = static_cast<rock::TerrainBoundaryMode>(boundaryInt);
         }
         settings.preview.viewportTessellation = visibilityJson.value("viewportTessellation", settings.preview.viewportTessellation);
         settings.preview.tessellationMinFactor = std::clamp(visibilityJson.value("tessellationMinFactor", settings.preview.tessellationMinFactor), 1.0f, 64.0f);
@@ -2684,6 +2698,7 @@ nlohmann::json MakeProjectSettingsJson()
             {"simulationResolution", preview.simulationResolution},
             {"lightingMode", preview.lightingMode},
             {"meshBackend", static_cast<int>(preview.meshBackend)},
+            {"terrainBoundaryMode", static_cast<int>(preview.terrainBoundaryMode)},
             {"viewportTessellation", preview.viewportTessellation},
             {"tessellationMinFactor", preview.tessellationMinFactor},
             {"tessellationMaxFactor", preview.tessellationMaxFactor},
@@ -2964,6 +2979,10 @@ void ReadPreviewSettingsJson(const nlohmann::json& settingsJson, rock::PreviewSe
                                       static_cast<int>(rock::MeshPreviewBackend::CpuMesh),
                                       static_cast<int>(rock::MeshPreviewBackend::GpuDisplacement));
     preview.meshBackend = static_cast<rock::MeshPreviewBackend>(backendInt);
+    const int boundaryInt = std::clamp(previewJson.value("terrainBoundaryMode", static_cast<int>(preview.terrainBoundaryMode)),
+                                      static_cast<int>(rock::TerrainBoundaryMode::None),
+                                      static_cast<int>(rock::TerrainBoundaryMode::Lines));
+    preview.terrainBoundaryMode = static_cast<rock::TerrainBoundaryMode>(boundaryInt);
     preview.viewportTessellation = previewJson.value("viewportTessellation", preview.viewportTessellation);
     preview.tessellationMinFactor = std::clamp(previewJson.value("tessellationMinFactor", preview.tessellationMinFactor), 1.0f, 64.0f);
     preview.tessellationMaxFactor = std::clamp(previewJson.value("tessellationMaxFactor", preview.tessellationMaxFactor), preview.tessellationMinFactor, 64.0f);
@@ -9195,6 +9214,71 @@ void EnsureGridPreviewBuffer()
     g_gpuMeshPreview.gridCellSizeMeters = cellSizeMeters;
 }
 
+void EnsureTerrainBoundaryLineBuffer(const rock::HeightfieldGrid& grid, uint64_t uploadKey)
+{
+    if (g_gpuMeshPreview.terrainBoundaryLineVertexBuffer &&
+        g_gpuMeshPreview.terrainBoundaryLineVertexCount > 0 &&
+        g_gpuMeshPreview.terrainBoundaryLineUploadKey == uploadKey)
+    {
+        return;
+    }
+
+    g_gpuMeshPreview.terrainBoundaryLineVertexBuffer.Reset();
+    g_gpuMeshPreview.terrainBoundaryLineVertexCount = 0;
+    g_gpuMeshPreview.terrainBoundaryLineUploadKey = UINT64_MAX;
+    const int n = grid.resolution;
+    if (n < 2 || grid.heights.size() < static_cast<size_t>(n) * static_cast<size_t>(n))
+    {
+        return;
+    }
+
+    const float halfSize = std::max(grid.terrainSizeMeters, 1.0f) * 0.5f;
+    const auto makeVertex = [](float x, float y, float z) {
+        return rock::MeshVertex{x, y, z, 0.0f, 1.0f, 0.0f, 0.0f};
+    };
+    const auto heightAt = [&](int x, int y) {
+        return grid.heights[static_cast<size_t>(y) * static_cast<size_t>(n) + static_cast<size_t>(x)];
+    };
+    const std::array<rock::MeshVertex, 4> topCorners = {{
+        makeVertex(-halfSize, heightAt(0, 0), halfSize),
+        makeVertex(halfSize, heightAt(n - 1, 0), halfSize),
+        makeVertex(halfSize, heightAt(n - 1, n - 1), -halfSize),
+        makeVertex(-halfSize, heightAt(0, n - 1), -halfSize),
+    }};
+    const std::array<rock::MeshVertex, 4> bottomCorners = {{
+        makeVertex(-halfSize, 0.0f, halfSize),
+        makeVertex(halfSize, 0.0f, halfSize),
+        makeVertex(halfSize, 0.0f, -halfSize),
+        makeVertex(-halfSize, 0.0f, -halfSize),
+    }};
+
+    std::vector<rock::MeshVertex> vertices;
+    vertices.reserve(16);
+    const auto addLine = [&](const rock::MeshVertex& a, const rock::MeshVertex& b) {
+        vertices.push_back(a);
+        vertices.push_back(b);
+    };
+    for (int i = 0; i < 4; ++i)
+    {
+        addLine(topCorners[static_cast<size_t>(i)], bottomCorners[static_cast<size_t>(i)]);
+        addLine(bottomCorners[static_cast<size_t>(i)], bottomCorners[static_cast<size_t>((i + 1) % 4)]);
+    }
+
+    const D3D12_HEAP_PROPERTIES uploadHeap = HeapProperties(D3D12_HEAP_TYPE_UPLOAD);
+    const UINT64 vbSize = vertices.size() * sizeof(rock::MeshVertex);
+    const D3D12_RESOURCE_DESC vbDesc = BufferResourceDesc(vbSize);
+    ThrowIfFailed(g_device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE,
+        &vbDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+        IID_PPV_ARGS(&g_gpuMeshPreview.terrainBoundaryLineVertexBuffer)), "Create terrain boundary line VB failed");
+    D3D12_RANGE readRange{};
+    void* mapped = nullptr;
+    g_gpuMeshPreview.terrainBoundaryLineVertexBuffer->Map(0, &readRange, &mapped);
+    std::memcpy(mapped, vertices.data(), static_cast<size_t>(vbSize));
+    g_gpuMeshPreview.terrainBoundaryLineVertexBuffer->Unmap(0, nullptr);
+    g_gpuMeshPreview.terrainBoundaryLineVertexCount = static_cast<UINT>(vertices.size());
+    g_gpuMeshPreview.terrainBoundaryLineUploadKey = uploadKey;
+}
+
 ImVec2 ProjectPreviewPoint(float x, float y, float z, const ImVec2& center, float scale)
 {
     ImVec2 p = RotatePoint(x, y, z, g_viewport.yaw, g_viewport.pitch);
@@ -9344,6 +9428,9 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
     const bool useDisplacement = g_graph.Settings().preview.meshBackend == rock::MeshPreviewBackend::GpuDisplacement;
     const bool useTessellation = useDisplacement && g_graph.Settings().preview.viewportTessellation;
     const bool useDepthOfField = g_graph.Settings().preview.depthOfFieldEnabled && showSurface;
+    const rock::TerrainBoundaryMode terrainBoundaryMode = g_graph.Settings().preview.terrainBoundaryMode;
+    const bool showSectionPolygons = showSurface && terrainBoundaryMode == rock::TerrainBoundaryMode::SectionPolygon;
+    const bool showTerrainBoundaryLines = showSurface && terrainBoundaryMode == rock::TerrainBoundaryMode::Lines;
     const bool meshHasVertices = !mesh.vertices.empty();
     const bool meshDirty = (g_gpuMeshPreview.graphVersion != currentVersion || (meshHasVertices && !g_gpuMeshPreview.vertexBuffer));
     const bool viewportDirty =
@@ -9358,6 +9445,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.showGrid != showGrid ||
         g_gpuMeshPreview.maskPreview != g_graph.Evaluation().previewShowsMask ||
         g_gpuMeshPreview.maskShading != static_cast<int>(g_graph.Settings().preview.maskShading) ||
+        g_gpuMeshPreview.terrainBoundaryMode != static_cast<int>(terrainBoundaryMode) ||
         g_gpuMeshPreview.lightingMode != g_graph.Settings().preview.lightingMode ||
         g_gpuMeshPreview.sunAzimuthDegrees != g_graph.Settings().preview.sunAzimuthDegrees ||
         g_gpuMeshPreview.sunElevationDegrees != g_graph.Settings().preview.sunElevationDegrees ||
@@ -9414,6 +9502,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.dofHighlightBoost != g_graph.Settings().preview.dofHighlightBoost ||
         (g_graph.Settings().sky.mode == rock::SkyMode::Atmospheric && g_graph.Settings().clouds.enabled && g_graph.Settings().clouds.animate && g_graph.Settings().clouds.windSpeedMetersPerSec > 0.0f) ||
         (showGrid && !g_gpuMeshPreview.gridVertexBuffer) ||
+        (showTerrainBoundaryLines && !g_gpuMeshPreview.terrainBoundaryLineVertexBuffer) ||
         g_gpuMeshPreview.colorState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE ||
         (useDepthOfField && g_gpuMeshPreview.postState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     if (!meshDirty && !viewportDirty) return true;
@@ -9461,6 +9550,21 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             const uint64_t tess = static_cast<uint64_t>(std::ceil(std::max(maxTessFactor, 1.0f)));
             renderStats.submittedTriangles += patches * tess * tess * 2u;
         };
+        const int previewMeshResolution = CurrentPreviewMeshResolution();
+        const int previewMeshResolutionM1 = std::max(0, previewMeshResolution - 1);
+        const UINT topSurfaceTriIndexCount = static_cast<UINT>(previewMeshResolutionM1 * previewMeshResolutionM1 * 6);
+        const UINT topSurfaceEdgeIndexCount = static_cast<UINT>(
+            (previewMeshResolution * previewMeshResolutionM1 * 2 + previewMeshResolutionM1 * previewMeshResolutionM1) * 2);
+        const auto cpuSurfaceIndexCount = [&]() {
+            return terrainBoundaryMode == rock::TerrainBoundaryMode::SectionPolygon
+                ? g_gpuMeshPreview.triIndexCount
+                : std::min(g_gpuMeshPreview.triIndexCount, topSurfaceTriIndexCount);
+        };
+        const auto cpuEdgeIndexCount = [&]() {
+            return terrainBoundaryMode == rock::TerrainBoundaryMode::SectionPolygon
+                ? g_gpuMeshPreview.edgeIndexCount
+                : std::min(g_gpuMeshPreview.edgeIndexCount, topSurfaceEdgeIndexCount);
+        };
 
         // Phase 2c-1: skip the CPU mesh upload (vb / ib / edge ib) when
         // the GPU displacement backend is on. The CPU mesh struct is still
@@ -9494,6 +9598,10 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         }
 
         const rock::HeightfieldGrid& previewGrid = g_graph.Evaluation().previewHeightfield;
+        if (showTerrainBoundaryLines)
+        {
+            EnsureTerrainBoundaryLineBuffer(previewGrid, currentVersion);
+        }
         bool previewGridTexturesReady = false;
         if (previewGrid.resolution >= 2)
         {
@@ -9507,7 +9615,6 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         if (useDisplacement && previewGrid.resolution >= 2)
         {
             std::string ignoredErr;
-            const int previewMeshResolution = CurrentPreviewMeshResolution();
             // Cloud-shadow CBV + dummy SRV are normally created lazily on
             // the first cloudy frame. The displacement root signature
             // requires them bound, so force initialisation here regardless
@@ -9809,7 +9916,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
                 {
                     recordIndexedDraw(shadowIndexCount, true);
                 }
-                if (g_gpuMeshPreview.displacementSectionIndexCount > 0)
+                if (showSectionPolygons && g_gpuMeshPreview.displacementSectionIndexCount > 0)
                 {
                     D3D12_INDEX_BUFFER_VIEW sectionIbv{
                         g_gpuMeshPreview.displacementSectionIndexBuffer->GetGPUVirtualAddress(),
@@ -9838,12 +9945,13 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             }
             else
             {
-                D3D12_INDEX_BUFFER_VIEW shadowIbv{g_gpuMeshPreview.indexBuffer->GetGPUVirtualAddress(), g_gpuMeshPreview.triIndexCount * sizeof(UINT), DXGI_FORMAT_R32_UINT};
+                const UINT shadowIndexCount = cpuSurfaceIndexCount();
+                D3D12_INDEX_BUFFER_VIEW shadowIbv{g_gpuMeshPreview.indexBuffer->GetGPUVirtualAddress(), shadowIndexCount * sizeof(UINT), DXGI_FORMAT_R32_UINT};
                 commandList->IASetIndexBuffer(&shadowIbv);
                 commandList->SetPipelineState(g_meshPreviewShadowPso.Get());
                 commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-                commandList->DrawIndexedInstanced(g_gpuMeshPreview.triIndexCount, 1, 0, 0, 0);
-                recordIndexedDraw(g_gpuMeshPreview.triIndexCount, true);
+                commandList->DrawIndexedInstanced(shadowIndexCount, 1, 0, 0, 0);
+                recordIndexedDraw(shadowIndexCount, true);
                 renderStats.shadowPass = true;
             }
 
@@ -10076,7 +10184,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             {
                 recordIndexedDraw(surfaceIndexCount, true);
             }
-            if (g_gpuMeshPreview.displacementSectionIndexCount > 0)
+            if (showSectionPolygons && g_gpuMeshPreview.displacementSectionIndexCount > 0)
             {
                 D3D12_INDEX_BUFFER_VIEW sectionIbv{
                     g_gpuMeshPreview.displacementSectionIndexBuffer->GetGPUVirtualAddress(),
@@ -10107,12 +10215,13 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         }
         else if (showSurface && g_gpuMeshPreview.triIndexCount > 0)
         {
-            D3D12_INDEX_BUFFER_VIEW ibv{g_gpuMeshPreview.indexBuffer->GetGPUVirtualAddress(), g_gpuMeshPreview.triIndexCount * sizeof(UINT), DXGI_FORMAT_R32_UINT};
+            const UINT surfaceIndexCount = cpuSurfaceIndexCount();
+            D3D12_INDEX_BUFFER_VIEW ibv{g_gpuMeshPreview.indexBuffer->GetGPUVirtualAddress(), surfaceIndexCount * sizeof(UINT), DXGI_FORMAT_R32_UINT};
             commandList->IASetIndexBuffer(&ibv);
             commandList->SetPipelineState(g_meshPreviewSurfacePso.Get());
             commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            commandList->DrawIndexedInstanced(g_gpuMeshPreview.triIndexCount, 1, 0, 0, 0);
-            recordIndexedDraw(g_gpuMeshPreview.triIndexCount, true);
+            commandList->DrawIndexedInstanced(surfaceIndexCount, 1, 0, 0, 0);
+            recordIndexedDraw(surfaceIndexCount, true);
             renderStats.surfacePass = true;
         }
         if (showWireframe && displacementReady &&
@@ -10184,7 +10293,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             {
                 recordIndexedDraw(wireIndexCount, true);
             }
-            if (g_gpuMeshPreview.displacementSectionIndexCount > 0)
+            if (terrainBoundaryMode == rock::TerrainBoundaryMode::SectionPolygon && g_gpuMeshPreview.displacementSectionIndexCount > 0)
             {
                 D3D12_INDEX_BUFFER_VIEW sectionIbv{
                     g_gpuMeshPreview.displacementSectionIndexBuffer->GetGPUVirtualAddress(),
@@ -10205,6 +10314,28 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
                 commandList->SetGraphicsRootConstantBufferView(1, g_gpuClouds.meshCbUploadBuffer->GetGPUVirtualAddress());
             }
             commandList->SetGraphicsRootDescriptorTable(2, g_gpuMeshPreview.meshResourceTableGpu);
+            if (hasMeshVertices)
+            {
+                commandList->IASetVertexBuffers(0, 1, &vbv);
+            }
+        }
+        if (showTerrainBoundaryLines && g_gpuMeshPreview.terrainBoundaryLineVertexCount > 0)
+        {
+            constants.albedoColor[0] = 0.42f;
+            constants.albedoColor[1] = 0.42f;
+            constants.albedoColor[2] = 0.42f;
+            constants.albedoColor[3] = 1.0f;
+            constants.colorTextureMode = 0.0f;
+            commandList->SetGraphicsRoot32BitConstants(0, sizeof(constants) / 4, &constants, 0);
+            D3D12_VERTEX_BUFFER_VIEW boundaryVbv{};
+            boundaryVbv.BufferLocation = g_gpuMeshPreview.terrainBoundaryLineVertexBuffer->GetGPUVirtualAddress();
+            boundaryVbv.SizeInBytes = g_gpuMeshPreview.terrainBoundaryLineVertexCount * static_cast<UINT>(sizeof(rock::MeshVertex));
+            boundaryVbv.StrideInBytes = static_cast<UINT>(sizeof(rock::MeshVertex));
+            commandList->IASetVertexBuffers(0, 1, &boundaryVbv);
+            commandList->SetPipelineState(g_meshPreviewGridPso.Get());
+            commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
+            commandList->DrawInstanced(g_gpuMeshPreview.terrainBoundaryLineVertexCount, 1, 0, 0);
+            recordDraw(g_gpuMeshPreview.terrainBoundaryLineVertexCount, false);
             if (hasMeshVertices)
             {
                 commandList->IASetVertexBuffers(0, 1, &vbv);
@@ -10241,12 +10372,13 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             constants.albedoColor[3] = 1.0f;
             constants.colorTextureMode = 0.0f;
             commandList->SetGraphicsRoot32BitConstants(0, sizeof(constants) / 4, &constants, 0);
-            D3D12_INDEX_BUFFER_VIEW ibv{g_gpuMeshPreview.edgeIndexBuffer->GetGPUVirtualAddress(), g_gpuMeshPreview.edgeIndexCount * sizeof(UINT), DXGI_FORMAT_R32_UINT};
+            const UINT edgeIndexCount = cpuEdgeIndexCount();
+            D3D12_INDEX_BUFFER_VIEW ibv{g_gpuMeshPreview.edgeIndexBuffer->GetGPUVirtualAddress(), edgeIndexCount * sizeof(UINT), DXGI_FORMAT_R32_UINT};
             commandList->IASetIndexBuffer(&ibv);
             commandList->SetPipelineState(g_meshPreviewWirePso.Get());
             commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
-            commandList->DrawIndexedInstanced(g_gpuMeshPreview.edgeIndexCount, 1, 0, 0, 0);
-            recordIndexedDraw(g_gpuMeshPreview.edgeIndexCount, false);
+            commandList->DrawIndexedInstanced(edgeIndexCount, 1, 0, 0, 0);
+            recordIndexedDraw(edgeIndexCount, false);
             renderStats.wireframePass = true;
         }
 
@@ -10424,6 +10556,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.showGrid      = showGrid;
         g_gpuMeshPreview.maskPreview   = g_graph.Evaluation().previewShowsMask;
         g_gpuMeshPreview.maskShading   = static_cast<int>(g_graph.Settings().preview.maskShading);
+        g_gpuMeshPreview.terrainBoundaryMode = static_cast<int>(terrainBoundaryMode);
         g_gpuMeshPreview.lightingMode  = g_graph.Settings().preview.lightingMode;
         g_gpuMeshPreview.sunAzimuthDegrees = g_graph.Settings().preview.sunAzimuthDegrees;
         g_gpuMeshPreview.sunElevationDegrees = g_graph.Settings().preview.sunElevationDegrees;
@@ -13766,6 +13899,18 @@ void DrawDisplaySettingsPanel()
         if (DrawPropertyBoolRow("Surface", "DisplaySurface", &settings.preview.showSurface, "Surface visibility changed", nullptr, rock::PreviewSettings{}.showSurface, true))
         {
             SaveAppSettingsSilently();
+        }
+        {
+            int boundaryModeInt = static_cast<int>(settings.preview.terrainBoundaryMode);
+            if (DrawPropertyComboRow("地形境界", "DisplayTerrainBoundaryMode", &boundaryModeInt, "なし\0断面ポリゴン\0ライン\0\0",
+                "地形外周の表示です。断面ポリゴンは側面と底面を描画し、ラインは四隅から高さ 0 への縦線と下端の正方形だけを表示します。",
+                static_cast<int>(rock::PreviewSettings{}.terrainBoundaryMode)))
+            {
+                settings.preview.terrainBoundaryMode = static_cast<rock::TerrainBoundaryMode>(std::clamp(boundaryModeInt,
+                    static_cast<int>(rock::TerrainBoundaryMode::None),
+                    static_cast<int>(rock::TerrainBoundaryMode::Lines)));
+                SaveAppSettingsSilently();
+            }
         }
         if (DrawPropertyBoolRow("Grid", "DisplayGrid", &settings.preview.showGrid, "Grid visibility changed", nullptr, rock::PreviewSettings{}.showGrid, true))
         {
