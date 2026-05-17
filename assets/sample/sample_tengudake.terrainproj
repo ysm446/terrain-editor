@@ -1,0 +1,3290 @@
+{
+  "appVersion": "3.18.0",
+  "format": "terrain_editor_project",
+  "formatVersion": 1,
+  "links": [
+    {
+      "endPin": 100009,
+      "id": 111,
+      "startPin": 11
+    },
+    {
+      "endPin": 100015,
+      "id": 100018,
+      "startPin": 100013
+    },
+    {
+      "endPin": 100016,
+      "id": 100021,
+      "startPin": 100020
+    },
+    {
+      "endPin": 100005,
+      "id": 100031,
+      "startPin": 100010
+    },
+    {
+      "endPin": 100033,
+      "id": 100035,
+      "startPin": 100006
+    },
+    {
+      "endPin": 100037,
+      "id": 100040,
+      "startPin": 100006
+    },
+    {
+      "endPin": 100042,
+      "id": 100045,
+      "startPin": 100038
+    },
+    {
+      "endPin": 100049,
+      "id": 100052,
+      "startPin": 100034
+    },
+    {
+      "endPin": 100054,
+      "id": 100057,
+      "startPin": 100043
+    },
+    {
+      "endPin": 100059,
+      "id": 100063,
+      "startPin": 100043
+    },
+    {
+      "endPin": 100066,
+      "id": 100068,
+      "startPin": 100043
+    },
+    {
+      "endPin": 100061,
+      "id": 100072,
+      "startPin": 100034
+    },
+    {
+      "endPin": 100047,
+      "id": 100073,
+      "startPin": 100043
+    },
+    {
+      "endPin": 100075,
+      "id": 100077,
+      "startPin": 100006
+    },
+    {
+      "endPin": 100068,
+      "id": 100079,
+      "startPin": 100062
+    },
+    {
+      "endPin": 100048,
+      "id": 100080,
+      "startPin": 100076
+    },
+    {
+      "endPin": 100082,
+      "id": 100085,
+      "startPin": 100034
+    },
+    {
+      "endPin": 100083,
+      "id": 100086,
+      "startPin": 100076
+    }
+  ],
+  "nodePositions": {
+    "1": [
+      19.0,
+      98.0
+    ],
+    "10": [
+      35.0,
+      354.0
+    ],
+    "100012": [
+      35.0,
+      530.0
+    ],
+    "100014": [
+      417.0,
+      578.0
+    ],
+    "100019": [
+      33.0,
+      690.0
+    ],
+    "100032": [
+      1457.0,
+      386.0
+    ],
+    "100036": [
+      1249.0,
+      106.0
+    ],
+    "100041": [
+      1697.0,
+      114.0
+    ],
+    "100046": [
+      2739.0,
+      210.0
+    ],
+    "100053": [
+      2193.0,
+      562.0
+    ],
+    "100058": [
+      2385.0,
+      2.0
+    ],
+    "100065": [
+      2200.0,
+      399.0
+    ],
+    "100074": [
+      1459.0,
+      562.0
+    ],
+    "100081": [
+      1821.0,
+      610.0
+    ],
+    "4": [
+      35.0,
+      -94.0
+    ],
+    "8": [
+      787.0,
+      98.0
+    ],
+    "9": [
+      417.0,
+      98.0
+    ]
+  },
+  "nodeSettings": {},
+  "nodes": [
+    {
+      "colorize": {
+        "backend": 1,
+        "stops": [
+          {
+            "b": 0.0,
+            "g": 0.0,
+            "position": 0.0,
+            "r": 0.0
+          },
+          {
+            "b": 1.0,
+            "g": 1.0,
+            "position": 1.0,
+            "r": 1.0
+          }
+        ]
+      },
+      "heightmap": {
+        "path": "D:\\GitHub\\terrain-editor\\data\\height_2km.png",
+        "relativeVerticalScalePercent": 29.5,
+        "scaleMeters": 2048.0,
+        "verticalOffsetMeters": 0.0
+      },
+      "heightmapBlur": {
+        "iterations": 1,
+        "radius": 3.0,
+        "strength": 1.0
+      },
+      "id": 1,
+      "inputs": [],
+      "kind": 4,
+      "maskBlend": {
+        "intensity": 1.0,
+        "mode": 0
+      },
+      "maskCurvature": {
+        "gamma": 1.0,
+        "mode": 2,
+        "radius": 3,
+        "sensitivityMeters": 1.0,
+        "threshold": 0.0
+      },
+      "maskFluvial": {
+        "accumulationThreshold": 0.004999999888241291,
+        "algorithm": 0,
+        "backend": 1,
+        "gamma": 0.5,
+        "inertia": 0.0,
+        "mfdExponent": 4.0,
+        "outputCurve": 0,
+        "pitFillIterations": 8,
+        "power": 1.600000023841858,
+        "softness": 0.15000000596046448
+      },
+      "maskLevels": {
+        "blackPoint": 0.0,
+        "gamma": 1.0,
+        "invert": false,
+        "whitePoint": 1.0
+      },
+      "maskNoise": {
+        "backend": 1,
+        "frequency": 4.0,
+        "lacunarity": 2.0,
+        "octaves": 4,
+        "persistence": 0.5,
+        "seed": 0
+      },
+      "maskSlope": {
+        "gamma": 1.0,
+        "invert": false,
+        "slopeMaxDeg": 60.0,
+        "slopeMinDeg": 25.0
+      },
+      "multiScaleErosion": {
+        "backend": 0,
+        "depositionStrength": 1.0,
+        "enableDeposition": true,
+        "enableStreamPower": true,
+        "enableThermal": true,
+        "flowExponent": 1.2999999523162842,
+        "iterations": 50,
+        "maxStreamPower": 10000.0,
+        "rain": 2.5999999046325684,
+        "slopeExponent": 2.0,
+        "speStrength": 0.0005000000237487257,
+        "speTimeStep": 1.0,
+        "streamExponent": 0.800000011920929,
+        "thermalAngleDegrees": 30.0,
+        "thermalNoiseMax": 1.399999976158142,
+        "thermalNoiseMin": 0.8999999761581421,
+        "thermalNoiseWavelength": 0.002300000051036477,
+        "thermalNoisifyAngle": true,
+        "thermalStrength": 4.999999873689376e-05,
+        "useMultigrid": true
+      },
+      "outputs": [
+        {
+          "id": 11,
+          "label": "Heightmap",
+          "valueType": 2
+        }
+      ],
+      "rock": {
+        "aspectVariation": 0.30000001192092896,
+        "backend": 1,
+        "bumpiness": 0.6000000238418579,
+        "coverage": 1.0,
+        "density": 8.0,
+        "edgeSharpness": 1.0,
+        "facetScale": 2.5,
+        "facetSharpness": 0.0,
+        "heightJitter": 0.5,
+        "layerCount": 1,
+        "orientationRule": 0,
+        "rockHeight": 1.5,
+        "rockSizeMaxM": 6.800000190734863,
+        "rockSizeMinM": 6.800000190734863,
+        "rotationVariation": 1.0,
+        "seed": 0,
+        "style": 0
+      },
+      "sediment": {
+        "backend": 1,
+        "convertTerrainToSediment": true,
+        "emissionAmountM": 0.5,
+        "emissionTime": 0.0,
+        "iterations": 50,
+        "largestDetailLevelM": 8.0,
+        "maskContrast": 0.699999988079071,
+        "sedimentViscosity": 0.20000000298023224,
+        "stabilizationIterations": 2
+      },
+      "shape": {
+        "kind": 0,
+        "relativeHeightPercent": 50.0,
+        "scaleMeters": 1024.0
+      },
+      "snow": {
+        "backend": 1,
+        "emissionAmount": 1.0,
+        "fillRadius": 3,
+        "maskMaxSnow": 1.0,
+        "slopeLimitMaxDeg": 60.0,
+        "slopeLimitMinDeg": 50.0,
+        "smoothingIterations": 2
+      },
+      "title": "Import Heightmap"
+    },
+    {
+      "colorize": {
+        "backend": 1,
+        "stops": [
+          {
+            "b": 0.0,
+            "g": 0.0,
+            "position": 0.0,
+            "r": 0.0
+          },
+          {
+            "b": 1.0,
+            "g": 1.0,
+            "position": 1.0,
+            "r": 1.0
+          }
+        ]
+      },
+      "heightmap": {
+        "path": "D:\\GitHub\\terrain-editor\\data\\mountain-ridge-13_Height Map_2048x2048_0_0.png",
+        "relativeVerticalScalePercent": 29.5,
+        "scaleMeters": 2048.0,
+        "verticalOffsetMeters": 0.0
+      },
+      "heightmapBlur": {
+        "iterations": 1,
+        "radius": 3.0,
+        "strength": 1.0
+      },
+      "id": 4,
+      "inputs": [],
+      "kind": 4,
+      "maskBlend": {
+        "intensity": 1.0,
+        "mode": 0
+      },
+      "maskCurvature": {
+        "gamma": 1.0,
+        "mode": 2,
+        "radius": 3,
+        "sensitivityMeters": 1.0,
+        "threshold": 0.0
+      },
+      "maskFluvial": {
+        "accumulationThreshold": 0.004999999888241291,
+        "algorithm": 0,
+        "backend": 1,
+        "gamma": 0.5,
+        "inertia": 0.0,
+        "mfdExponent": 4.0,
+        "outputCurve": 0,
+        "pitFillIterations": 8,
+        "power": 1.600000023841858,
+        "softness": 0.15000000596046448
+      },
+      "maskLevels": {
+        "blackPoint": 0.0,
+        "gamma": 1.0,
+        "invert": false,
+        "whitePoint": 1.0
+      },
+      "maskNoise": {
+        "backend": 1,
+        "frequency": 4.0,
+        "lacunarity": 2.0,
+        "octaves": 4,
+        "persistence": 0.5,
+        "seed": 0
+      },
+      "maskSlope": {
+        "gamma": 1.0,
+        "invert": false,
+        "slopeMaxDeg": 60.0,
+        "slopeMinDeg": 25.0
+      },
+      "multiScaleErosion": {
+        "backend": 0,
+        "depositionStrength": 1.0,
+        "enableDeposition": true,
+        "enableStreamPower": true,
+        "enableThermal": true,
+        "flowExponent": 1.2999999523162842,
+        "iterations": 50,
+        "maxStreamPower": 10000.0,
+        "rain": 2.5999999046325684,
+        "slopeExponent": 2.0,
+        "speStrength": 0.0005000000237487257,
+        "speTimeStep": 1.0,
+        "streamExponent": 0.800000011920929,
+        "thermalAngleDegrees": 30.0,
+        "thermalNoiseMax": 1.399999976158142,
+        "thermalNoiseMin": 0.8999999761581421,
+        "thermalNoiseWavelength": 0.002300000051036477,
+        "thermalNoisifyAngle": true,
+        "thermalStrength": 4.999999873689376e-05,
+        "useMultigrid": true
+      },
+      "outputs": [
+        {
+          "id": 19,
+          "label": "Heightmap",
+          "valueType": 2
+        }
+      ],
+      "rock": {
+        "aspectVariation": 0.30000001192092896,
+        "backend": 1,
+        "bumpiness": 0.6000000238418579,
+        "coverage": 1.0,
+        "density": 8.0,
+        "edgeSharpness": 1.0,
+        "facetScale": 2.5,
+        "facetSharpness": 0.0,
+        "heightJitter": 0.5,
+        "layerCount": 1,
+        "orientationRule": 0,
+        "rockHeight": 1.5,
+        "rockSizeMaxM": 6.800000190734863,
+        "rockSizeMinM": 6.800000190734863,
+        "rotationVariation": 1.0,
+        "seed": 0,
+        "style": 0
+      },
+      "sediment": {
+        "backend": 1,
+        "convertTerrainToSediment": true,
+        "emissionAmountM": 0.5,
+        "emissionTime": 0.0,
+        "iterations": 50,
+        "largestDetailLevelM": 8.0,
+        "maskContrast": 0.699999988079071,
+        "sedimentViscosity": 0.20000000298023224,
+        "stabilizationIterations": 2
+      },
+      "shape": {
+        "kind": 0,
+        "relativeHeightPercent": 50.0,
+        "scaleMeters": 1024.0
+      },
+      "snow": {
+        "backend": 1,
+        "emissionAmount": 1.0,
+        "fillRadius": 3,
+        "maskMaxSnow": 1.0,
+        "slopeLimitMaxDeg": 60.0,
+        "slopeLimitMinDeg": 50.0,
+        "smoothingIterations": 2
+      },
+      "title": "Import Heightmap"
+    },
+    {
+      "colorize": {
+        "backend": 1,
+        "stops": [
+          {
+            "b": 0.0,
+            "g": 0.0,
+            "position": 0.0,
+            "r": 0.0
+          },
+          {
+            "b": 1.0,
+            "g": 1.0,
+            "position": 1.0,
+            "r": 1.0
+          }
+        ]
+      },
+      "heightmap": {
+        "path": "",
+        "relativeVerticalScalePercent": 100.0,
+        "scaleMeters": 1024.0,
+        "verticalOffsetMeters": 0.0
+      },
+      "heightmapBlur": {
+        "iterations": 1,
+        "radius": 3.0,
+        "strength": 1.0
+      },
+      "id": 8,
+      "inputs": [
+        {
+          "id": 100005,
+          "label": "Heightmap",
+          "valueType": 2
+        }
+      ],
+      "kind": 8,
+      "maskBlend": {
+        "intensity": 1.0,
+        "mode": 0
+      },
+      "maskCurvature": {
+        "gamma": 1.0,
+        "mode": 2,
+        "radius": 3,
+        "sensitivityMeters": 1.0,
+        "threshold": 0.0
+      },
+      "maskFluvial": {
+        "accumulationThreshold": 0.004999999888241291,
+        "algorithm": 0,
+        "backend": 1,
+        "gamma": 0.5,
+        "inertia": 0.0,
+        "mfdExponent": 4.0,
+        "outputCurve": 0,
+        "pitFillIterations": 8,
+        "power": 1.600000023841858,
+        "softness": 0.15000000596046448
+      },
+      "maskLevels": {
+        "blackPoint": 0.0,
+        "gamma": 1.0,
+        "invert": false,
+        "whitePoint": 1.0
+      },
+      "maskNoise": {
+        "backend": 1,
+        "frequency": 4.0,
+        "lacunarity": 2.0,
+        "octaves": 4,
+        "persistence": 0.5,
+        "seed": 0
+      },
+      "maskSlope": {
+        "gamma": 1.0,
+        "invert": false,
+        "slopeMaxDeg": 60.0,
+        "slopeMinDeg": 25.0
+      },
+      "multiScaleErosion": {
+        "backend": 1,
+        "depositionStrength": 0.20000000298023224,
+        "enableDeposition": true,
+        "enableStreamPower": true,
+        "enableThermal": true,
+        "flowExponent": 1.2999999523162842,
+        "iterations": 40,
+        "maxStreamPower": 10000.0,
+        "rain": 2.5999999046325684,
+        "slopeExponent": 2.0,
+        "speStrength": 0.004000000189989805,
+        "speTimeStep": 2.0,
+        "streamExponent": 0.8500000238418579,
+        "thermalAngleDegrees": 30.0,
+        "thermalNoiseMax": 1.399999976158142,
+        "thermalNoiseMin": 0.8999999761581421,
+        "thermalNoiseWavelength": 0.002300000051036477,
+        "thermalNoisifyAngle": false,
+        "thermalStrength": 0.004999999888241291,
+        "useMultigrid": true
+      },
+      "outputs": [
+        {
+          "id": 100006,
+          "label": "Heightmap",
+          "valueType": 2
+        },
+        {
+          "id": 100007,
+          "label": "Flows",
+          "valueType": 3
+        },
+        {
+          "id": 100008,
+          "label": "Deposits",
+          "valueType": 3
+        }
+      ],
+      "rock": {
+        "aspectVariation": 0.30000001192092896,
+        "backend": 1,
+        "bumpiness": 0.6000000238418579,
+        "coverage": 1.0,
+        "density": 8.0,
+        "edgeSharpness": 1.0,
+        "facetScale": 2.5,
+        "facetSharpness": 0.0,
+        "heightJitter": 0.5,
+        "layerCount": 1,
+        "orientationRule": 0,
+        "rockHeight": 1.5,
+        "rockSizeMaxM": 6.800000190734863,
+        "rockSizeMinM": 6.800000190734863,
+        "rotationVariation": 1.0,
+        "seed": 0,
+        "style": 0
+      },
+      "sediment": {
+        "backend": 1,
+        "convertTerrainToSediment": true,
+        "emissionAmountM": 0.5,
+        "emissionTime": 0.0,
+        "iterations": 50,
+        "largestDetailLevelM": 8.0,
+        "maskContrast": 0.699999988079071,
+        "sedimentViscosity": 0.20000000298023224,
+        "stabilizationIterations": 2
+      },
+      "shape": {
+        "kind": 0,
+        "relativeHeightPercent": 50.0,
+        "scaleMeters": 1024.0
+      },
+      "snow": {
+        "backend": 1,
+        "emissionAmount": 1.0,
+        "fillRadius": 3,
+        "maskMaxSnow": 1.0,
+        "slopeLimitMaxDeg": 60.0,
+        "slopeLimitMinDeg": 50.0,
+        "smoothingIterations": 2
+      },
+      "title": "Multi-Scale Erosion"
+    },
+    {
+      "colorize": {
+        "backend": 1,
+        "stops": [
+          {
+            "b": 0.0,
+            "g": 0.0,
+            "position": 0.0,
+            "r": 0.0
+          },
+          {
+            "b": 1.0,
+            "g": 1.0,
+            "position": 1.0,
+            "r": 1.0
+          }
+        ]
+      },
+      "heightmap": {
+        "path": "",
+        "relativeVerticalScalePercent": 100.0,
+        "scaleMeters": 1024.0,
+        "verticalOffsetMeters": 0.0
+      },
+      "heightmapBlur": {
+        "iterations": 1,
+        "radius": 10.0,
+        "strength": 1.0
+      },
+      "id": 9,
+      "inputs": [
+        {
+          "id": 100009,
+          "label": "Heightmap",
+          "valueType": 2
+        }
+      ],
+      "kind": 5,
+      "maskBlend": {
+        "intensity": 1.0,
+        "mode": 0
+      },
+      "maskCurvature": {
+        "gamma": 1.0,
+        "mode": 2,
+        "radius": 3,
+        "sensitivityMeters": 1.0,
+        "threshold": 0.0
+      },
+      "maskFluvial": {
+        "accumulationThreshold": 0.004999999888241291,
+        "algorithm": 0,
+        "backend": 1,
+        "gamma": 0.5,
+        "inertia": 0.0,
+        "mfdExponent": 4.0,
+        "outputCurve": 0,
+        "pitFillIterations": 8,
+        "power": 1.600000023841858,
+        "softness": 0.15000000596046448
+      },
+      "maskLevels": {
+        "blackPoint": 0.0,
+        "gamma": 1.0,
+        "invert": false,
+        "whitePoint": 1.0
+      },
+      "maskNoise": {
+        "backend": 1,
+        "frequency": 4.0,
+        "lacunarity": 2.0,
+        "octaves": 4,
+        "persistence": 0.5,
+        "seed": 0
+      },
+      "maskSlope": {
+        "gamma": 1.0,
+        "invert": false,
+        "slopeMaxDeg": 60.0,
+        "slopeMinDeg": 25.0
+      },
+      "multiScaleErosion": {
+        "backend": 0,
+        "depositionStrength": 1.0,
+        "enableDeposition": true,
+        "enableStreamPower": true,
+        "enableThermal": true,
+        "flowExponent": 1.2999999523162842,
+        "iterations": 50,
+        "maxStreamPower": 10000.0,
+        "rain": 2.5999999046325684,
+        "slopeExponent": 2.0,
+        "speStrength": 0.0005000000237487257,
+        "speTimeStep": 1.0,
+        "streamExponent": 0.800000011920929,
+        "thermalAngleDegrees": 30.0,
+        "thermalNoiseMax": 1.399999976158142,
+        "thermalNoiseMin": 0.8999999761581421,
+        "thermalNoiseWavelength": 0.002300000051036477,
+        "thermalNoisifyAngle": true,
+        "thermalStrength": 4.999999873689376e-05,
+        "useMultigrid": true
+      },
+      "outputs": [
+        {
+          "id": 100010,
+          "label": "Heightmap",
+          "valueType": 2
+        }
+      ],
+      "rock": {
+        "aspectVariation": 0.30000001192092896,
+        "backend": 1,
+        "bumpiness": 0.6000000238418579,
+        "coverage": 1.0,
+        "density": 8.0,
+        "edgeSharpness": 1.0,
+        "facetScale": 2.5,
+        "facetSharpness": 0.0,
+        "heightJitter": 0.5,
+        "layerCount": 1,
+        "orientationRule": 0,
+        "rockHeight": 1.5,
+        "rockSizeMaxM": 6.800000190734863,
+        "rockSizeMinM": 6.800000190734863,
+        "rotationVariation": 1.0,
+        "seed": 0,
+        "style": 0
+      },
+      "sediment": {
+        "backend": 1,
+        "convertTerrainToSediment": true,
+        "emissionAmountM": 0.5,
+        "emissionTime": 0.0,
+        "iterations": 50,
+        "largestDetailLevelM": 8.0,
+        "maskContrast": 0.699999988079071,
+        "sedimentViscosity": 0.20000000298023224,
+        "stabilizationIterations": 2
+      },
+      "shape": {
+        "kind": 0,
+        "relativeHeightPercent": 50.0,
+        "scaleMeters": 1024.0
+      },
+      "snow": {
+        "backend": 1,
+        "emissionAmount": 1.0,
+        "fillRadius": 3,
+        "maskMaxSnow": 1.0,
+        "slopeLimitMaxDeg": 60.0,
+        "slopeLimitMinDeg": 50.0,
+        "smoothingIterations": 2
+      },
+      "title": "Heightmap Blur"
+    },
+    {
+      "colorize": {
+        "backend": 1,
+        "stops": [
+          {
+            "b": 0.0,
+            "g": 0.0,
+            "position": 0.0,
+            "r": 0.0
+          },
+          {
+            "b": 1.0,
+            "g": 1.0,
+            "position": 1.0,
+            "r": 1.0
+          }
+        ]
+      },
+      "heightmap": {
+        "path": "",
+        "relativeVerticalScalePercent": 100.0,
+        "scaleMeters": 1024.0,
+        "verticalOffsetMeters": 0.0
+      },
+      "heightmapBlur": {
+        "iterations": 1,
+        "radius": 3.0,
+        "strength": 1.0
+      },
+      "id": 10,
+      "inputs": [],
+      "kind": 6,
+      "maskBlend": {
+        "intensity": 1.0,
+        "mode": 0
+      },
+      "maskCurvature": {
+        "gamma": 1.0,
+        "mode": 2,
+        "radius": 3,
+        "sensitivityMeters": 1.0,
+        "threshold": 0.0
+      },
+      "maskFluvial": {
+        "accumulationThreshold": 0.004999999888241291,
+        "algorithm": 0,
+        "backend": 1,
+        "gamma": 0.5,
+        "inertia": 0.0,
+        "mfdExponent": 4.0,
+        "outputCurve": 0,
+        "pitFillIterations": 8,
+        "power": 1.600000023841858,
+        "softness": 0.15000000596046448
+      },
+      "maskLevels": {
+        "blackPoint": 0.0,
+        "gamma": 1.0,
+        "invert": false,
+        "whitePoint": 1.0
+      },
+      "maskNoise": {
+        "backend": 1,
+        "frequency": 4.0,
+        "lacunarity": 2.0,
+        "octaves": 4,
+        "persistence": 0.5,
+        "seed": 0
+      },
+      "maskSlope": {
+        "gamma": 1.0,
+        "invert": false,
+        "slopeMaxDeg": 60.0,
+        "slopeMinDeg": 25.0
+      },
+      "multiScaleErosion": {
+        "backend": 0,
+        "depositionStrength": 1.0,
+        "enableDeposition": true,
+        "enableStreamPower": true,
+        "enableThermal": true,
+        "flowExponent": 1.2999999523162842,
+        "iterations": 50,
+        "maxStreamPower": 10000.0,
+        "rain": 2.5999999046325684,
+        "slopeExponent": 2.0,
+        "speStrength": 0.0005000000237487257,
+        "speTimeStep": 1.0,
+        "streamExponent": 0.800000011920929,
+        "thermalAngleDegrees": 30.0,
+        "thermalNoiseMax": 1.399999976158142,
+        "thermalNoiseMin": 0.8999999761581421,
+        "thermalNoiseWavelength": 0.002300000051036477,
+        "thermalNoisifyAngle": true,
+        "thermalStrength": 4.999999873689376e-05,
+        "useMultigrid": true
+      },
+      "outputs": [
+        {
+          "id": 100011,
+          "label": "Heightmap",
+          "valueType": 2
+        }
+      ],
+      "rock": {
+        "aspectVariation": 0.30000001192092896,
+        "backend": 1,
+        "bumpiness": 0.6000000238418579,
+        "coverage": 1.0,
+        "density": 8.0,
+        "edgeSharpness": 1.0,
+        "facetScale": 2.5,
+        "facetSharpness": 0.0,
+        "heightJitter": 0.5,
+        "layerCount": 1,
+        "orientationRule": 0,
+        "rockHeight": 1.5,
+        "rockSizeMaxM": 6.800000190734863,
+        "rockSizeMinM": 6.800000190734863,
+        "rotationVariation": 1.0,
+        "seed": 0,
+        "style": 0
+      },
+      "sediment": {
+        "backend": 1,
+        "convertTerrainToSediment": true,
+        "emissionAmountM": 0.5,
+        "emissionTime": 0.0,
+        "iterations": 50,
+        "largestDetailLevelM": 8.0,
+        "maskContrast": 0.699999988079071,
+        "sedimentViscosity": 0.20000000298023224,
+        "stabilizationIterations": 2
+      },
+      "shape": {
+        "kind": 0,
+        "relativeHeightPercent": 20.0,
+        "scaleMeters": 2048.0
+      },
+      "snow": {
+        "backend": 1,
+        "emissionAmount": 1.0,
+        "fillRadius": 3,
+        "maskMaxSnow": 1.0,
+        "slopeLimitMaxDeg": 60.0,
+        "slopeLimitMinDeg": 50.0,
+        "smoothingIterations": 2
+      },
+      "title": "Shape"
+    },
+    {
+      "colorize": {
+        "backend": 1,
+        "stops": [
+          {
+            "b": 0.0,
+            "g": 0.0,
+            "position": 0.0,
+            "r": 0.0
+          },
+          {
+            "b": 1.0,
+            "g": 1.0,
+            "position": 1.0,
+            "r": 1.0
+          }
+        ]
+      },
+      "heightmap": {
+        "path": "",
+        "relativeVerticalScalePercent": 100.0,
+        "scaleMeters": 1024.0,
+        "verticalOffsetMeters": 0.0
+      },
+      "heightmapBlur": {
+        "iterations": 1,
+        "radius": 3.0,
+        "strength": 1.0
+      },
+      "id": 100012,
+      "inputs": [],
+      "kind": 9,
+      "maskBlend": {
+        "intensity": 1.0,
+        "mode": 0
+      },
+      "maskCurvature": {
+        "gamma": 1.0,
+        "mode": 2,
+        "radius": 3,
+        "sensitivityMeters": 1.0,
+        "threshold": 0.0
+      },
+      "maskFluvial": {
+        "accumulationThreshold": 0.004999999888241291,
+        "algorithm": 0,
+        "backend": 1,
+        "gamma": 0.5,
+        "inertia": 0.0,
+        "mfdExponent": 4.0,
+        "outputCurve": 0,
+        "pitFillIterations": 8,
+        "power": 1.600000023841858,
+        "softness": 0.15000000596046448
+      },
+      "maskLevels": {
+        "blackPoint": 0.0,
+        "gamma": 1.0,
+        "invert": false,
+        "whitePoint": 1.0
+      },
+      "maskNoise": {
+        "backend": 1,
+        "frequency": 4.0,
+        "lacunarity": 2.0,
+        "octaves": 2,
+        "persistence": 0.5,
+        "seed": 0
+      },
+      "maskSlope": {
+        "gamma": 1.0,
+        "invert": false,
+        "slopeMaxDeg": 60.0,
+        "slopeMinDeg": 25.0
+      },
+      "multiScaleErosion": {
+        "backend": 0,
+        "depositionStrength": 1.0,
+        "enableDeposition": true,
+        "enableStreamPower": true,
+        "enableThermal": true,
+        "flowExponent": 1.2999999523162842,
+        "iterations": 50,
+        "maxStreamPower": 10000.0,
+        "rain": 2.5999999046325684,
+        "slopeExponent": 2.0,
+        "speStrength": 0.0005000000237487257,
+        "speTimeStep": 1.0,
+        "streamExponent": 0.800000011920929,
+        "thermalAngleDegrees": 30.0,
+        "thermalNoiseMax": 1.399999976158142,
+        "thermalNoiseMin": 0.8999999761581421,
+        "thermalNoiseWavelength": 0.002300000051036477,
+        "thermalNoisifyAngle": true,
+        "thermalStrength": 4.999999873689376e-05,
+        "useMultigrid": true
+      },
+      "outputs": [
+        {
+          "id": 100013,
+          "label": "Mask",
+          "valueType": 3
+        }
+      ],
+      "rock": {
+        "aspectVariation": 0.30000001192092896,
+        "backend": 1,
+        "bumpiness": 0.6000000238418579,
+        "coverage": 1.0,
+        "density": 8.0,
+        "edgeSharpness": 1.0,
+        "facetScale": 2.5,
+        "facetSharpness": 0.0,
+        "heightJitter": 0.5,
+        "layerCount": 1,
+        "orientationRule": 0,
+        "rockHeight": 1.5,
+        "rockSizeMaxM": 6.800000190734863,
+        "rockSizeMinM": 6.800000190734863,
+        "rotationVariation": 1.0,
+        "seed": 0,
+        "style": 0
+      },
+      "sediment": {
+        "backend": 1,
+        "convertTerrainToSediment": true,
+        "emissionAmountM": 0.5,
+        "emissionTime": 0.0,
+        "iterations": 50,
+        "largestDetailLevelM": 8.0,
+        "maskContrast": 0.699999988079071,
+        "sedimentViscosity": 0.20000000298023224,
+        "stabilizationIterations": 2
+      },
+      "shape": {
+        "kind": 0,
+        "relativeHeightPercent": 50.0,
+        "scaleMeters": 1024.0
+      },
+      "snow": {
+        "backend": 1,
+        "emissionAmount": 1.0,
+        "fillRadius": 3,
+        "maskMaxSnow": 1.0,
+        "slopeLimitMaxDeg": 60.0,
+        "slopeLimitMinDeg": 50.0,
+        "smoothingIterations": 2
+      },
+      "title": "Mask Noise"
+    },
+    {
+      "colorize": {
+        "backend": 1,
+        "stops": [
+          {
+            "b": 0.0,
+            "g": 0.0,
+            "position": 0.0,
+            "r": 0.0
+          },
+          {
+            "b": 1.0,
+            "g": 1.0,
+            "position": 1.0,
+            "r": 1.0
+          }
+        ]
+      },
+      "heightmap": {
+        "path": "",
+        "relativeVerticalScalePercent": 100.0,
+        "scaleMeters": 1024.0,
+        "verticalOffsetMeters": 0.0
+      },
+      "heightmapBlur": {
+        "iterations": 1,
+        "radius": 3.0,
+        "strength": 1.0
+      },
+      "id": 100014,
+      "inputs": [
+        {
+          "id": 100015,
+          "label": "A",
+          "valueType": 3
+        },
+        {
+          "id": 100016,
+          "label": "B",
+          "valueType": 3
+        }
+      ],
+      "kind": 10,
+      "maskBlend": {
+        "intensity": 1.0,
+        "mode": 1
+      },
+      "maskCurvature": {
+        "gamma": 1.0,
+        "mode": 2,
+        "radius": 3,
+        "sensitivityMeters": 1.0,
+        "threshold": 0.0
+      },
+      "maskFluvial": {
+        "accumulationThreshold": 0.004999999888241291,
+        "algorithm": 0,
+        "backend": 1,
+        "gamma": 0.5,
+        "inertia": 0.0,
+        "mfdExponent": 4.0,
+        "outputCurve": 0,
+        "pitFillIterations": 8,
+        "power": 1.600000023841858,
+        "softness": 0.15000000596046448
+      },
+      "maskLevels": {
+        "blackPoint": 0.0,
+        "gamma": 1.0,
+        "invert": false,
+        "whitePoint": 1.0
+      },
+      "maskNoise": {
+        "backend": 1,
+        "frequency": 4.0,
+        "lacunarity": 2.0,
+        "octaves": 4,
+        "persistence": 0.5,
+        "seed": 0
+      },
+      "maskSlope": {
+        "gamma": 1.0,
+        "invert": false,
+        "slopeMaxDeg": 60.0,
+        "slopeMinDeg": 25.0
+      },
+      "multiScaleErosion": {
+        "backend": 0,
+        "depositionStrength": 1.0,
+        "enableDeposition": true,
+        "enableStreamPower": true,
+        "enableThermal": true,
+        "flowExponent": 1.2999999523162842,
+        "iterations": 50,
+        "maxStreamPower": 10000.0,
+        "rain": 2.5999999046325684,
+        "slopeExponent": 2.0,
+        "speStrength": 0.0005000000237487257,
+        "speTimeStep": 1.0,
+        "streamExponent": 0.800000011920929,
+        "thermalAngleDegrees": 30.0,
+        "thermalNoiseMax": 1.399999976158142,
+        "thermalNoiseMin": 0.8999999761581421,
+        "thermalNoiseWavelength": 0.002300000051036477,
+        "thermalNoisifyAngle": true,
+        "thermalStrength": 4.999999873689376e-05,
+        "useMultigrid": true
+      },
+      "outputs": [
+        {
+          "id": 100017,
+          "label": "Mask",
+          "valueType": 3
+        }
+      ],
+      "rock": {
+        "aspectVariation": 0.30000001192092896,
+        "backend": 1,
+        "bumpiness": 0.6000000238418579,
+        "coverage": 1.0,
+        "density": 8.0,
+        "edgeSharpness": 1.0,
+        "facetScale": 2.5,
+        "facetSharpness": 0.0,
+        "heightJitter": 0.5,
+        "layerCount": 1,
+        "orientationRule": 0,
+        "rockHeight": 1.5,
+        "rockSizeMaxM": 6.800000190734863,
+        "rockSizeMinM": 6.800000190734863,
+        "rotationVariation": 1.0,
+        "seed": 0,
+        "style": 0
+      },
+      "sediment": {
+        "backend": 1,
+        "convertTerrainToSediment": true,
+        "emissionAmountM": 0.5,
+        "emissionTime": 0.0,
+        "iterations": 50,
+        "largestDetailLevelM": 8.0,
+        "maskContrast": 0.699999988079071,
+        "sedimentViscosity": 0.20000000298023224,
+        "stabilizationIterations": 2
+      },
+      "shape": {
+        "kind": 0,
+        "relativeHeightPercent": 50.0,
+        "scaleMeters": 1024.0
+      },
+      "snow": {
+        "backend": 1,
+        "emissionAmount": 1.0,
+        "fillRadius": 3,
+        "maskMaxSnow": 1.0,
+        "slopeLimitMaxDeg": 60.0,
+        "slopeLimitMinDeg": 50.0,
+        "smoothingIterations": 2
+      },
+      "title": "Mask Blend"
+    },
+    {
+      "colorize": {
+        "backend": 1,
+        "stops": [
+          {
+            "b": 0.0,
+            "g": 0.0,
+            "position": 0.0,
+            "r": 0.0
+          },
+          {
+            "b": 1.0,
+            "g": 1.0,
+            "position": 1.0,
+            "r": 1.0
+          }
+        ]
+      },
+      "heightmap": {
+        "path": "",
+        "relativeVerticalScalePercent": 100.0,
+        "scaleMeters": 1024.0,
+        "verticalOffsetMeters": 0.0
+      },
+      "heightmapBlur": {
+        "iterations": 1,
+        "radius": 3.0,
+        "strength": 1.0
+      },
+      "id": 100019,
+      "inputs": [],
+      "kind": 9,
+      "maskBlend": {
+        "intensity": 1.0,
+        "mode": 0
+      },
+      "maskCurvature": {
+        "gamma": 1.0,
+        "mode": 2,
+        "radius": 3,
+        "sensitivityMeters": 1.0,
+        "threshold": 0.0
+      },
+      "maskFluvial": {
+        "accumulationThreshold": 0.004999999888241291,
+        "algorithm": 0,
+        "backend": 1,
+        "gamma": 0.5,
+        "inertia": 0.0,
+        "mfdExponent": 4.0,
+        "outputCurve": 0,
+        "pitFillIterations": 8,
+        "power": 1.600000023841858,
+        "softness": 0.15000000596046448
+      },
+      "maskLevels": {
+        "blackPoint": 0.0,
+        "gamma": 1.0,
+        "invert": false,
+        "whitePoint": 1.0
+      },
+      "maskNoise": {
+        "backend": 1,
+        "frequency": 4.0,
+        "lacunarity": 2.0,
+        "octaves": 5,
+        "persistence": 0.5,
+        "seed": 0
+      },
+      "maskSlope": {
+        "gamma": 1.0,
+        "invert": false,
+        "slopeMaxDeg": 60.0,
+        "slopeMinDeg": 25.0
+      },
+      "multiScaleErosion": {
+        "backend": 0,
+        "depositionStrength": 1.0,
+        "enableDeposition": true,
+        "enableStreamPower": true,
+        "enableThermal": true,
+        "flowExponent": 1.2999999523162842,
+        "iterations": 50,
+        "maxStreamPower": 10000.0,
+        "rain": 2.5999999046325684,
+        "slopeExponent": 2.0,
+        "speStrength": 0.0005000000237487257,
+        "speTimeStep": 1.0,
+        "streamExponent": 0.800000011920929,
+        "thermalAngleDegrees": 30.0,
+        "thermalNoiseMax": 1.399999976158142,
+        "thermalNoiseMin": 0.8999999761581421,
+        "thermalNoiseWavelength": 0.002300000051036477,
+        "thermalNoisifyAngle": true,
+        "thermalStrength": 4.999999873689376e-05,
+        "useMultigrid": true
+      },
+      "outputs": [
+        {
+          "id": 100020,
+          "label": "Mask",
+          "valueType": 3
+        }
+      ],
+      "rock": {
+        "aspectVariation": 0.30000001192092896,
+        "backend": 1,
+        "bumpiness": 0.6000000238418579,
+        "coverage": 1.0,
+        "density": 8.0,
+        "edgeSharpness": 1.0,
+        "facetScale": 2.5,
+        "facetSharpness": 0.0,
+        "heightJitter": 0.5,
+        "layerCount": 1,
+        "orientationRule": 0,
+        "rockHeight": 1.5,
+        "rockSizeMaxM": 6.800000190734863,
+        "rockSizeMinM": 6.800000190734863,
+        "rotationVariation": 1.0,
+        "seed": 0,
+        "style": 0
+      },
+      "sediment": {
+        "backend": 1,
+        "convertTerrainToSediment": true,
+        "emissionAmountM": 0.5,
+        "emissionTime": 0.0,
+        "iterations": 50,
+        "largestDetailLevelM": 8.0,
+        "maskContrast": 0.699999988079071,
+        "sedimentViscosity": 0.20000000298023224,
+        "stabilizationIterations": 2
+      },
+      "shape": {
+        "kind": 0,
+        "relativeHeightPercent": 50.0,
+        "scaleMeters": 1024.0
+      },
+      "snow": {
+        "backend": 1,
+        "emissionAmount": 1.0,
+        "fillRadius": 3,
+        "maskMaxSnow": 1.0,
+        "slopeLimitMaxDeg": 60.0,
+        "slopeLimitMinDeg": 50.0,
+        "smoothingIterations": 2
+      },
+      "title": "Mask Noise"
+    },
+    {
+      "colorize": {
+        "backend": 1,
+        "stops": [
+          {
+            "b": 0.0,
+            "g": 0.0,
+            "position": 0.0,
+            "r": 0.0
+          },
+          {
+            "b": 1.0,
+            "g": 1.0,
+            "position": 1.0,
+            "r": 1.0
+          }
+        ]
+      },
+      "heightmap": {
+        "path": "",
+        "relativeVerticalScalePercent": 100.0,
+        "scaleMeters": 1024.0,
+        "verticalOffsetMeters": 0.0
+      },
+      "heightmapBlur": {
+        "iterations": 1,
+        "radius": 3.0,
+        "strength": 1.0
+      },
+      "id": 100032,
+      "inputs": [
+        {
+          "id": 100033,
+          "label": "Heightmap",
+          "valueType": 2
+        }
+      ],
+      "kind": 11,
+      "maskBlend": {
+        "intensity": 1.0,
+        "mode": 0
+      },
+      "maskCurvature": {
+        "gamma": 1.0,
+        "mode": 2,
+        "radius": 3,
+        "sensitivityMeters": 1.0,
+        "threshold": 0.0
+      },
+      "maskFluvial": {
+        "accumulationThreshold": 0.0,
+        "algorithm": 1,
+        "backend": 1,
+        "gamma": 1.5,
+        "inertia": 0.0,
+        "mfdExponent": 4.0,
+        "outputCurve": 0,
+        "pitFillIterations": 8,
+        "power": 1.600000023841858,
+        "softness": 0.15000000596046448
+      },
+      "maskLevels": {
+        "blackPoint": 0.0,
+        "gamma": 1.0,
+        "invert": false,
+        "whitePoint": 1.0
+      },
+      "maskNoise": {
+        "backend": 1,
+        "frequency": 4.0,
+        "lacunarity": 2.0,
+        "octaves": 4,
+        "persistence": 0.5,
+        "seed": 0
+      },
+      "maskSlope": {
+        "gamma": 1.0,
+        "invert": false,
+        "slopeMaxDeg": 60.0,
+        "slopeMinDeg": 25.0
+      },
+      "multiScaleErosion": {
+        "backend": 0,
+        "depositionStrength": 1.0,
+        "enableDeposition": true,
+        "enableStreamPower": true,
+        "enableThermal": true,
+        "flowExponent": 1.2999999523162842,
+        "iterations": 50,
+        "maxStreamPower": 10000.0,
+        "rain": 2.5999999046325684,
+        "slopeExponent": 2.0,
+        "speStrength": 0.0005000000237487257,
+        "speTimeStep": 1.0,
+        "streamExponent": 0.800000011920929,
+        "thermalAngleDegrees": 30.0,
+        "thermalNoiseMax": 1.399999976158142,
+        "thermalNoiseMin": 0.8999999761581421,
+        "thermalNoiseWavelength": 0.002300000051036477,
+        "thermalNoisifyAngle": true,
+        "thermalStrength": 4.999999873689376e-05,
+        "useMultigrid": true
+      },
+      "outputs": [
+        {
+          "id": 100034,
+          "label": "Mask",
+          "valueType": 3
+        }
+      ],
+      "rock": {
+        "aspectVariation": 0.30000001192092896,
+        "backend": 1,
+        "bumpiness": 0.6000000238418579,
+        "coverage": 1.0,
+        "density": 8.0,
+        "edgeSharpness": 1.0,
+        "facetScale": 2.5,
+        "facetSharpness": 0.0,
+        "heightJitter": 0.5,
+        "layerCount": 1,
+        "orientationRule": 0,
+        "rockHeight": 1.5,
+        "rockSizeMaxM": 6.800000190734863,
+        "rockSizeMinM": 6.800000190734863,
+        "rotationVariation": 1.0,
+        "seed": 0,
+        "style": 0
+      },
+      "sediment": {
+        "backend": 1,
+        "convertTerrainToSediment": true,
+        "emissionAmountM": 0.5,
+        "emissionTime": 0.0,
+        "iterations": 50,
+        "largestDetailLevelM": 8.0,
+        "maskContrast": 0.699999988079071,
+        "sedimentViscosity": 0.20000000298023224,
+        "stabilizationIterations": 2
+      },
+      "shape": {
+        "kind": 0,
+        "relativeHeightPercent": 50.0,
+        "scaleMeters": 1024.0
+      },
+      "snow": {
+        "backend": 1,
+        "emissionAmount": 1.0,
+        "fillRadius": 3,
+        "maskMaxSnow": 1.0,
+        "slopeLimitMaxDeg": 60.0,
+        "slopeLimitMinDeg": 50.0,
+        "smoothingIterations": 2
+      },
+      "title": "Mask Fluvial"
+    },
+    {
+      "colorize": {
+        "backend": 1,
+        "stops": [
+          {
+            "b": 0.0,
+            "g": 0.0,
+            "position": 0.0,
+            "r": 0.0
+          },
+          {
+            "b": 1.0,
+            "g": 1.0,
+            "position": 1.0,
+            "r": 1.0
+          }
+        ]
+      },
+      "heightmap": {
+        "path": "",
+        "relativeVerticalScalePercent": 100.0,
+        "scaleMeters": 1024.0,
+        "verticalOffsetMeters": 0.0
+      },
+      "heightmapBlur": {
+        "iterations": 1,
+        "radius": 3.0,
+        "strength": 1.0
+      },
+      "id": 100036,
+      "inputs": [
+        {
+          "id": 100037,
+          "label": "Heightmap",
+          "valueType": 2
+        }
+      ],
+      "kind": 12,
+      "maskBlend": {
+        "intensity": 1.0,
+        "mode": 0
+      },
+      "maskCurvature": {
+        "gamma": 1.0,
+        "mode": 2,
+        "radius": 3,
+        "sensitivityMeters": 1.0,
+        "threshold": 0.0
+      },
+      "maskFluvial": {
+        "accumulationThreshold": 0.0,
+        "algorithm": 0,
+        "backend": 1,
+        "gamma": 0.5,
+        "inertia": 0.0,
+        "mfdExponent": 4.0,
+        "outputCurve": 0,
+        "pitFillIterations": 8,
+        "power": 1.600000023841858,
+        "softness": 0.15000000596046448
+      },
+      "maskLevels": {
+        "blackPoint": 0.0,
+        "gamma": 1.0,
+        "invert": false,
+        "whitePoint": 1.0
+      },
+      "maskNoise": {
+        "backend": 1,
+        "frequency": 4.0,
+        "lacunarity": 2.0,
+        "octaves": 4,
+        "persistence": 0.5,
+        "seed": 0
+      },
+      "maskSlope": {
+        "gamma": 1.0,
+        "invert": false,
+        "slopeMaxDeg": 60.0,
+        "slopeMinDeg": 25.0
+      },
+      "multiScaleErosion": {
+        "backend": 0,
+        "depositionStrength": 1.0,
+        "enableDeposition": true,
+        "enableStreamPower": true,
+        "enableThermal": true,
+        "flowExponent": 1.2999999523162842,
+        "iterations": 50,
+        "maxStreamPower": 10000.0,
+        "rain": 2.5999999046325684,
+        "slopeExponent": 2.0,
+        "speStrength": 0.0005000000237487257,
+        "speTimeStep": 1.0,
+        "streamExponent": 0.800000011920929,
+        "thermalAngleDegrees": 30.0,
+        "thermalNoiseMax": 1.399999976158142,
+        "thermalNoiseMin": 0.8999999761581421,
+        "thermalNoiseWavelength": 0.002300000051036477,
+        "thermalNoisifyAngle": true,
+        "thermalStrength": 4.999999873689376e-05,
+        "useMultigrid": true
+      },
+      "outputs": [
+        {
+          "id": 100038,
+          "label": "Heightmap",
+          "valueType": 2
+        },
+        {
+          "id": 100039,
+          "label": "Mask",
+          "valueType": 3
+        }
+      ],
+      "rock": {
+        "aspectVariation": 0.30000001192092896,
+        "backend": 1,
+        "bumpiness": 1.0,
+        "coverage": 1.0,
+        "density": 30.0,
+        "edgeSharpness": 1.0,
+        "facetScale": 0.5,
+        "facetSharpness": 1.0,
+        "heightJitter": 0.5,
+        "layerCount": 3,
+        "orientationRule": 1,
+        "rockHeight": 5.0,
+        "rockSizeMaxM": 40.0,
+        "rockSizeMinM": 15.0,
+        "rotationVariation": 1.0,
+        "seed": 0,
+        "style": 1
+      },
+      "sediment": {
+        "backend": 1,
+        "convertTerrainToSediment": true,
+        "emissionAmountM": 0.5,
+        "emissionTime": 0.0,
+        "iterations": 50,
+        "largestDetailLevelM": 8.0,
+        "maskContrast": 0.699999988079071,
+        "sedimentViscosity": 0.20000000298023224,
+        "stabilizationIterations": 2
+      },
+      "shape": {
+        "kind": 0,
+        "relativeHeightPercent": 50.0,
+        "scaleMeters": 1024.0
+      },
+      "snow": {
+        "backend": 1,
+        "emissionAmount": 1.0,
+        "fillRadius": 3,
+        "maskMaxSnow": 1.0,
+        "slopeLimitMaxDeg": 60.0,
+        "slopeLimitMinDeg": 50.0,
+        "smoothingIterations": 2
+      },
+      "title": "Rock"
+    },
+    {
+      "colorize": {
+        "backend": 1,
+        "stops": [
+          {
+            "b": 0.0,
+            "g": 0.0,
+            "position": 0.0,
+            "r": 0.0
+          },
+          {
+            "b": 1.0,
+            "g": 1.0,
+            "position": 1.0,
+            "r": 1.0
+          }
+        ]
+      },
+      "heightmap": {
+        "path": "",
+        "relativeVerticalScalePercent": 100.0,
+        "scaleMeters": 1024.0,
+        "verticalOffsetMeters": 0.0
+      },
+      "heightmapBlur": {
+        "iterations": 1,
+        "radius": 3.0,
+        "strength": 1.0
+      },
+      "id": 100041,
+      "inputs": [
+        {
+          "id": 100042,
+          "label": "Heightmap",
+          "valueType": 2
+        }
+      ],
+      "kind": 13,
+      "maskBlend": {
+        "intensity": 1.0,
+        "mode": 0
+      },
+      "maskCurvature": {
+        "gamma": 1.0,
+        "mode": 2,
+        "radius": 3,
+        "sensitivityMeters": 1.0,
+        "threshold": 0.0
+      },
+      "maskFluvial": {
+        "accumulationThreshold": 0.0,
+        "algorithm": 0,
+        "backend": 1,
+        "gamma": 0.5,
+        "inertia": 0.0,
+        "mfdExponent": 4.0,
+        "outputCurve": 0,
+        "pitFillIterations": 8,
+        "power": 1.600000023841858,
+        "softness": 0.15000000596046448
+      },
+      "maskLevels": {
+        "blackPoint": 0.0,
+        "gamma": 1.0,
+        "invert": false,
+        "whitePoint": 1.0
+      },
+      "maskNoise": {
+        "backend": 1,
+        "frequency": 4.0,
+        "lacunarity": 2.0,
+        "octaves": 4,
+        "persistence": 0.5,
+        "seed": 0
+      },
+      "maskSlope": {
+        "gamma": 1.0,
+        "invert": false,
+        "slopeMaxDeg": 60.0,
+        "slopeMinDeg": 25.0
+      },
+      "multiScaleErosion": {
+        "backend": 0,
+        "depositionStrength": 1.0,
+        "enableDeposition": true,
+        "enableStreamPower": true,
+        "enableThermal": true,
+        "flowExponent": 1.2999999523162842,
+        "iterations": 50,
+        "maxStreamPower": 10000.0,
+        "rain": 2.5999999046325684,
+        "slopeExponent": 2.0,
+        "speStrength": 0.0005000000237487257,
+        "speTimeStep": 1.0,
+        "streamExponent": 0.800000011920929,
+        "thermalAngleDegrees": 30.0,
+        "thermalNoiseMax": 1.399999976158142,
+        "thermalNoiseMin": 0.8999999761581421,
+        "thermalNoiseWavelength": 0.002300000051036477,
+        "thermalNoisifyAngle": true,
+        "thermalStrength": 4.999999873689376e-05,
+        "useMultigrid": true
+      },
+      "outputs": [
+        {
+          "id": 100043,
+          "label": "Heightmap",
+          "valueType": 2
+        },
+        {
+          "id": 100044,
+          "label": "Sediment",
+          "valueType": 3
+        }
+      ],
+      "rock": {
+        "aspectVariation": 0.30000001192092896,
+        "backend": 1,
+        "bumpiness": 0.6000000238418579,
+        "coverage": 1.0,
+        "density": 8.0,
+        "edgeSharpness": 1.0,
+        "facetScale": 2.5,
+        "facetSharpness": 0.5,
+        "heightJitter": 0.5,
+        "layerCount": 1,
+        "orientationRule": 0,
+        "rockHeight": 1.5,
+        "rockSizeMaxM": 10.0,
+        "rockSizeMinM": 5.0,
+        "rotationVariation": 1.0,
+        "seed": 0,
+        "style": 0
+      },
+      "sediment": {
+        "backend": 1,
+        "convertTerrainToSediment": false,
+        "emissionAmountM": 0.5,
+        "emissionTime": 0.0,
+        "iterations": 30,
+        "largestDetailLevelM": 16.0,
+        "maskContrast": 0.0,
+        "sedimentViscosity": 0.25,
+        "stabilizationIterations": 2
+      },
+      "shape": {
+        "kind": 0,
+        "relativeHeightPercent": 50.0,
+        "scaleMeters": 1024.0
+      },
+      "snow": {
+        "backend": 1,
+        "emissionAmount": 1.0,
+        "fillRadius": 3,
+        "maskMaxSnow": 1.0,
+        "slopeLimitMaxDeg": 60.0,
+        "slopeLimitMinDeg": 50.0,
+        "smoothingIterations": 2
+      },
+      "title": "Sediment"
+    },
+    {
+      "colorize": {
+        "backend": 1,
+        "stops": [
+          {
+            "b": 0.32156863808631897,
+            "g": 0.572549045085907,
+            "position": 0.0,
+            "r": 0.5372549295425415
+          },
+          {
+            "b": 0.12156862765550613,
+            "g": 0.3843137323856354,
+            "position": 0.016129031777381897,
+            "r": 0.3490196168422699
+          },
+          {
+            "b": 0.2980392277240753,
+            "g": 0.572549045085907,
+            "position": 0.04838709533214569,
+            "r": 0.5254902243614197
+          },
+          {
+            "b": 0.0784313753247261,
+            "g": 0.40392157435417175,
+            "position": 0.09677419066429138,
+            "r": 0.32549020648002625
+          },
+          {
+            "b": 0.239215686917305,
+            "g": 0.6117647290229797,
+            "position": 0.14516128599643707,
+            "r": 0.4941176474094391
+          },
+          {
+            "b": 0.0235294122248888,
+            "g": 0.239215686917305,
+            "position": 0.19354838132858276,
+            "r": 0.16470588743686676
+          },
+          {
+            "b": 0.2078431397676468,
+            "g": 0.46666666865348816,
+            "position": 0.20967741310596466,
+            "r": 0.38823530077934265
+          },
+          {
+            "b": 0.10980392247438431,
+            "g": 0.3803921639919281,
+            "position": 0.22580644488334656,
+            "r": 0.29411765933036804
+          },
+          {
+            "b": 0.27450981736183167,
+            "g": 0.5843137502670288,
+            "position": 0.25806450843811035,
+            "r": 0.4901960790157318
+          },
+          {
+            "b": 0.2078431397676468,
+            "g": 0.4941176474094391,
+            "position": 0.27419355511665344,
+            "r": 0.40392157435417175
+          },
+          {
+            "b": 0.0,
+            "g": 0.13333334028720856,
+            "position": 0.29032257199287415,
+            "r": 0.0470588244497776
+          },
+          {
+            "b": 0.019607843831181526,
+            "g": 0.20392157137393951,
+            "position": 0.32258063554763794,
+            "r": 0.1568627506494522
+          },
+          {
+            "b": 0.3019607961177826,
+            "g": 0.615686297416687,
+            "position": 0.35483869910240173,
+            "r": 0.5490196347236633
+          },
+          {
+            "b": 0.16078431904315948,
+            "g": 0.4431372582912445,
+            "position": 0.3709677457809448,
+            "r": 0.3921568691730499
+          },
+          {
+            "b": 0.3333333432674408,
+            "g": 0.6117647290229797,
+            "position": 0.3870967626571655,
+            "r": 0.5607843399047852
+          },
+          {
+            "b": 0.10588235408067703,
+            "g": 0.364705890417099,
+            "position": 0.4032258093357086,
+            "r": 0.3176470696926117
+          },
+          {
+            "b": 0.23137255012989044,
+            "g": 0.5098039507865906,
+            "position": 0.4516128897666931,
+            "r": 0.4470588266849518
+          },
+          {
+            "b": 0.11372549086809158,
+            "g": 0.3843137323856354,
+            "position": 0.4677419364452362,
+            "r": 0.32156863808631897
+          },
+          {
+            "b": 0.1882352977991104,
+            "g": 0.43529412150382996,
+            "position": 0.5161290168762207,
+            "r": 0.38823530077934265
+          },
+          {
+            "b": 0.01568627543747425,
+            "g": 0.19607843458652496,
+            "position": 0.5645161271095276,
+            "r": 0.14901961386203766
+          },
+          {
+            "b": 0.019607843831181526,
+            "g": 0.23137255012989044,
+            "position": 0.5806451439857483,
+            "r": 0.18039216101169586
+          },
+          {
+            "b": 0.47058823704719543,
+            "g": 0.7215686440467834,
+            "position": 0.6198830604553223,
+            "r": 0.6509804129600525
+          },
+          {
+            "b": 0.4000000059604645,
+            "g": 0.7882353067398071,
+            "position": 0.6451612710952759,
+            "r": 0.615686297416687
+          },
+          {
+            "b": 0.21960784494876862,
+            "g": 0.6352941393852234,
+            "position": 0.7096773982048035,
+            "r": 0.45490196347236633
+          },
+          {
+            "b": 0.5372549295425415,
+            "g": 0.9176470637321472,
+            "position": 0.7456140518188477,
+            "r": 0.7411764860153198
+          },
+          {
+            "b": 0.21568627655506134,
+            "g": 0.5882353186607361,
+            "position": 0.8225806355476379,
+            "r": 0.43529412150382996
+          },
+          {
+            "b": 0.2235294133424759,
+            "g": 0.5803921818733215,
+            "position": 0.8548387289047241,
+            "r": 0.45490196347236633
+          },
+          {
+            "b": 0.40784314274787903,
+            "g": 0.8470588326454163,
+            "position": 0.8870967626571655,
+            "r": 0.7098039388656616
+          },
+          {
+            "b": 0.1921568661928177,
+            "g": 0.6549019813537598,
+            "position": 0.9354838728904724,
+            "r": 0.5333333611488342
+          },
+          {
+            "b": 0.48627451062202454,
+            "g": 0.9490196108818054,
+            "position": 0.9677419066429138,
+            "r": 0.8274509906768799
+          },
+          {
+            "b": 0.4470588266849518,
+            "g": 0.9176470637321472,
+            "position": 1.0,
+            "r": 0.7960784435272217
+          }
+        ]
+      },
+      "heightmap": {
+        "path": "",
+        "relativeVerticalScalePercent": 100.0,
+        "scaleMeters": 1024.0,
+        "verticalOffsetMeters": 0.0
+      },
+      "heightmapBlur": {
+        "iterations": 1,
+        "radius": 3.0,
+        "strength": 1.0
+      },
+      "id": 100046,
+      "inputs": [
+        {
+          "id": 100047,
+          "label": "Heightmap",
+          "valueType": 2
+        },
+        {
+          "id": 100068,
+          "label": "Base Color",
+          "valueType": 4
+        },
+        {
+          "id": 100048,
+          "label": "Mask",
+          "valueType": 3
+        },
+        {
+          "id": 100049,
+          "label": "Gradient Mask",
+          "valueType": 3
+        }
+      ],
+      "kind": 15,
+      "maskBlend": {
+        "intensity": 1.0,
+        "mode": 0
+      },
+      "maskCurvature": {
+        "gamma": 1.0,
+        "mode": 2,
+        "radius": 3,
+        "sensitivityMeters": 1.0,
+        "threshold": 0.0
+      },
+      "maskFluvial": {
+        "accumulationThreshold": 0.0,
+        "algorithm": 0,
+        "backend": 1,
+        "gamma": 0.5,
+        "inertia": 0.0,
+        "mfdExponent": 4.0,
+        "outputCurve": 0,
+        "pitFillIterations": 8,
+        "power": 1.600000023841858,
+        "softness": 0.15000000596046448
+      },
+      "maskLevels": {
+        "blackPoint": 0.0,
+        "gamma": 1.0,
+        "invert": false,
+        "whitePoint": 1.0
+      },
+      "maskNoise": {
+        "backend": 1,
+        "frequency": 4.0,
+        "lacunarity": 2.0,
+        "octaves": 4,
+        "persistence": 0.5,
+        "seed": 0
+      },
+      "maskSlope": {
+        "gamma": 1.0,
+        "invert": false,
+        "slopeMaxDeg": 60.0,
+        "slopeMinDeg": 25.0
+      },
+      "multiScaleErosion": {
+        "backend": 0,
+        "depositionStrength": 0.20000000298023224,
+        "enableDeposition": true,
+        "enableStreamPower": true,
+        "enableThermal": true,
+        "flowExponent": 1.2999999523162842,
+        "iterations": 50,
+        "maxStreamPower": 10000.0,
+        "rain": 2.5999999046325684,
+        "slopeExponent": 2.0,
+        "speStrength": 0.004000000189989805,
+        "speTimeStep": 1.0,
+        "streamExponent": 0.8999999761581421,
+        "thermalAngleDegrees": 30.0,
+        "thermalNoiseMax": 1.399999976158142,
+        "thermalNoiseMin": 0.8999999761581421,
+        "thermalNoiseWavelength": 0.002300000051036477,
+        "thermalNoisifyAngle": true,
+        "thermalStrength": 0.004999999888241291,
+        "useMultigrid": true
+      },
+      "outputs": [
+        {
+          "id": 100050,
+          "label": "Color Texture",
+          "valueType": 4
+        }
+      ],
+      "rock": {
+        "aspectVariation": 0.30000001192092896,
+        "backend": 1,
+        "bumpiness": 0.6000000238418579,
+        "coverage": 1.0,
+        "density": 8.0,
+        "edgeSharpness": 1.0,
+        "facetScale": 2.5,
+        "facetSharpness": 0.5,
+        "heightJitter": 0.5,
+        "layerCount": 1,
+        "orientationRule": 0,
+        "rockHeight": 1.5,
+        "rockSizeMaxM": 10.0,
+        "rockSizeMinM": 5.0,
+        "rotationVariation": 1.0,
+        "seed": 0,
+        "style": 0
+      },
+      "sediment": {
+        "backend": 1,
+        "convertTerrainToSediment": true,
+        "emissionAmountM": 0.5,
+        "emissionTime": 0.0,
+        "iterations": 40,
+        "largestDetailLevelM": 8.0,
+        "maskContrast": 0.0,
+        "sedimentViscosity": 0.20000000298023224,
+        "stabilizationIterations": 2
+      },
+      "shape": {
+        "kind": 0,
+        "relativeHeightPercent": 50.0,
+        "scaleMeters": 1024.0
+      },
+      "snow": {
+        "backend": 1,
+        "emissionAmount": 1.0,
+        "fillRadius": 3,
+        "maskMaxSnow": 1.0,
+        "slopeLimitMaxDeg": 60.0,
+        "slopeLimitMinDeg": 50.0,
+        "smoothingIterations": 2
+      },
+      "title": "Colorize"
+    },
+    {
+      "colorize": {
+        "backend": 1,
+        "stops": [
+          {
+            "b": 0.0,
+            "g": 0.0,
+            "position": 0.0,
+            "r": 0.0
+          },
+          {
+            "b": 1.0,
+            "g": 1.0,
+            "position": 1.0,
+            "r": 1.0
+          }
+        ]
+      },
+      "heightmap": {
+        "path": "",
+        "relativeVerticalScalePercent": 100.0,
+        "scaleMeters": 1024.0,
+        "verticalOffsetMeters": 0.0
+      },
+      "heightmapBlur": {
+        "iterations": 1,
+        "radius": 3.0,
+        "strength": 1.0
+      },
+      "id": 100053,
+      "inputs": [
+        {
+          "id": 100054,
+          "label": "Heightmap",
+          "valueType": 2
+        }
+      ],
+      "kind": 14,
+      "maskBlend": {
+        "intensity": 1.0,
+        "mode": 0
+      },
+      "maskCurvature": {
+        "gamma": 1.0,
+        "mode": 2,
+        "radius": 3,
+        "sensitivityMeters": 1.0,
+        "threshold": 0.0
+      },
+      "maskFluvial": {
+        "accumulationThreshold": 0.0,
+        "algorithm": 0,
+        "backend": 1,
+        "gamma": 0.5,
+        "inertia": 0.0,
+        "mfdExponent": 4.0,
+        "outputCurve": 0,
+        "pitFillIterations": 8,
+        "power": 1.600000023841858,
+        "softness": 0.15000000596046448
+      },
+      "maskLevels": {
+        "blackPoint": 0.0,
+        "gamma": 1.0,
+        "invert": false,
+        "whitePoint": 1.0
+      },
+      "maskNoise": {
+        "backend": 1,
+        "frequency": 4.0,
+        "lacunarity": 2.0,
+        "octaves": 4,
+        "persistence": 0.5,
+        "seed": 0
+      },
+      "maskSlope": {
+        "gamma": 1.0,
+        "invert": false,
+        "slopeMaxDeg": 60.0,
+        "slopeMinDeg": 25.0
+      },
+      "multiScaleErosion": {
+        "backend": 0,
+        "depositionStrength": 0.20000000298023224,
+        "enableDeposition": true,
+        "enableStreamPower": true,
+        "enableThermal": true,
+        "flowExponent": 1.2999999523162842,
+        "iterations": 50,
+        "maxStreamPower": 10000.0,
+        "rain": 2.5999999046325684,
+        "slopeExponent": 2.0,
+        "speStrength": 0.004000000189989805,
+        "speTimeStep": 1.0,
+        "streamExponent": 0.8999999761581421,
+        "thermalAngleDegrees": 30.0,
+        "thermalNoiseMax": 1.399999976158142,
+        "thermalNoiseMin": 0.8999999761581421,
+        "thermalNoiseWavelength": 0.002300000051036477,
+        "thermalNoisifyAngle": true,
+        "thermalStrength": 0.004999999888241291,
+        "useMultigrid": true
+      },
+      "outputs": [
+        {
+          "id": 100055,
+          "label": "Heightmap",
+          "valueType": 2
+        },
+        {
+          "id": 100056,
+          "label": "Snow",
+          "valueType": 3
+        }
+      ],
+      "rock": {
+        "aspectVariation": 0.30000001192092896,
+        "backend": 1,
+        "bumpiness": 0.6000000238418579,
+        "coverage": 1.0,
+        "density": 8.0,
+        "edgeSharpness": 1.0,
+        "facetScale": 2.5,
+        "facetSharpness": 0.5,
+        "heightJitter": 0.5,
+        "layerCount": 1,
+        "orientationRule": 0,
+        "rockHeight": 1.5,
+        "rockSizeMaxM": 10.0,
+        "rockSizeMinM": 5.0,
+        "rotationVariation": 1.0,
+        "seed": 0,
+        "style": 0
+      },
+      "sediment": {
+        "backend": 1,
+        "convertTerrainToSediment": true,
+        "emissionAmountM": 0.5,
+        "emissionTime": 0.0,
+        "iterations": 40,
+        "largestDetailLevelM": 8.0,
+        "maskContrast": 0.0,
+        "sedimentViscosity": 0.20000000298023224,
+        "stabilizationIterations": 2
+      },
+      "shape": {
+        "kind": 0,
+        "relativeHeightPercent": 50.0,
+        "scaleMeters": 1024.0
+      },
+      "snow": {
+        "backend": 1,
+        "emissionAmount": 13.40999984741211,
+        "fillRadius": 3,
+        "maskMaxSnow": 1.0,
+        "slopeLimitMaxDeg": 49.900001525878906,
+        "slopeLimitMinDeg": 31.899999618530273,
+        "smoothingIterations": 14
+      },
+      "title": "Snow"
+    },
+    {
+      "colorize": {
+        "backend": 1,
+        "stops": [
+          {
+            "b": 0.5372549295425415,
+            "g": 0.7137255072593689,
+            "position": 0.0,
+            "r": 0.8784313797950745
+          },
+          {
+            "b": 0.6313725709915161,
+            "g": 0.7529411911964417,
+            "position": 0.011904762126505375,
+            "r": 0.8784313797950745
+          },
+          {
+            "b": 0.4156862795352936,
+            "g": 0.5686274766921997,
+            "position": 0.0357142873108387,
+            "r": 0.7490196228027344
+          },
+          {
+            "b": 0.5176470875740051,
+            "g": 0.7215686440467834,
+            "position": 0.1666666716337204,
+            "r": 0.9176470637321472
+          },
+          {
+            "b": 0.4313725531101227,
+            "g": 0.6235294342041016,
+            "position": 0.2023809552192688,
+            "r": 0.8235294222831726
+          },
+          {
+            "b": 0.47058823704719543,
+            "g": 0.6705882549285889,
+            "position": 0.2380952388048172,
+            "r": 0.8666666746139526
+          },
+          {
+            "b": 0.364705890417099,
+            "g": 0.6117647290229797,
+            "position": 0.2738095223903656,
+            "r": 0.8470588326454163
+          },
+          {
+            "b": 0.4588235318660736,
+            "g": 0.6901960968971252,
+            "position": 0.2857142984867096,
+            "r": 0.8941176533699036
+          },
+          {
+            "b": 0.3921568691730499,
+            "g": 0.6196078658103943,
+            "position": 0.3095238208770752,
+            "r": 0.8313725590705872
+          },
+          {
+            "b": 0.5137255191802979,
+            "g": 0.729411780834198,
+            "position": 0.3214285671710968,
+            "r": 0.9411764740943909
+          },
+          {
+            "b": 0.47058823704719543,
+            "g": 0.7019608020782471,
+            "position": 0.380952388048172,
+            "r": 0.9098039269447327
+          },
+          {
+            "b": 0.5254902243614197,
+            "g": 0.7333333492279053,
+            "position": 0.3928571343421936,
+            "r": 0.929411768913269
+          },
+          {
+            "b": 0.45490196347236633,
+            "g": 0.6745098233222961,
+            "position": 0.4047619104385376,
+            "r": 0.8745098114013672
+          },
+          {
+            "b": 0.5058823823928833,
+            "g": 0.7450980544090271,
+            "position": 0.488095223903656,
+            "r": 0.9450980424880981
+          },
+          {
+            "b": 0.4117647111415863,
+            "g": 0.6431372761726379,
+            "position": 0.523809552192688,
+            "r": 0.8549019694328308
+          },
+          {
+            "b": 0.4117647111415863,
+            "g": 0.6392157077789307,
+            "position": 0.5476190447807312,
+            "r": 0.8470588326454163
+          },
+          {
+            "b": 0.5411764979362488,
+            "g": 0.7607843279838562,
+            "position": 0.6071428656578064,
+            "r": 0.9490196108818054
+          },
+          {
+            "b": 0.48627451062202454,
+            "g": 0.6941176652908325,
+            "position": 0.6190476417541504,
+            "r": 0.8823529481887817
+          },
+          {
+            "b": 0.5607843399047852,
+            "g": 0.7411764860153198,
+            "position": 0.6428571343421936,
+            "r": 0.9019607901573181
+          },
+          {
+            "b": 0.30980393290519714,
+            "g": 0.5254902243614197,
+            "position": 0.6785714030265808,
+            "r": 0.7333333492279053
+          },
+          {
+            "b": 0.4313725531101227,
+            "g": 0.6431372761726379,
+            "position": 0.6904761791229248,
+            "r": 0.843137264251709
+          },
+          {
+            "b": 0.25882354378700256,
+            "g": 0.4627451002597809,
+            "position": 0.7023809552192688,
+            "r": 0.6784313917160034
+          },
+          {
+            "b": 0.529411792755127,
+            "g": 0.7372549176216125,
+            "position": 0.726190447807312,
+            "r": 0.8941176533699036
+          },
+          {
+            "b": 0.4000000059604645,
+            "g": 0.6235294342041016,
+            "position": 0.738095223903656,
+            "r": 0.8039215803146362
+          },
+          {
+            "b": 0.7607843279838562,
+            "g": 0.8509804010391235,
+            "position": 0.7857142686843872,
+            "r": 0.9450980424880981
+          },
+          {
+            "b": 0.7058823704719543,
+            "g": 0.8627451062202454,
+            "position": 0.8214285969734192,
+            "r": 0.929411768913269
+          },
+          {
+            "b": 0.4627451002597809,
+            "g": 0.658823549747467,
+            "position": 0.8571428656578064,
+            "r": 0.8470588326454163
+          },
+          {
+            "b": 0.501960813999176,
+            "g": 0.7098039388656616,
+            "position": 0.8809523582458496,
+            "r": 0.8784313797950745
+          },
+          {
+            "b": 0.3529411852359772,
+            "g": 0.5882353186607361,
+            "position": 0.9166666865348816,
+            "r": 0.7764706015586853
+          },
+          {
+            "b": 0.6039215922355652,
+            "g": 0.7803921699523926,
+            "position": 0.9523809552192688,
+            "r": 0.9137254953384399
+          },
+          {
+            "b": 0.4431372582912445,
+            "g": 0.686274528503418,
+            "position": 0.988095223903656,
+            "r": 0.8823529481887817
+          },
+          {
+            "b": 0.4431372582912445,
+            "g": 0.686274528503418,
+            "position": 1.0,
+            "r": 0.8823529481887817
+          }
+        ]
+      },
+      "heightmap": {
+        "path": "",
+        "relativeVerticalScalePercent": 100.0,
+        "scaleMeters": 1024.0,
+        "verticalOffsetMeters": 0.0
+      },
+      "heightmapBlur": {
+        "iterations": 1,
+        "radius": 3.0,
+        "strength": 1.0
+      },
+      "id": 100058,
+      "inputs": [
+        {
+          "id": 100059,
+          "label": "Heightmap",
+          "valueType": 2
+        },
+        {
+          "id": 100069,
+          "label": "Base Color",
+          "valueType": 4
+        },
+        {
+          "id": 100060,
+          "label": "Mask",
+          "valueType": 3
+        },
+        {
+          "id": 100061,
+          "label": "Gradient Mask",
+          "valueType": 3
+        }
+      ],
+      "kind": 15,
+      "maskBlend": {
+        "intensity": 1.0,
+        "mode": 0
+      },
+      "maskCurvature": {
+        "gamma": 1.0,
+        "mode": 2,
+        "radius": 3,
+        "sensitivityMeters": 1.0,
+        "threshold": 0.0
+      },
+      "maskFluvial": {
+        "accumulationThreshold": 0.0,
+        "algorithm": 0,
+        "backend": 1,
+        "gamma": 0.5,
+        "inertia": 0.0,
+        "mfdExponent": 4.0,
+        "outputCurve": 0,
+        "pitFillIterations": 8,
+        "power": 1.600000023841858,
+        "softness": 0.15000000596046448
+      },
+      "maskLevels": {
+        "blackPoint": 0.0,
+        "gamma": 1.0,
+        "invert": false,
+        "whitePoint": 1.0
+      },
+      "maskNoise": {
+        "backend": 1,
+        "frequency": 4.0,
+        "lacunarity": 2.0,
+        "octaves": 4,
+        "persistence": 0.5,
+        "seed": 0
+      },
+      "maskSlope": {
+        "gamma": 1.0,
+        "invert": false,
+        "slopeMaxDeg": 60.0,
+        "slopeMinDeg": 25.0
+      },
+      "multiScaleErosion": {
+        "backend": 0,
+        "depositionStrength": 0.20000000298023224,
+        "enableDeposition": true,
+        "enableStreamPower": true,
+        "enableThermal": true,
+        "flowExponent": 1.2999999523162842,
+        "iterations": 50,
+        "maxStreamPower": 10000.0,
+        "rain": 2.5999999046325684,
+        "slopeExponent": 2.0,
+        "speStrength": 0.004000000189989805,
+        "speTimeStep": 1.0,
+        "streamExponent": 0.8999999761581421,
+        "thermalAngleDegrees": 30.0,
+        "thermalNoiseMax": 1.399999976158142,
+        "thermalNoiseMin": 0.8999999761581421,
+        "thermalNoiseWavelength": 0.002300000051036477,
+        "thermalNoisifyAngle": true,
+        "thermalStrength": 0.004999999888241291,
+        "useMultigrid": true
+      },
+      "outputs": [
+        {
+          "id": 100062,
+          "label": "Color Texture",
+          "valueType": 4
+        }
+      ],
+      "rock": {
+        "aspectVariation": 0.30000001192092896,
+        "backend": 1,
+        "bumpiness": 0.6000000238418579,
+        "coverage": 1.0,
+        "density": 8.0,
+        "edgeSharpness": 1.0,
+        "facetScale": 2.5,
+        "facetSharpness": 0.5,
+        "heightJitter": 0.5,
+        "layerCount": 1,
+        "orientationRule": 0,
+        "rockHeight": 1.5,
+        "rockSizeMaxM": 10.0,
+        "rockSizeMinM": 5.0,
+        "rotationVariation": 1.0,
+        "seed": 0,
+        "style": 0
+      },
+      "sediment": {
+        "backend": 1,
+        "convertTerrainToSediment": true,
+        "emissionAmountM": 0.5,
+        "emissionTime": 0.0,
+        "iterations": 40,
+        "largestDetailLevelM": 8.0,
+        "maskContrast": 0.0,
+        "sedimentViscosity": 0.20000000298023224,
+        "stabilizationIterations": 2
+      },
+      "shape": {
+        "kind": 0,
+        "relativeHeightPercent": 50.0,
+        "scaleMeters": 1024.0
+      },
+      "snow": {
+        "backend": 1,
+        "emissionAmount": 1.0,
+        "fillRadius": 3,
+        "maskMaxSnow": 1.0,
+        "slopeLimitMaxDeg": 60.0,
+        "slopeLimitMinDeg": 50.0,
+        "smoothingIterations": 8
+      },
+      "title": "Colorize"
+    },
+    {
+      "colorize": {
+        "backend": 1,
+        "stops": [
+          {
+            "b": 0.0,
+            "g": 0.0,
+            "position": 0.0,
+            "r": 0.0
+          },
+          {
+            "b": 1.0,
+            "g": 1.0,
+            "position": 1.0,
+            "r": 1.0
+          }
+        ]
+      },
+      "heightmap": {
+        "path": "",
+        "relativeVerticalScalePercent": 100.0,
+        "scaleMeters": 1024.0,
+        "verticalOffsetMeters": 0.0
+      },
+      "heightmapBlur": {
+        "iterations": 1,
+        "radius": 3.0,
+        "strength": 1.0
+      },
+      "id": 100065,
+      "inputs": [
+        {
+          "id": 100066,
+          "label": "Heightmap",
+          "valueType": 2
+        }
+      ],
+      "kind": 16,
+      "maskBlend": {
+        "intensity": 1.0,
+        "mode": 0
+      },
+      "maskCurvature": {
+        "gamma": 1.0,
+        "mode": 2,
+        "radius": 4,
+        "sensitivityMeters": 1.0,
+        "threshold": 0.0
+      },
+      "maskFluvial": {
+        "accumulationThreshold": 0.0,
+        "algorithm": 0,
+        "backend": 1,
+        "gamma": 0.5,
+        "inertia": 0.0,
+        "mfdExponent": 4.0,
+        "outputCurve": 0,
+        "pitFillIterations": 8,
+        "power": 1.600000023841858,
+        "softness": 0.15000000596046448
+      },
+      "maskLevels": {
+        "blackPoint": 0.0,
+        "gamma": 1.0,
+        "invert": false,
+        "whitePoint": 1.0
+      },
+      "maskNoise": {
+        "backend": 1,
+        "frequency": 4.0,
+        "lacunarity": 2.0,
+        "octaves": 4,
+        "persistence": 0.5,
+        "seed": 0
+      },
+      "maskSlope": {
+        "gamma": 1.0,
+        "invert": false,
+        "slopeMaxDeg": 60.0,
+        "slopeMinDeg": 25.0
+      },
+      "multiScaleErosion": {
+        "backend": 0,
+        "depositionStrength": 0.20000000298023224,
+        "enableDeposition": true,
+        "enableStreamPower": true,
+        "enableThermal": true,
+        "flowExponent": 1.2999999523162842,
+        "iterations": 50,
+        "maxStreamPower": 10000.0,
+        "rain": 2.5999999046325684,
+        "slopeExponent": 2.0,
+        "speStrength": 0.004000000189989805,
+        "speTimeStep": 1.0,
+        "streamExponent": 0.8999999761581421,
+        "thermalAngleDegrees": 30.0,
+        "thermalNoiseMax": 1.399999976158142,
+        "thermalNoiseMin": 0.8999999761581421,
+        "thermalNoiseWavelength": 0.002300000051036477,
+        "thermalNoisifyAngle": true,
+        "thermalStrength": 0.004999999888241291,
+        "useMultigrid": true
+      },
+      "outputs": [
+        {
+          "id": 100067,
+          "label": "Mask",
+          "valueType": 3
+        }
+      ],
+      "rock": {
+        "aspectVariation": 0.30000001192092896,
+        "backend": 1,
+        "bumpiness": 0.6000000238418579,
+        "coverage": 1.0,
+        "density": 8.0,
+        "edgeSharpness": 1.0,
+        "facetScale": 2.5,
+        "facetSharpness": 0.5,
+        "heightJitter": 0.5,
+        "layerCount": 1,
+        "orientationRule": 0,
+        "rockHeight": 1.5,
+        "rockSizeMaxM": 10.0,
+        "rockSizeMinM": 5.0,
+        "rotationVariation": 1.0,
+        "seed": 0,
+        "style": 0
+      },
+      "sediment": {
+        "backend": 1,
+        "convertTerrainToSediment": true,
+        "emissionAmountM": 0.5,
+        "emissionTime": 0.0,
+        "iterations": 40,
+        "largestDetailLevelM": 8.0,
+        "maskContrast": 0.0,
+        "sedimentViscosity": 0.20000000298023224,
+        "stabilizationIterations": 2
+      },
+      "shape": {
+        "kind": 0,
+        "relativeHeightPercent": 50.0,
+        "scaleMeters": 1024.0
+      },
+      "snow": {
+        "backend": 1,
+        "emissionAmount": 1.0,
+        "fillRadius": 3,
+        "maskMaxSnow": 1.0,
+        "slopeLimitMaxDeg": 60.0,
+        "slopeLimitMinDeg": 50.0,
+        "smoothingIterations": 8
+      },
+      "title": "Mask Curvature"
+    },
+    {
+      "colorize": {
+        "backend": 1,
+        "stops": [
+          {
+            "b": 0.0,
+            "g": 0.0,
+            "position": 0.0,
+            "r": 0.0
+          },
+          {
+            "b": 1.0,
+            "g": 1.0,
+            "position": 1.0,
+            "r": 1.0
+          }
+        ]
+      },
+      "heightmap": {
+        "path": "",
+        "relativeVerticalScalePercent": 100.0,
+        "scaleMeters": 1024.0,
+        "verticalOffsetMeters": 0.0
+      },
+      "heightmapBlur": {
+        "iterations": 1,
+        "radius": 3.0,
+        "strength": 1.0
+      },
+      "id": 100074,
+      "inputs": [
+        {
+          "id": 100075,
+          "label": "Heightmap",
+          "valueType": 2
+        }
+      ],
+      "kind": 18,
+      "maskBlend": {
+        "intensity": 1.0,
+        "mode": 0
+      },
+      "maskCurvature": {
+        "gamma": 1.0,
+        "mode": 2,
+        "radius": 3,
+        "sensitivityMeters": 1.0,
+        "threshold": 0.0
+      },
+      "maskFluvial": {
+        "accumulationThreshold": 0.0,
+        "algorithm": 0,
+        "backend": 1,
+        "gamma": 0.5,
+        "inertia": 0.0,
+        "mfdExponent": 4.0,
+        "outputCurve": 0,
+        "pitFillIterations": 8,
+        "power": 1.600000023841858,
+        "softness": 0.15000000596046448
+      },
+      "maskLevels": {
+        "blackPoint": 0.0,
+        "gamma": 1.0,
+        "invert": false,
+        "whitePoint": 1.0
+      },
+      "maskNoise": {
+        "backend": 1,
+        "frequency": 4.0,
+        "lacunarity": 2.0,
+        "octaves": 4,
+        "persistence": 0.5,
+        "seed": 0
+      },
+      "maskSlope": {
+        "gamma": 1.0,
+        "invert": true,
+        "slopeMaxDeg": 60.0,
+        "slopeMinDeg": 40.0
+      },
+      "multiScaleErosion": {
+        "backend": 0,
+        "depositionStrength": 0.20000000298023224,
+        "enableDeposition": true,
+        "enableStreamPower": true,
+        "enableThermal": true,
+        "flowExponent": 1.2999999523162842,
+        "iterations": 50,
+        "maxStreamPower": 10000.0,
+        "rain": 2.5999999046325684,
+        "slopeExponent": 2.0,
+        "speStrength": 0.004000000189989805,
+        "speTimeStep": 1.0,
+        "streamExponent": 0.8999999761581421,
+        "thermalAngleDegrees": 30.0,
+        "thermalNoiseMax": 1.399999976158142,
+        "thermalNoiseMin": 0.8999999761581421,
+        "thermalNoiseWavelength": 0.002300000051036477,
+        "thermalNoisifyAngle": true,
+        "thermalStrength": 0.004999999888241291,
+        "useMultigrid": true
+      },
+      "outputs": [
+        {
+          "id": 100076,
+          "label": "Mask",
+          "valueType": 3
+        }
+      ],
+      "rock": {
+        "aspectVariation": 0.30000001192092896,
+        "backend": 1,
+        "bumpiness": 0.6000000238418579,
+        "coverage": 1.0,
+        "density": 8.0,
+        "edgeSharpness": 1.0,
+        "facetScale": 2.5,
+        "facetSharpness": 0.5,
+        "heightJitter": 0.5,
+        "layerCount": 1,
+        "orientationRule": 0,
+        "rockHeight": 1.5,
+        "rockSizeMaxM": 10.0,
+        "rockSizeMinM": 5.0,
+        "rotationVariation": 1.0,
+        "seed": 0,
+        "style": 0
+      },
+      "sediment": {
+        "backend": 1,
+        "convertTerrainToSediment": true,
+        "emissionAmountM": 0.5,
+        "emissionTime": 0.0,
+        "iterations": 40,
+        "largestDetailLevelM": 8.0,
+        "maskContrast": 0.0,
+        "sedimentViscosity": 0.20000000298023224,
+        "stabilizationIterations": 2
+      },
+      "shape": {
+        "kind": 0,
+        "relativeHeightPercent": 50.0,
+        "scaleMeters": 1024.0
+      },
+      "snow": {
+        "backend": 1,
+        "emissionAmount": 1.0,
+        "fillRadius": 3,
+        "maskMaxSnow": 1.0,
+        "slopeLimitMaxDeg": 60.0,
+        "slopeLimitMinDeg": 50.0,
+        "smoothingIterations": 8
+      },
+      "title": "Mask Slope"
+    },
+    {
+      "colorize": {
+        "backend": 1,
+        "stops": [
+          {
+            "b": 0.0,
+            "g": 0.0,
+            "position": 0.0,
+            "r": 0.0
+          },
+          {
+            "b": 1.0,
+            "g": 1.0,
+            "position": 1.0,
+            "r": 1.0
+          }
+        ]
+      },
+      "heightmap": {
+        "path": "",
+        "relativeVerticalScalePercent": 100.0,
+        "scaleMeters": 1024.0,
+        "verticalOffsetMeters": 0.0
+      },
+      "heightmapBlur": {
+        "iterations": 1,
+        "radius": 3.0,
+        "strength": 1.0
+      },
+      "id": 100081,
+      "inputs": [
+        {
+          "id": 100082,
+          "label": "A",
+          "valueType": 3
+        },
+        {
+          "id": 100083,
+          "label": "B",
+          "valueType": 3
+        }
+      ],
+      "kind": 10,
+      "maskBlend": {
+        "intensity": 1.0,
+        "mode": 1
+      },
+      "maskCurvature": {
+        "gamma": 1.0,
+        "mode": 2,
+        "radius": 3,
+        "sensitivityMeters": 1.0,
+        "threshold": 0.0
+      },
+      "maskFluvial": {
+        "accumulationThreshold": 0.0,
+        "algorithm": 0,
+        "backend": 1,
+        "gamma": 0.5,
+        "inertia": 0.0,
+        "mfdExponent": 4.0,
+        "outputCurve": 0,
+        "pitFillIterations": 8,
+        "power": 1.600000023841858,
+        "softness": 0.15000000596046448
+      },
+      "maskLevels": {
+        "blackPoint": 0.0,
+        "gamma": 1.0,
+        "invert": false,
+        "whitePoint": 1.0
+      },
+      "maskNoise": {
+        "backend": 1,
+        "frequency": 4.0,
+        "lacunarity": 2.0,
+        "octaves": 4,
+        "persistence": 0.5,
+        "seed": 0
+      },
+      "maskSlope": {
+        "gamma": 1.0,
+        "invert": false,
+        "slopeMaxDeg": 60.0,
+        "slopeMinDeg": 25.0
+      },
+      "multiScaleErosion": {
+        "backend": 0,
+        "depositionStrength": 0.20000000298023224,
+        "enableDeposition": true,
+        "enableStreamPower": true,
+        "enableThermal": true,
+        "flowExponent": 1.2999999523162842,
+        "iterations": 50,
+        "maxStreamPower": 10000.0,
+        "rain": 2.5999999046325684,
+        "slopeExponent": 2.0,
+        "speStrength": 0.004000000189989805,
+        "speTimeStep": 1.0,
+        "streamExponent": 0.8999999761581421,
+        "thermalAngleDegrees": 30.0,
+        "thermalNoiseMax": 1.399999976158142,
+        "thermalNoiseMin": 0.8999999761581421,
+        "thermalNoiseWavelength": 0.002300000051036477,
+        "thermalNoisifyAngle": true,
+        "thermalStrength": 0.004999999888241291,
+        "useMultigrid": true
+      },
+      "outputs": [
+        {
+          "id": 100084,
+          "label": "Mask",
+          "valueType": 3
+        }
+      ],
+      "rock": {
+        "aspectVariation": 0.30000001192092896,
+        "backend": 1,
+        "bumpiness": 0.6000000238418579,
+        "coverage": 1.0,
+        "density": 8.0,
+        "edgeSharpness": 1.0,
+        "facetScale": 2.5,
+        "facetSharpness": 0.5,
+        "heightJitter": 0.5,
+        "layerCount": 1,
+        "orientationRule": 0,
+        "rockHeight": 1.5,
+        "rockSizeMaxM": 10.0,
+        "rockSizeMinM": 5.0,
+        "rotationVariation": 1.0,
+        "seed": 0,
+        "style": 0
+      },
+      "sediment": {
+        "backend": 1,
+        "convertTerrainToSediment": true,
+        "emissionAmountM": 0.5,
+        "emissionTime": 0.0,
+        "iterations": 40,
+        "largestDetailLevelM": 8.0,
+        "maskContrast": 0.0,
+        "sedimentViscosity": 0.20000000298023224,
+        "stabilizationIterations": 2
+      },
+      "shape": {
+        "kind": 0,
+        "relativeHeightPercent": 50.0,
+        "scaleMeters": 1024.0
+      },
+      "snow": {
+        "backend": 1,
+        "emissionAmount": 1.0,
+        "fillRadius": 3,
+        "maskMaxSnow": 1.0,
+        "slopeLimitMaxDeg": 60.0,
+        "slopeLimitMinDeg": 50.0,
+        "smoothingIterations": 8
+      },
+      "title": "Mask Blend"
+    }
+  ],
+  "previewPinId": 100043,
+  "previewStage": 12,
+  "selectedNodeId": 0,
+  "selectedNodeIds": [],
+  "settings": {
+    "clouds": {
+      "absorption": 0.1860000044107437,
+      "altitudeMax": 1776.0,
+      "altitudeMin": 0.0,
+      "color": [
+        0.757446825504303,
+        0.757446825504303,
+        0.757446825504303
+      ],
+      "coverage": 0.40299999713897705,
+      "densityMultiplier": 0.4880000054836273,
+      "enabled": true,
+      "fieldFalloff": 600.0,
+      "fieldRadius": 1500.0,
+      "horizontalScale": 4000.0,
+      "lightSamples": 6,
+      "lightStepMeters": 80.0,
+      "phaseEccentricity": 0.4000000059604645,
+      "qualitySamples": 32,
+      "seed": 1,
+      "shadowResolution": 1024,
+      "shadowSamples": 16,
+      "shadowStrength": 0.699999988079071,
+      "windDirectionDegrees": 45.0,
+      "windSpeedMetersPerSec": 0.0
+    },
+    "display": {
+      "cloudsEnabled": true,
+      "mode": 1,
+      "showFps": true
+    },
+    "preview": {
+      "gridCellCount": 30,
+      "gridCellSizeMeters": 100.0,
+      "gridColor": [
+        0.20000000298023224,
+        0.20000000298023224,
+        0.20000000298023224
+      ],
+      "lightingMode": 1,
+      "meshBackend": 1,
+      "showGrid": true,
+      "simulationResolution": 2048,
+      "tessellationFarDistance": 1000.0,
+      "tessellationMaxFactor": 2.0,
+      "tessellationMinFactor": 1.0,
+      "tessellationNearDistance": 450.0,
+      "viewportTessellation": true
+    },
+    "sky": {
+      "atmosphereDensity": 1.0,
+      "groundAlbedo": [
+        0.30000001192092896,
+        0.30000001192092896,
+        0.30000001192092896
+      ],
+      "mieEccentricity": 0.7599999904632568,
+      "mieStrength": 0.20000000298023224,
+      "mode": 0,
+      "sunGlowStrength": 0.30000001192092896,
+      "sunSizeDegrees": 2.5
+    }
+  },
+  "viewport": {
+    "fovDegrees": 26.991466522216797,
+    "orbitDistance": 1826.96142578125,
+    "pan": [
+      0.0,
+      -84.0
+    ],
+    "pitch": 0.5600000023841858,
+    "yaw": -33.63051986694336,
+    "zoom": 0.10366671532392502
+  }
+}
