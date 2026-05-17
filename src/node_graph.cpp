@@ -223,15 +223,13 @@ uint64_t HashColorizeSettings(const ColorizeSettings& settings)
 uint64_t HashMaskFluvialSettings(const MaskFluvialSettings& settings, int resolution)
 {
     uint64_t hash = 8589869056ull;
-    HashCombine(hash, static_cast<uint64_t>(settings.algorithm));
     HashCombine(hash, static_cast<uint64_t>(settings.outputCurve));
     HashCombine(hash, HashFloat(settings.accumulationThreshold));
     HashCombine(hash, HashFloat(settings.gamma));
     HashCombine(hash, HashFloat(settings.softness));
     HashCombine(hash, HashFloat(settings.power));
-    HashCombine(hash, static_cast<uint64_t>(settings.pitFillIterations));
+    HashCombine(hash, HashFloat(settings.largestDetailLevelM));
     HashCombine(hash, HashFloat(settings.mfdExponent));
-    HashCombine(hash, HashFloat(settings.inertia));
     HashCombine(hash, static_cast<uint64_t>(settings.backend));
     HashCombine(hash, static_cast<uint64_t>(resolution));
     return hash;
@@ -1764,7 +1762,7 @@ void ApplyMultiScaleErosion(HeightfieldGrid& grid, const MultiScaleErosionSettin
     grid.age.assign(targetCellCount, 0.0f);
 }
 
-// Mask Fluvial: D8 / MFD flow accumulation -> river-stream mask.
+// Mask Fluvial: MFD flow accumulation -> river-stream mask.
 // Heights pass through. Fills grid.mask with a normalized 0..1 mask
 // where the upstream-cell count exceeds accumulationThreshold.
 void ApplyMaskFluvial(HeightfieldGrid& grid, const MaskFluvialSettings& settings)
@@ -1786,16 +1784,62 @@ void ApplyMaskFluvial(HeightfieldGrid& grid, const MaskFluvialSettings& settings
         // Falls through to the CPU implementation on shader / dispatch failure.
     }
 
-    // 1. Iterative pit fill (Jacobi, double-buffered). Any interior cell
+    // 1. Build analysis heights. Largest Detail Level low-passes small
+    // wrinkles before flow routing, without modifying the output heightfield.
+    const float terrainSize = std::max(grid.terrainSizeMeters, 1.0f);
+    const float cellSize = terrainSize / static_cast<float>(std::max(1, n - 1));
+    const float largestDetailM = std::clamp(settings.largestDetailLevelM, cellSize, terrainSize * 0.5f);
+    const int detailRadius = std::clamp(static_cast<int>(std::round(largestDetailM / cellSize)), 1, 64);
+    std::vector<float> analysisHeights = grid.heights;
+    if (detailRadius > 1)
+    {
+        std::vector<float> temp(cellCount, 0.0f);
+        const float sigma = std::max(1.0f, static_cast<float>(detailRadius) * 0.5f);
+        const float invTwoSigma2 = 1.0f / (2.0f * sigma * sigma);
+        ParallelForRows(n, [&](int z) {
+            const size_t rowBase = static_cast<size_t>(z) * static_cast<size_t>(n);
+            for (int x = 0; x < n; ++x)
+            {
+                float sum = 0.0f;
+                float weightSum = 0.0f;
+                for (int ox = -detailRadius; ox <= detailRadius; ++ox)
+                {
+                    const int sx = std::clamp(x + ox, 0, n - 1);
+                    const float w = std::exp(-static_cast<float>(ox * ox) * invTwoSigma2);
+                    sum += analysisHeights[rowBase + static_cast<size_t>(sx)] * w;
+                    weightSum += w;
+                }
+                temp[rowBase + static_cast<size_t>(x)] = sum / std::max(weightSum, 1e-6f);
+            }
+        });
+        ParallelForRows(n, [&](int z) {
+            const size_t rowBase = static_cast<size_t>(z) * static_cast<size_t>(n);
+            for (int x = 0; x < n; ++x)
+            {
+                float sum = 0.0f;
+                float weightSum = 0.0f;
+                for (int oz = -detailRadius; oz <= detailRadius; ++oz)
+                {
+                    const int sz = std::clamp(z + oz, 0, n - 1);
+                    const float w = std::exp(-static_cast<float>(oz * oz) * invTwoSigma2);
+                    sum += temp[static_cast<size_t>(sz) * static_cast<size_t>(n) + static_cast<size_t>(x)] * w;
+                    weightSum += w;
+                }
+                analysisHeights[rowBase + static_cast<size_t>(x)] = sum / std::max(weightSum, 1e-6f);
+            }
+        });
+    }
+
+    // 2. Iterative pit fill (Jacobi, double-buffered). Any interior cell
     // whose 8 neighbours are all >= itself gets raised to (min_neighbour +
     // epsilon). Boundary cells act as outlets. We use Jacobi (read from
     // `filled`, write to `next`, swap) instead of Gauss-Seidel so the
     // sweep parallelises cleanly across rows. Jacobi propagates fills one
     // cell per iteration just like GS, so iteration count is the practical
     // tunable for "how deep a pit can be filled".
-    std::vector<float> filled = grid.heights;
+    std::vector<float> filled = std::move(analysisHeights);
     std::vector<float> next = filled;
-    const int pitIters = std::clamp(settings.pitFillIterations, 0, 64);
+    const int pitIters = MaskFluvialSettings{}.pitFillIterations;
     constexpr float kPitEpsilon = 1e-4f;
     for (int iter = 0; iter < pitIters; ++iter)
     {
@@ -1826,7 +1870,7 @@ void ApplyMaskFluvial(HeightfieldGrid& grid, const MaskFluvialSettings& settings
         std::swap(filled, next);
     }
 
-    // 2. Sort cell indices by height descending. Accumulation must process
+    // 3. Sort cell indices by height descending. Accumulation must process
     // each cell after every higher cell upstream of it has already pushed
     // its flow downhill, so a topological sort by elevation works.
     std::vector<int> indices(cellCount);
@@ -1834,8 +1878,8 @@ void ApplyMaskFluvial(HeightfieldGrid& grid, const MaskFluvialSettings& settings
     std::sort(std::execution::par, indices.begin(), indices.end(),
               [&filled](int a, int b) { return filled[a] > filled[b]; });
 
-    // 3. Flow accumulation. Each cell starts with weight 1 and pushes its
-    // accumulator to one (D8) or several (MFD) downhill neighbours.
+    // 4. Flow accumulation. Each cell starts with weight 1 and pushes its
+    // accumulator to several MFD downhill neighbours.
     std::vector<float> accum(cellCount, 1.0f);
     static const int kDx[8]    = {-1, 0, 1, -1, 1, -1, 0, 1};
     static const int kDz[8]    = {-1, -1, -1, 0, 0, 1, 1, 1};
@@ -1845,124 +1889,44 @@ void ApplyMaskFluvial(HeightfieldGrid& grid, const MaskFluvialSettings& settings
         1.41421356f, 1.0f, 1.41421356f,
     };
 
-    // Inertia bias: 0 = strict steepest descent (legacy), 1 = follow
-    // 3x3 Sobel-smoothed downhill direction. Directions aligned with
-    // the smoothed downhill get a bonus, directions opposite get pruned.
-    // Result: smoother, more meandering river paths instead of the
-    // jagged grid-aligned zig-zags D8 normally produces.
-    const float inertia = std::clamp(settings.inertia, 0.0f, 1.0f);
-    auto computeAlignmentFactors = [&](int x, int z, float (&factors)[8]) {
-        if (inertia <= 0.0f || x <= 0 || x >= n - 1 || z <= 0 || z >= n - 1)
-        {
-            for (int k = 0; k < 8; ++k) factors[k] = 1.0f;
-            return;
-        }
-        auto H = [&](int xx, int zz) -> float {
-            return filled[static_cast<size_t>(zz) * n + xx];
-        };
-        // Sobel 3x3 — Sx,Sz point UPHILL. Downhill = -(Sx,Sz).
-        const float Sx = (H(x+1, z-1) - H(x-1, z-1)) +
-                         2.0f * (H(x+1, z) - H(x-1, z)) +
-                         (H(x+1, z+1) - H(x-1, z+1));
-        const float Sz = (H(x-1, z+1) - H(x-1, z-1)) +
-                         2.0f * (H(x, z+1) - H(x, z-1)) +
-                         (H(x+1, z+1) - H(x+1, z-1));
-        const float downX = -Sx;
-        const float downZ = -Sz;
-        const float gmag = std::sqrt(downX * downX + downZ * downZ);
-        if (gmag < 1e-6f)
-        {
-            for (int k = 0; k < 8; ++k) factors[k] = 1.0f;
-            return;
-        }
-        const float invMag = 1.0f / gmag;
-        const float dnX = downX * invMag;
-        const float dnZ = downZ * invMag;
+    const float p = std::clamp(settings.mfdExponent, 0.1f, 16.0f);
+    for (int idx : indices)
+    {
+        const int x = idx % n;
+        const int z = idx / n;
+        const float h = filled[static_cast<size_t>(idx)];
+        float weights[8] = {0};
+        float weightSum = 0.0f;
         for (int k = 0; k < 8; ++k)
         {
-            const float dirX = static_cast<float>(kDx[k]) / kDist[k];
-            const float dirZ = static_cast<float>(kDz[k]) / kDist[k];
-            const float align = std::max(0.0f, dirX * dnX + dirZ * dnZ);
-            factors[k] = (1.0f - inertia) + inertia * align;
-        }
-    };
-
-    if (settings.algorithm == FlowAccumulationAlgorithm::D8)
-    {
-        for (int idx : indices)
-        {
-            const int x = idx % n;
-            const int z = idx / n;
-            const float h = filled[static_cast<size_t>(idx)];
-            float align[8];
-            computeAlignmentFactors(x, z, align);
-            int bestK = -1;
-            float bestScore = 0.0f;
-            for (int k = 0; k < 8; ++k)
+            const int nx = x + kDx[k];
+            const int nz = z + kDz[k];
+            if (nx < 0 || nx >= n || nz < 0 || nz >= n) continue;
+            const float nh = filled[static_cast<size_t>(nz) * n + nx];
+            const float slope = (h - nh) / kDist[k];
+            if (slope > 0.0f)
             {
-                const int nx = x + kDx[k];
-                const int nz = z + kDz[k];
-                if (nx < 0 || nx >= n || nz < 0 || nz >= n) continue;
-                const float nh = filled[static_cast<size_t>(nz) * n + nx];
-                const float slope = (h - nh) / kDist[k];
-                const float score = slope * align[k];
-                if (score > bestScore) { bestScore = score; bestK = k; }
-            }
-            if (bestK >= 0)
-            {
-                const int nx = x + kDx[bestK];
-                const int nz = z + kDz[bestK];
-                accum[static_cast<size_t>(nz) * n + nx] += accum[static_cast<size_t>(idx)];
+                weights[k] = std::pow(slope, p);
+                weightSum += weights[k];
             }
         }
-    }
-    else
-    {
-        const float p = std::clamp(settings.mfdExponent, 0.1f, 16.0f);
-        for (int idx : indices)
+        if (weightSum > 0.0f)
         {
-            const int x = idx % n;
-            const int z = idx / n;
-            const float h = filled[static_cast<size_t>(idx)];
-            float align[8];
-            computeAlignmentFactors(x, z, align);
-            float weights[8] = {0};
-            float weightSum = 0.0f;
+            const float inv = 1.0f / weightSum;
+            const float a = accum[static_cast<size_t>(idx)];
             for (int k = 0; k < 8; ++k)
             {
-                const int nx = x + kDx[k];
-                const int nz = z + kDz[k];
-                if (nx < 0 || nx >= n || nz < 0 || nz >= n) continue;
-                const float nh = filled[static_cast<size_t>(nz) * n + nx];
-                const float slope = (h - nh) / kDist[k];
-                if (slope > 0.0f)
+                if (weights[k] > 0.0f)
                 {
-                    // Lift `align` to the same exponent as `slope` so the
-                    // inertia bias has comparable strength to the slope
-                    // distribution. Otherwise (with default p=4) slope^4
-                    // dominates and align (linear) barely shifts proportions.
-                    weights[k] = std::pow(slope * align[k], p);
-                    weightSum += weights[k];
-                }
-            }
-            if (weightSum > 0.0f)
-            {
-                const float inv = 1.0f / weightSum;
-                const float a = accum[static_cast<size_t>(idx)];
-                for (int k = 0; k < 8; ++k)
-                {
-                    if (weights[k] > 0.0f)
-                    {
-                        const int nx = x + kDx[k];
-                        const int nz = z + kDz[k];
-                        accum[static_cast<size_t>(nz) * n + nx] += a * weights[k] * inv;
-                    }
+                    const int nx = x + kDx[k];
+                    const int nz = z + kDz[k];
+                    accum[static_cast<size_t>(nz) * n + nx] += a * weights[k] * inv;
                 }
             }
         }
     }
 
-    // 4. Convert accumulation to mask. Threshold is interpreted as a
+    // 5. Convert accumulation to mask. Threshold is interpreted as a
     // fraction of grid cells so it stays meaningful across resolutions.
     // The per-cell math is heavy (std::log / std::pow), so the row sweep
     // here parallelises cleanly and is a big win at higher resolutions.

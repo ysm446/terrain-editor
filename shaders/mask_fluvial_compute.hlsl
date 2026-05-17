@@ -1,6 +1,6 @@
 // Mask Fluvial compute shader.
 //
-// GPU port of the D8 / MFD flow accumulation in src/node_graph.cpp
+// GPU port of the MFD flow accumulation in src/node_graph.cpp
 // (ApplyMaskFluvial). The CPU version is a sort + topological walk
 // (inherently sequential). The GPU version uses an iterative Jacobi
 // gather instead — all cells update in parallel each iteration, with
@@ -9,15 +9,17 @@
 // to the CPU output but not bit-identical (gather order differs, so
 // floating-point accumulation order differs).
 //
-// 5-stage pipeline:
+// Pipeline:
 //
+//   CSCopyInputHeights — copy raw heights into the analysis height buffer.
+//   CSBlurHorizontal / CSBlurVertical — optional Largest Detail Level
+//                       low-pass on analysis heights only.
 //   CSPitFillJacobi  — Jacobi double-buffered pit fill, one dispatch per
 //                       iteration (read from PrevHeights, write to NextHeights).
 //   CSCommitHeights  — copy PitFill result back into Heights for the rest
 //                       of the pipeline.
-//   CSComputeWeights — D8 / MFD per-cell receiver weights into 8-float
+//   CSComputeWeights — MFD per-cell receiver weights into 8-float
 //                       OutWeights (k order: NW, N, NE, W, E, SW, S, SE).
-//                       Set algorithmIsMfd = 0 / 1.
 //   CSAccumIter      — Jacobi gather: for each cell c, scan its 8
 //                       neighbours; if neighbour n's weight in the direction
 //                       toward c is > 0, add accum_prev[n] * weight to c.
@@ -39,7 +41,7 @@
 cbuffer MaskFluvialConstants : register(b0)
 {
     uint  resolution;
-    uint  algorithmIsMfd;
+    uint  algorithmIsMfd;   // Legacy padding slot. Mask Fluvial evaluates as MFD.
     float mfdExponent;
     uint  accumDirection;   // 0: read AccumA → write AccumB.  1: read AccumB → write AccumA.
 
@@ -50,9 +52,13 @@ cbuffer MaskFluvialConstants : register(b0)
     float power;
 
     uint  outputCurve;      // 0=Log, 1=Threshold, 2=Linear
-    float inertia;          // 0..1. Bias receivers toward 3x3 Sobel-smoothed downhill direction.
-    float pad0;
-    float pad1;
+    float inertia;          // Legacy padding slot. Inertia is fixed to 0 in Mask Fluvial.
+    uint  detailBlurRadius; // Largest Detail Level converted to cells.
+    uint  pad0;
+    uint  pad1;
+    uint  pad2;
+    uint  pad3;
+    uint  pad4;
 };
 
 RWStructuredBuffer<float> Heights       : register(u0);
@@ -98,6 +104,52 @@ void CSCopyInputHeights(uint3 dt : SV_DispatchThreadID)
 }
 
 [numthreads(8, 8, 1)]
+void CSBlurHorizontal(uint3 dt : SV_DispatchThreadID)
+{
+    uint x = dt.x;
+    uint z = dt.y;
+    if (x >= resolution || z >= resolution) return;
+
+    int radius = clamp((int)detailBlurRadius, 1, 64);
+    float sigma = max(1.0f, (float)radius * 0.5f);
+    float invTwoSigma2 = 1.0f / (2.0f * sigma * sigma);
+    float sum = 0.0f;
+    float weightSum = 0.0f;
+    [loop]
+    for (int ox = -radius; ox <= radius; ++ox)
+    {
+        uint sx = (uint)clamp((int)x + ox, 0, (int)resolution - 1);
+        float w = exp(-(float)(ox * ox) * invTwoSigma2);
+        sum += Heights[z * resolution + sx] * w;
+        weightSum += w;
+    }
+    HeightsScratch[z * resolution + x] = sum / max(1e-6f, weightSum);
+}
+
+[numthreads(8, 8, 1)]
+void CSBlurVertical(uint3 dt : SV_DispatchThreadID)
+{
+    uint x = dt.x;
+    uint z = dt.y;
+    if (x >= resolution || z >= resolution) return;
+
+    int radius = clamp((int)detailBlurRadius, 1, 64);
+    float sigma = max(1.0f, (float)radius * 0.5f);
+    float invTwoSigma2 = 1.0f / (2.0f * sigma * sigma);
+    float sum = 0.0f;
+    float weightSum = 0.0f;
+    [loop]
+    for (int oz = -radius; oz <= radius; ++oz)
+    {
+        uint sz = (uint)clamp((int)z + oz, 0, (int)resolution - 1);
+        float w = exp(-(float)(oz * oz) * invTwoSigma2);
+        sum += HeightsScratch[sz * resolution + x] * w;
+        weightSum += w;
+    }
+    Heights[z * resolution + x] = sum / max(1e-6f, weightSum);
+}
+
+[numthreads(8, 8, 1)]
 void CSPitFillJacobi(uint3 dt : SV_DispatchThreadID)
 {
     uint x = dt.x;
@@ -136,42 +188,6 @@ void CSCommitHeights(uint3 dt : SV_DispatchThreadID)
     Heights[i] = HeightsScratch[i];
 }
 
-// Compute inertia bias factor per direction. Returns 1.0 for every
-// direction when inertia = 0 or the cell is on the boundary or the
-// gradient is degenerate (flat). Otherwise returns
-// (1 - inertia) + inertia * max(0, dot(dir_k, downhill_smoothed)).
-void ComputeAlignmentFactors(int x, int z, out float factors[8])
-{
-    [unroll]
-    for (int kInit = 0; kInit < 8; ++kInit) factors[kInit] = 1.0f;
-
-    if (inertia <= 0.0f) return;
-    if (x <= 0 || x >= (int)resolution - 1 || z <= 0 || z >= (int)resolution - 1) return;
-
-    uint baseIdx = (uint)z * resolution + (uint)x;
-    float Sx = (Heights[baseIdx + 1u - resolution] - Heights[baseIdx - 1u - resolution]) +
-               2.0f * (Heights[baseIdx + 1u] - Heights[baseIdx - 1u]) +
-               (Heights[baseIdx + 1u + resolution] - Heights[baseIdx - 1u + resolution]);
-    float Sz = (Heights[baseIdx - 1u + resolution] - Heights[baseIdx - 1u - resolution]) +
-               2.0f * (Heights[baseIdx + resolution] - Heights[baseIdx - resolution]) +
-               (Heights[baseIdx + 1u + resolution] - Heights[baseIdx + 1u - resolution]);
-    float downX = -Sx;
-    float downZ = -Sz;
-    float gmag = sqrt(downX * downX + downZ * downZ);
-    if (gmag < 1e-6f) return;
-    float invMag = 1.0f / gmag;
-    float dnX = downX * invMag;
-    float dnZ = downZ * invMag;
-    [unroll]
-    for (int k = 0; k < 8; ++k)
-    {
-        float dirX = (float)kDx[k] / kDist[k];
-        float dirZ = (float)kDz[k] / kDist[k];
-        float a = max(0.0f, dirX * dnX + dirZ * dnZ);
-        factors[k] = (1.0f - inertia) + inertia * a;
-    }
-}
-
 [numthreads(8, 8, 1)]
 void CSComputeWeights(uint3 dt : SV_DispatchThreadID)
 {
@@ -181,63 +197,29 @@ void CSComputeWeights(uint3 dt : SV_DispatchThreadID)
     uint i = z * resolution + x;
     float h = Heights[i];
 
-    float align[8];
-    ComputeAlignmentFactors((int)x, (int)z, align);
-
-    if (algorithmIsMfd == 0u)
+    // MFD — per-direction slope^p, normalised so all positive weights sum to 1.
+    float w[8];
+    float sum = 0.0f;
+    [unroll]
+    for (int k = 0; k < 8; ++k)
     {
-        // D8 — single steepest-descent direction (weight = 1.0), with
-        // inertia bias applied to the slope-vs-direction comparison.
-        int bestK = -1;
-        float bestScore = 0.0f;
-        [unroll]
-        for (int k = 0; k < 8; ++k)
+        int nx = (int)x + kDx[k];
+        int nz = (int)z + kDz[k];
+        float wk = 0.0f;
+        if (!(nx < 0 || nx >= (int)resolution || nz < 0 || nz >= (int)resolution))
         {
-            int nx = (int)x + kDx[k];
-            int nz = (int)z + kDz[k];
-            if (nx < 0 || nx >= (int)resolution || nz < 0 || nz >= (int)resolution) continue;
             float nh = Heights[(uint)nz * resolution + (uint)nx];
             float slope = (h - nh) / kDist[k];
-            float score = slope * align[k];
-            if (score > bestScore) { bestScore = score; bestK = k; }
+            if (slope > 0.0f) wk = pow(slope, mfdExponent);
         }
-        [unroll]
-        for (int k2 = 0; k2 < 8; ++k2)
-        {
-            Weights[i * 8u + (uint)k2] = (k2 == bestK) ? 1.0f : 0.0f;
-        }
+        w[k] = wk;
+        sum += wk;
     }
-    else
+    float inv = (sum > 0.0f) ? (1.0f / sum) : 0.0f;
+    [unroll]
+    for (int k3 = 0; k3 < 8; ++k3)
     {
-        // MFD — per-direction slope^p × align, normalised so all
-        // positive weights sum to 1.
-        float w[8];
-        float sum = 0.0f;
-        [unroll]
-        for (int k = 0; k < 8; ++k)
-        {
-            int nx = (int)x + kDx[k];
-            int nz = (int)z + kDz[k];
-            float wk = 0.0f;
-            if (!(nx < 0 || nx >= (int)resolution || nz < 0 || nz >= (int)resolution))
-            {
-                float nh = Heights[(uint)nz * resolution + (uint)nx];
-                float slope = (h - nh) / kDist[k];
-                // Lift `align` to the same exponent as `slope` (= mfdExponent)
-                // so the inertia bias has comparable strength to the slope
-                // distribution. Without this, slope^p (default p=4) dominates
-                // and the linear align barely shifts proportions.
-                if (slope > 0.0f) wk = pow(slope * align[k], mfdExponent);
-            }
-            w[k] = wk;
-            sum += wk;
-        }
-        float inv = (sum > 0.0f) ? (1.0f / sum) : 0.0f;
-        [unroll]
-        for (int k3 = 0; k3 < 8; ++k3)
-        {
-            Weights[i * 8u + (uint)k3] = w[k3] * inv;
-        }
+        Weights[i * 8u + (uint)k3] = w[k3] * inv;
     }
 }
 

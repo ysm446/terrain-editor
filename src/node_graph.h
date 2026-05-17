@@ -399,14 +399,14 @@ struct ColorizeSettings
     ColorizeBackend backend = ColorizeBackend::GpuCompute;
 };
 
-// Heightfield -> mask. Performs D8 (or MFD) flow accumulation on the
+// Heightfield -> mask. Performs MFD flow accumulation on the
 // input heights and emits a mask. The default Log curve produces the
 // classic continuous dendritic drainage tree (every cell visible, fine
 // branches dim, main trunks bright). Switch to Threshold for sharp
 // binary river extraction or Linear for a non-log continuous map.
 struct MaskFluvialSettings
 {
-    FlowAccumulationAlgorithm algorithm = FlowAccumulationAlgorithm::D8;
+    FlowAccumulationAlgorithm algorithm = FlowAccumulationAlgorithm::MFD; // Legacy serialized field. Mask Fluvial now evaluates as MFD.
     MaskFluvialOutputCurve outputCurve = MaskFluvialOutputCurve::Log;
     // In Log/Linear modes: noise floor — cells with fewer upstream cells
     // than this fraction of the grid get clipped to 0. Default 0 shows
@@ -417,13 +417,10 @@ struct MaskFluvialSettings
     float gamma = 0.5f;           // Log/Linear curve exponent (lower = brighter leaves)
     float softness = 0.15f;       // Threshold mode: smoothstep transition width
     float power = 1.6f;           // Threshold mode: pow(mask, power) for edge taper
-    int pitFillIterations = 8;    // 0 keeps lakes, ~8 removes most local pits
-    float mfdExponent = 4.0f;     // MFD slope exponent (only when MFD selected)
-    // 0..1. 受信ウェイト計算時に「Sobel 3x3 で平滑化された下流方向」へのバイアスを混ぜる係数。
-    // 0 = 完全にローカル最急降下 (従来)、1 = 平滑化下流方向に強く従う (滑らかに蛇行する川)。
-    // GeoGen の particle inertia とは別物 (粒子状態を持たないため) だが、
-    // 視覚的には同様に「グリッド整列のジグザグ化を抑え、滑らかな川筋」を狙った効果。
-    float inertia = 0.0f;
+    int pitFillIterations = 8;    // Legacy serialized setting. Internally fixed to the default.
+    float largestDetailLevelM = 8.0f; // m. Low-pass scale for flow-direction analysis; larger values ignore smaller terrain wrinkles.
+    float mfdExponent = 4.0f;     // Flow concentration. Higher = more channelised, lower = more distributed.
+    float inertia = 0.0f;         // Legacy serialized setting. Internally fixed to the default.
     MaskFluvialBackend backend = MaskFluvialBackend::GpuCompute; // CPU 厳密 (sort + topological walk) vs GPU 反復 (Jacobi gather, ~2*resolution iters; 視覚的に同等だが数値は完全一致せず). 既定 GPU. シェーダー / ディスパッチ失敗時は CPU に自動フォールバック.
 };
 

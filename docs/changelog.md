@@ -5,6 +5,12 @@
 - 予定タスクに、スプラインパスのネットワークから山脈や尾根の土台になる `Heightmap` と `Mask` を作る `Spline` ノードを追加しました。
 - `docs/plan/terrain_workflow.md` を追加し、岩、土、植生、砂礫を分けて考える地形制作の基礎フローを整理しました。
 
+## 0.18.15 - 2026-05-18 06:12
+
+- `Mask Fluvial` ノードに `Largest Detail Level (m)` を追加しました。`4 m` / `8 m` / `16 m` / `32 m` / `64 m` から選択でき、流向計算前の解析用ハイトを分離ガウスブラーでならして、小さな凹凸をどの程度無視するかを調整できます。入力ハイトフィールド自体は変更せず、CPU / GPU の両バックエンドに反映します。
+- `Mask Fluvial` の `Algorithm` UI を外し、流量累積を MFD 固定にしました。旧プロジェクトに保存された D8 設定は読み込み時に MFD として扱い、細さや集中度は `Flow Concentration` で調整します。
+- 効果が分かりにくかった `Mask Fluvial` の `Pit Fill Iterations` と `Inertia (%)` をプロパティ UI から外し、内部既定値へ固定しました。主要な調整軸は `Largest Detail Level` / `Flow Concentration` / `Output Curve` / `Threshold` / `Gamma` に整理しています。
+
 ## 0.18.14 - 2026-05-18 05:41
 
 - `Snow` ノードに GeoGen Snow 相当の `Largest Detail Level (m)` を追加しました。`4 m` / `8 m` / `16 m` / `32 m` / `64 m` から選択でき、積雪面の隙間埋めに使う最大スケールをメートル単位で調整できます。

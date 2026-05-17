@@ -602,6 +602,8 @@ ComPtr<ID3D12RootSignature> g_maskFluvialComputeRootSignature;
 ComPtr<ID3D12PipelineState> g_mfPitFillPso;
 ComPtr<ID3D12PipelineState> g_mfCommitHeightsPso;
 ComPtr<ID3D12PipelineState> g_mfCopyInputHeightsPso;
+ComPtr<ID3D12PipelineState> g_mfBlurHorizontalPso;
+ComPtr<ID3D12PipelineState> g_mfBlurVerticalPso;
 ComPtr<ID3D12PipelineState> g_mfComputeWeightsPso;
 ComPtr<ID3D12PipelineState> g_mfAccumInitPso;
 ComPtr<ID3D12PipelineState> g_mfAccumIterPso;
@@ -1198,6 +1200,8 @@ void CleanupD3D()
     g_mfPitFillPso.Reset();
     g_mfCommitHeightsPso.Reset();
     g_mfCopyInputHeightsPso.Reset();
+    g_mfBlurHorizontalPso.Reset();
+    g_mfBlurVerticalPso.Reset();
     g_mfComputeWeightsPso.Reset();
     g_mfAccumInitPso.Reset();
     g_mfAccumIterPso.Reset();
@@ -2201,9 +2205,8 @@ nlohmann::json MakeMaskSettingsJson(const rock::Node& node)
             {"gamma", node.maskFluvial.gamma},
             {"softness", node.maskFluvial.softness},
             {"power", node.maskFluvial.power},
-            {"pitFillIterations", node.maskFluvial.pitFillIterations},
+            {"largestDetailLevelM", node.maskFluvial.largestDetailLevelM},
             {"mfdExponent", node.maskFluvial.mfdExponent},
-            {"inertia", node.maskFluvial.inertia},
             {"backend", static_cast<int>(node.maskFluvial.backend)},
         }},
         {"maskCurvature", {
@@ -2504,10 +2507,8 @@ void ReadMaskSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     node.maskHeight.gamma = std::clamp(nodeMaskHeightJson.value("gamma", node.maskHeight.gamma), 0.05f, 8.0f);
     node.maskHeight.invert = nodeMaskHeightJson.value("invert", node.maskHeight.invert);
     {
-        const int algoInt = std::clamp(nodeMaskFluvialJson.value("algorithm", static_cast<int>(node.maskFluvial.algorithm)),
-                                        static_cast<int>(rock::FlowAccumulationAlgorithm::D8),
-                                        static_cast<int>(rock::FlowAccumulationAlgorithm::MFD));
-        node.maskFluvial.algorithm = static_cast<rock::FlowAccumulationAlgorithm>(algoInt);
+        (void)nodeMaskFluvialJson.value("algorithm", static_cast<int>(node.maskFluvial.algorithm));
+        node.maskFluvial.algorithm = rock::FlowAccumulationAlgorithm::MFD;
     }
     {
         const int curveInt = std::clamp(nodeMaskFluvialJson.value("outputCurve", static_cast<int>(node.maskFluvial.outputCurve)),
@@ -2519,9 +2520,12 @@ void ReadMaskSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     node.maskFluvial.gamma = std::clamp(nodeMaskFluvialJson.value("gamma", node.maskFluvial.gamma), 0.05f, 8.0f);
     node.maskFluvial.softness = std::clamp(nodeMaskFluvialJson.value("softness", node.maskFluvial.softness), 0.001f, 4.0f);
     node.maskFluvial.power = std::clamp(nodeMaskFluvialJson.value("power", node.maskFluvial.power), 0.1f, 8.0f);
-    node.maskFluvial.pitFillIterations = std::clamp(nodeMaskFluvialJson.value("pitFillIterations", node.maskFluvial.pitFillIterations), 0, 64);
+    (void)nodeMaskFluvialJson.value("pitFillIterations", node.maskFluvial.pitFillIterations);
+    node.maskFluvial.pitFillIterations = rock::MaskFluvialSettings{}.pitFillIterations;
+    node.maskFluvial.largestDetailLevelM = std::clamp(nodeMaskFluvialJson.value("largestDetailLevelM", node.maskFluvial.largestDetailLevelM), 1.0f, 1024.0f);
     node.maskFluvial.mfdExponent = std::clamp(nodeMaskFluvialJson.value("mfdExponent", node.maskFluvial.mfdExponent), 0.1f, 16.0f);
-    node.maskFluvial.inertia = std::clamp(nodeMaskFluvialJson.value("inertia", node.maskFluvial.inertia), 0.0f, 1.0f);
+    (void)nodeMaskFluvialJson.value("inertia", node.maskFluvial.inertia);
+    node.maskFluvial.inertia = rock::MaskFluvialSettings{}.inertia;
     {
         const int backendInt = std::clamp(nodeMaskFluvialJson.value("backend", static_cast<int>(node.maskFluvial.backend)),
                                            static_cast<int>(rock::MaskFluvialBackend::CpuReference),
@@ -6185,15 +6189,20 @@ struct MaskFluvialShaderConstants
 
     UINT  outputCurve;
     float inertia;
-    float pad0;
-    float pad1;
+    UINT  detailBlurRadius;
+    UINT  pad0;
+    UINT  pad1;
+    UINT  pad2;
+    UINT  pad3;
+    UINT  pad4;
 };
-static_assert(sizeof(MaskFluvialShaderConstants) == 12 * sizeof(UINT), "MaskFluvialShaderConstants must be 12 DWORDs");
+static_assert(sizeof(MaskFluvialShaderConstants) == 16 * sizeof(UINT), "MaskFluvialShaderConstants must be 16 DWORDs");
 
 bool EnsureMaskFluvialComputePipeline(std::string* error)
 {
     if (g_maskFluvialComputeReady && g_maskFluvialComputeRootSignature
         && g_mfPitFillPso && g_mfCommitHeightsPso && g_mfCopyInputHeightsPso
+        && g_mfBlurHorizontalPso && g_mfBlurVerticalPso
         && g_mfComputeWeightsPso && g_mfAccumInitPso && g_mfAccumIterPso
         && g_mfMaxReducePso && g_mfToMaskLogPso && g_mfToMaskLinearPso && g_mfToMaskThresholdPso)
     {
@@ -6218,7 +6227,7 @@ bool EnsureMaskFluvialComputePipeline(std::string* error)
     rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     rootParams[0].Constants.ShaderRegister = 0;
     rootParams[0].Constants.RegisterSpace = 0;
-    rootParams[0].Constants.Num32BitValues = 12;
+    rootParams[0].Constants.Num32BitValues = 16;
     rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
@@ -6280,6 +6289,8 @@ bool EnsureMaskFluvialComputePipeline(std::string* error)
     struct Entry { const char* name; ComPtr<ID3D12PipelineState>* pso; };
     Entry entries[] = {
         {"CSCopyInputHeights", &g_mfCopyInputHeightsPso},
+        {"CSBlurHorizontal",    &g_mfBlurHorizontalPso},
+        {"CSBlurVertical",      &g_mfBlurVerticalPso},
         {"CSPitFillJacobi",    &g_mfPitFillPso},
         {"CSCommitHeights",    &g_mfCommitHeightsPso},
         {"CSComputeWeights",   &g_mfComputeWeightsPso},
@@ -6460,7 +6471,7 @@ bool RunMaskFluvialComputeImmediate(rock::HeightfieldGrid& grid, const rock::Mas
 
     MaskFluvialShaderConstants k{};
     k.resolution      = resolution;
-    k.algorithmIsMfd  = (settings.algorithm == rock::FlowAccumulationAlgorithm::MFD) ? 1u : 0u;
+    k.algorithmIsMfd  = 1u;
     k.mfdExponent     = std::clamp(settings.mfdExponent, 0.1f, 16.0f);
     k.accumDirection  = 0u;
     k.thresholdCells  = thresholdCells;
@@ -6468,9 +6479,12 @@ bool RunMaskFluvialComputeImmediate(rock::HeightfieldGrid& grid, const rock::Mas
     k.softness        = std::clamp(settings.softness, 0.001f, 4.0f);
     k.power           = std::clamp(settings.power, 0.1f, 8.0f);
     k.outputCurve     = static_cast<UINT>(settings.outputCurve);
-    k.inertia         = std::clamp(settings.inertia, 0.0f, 1.0f);
+    k.inertia         = 0.0f;
+    const float cellSizeMeters = std::max(grid.terrainSizeMeters, 1.0f) / static_cast<float>(std::max(1u, resolution - 1u));
+    const float largestDetailM = std::clamp(settings.largestDetailLevelM, cellSizeMeters, std::max(grid.terrainSizeMeters, 1.0f) * 0.5f);
+    k.detailBlurRadius = static_cast<UINT>(std::clamp(static_cast<int>(std::round(largestDetailM / cellSizeMeters)), 1, 64));
     auto setConstants = [&]() {
-        commandList->SetComputeRoot32BitConstants(0, 12, &k, 0);
+        commandList->SetComputeRoot32BitConstants(0, 16, &k, 0);
     };
 
     // 1. Copy input heights into the working Heights buffer.
@@ -6479,8 +6493,19 @@ bool RunMaskFluvialComputeImmediate(rock::HeightfieldGrid& grid, const rock::Mas
     commandList->Dispatch(groupCount, groupCount, 1);
     uavBarrier();
 
-    // 2. Pit fill iterations (Jacobi double-buffer + commit).
-    const int pitIters = std::clamp(settings.pitFillIterations, 0, 64);
+    // 2. Low-pass the analysis heights according to Largest Detail Level.
+    if (k.detailBlurRadius > 1u)
+    {
+        commandList->SetPipelineState(g_mfBlurHorizontalPso.Get());
+        commandList->Dispatch(groupCount, groupCount, 1);
+        uavBarrier();
+        commandList->SetPipelineState(g_mfBlurVerticalPso.Get());
+        commandList->Dispatch(groupCount, groupCount, 1);
+        uavBarrier();
+    }
+
+    // 3. Pit fill iterations (Jacobi double-buffer + commit).
+    const int pitIters = rock::MaskFluvialSettings{}.pitFillIterations;
     for (int i = 0; i < pitIters; ++i)
     {
         commandList->SetPipelineState(g_mfPitFillPso.Get());
@@ -6491,17 +6516,17 @@ bool RunMaskFluvialComputeImmediate(rock::HeightfieldGrid& grid, const rock::Mas
         uavBarrier();
     }
 
-    // 3. Compute receivers / weights from final Heights.
+    // 4. Compute receivers / weights from final Heights.
     commandList->SetPipelineState(g_mfComputeWeightsPso.Get());
     commandList->Dispatch(groupCount, groupCount, 1);
     uavBarrier();
 
-    // 4. Initialise AccumA = 1.0.
+    // 5. Initialise AccumA = 1.0.
     commandList->SetPipelineState(g_mfAccumInitPso.Get());
     commandList->Dispatch(groupCount, groupCount, 1);
     uavBarrier();
 
-    // 5. Iterative Jacobi gather. K = 2 * resolution iterations, even so
+    // 6. Iterative Jacobi gather. K = 2 * resolution iterations, even so
     //    the final result lands in AccumA. Direction alternates each iter.
     const int accumIters = static_cast<int>(resolution) * 2;
     for (int i = 0; i < accumIters; ++i)
@@ -6516,7 +6541,7 @@ bool RunMaskFluvialComputeImmediate(rock::HeightfieldGrid& grid, const rock::Mas
     k.accumDirection = 0u;
     setConstants();
 
-    // 6. For Log/Linear: reduce max(adjusted) into MaxScratch[0].
+    // 7. For Log/Linear: reduce max(adjusted) into MaxScratch[0].
     if (settings.outputCurve != rock::MaskFluvialOutputCurve::Threshold)
     {
         commandList->SetPipelineState(g_mfMaxReducePso.Get());
@@ -6524,7 +6549,7 @@ bool RunMaskFluvialComputeImmediate(rock::HeightfieldGrid& grid, const rock::Mas
         uavBarrier();
     }
 
-    // 7. Mask conversion.
+    // 8. Mask conversion.
     ID3D12PipelineState* maskPso = g_mfToMaskLogPso.Get();
     if (settings.outputCurve == rock::MaskFluvialOutputCurve::Threshold) maskPso = g_mfToMaskThresholdPso.Get();
     else if (settings.outputCurve == rock::MaskFluvialOutputCurve::Linear) maskPso = g_mfToMaskLinearPso.Get();
@@ -6532,7 +6557,7 @@ bool RunMaskFluvialComputeImmediate(rock::HeightfieldGrid& grid, const rock::Mas
     commandList->Dispatch(groupCount, groupCount, 1);
     uavBarrier();
 
-    // 8. Read back OutMask.
+    // 9. Read back OutMask.
     transition(outMaskBuf.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
     commandList->CopyBufferRegion(readbackMask.Get(), 0, outMaskBuf.Get(), 0, fieldByteSize);
     ThrowIfFailed(commandList->Close(), "Close MF command list failed");
@@ -13398,7 +13423,9 @@ bool DrawMaskFluvialProperties(rock::Node& editableNode)
     mf.gamma = std::clamp(mf.gamma, 0.05f, 8.0f);
     mf.softness = std::clamp(mf.softness, 0.001f, 4.0f);
     mf.power = std::clamp(mf.power, 0.1f, 8.0f);
-    mf.pitFillIterations = std::clamp(mf.pitFillIterations, 0, 64);
+    mf.pitFillIterations = rock::MaskFluvialSettings{}.pitFillIterations;
+    mf.inertia = rock::MaskFluvialSettings{}.inertia;
+    mf.largestDetailLevelM = std::clamp(mf.largestDetailLevelM, 1.0f, 1024.0f);
     mf.mfdExponent = std::clamp(mf.mfdExponent, 0.1f, 16.0f);
 
     {
@@ -13412,14 +13439,7 @@ bool DrawMaskFluvialProperties(rock::Node& editableNode)
         }
     }
 
-    int algoInt = static_cast<int>(mf.algorithm);
-    if (DrawPropertyComboRow("Algorithm", "MaskFluvialAlgorithm", &algoInt, "D8\0MFD\0\0", "流れ累積アルゴリズムです。D8 は最急降下方向のみに流す(細い線)、MFD は複数方向に重み付き分配(太い面)。", static_cast<int>(rock::MaskFluvialSettings{}.algorithm)))
-    {
-        mf.algorithm = static_cast<rock::FlowAccumulationAlgorithm>(std::clamp(algoInt,
-            static_cast<int>(rock::FlowAccumulationAlgorithm::D8),
-            static_cast<int>(rock::FlowAccumulationAlgorithm::MFD)));
-        EvaluateGraph();
-    }
+    mf.algorithm = rock::FlowAccumulationAlgorithm::MFD;
     int curveInt = static_cast<int>(mf.outputCurve);
     if (DrawPropertyComboRow("Output Curve", "MaskFluvialCurve", &curveInt, "Log\0Threshold\0Linear\0\0", "累積値をマスクへ写すカーブです。Log は連続的な樹枝状ドレナージマップ(既定、参考画像の見た目)、Threshold は閾値ベースの二値川筋抽出、Linear は非対数の連続マップ(主流偏重)。", static_cast<int>(rock::MaskFluvialSettings{}.outputCurve)))
     {
@@ -13453,20 +13473,29 @@ bool DrawMaskFluvialProperties(rock::Node& editableNode)
             EvaluateGraph();
         }
     }
-    if (DrawPropertyIntRow("Pit Fill Iterations", "MaskFluvialPitFill", &mf.pitFillIterations, 0, 64, rock::MaskFluvialSettings{}.pitFillIterations, "Mask fluvial pit fill changed", true, "局所窪みを埋める反復回数です。0 で湖を残し、増やすほど排水経路が確実につながります。"))
     {
-        EvaluateGraph();
-    }
-    if (DrawPropertyPercentRow("Inertia (%)", "MaskFluvialInertia", &mf.inertia, 0.0f, 1.0f, rock::MaskFluvialSettings{}.inertia, "Mask fluvial inertia changed", "受信ウェイト計算時に「3x3 Sobel で平滑化された下流方向」へのバイアスを混ぜます。0% で従来の最急降下のみ (グリッド整列のジグザグ川)、上げるほど滑らかに蛇行する川筋になります。30-70% が見栄え良し。100% で完全に平滑化下流方向に従います。"))
-    {
-        EvaluateGraph();
-    }
-    if (mf.algorithm == rock::FlowAccumulationAlgorithm::MFD)
-    {
-        if (DrawPropertyFloatRow("MFD Exponent", "MaskFluvialMfdExponent", &mf.mfdExponent, 0.1f, 16.0f, rock::MaskFluvialSettings{}.mfdExponent, "Mask fluvial MFD exponent changed", true, "MFD 時の下流分配の鋭さです。大きいほど D8 寄り(主流に集中)、小さいほど面的に広がります。"))
+        constexpr std::array<float, 5> kFluvialDetailLevels = {4.0f, 8.0f, 16.0f, 32.0f, 64.0f};
+        int detailIndex = 1;
+        float bestDistance = FLT_MAX;
+        for (int i = 0; i < static_cast<int>(kFluvialDetailLevels.size()); ++i)
         {
+            const float distance = std::abs(mf.largestDetailLevelM - kFluvialDetailLevels[static_cast<size_t>(i)]);
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                detailIndex = i;
+            }
+        }
+        if (DrawPropertyComboRow("Largest Detail Level (m)", "MaskFluvialLargestDetailLevel", &detailIndex, "4 m\0" "8 m\0" "16 m\0" "32 m\0" "64 m\0" "\0", "流向を計算する前の解析用ハイトをならす最大スケールです。4m は細かい支流や小さな窪みを拾いやすく、64m は小さな凹凸を無視して大きな谷筋を優先します。入力地形そのものは変更しません。", 1))
+        {
+            detailIndex = std::clamp(detailIndex, 0, static_cast<int>(kFluvialDetailLevels.size()) - 1);
+            mf.largestDetailLevelM = kFluvialDetailLevels[static_cast<size_t>(detailIndex)];
             EvaluateGraph();
         }
+    }
+    if (DrawPropertyFloatRow("Flow Concentration", "MaskFluvialMfdExponent", &mf.mfdExponent, 0.1f, 16.0f, rock::MaskFluvialSettings{}.mfdExponent, "Mask fluvial flow concentration changed", true, "MFD の下流分配の集中度です。大きいほど主流に集まり、小さいほど流域・湿地帯のように面で広がります。"))
+    {
+        EvaluateGraph();
     }
 
     ImGui::EndTable();

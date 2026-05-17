@@ -13,6 +13,9 @@
 
 ## 2026-05-18
 
+- `Mask Fluvial` ノードに `Largest Detail Level (m)` を追加し、流向計算前の解析用ハイトだけを分離ガウスブラーでならして、小さな凹凸をどの程度無視するかを選べるようにした。
+- `Mask Fluvial` の `Algorithm` UI を外し、自然な流路マスク向けに MFD 固定へ寄せた。旧 D8 保存値は読み込み時に MFD として扱う。
+- `Mask Fluvial` の `Pit Fill Iterations` と `Inertia (%)` を UI から外し、内部既定値へ固定した。調整軸を見た目に効きやすい項目へ絞った。
 - `Snow` ノードに GeoGen Snow 相当の `Largest Detail Level (m)` を追加し、4m / 8m / 16m / 32m / 64m から積雪面の隙間埋めスケールを選べるようにした。
 - `Snow` の大きな `Largest Detail Level` で方向性のある伸びが出にくいよう、envelope smoothing を分離ガウスブラーに変更した。横方向と縦方向で blur を作り、最後に一度だけ `max(original, blurred)` を適用する。
 - 表示設定に `地形境界` を追加し、断面壁と底面の表示を `なし` / `断面ポリゴン` / `ライン` から選べるようにした。`ライン` はハイトマップ四隅から高さ 0 へ落とすグレーの縦線と、下端をつなぐ正方形のラインで構成する。
