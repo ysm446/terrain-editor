@@ -208,6 +208,97 @@ float4 VSDisplacementShadow(uint vid : SV_VertexID) : SV_POSITION
     return float4(lightUv.x * 2.0 - 1.0, lightUv.y * 2.0 - 1.0, saturate(lightUv.z), 1.0);
 }
 
+float2 SectionUvForVertex(uint vid, out bool isBottomGrid, out bool isWallBottom, out float3 normal)
+{
+    uint M = (uint)displacementGridResolution;
+    uint wallVertexCount = 8u * M;
+    isBottomGrid = vid >= wallVertexCount;
+    isWallBottom = false;
+
+    if (isBottomGrid)
+    {
+        uint gridVid = vid - wallVertexCount;
+        uint x = gridVid % M;
+        uint z = gridVid / M;
+        normal = float3(0.0, -1.0, 0.0);
+        return float2(
+            (float)x / (displacementGridResolution - 1.0),
+            (float)z / (displacementGridResolution - 1.0));
+    }
+
+    uint side = vid / (2u * M);
+    uint sideLocal = vid - side * 2u * M;
+    uint i = sideLocal / 2u;
+    isWallBottom = (sideLocal & 1u) != 0u;
+    float t = (float)i / (displacementGridResolution - 1.0);
+
+    if (side == 0u)
+    {
+        normal = float3(0.0, 0.0, 1.0);
+        return float2(t, 0.0);
+    }
+    if (side == 1u)
+    {
+        normal = float3(1.0, 0.0, 0.0);
+        return float2(1.0, t);
+    }
+    if (side == 2u)
+    {
+        normal = float3(0.0, 0.0, -1.0);
+        return float2(1.0 - t, 1.0);
+    }
+
+    normal = float3(-1.0, 0.0, 0.0);
+    return float2(0.0, 1.0 - t);
+}
+
+VSOut VSDisplacementSection(uint vid : SV_VertexID)
+{
+    bool isBottomGrid;
+    bool isWallBottom;
+    float3 worldNor;
+    float2 uv = SectionUvForVertex(vid, isBottomGrid, isWallBottom, worldNor);
+    float3 worldPos = isWallBottom || isBottomGrid
+        ? float3(
+            lerp(-displacementHalfSize, displacementHalfSize, uv.x),
+            0.0,
+            lerp(displacementHalfSize, -displacementHalfSize, uv.y))
+        : SampleDisplacedWorldPos(uv.x, uv.y);
+
+    float3 view = worldPos - cameraPosition.xyz;
+    float cx = dot(view, cameraRight.xyz);
+    float cy = dot(view, cameraUp.xyz);
+    float d  = dot(view, cameraForward.xyz);
+
+    VSOut o;
+    o.pos = float4(
+        cx * projScaleX + panNdcX * d,
+        cy * projScaleY + panNdcY * d,
+        (d - nearPlane) / (farPlane - nearPlane) * d,
+        d);
+    o.worldNor = worldNor;
+    o.worldPos = worldPos;
+    o.mask = isBottomGrid ? 0.0 : 2.0;
+    o.vertexColor = float3(0.0, 0.0, 0.0);
+    return o;
+}
+
+float4 VSDisplacementSectionShadow(uint vid : SV_VertexID) : SV_POSITION
+{
+    bool isBottomGrid;
+    bool isWallBottom;
+    float3 worldNor;
+    float2 uv = SectionUvForVertex(vid, isBottomGrid, isWallBottom, worldNor);
+    float3 worldPos = isWallBottom || isBottomGrid
+        ? float3(
+            lerp(-displacementHalfSize, displacementHalfSize, uv.x),
+            0.0,
+            lerp(displacementHalfSize, -displacementHalfSize, uv.y))
+        : SampleDisplacedWorldPos(uv.x, uv.y);
+    float3 lightUv = LightSpace01(worldPos);
+    return float4(lightUv.x * 2.0 - 1.0, lightUv.y * 2.0 - 1.0, saturate(lightUv.z), 1.0);
+}
+
 struct PatchControlPoint
 {
     float2 uv : TEXCOORD0;

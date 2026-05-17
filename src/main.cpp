@@ -482,10 +482,12 @@ struct GpuMeshPreview
     uint64_t colorizeTextureUploadKey = 0;
     ComPtr<ID3D12Resource> displacementTriIndexBuffer;
     ComPtr<ID3D12Resource> displacementPatchIndexBuffer;
+    ComPtr<ID3D12Resource> displacementSectionIndexBuffer;
     ComPtr<ID3D12Resource> displacementEdgeIndexBuffer;
     int displacementMeshResolution = 0;
     UINT displacementTriIndexCount = 0;
     UINT displacementPatchIndexCount = 0;
+    UINT displacementSectionIndexCount = 0;
     UINT displacementEdgeIndexCount = 0;
     uint64_t displacementHeightUploadKey = 0;
     bool viewportTessellation = false;
@@ -507,6 +509,9 @@ ComPtr<ID3D12RootSignature> g_meshPreviewDisplacementRootSignature;
 ComPtr<ID3D12PipelineState> g_meshPreviewDisplacementSurfacePso;
 ComPtr<ID3D12PipelineState> g_meshPreviewDisplacementShadowPso;
 ComPtr<ID3D12PipelineState> g_meshPreviewDisplacementWirePso;
+ComPtr<ID3D12PipelineState> g_meshPreviewDisplacementSectionPso;
+ComPtr<ID3D12PipelineState> g_meshPreviewDisplacementSectionShadowPso;
+ComPtr<ID3D12PipelineState> g_meshPreviewDisplacementSectionWirePso;
 ComPtr<ID3D12PipelineState> g_meshPreviewDisplacementTessSurfacePso;
 ComPtr<ID3D12PipelineState> g_meshPreviewDisplacementTessShadowPso;
 ComPtr<ID3D12PipelineState> g_meshPreviewDisplacementTessWirePso;
@@ -1078,6 +1083,9 @@ void CleanupD3D()
     g_meshPreviewDisplacementSurfacePso.Reset();
     g_meshPreviewDisplacementShadowPso.Reset();
     g_meshPreviewDisplacementWirePso.Reset();
+    g_meshPreviewDisplacementSectionPso.Reset();
+    g_meshPreviewDisplacementSectionShadowPso.Reset();
+    g_meshPreviewDisplacementSectionWirePso.Reset();
     g_meshPreviewDisplacementTessSurfacePso.Reset();
     g_meshPreviewDisplacementTessShadowPso.Reset();
     g_meshPreviewDisplacementTessWirePso.Reset();
@@ -3425,7 +3433,7 @@ bool EnsureMeshPreviewDisplacementPipeline(std::string* error)
 #if defined(_DEBUG)
     compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
 #endif
-    ComPtr<ID3DBlob> vsBlob, psBlob, psEdgeBlob, vsShadowBlob, vsPatchBlob, hsPatchBlob, dsPatchBlob, dsPatchShadowBlob;
+    ComPtr<ID3DBlob> vsBlob, psBlob, psEdgeBlob, vsShadowBlob, vsSectionBlob, vsSectionShadowBlob, vsPatchBlob, hsPatchBlob, dsPatchBlob, dsPatchShadowBlob;
     hr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "VSDisplacement", "vs_5_0", compileFlags, 0, &vsBlob, &errBlob);
     if (FAILED(hr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile VSDisplacement failed"; return false; }
     errBlob.Reset();
@@ -3437,6 +3445,12 @@ bool EnsureMeshPreviewDisplacementPipeline(std::string* error)
     errBlob.Reset();
     hr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "VSDisplacementShadow", "vs_5_0", compileFlags, 0, &vsShadowBlob, &errBlob);
     if (FAILED(hr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile VSDisplacementShadow failed"; return false; }
+    errBlob.Reset();
+    hr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "VSDisplacementSection", "vs_5_0", compileFlags, 0, &vsSectionBlob, &errBlob);
+    if (FAILED(hr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile VSDisplacementSection failed"; return false; }
+    errBlob.Reset();
+    hr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "VSDisplacementSectionShadow", "vs_5_0", compileFlags, 0, &vsSectionShadowBlob, &errBlob);
+    if (FAILED(hr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile VSDisplacementSectionShadow failed"; return false; }
     errBlob.Reset();
     hr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "VSDisplacementPatch", "vs_5_0", compileFlags, 0, &vsPatchBlob, &errBlob);
     if (FAILED(hr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile VSDisplacementPatch failed"; return false; }
@@ -3495,6 +3509,45 @@ bool EnsureMeshPreviewDisplacementPipeline(std::string* error)
     psoDesc.BlendState.RenderTarget[0].BlendEnable = FALSE;
     psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
     psoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
+
+    psoDesc.VS = {vsSectionBlob->GetBufferPointer(), vsSectionBlob->GetBufferSize()};
+    psoDesc.PS = {psBlob->GetBufferPointer(), psBlob->GetBufferSize()};
+    psoDesc.HS = {};
+    psoDesc.DS = {};
+    psoDesc.NumRenderTargets = 1;
+    psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewDisplacementSectionPso));
+    if (FAILED(hr)) { if (error) *error = "Create displacement section PSO failed"; return false; }
+
+    psoDesc.PS = {psEdgeBlob->GetBufferPointer(), psEdgeBlob->GetBufferSize()};
+    psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_WIREFRAME;
+    psoDesc.RasterizerState.DepthBias = -64;
+    psoDesc.RasterizerState.SlopeScaledDepthBias = -0.25f;
+    psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    psoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    psoDesc.BlendState.RenderTarget[0].BlendEnable = TRUE;
+    psoDesc.BlendState.RenderTarget[0].SrcBlend = D3D12_BLEND_SRC_ALPHA;
+    psoDesc.BlendState.RenderTarget[0].DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+    psoDesc.BlendState.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
+    psoDesc.BlendState.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
+    psoDesc.BlendState.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+    psoDesc.BlendState.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewDisplacementSectionWirePso));
+    if (FAILED(hr)) { if (error) *error = "Create displacement section wire PSO failed"; return false; }
+
+    psoDesc.VS = {vsSectionShadowBlob->GetBufferPointer(), vsSectionShadowBlob->GetBufferSize()};
+    psoDesc.PS = {};
+    psoDesc.NumRenderTargets = 0;
+    psoDesc.RTVFormats[0] = DXGI_FORMAT_UNKNOWN;
+    psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+    psoDesc.RasterizerState.DepthBias = 1200;
+    psoDesc.RasterizerState.SlopeScaledDepthBias = 1.5f;
+    psoDesc.BlendState.RenderTarget[0].BlendEnable = FALSE;
+    psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    psoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
+    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewDisplacementSectionShadowPso));
+    if (FAILED(hr)) { if (error) *error = "Create displacement section shadow PSO failed"; return false; }
 
     // Shadow PSO — same root sig (so the shader can read displacement
     // constants + height texture), but writes only depth.
@@ -3563,6 +3616,7 @@ bool EnsureDisplacementGridIndexBuffers(int meshResolution, std::string* error)
     if (g_gpuMeshPreview.displacementMeshResolution == meshResolution &&
         g_gpuMeshPreview.displacementTriIndexBuffer &&
         g_gpuMeshPreview.displacementPatchIndexBuffer &&
+        g_gpuMeshPreview.displacementSectionIndexBuffer &&
         g_gpuMeshPreview.displacementEdgeIndexBuffer)
     {
         return true;
@@ -3577,6 +3631,8 @@ bool EnsureDisplacementGridIndexBuffers(int meshResolution, std::string* error)
     triIndices.reserve(static_cast<size_t>(M1) * static_cast<size_t>(M1) * 6u);
     std::vector<UINT> patchIndices;
     patchIndices.reserve(static_cast<size_t>(M1) * static_cast<size_t>(M1) * 4u);
+    std::vector<UINT> sectionIndices;
+    sectionIndices.reserve(static_cast<size_t>(M1) * static_cast<size_t>(M1) * 6u + static_cast<size_t>(M1) * 24u);
     for (int z = 0; z < M1; ++z)
     {
         for (int x = 0; x < M1; ++x)
@@ -3588,6 +3644,33 @@ bool EnsureDisplacementGridIndexBuffers(int meshResolution, std::string* error)
             triIndices.push_back(a); triIndices.push_back(b); triIndices.push_back(c);
             triIndices.push_back(a); triIndices.push_back(c); triIndices.push_back(d);
             patchIndices.push_back(a); patchIndices.push_back(b); patchIndices.push_back(c); patchIndices.push_back(d);
+        }
+    }
+
+    const UINT wallVertexCount = static_cast<UINT>(8 * M);
+    for (int side = 0; side < 4; ++side)
+    {
+        const UINT sideBase = static_cast<UINT>(side * 2 * M);
+        for (int i = 0; i < M1; ++i)
+        {
+            const UINT topA = sideBase + static_cast<UINT>(2 * i);
+            const UINT bottomA = topA + 1u;
+            const UINT topB = sideBase + static_cast<UINT>(2 * (i + 1));
+            const UINT bottomB = topB + 1u;
+            sectionIndices.push_back(topA); sectionIndices.push_back(topB); sectionIndices.push_back(bottomB);
+            sectionIndices.push_back(topA); sectionIndices.push_back(bottomB); sectionIndices.push_back(bottomA);
+        }
+    }
+    for (int z = 0; z < M1; ++z)
+    {
+        for (int x = 0; x < M1; ++x)
+        {
+            const UINT a = wallVertexCount + static_cast<UINT>(z * M + x);
+            const UINT b = wallVertexCount + static_cast<UINT>((z + 1) * M + x);
+            const UINT c = wallVertexCount + static_cast<UINT>((z + 1) * M + x + 1);
+            const UINT d = wallVertexCount + static_cast<UINT>(z * M + x + 1);
+            sectionIndices.push_back(a); sectionIndices.push_back(b); sectionIndices.push_back(c);
+            sectionIndices.push_back(a); sectionIndices.push_back(c); sectionIndices.push_back(d);
         }
     }
 
@@ -3644,6 +3727,11 @@ bool EnsureDisplacementGridIndexBuffers(int meshResolution, std::string* error)
         if (error) *error = "Create displacement patch IB failed";
         return false;
     }
+    if (!makeBuffer(sectionIndices.size() * sizeof(UINT), g_gpuMeshPreview.displacementSectionIndexBuffer))
+    {
+        if (error) *error = "Create displacement section IB failed";
+        return false;
+    }
     if (!makeBuffer(edgeIndices.size() * sizeof(UINT), g_gpuMeshPreview.displacementEdgeIndexBuffer))
     {
         if (error) *error = "Create displacement edge IB failed";
@@ -3667,6 +3755,13 @@ bool EnsureDisplacementGridIndexBuffers(int meshResolution, std::string* error)
     {
         void* mapped = nullptr;
         D3D12_RANGE readRange{0, 0};
+        g_gpuMeshPreview.displacementSectionIndexBuffer->Map(0, &readRange, &mapped);
+        std::memcpy(mapped, sectionIndices.data(), sectionIndices.size() * sizeof(UINT));
+        g_gpuMeshPreview.displacementSectionIndexBuffer->Unmap(0, nullptr);
+    }
+    {
+        void* mapped = nullptr;
+        D3D12_RANGE readRange{0, 0};
         g_gpuMeshPreview.displacementEdgeIndexBuffer->Map(0, &readRange, &mapped);
         std::memcpy(mapped, edgeIndices.data(), edgeIndices.size() * sizeof(UINT));
         g_gpuMeshPreview.displacementEdgeIndexBuffer->Unmap(0, nullptr);
@@ -3674,6 +3769,7 @@ bool EnsureDisplacementGridIndexBuffers(int meshResolution, std::string* error)
 
     g_gpuMeshPreview.displacementTriIndexCount = static_cast<UINT>(triIndices.size());
     g_gpuMeshPreview.displacementPatchIndexCount = static_cast<UINT>(patchIndices.size());
+    g_gpuMeshPreview.displacementSectionIndexCount = static_cast<UINT>(sectionIndices.size());
     g_gpuMeshPreview.displacementEdgeIndexCount = static_cast<UINT>(edgeIndices.size());
     g_gpuMeshPreview.displacementMeshResolution = meshResolution;
     return true;
@@ -9344,6 +9440,18 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
                 {
                     recordIndexedDraw(shadowIndexCount, true);
                 }
+                if (g_gpuMeshPreview.displacementSectionIndexCount > 0)
+                {
+                    D3D12_INDEX_BUFFER_VIEW sectionIbv{
+                        g_gpuMeshPreview.displacementSectionIndexBuffer->GetGPUVirtualAddress(),
+                        g_gpuMeshPreview.displacementSectionIndexCount * static_cast<UINT>(sizeof(UINT)),
+                        DXGI_FORMAT_R32_UINT};
+                    commandList->IASetIndexBuffer(&sectionIbv);
+                    commandList->SetPipelineState(g_meshPreviewDisplacementSectionShadowPso.Get());
+                    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+                    commandList->DrawIndexedInstanced(g_gpuMeshPreview.displacementSectionIndexCount, 1, 0, 0, 0);
+                    recordIndexedDraw(g_gpuMeshPreview.displacementSectionIndexCount, true);
+                }
                 renderStats.shadowPass = true;
 
                 // Restore CPU root sig + bindings for the surface / grid
@@ -9587,6 +9695,18 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             {
                 recordIndexedDraw(surfaceIndexCount, true);
             }
+            if (g_gpuMeshPreview.displacementSectionIndexCount > 0)
+            {
+                D3D12_INDEX_BUFFER_VIEW sectionIbv{
+                    g_gpuMeshPreview.displacementSectionIndexBuffer->GetGPUVirtualAddress(),
+                    g_gpuMeshPreview.displacementSectionIndexCount * static_cast<UINT>(sizeof(UINT)),
+                    DXGI_FORMAT_R32_UINT};
+                commandList->IASetIndexBuffer(&sectionIbv);
+                commandList->SetPipelineState(g_meshPreviewDisplacementSectionPso.Get());
+                commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+                commandList->DrawIndexedInstanced(g_gpuMeshPreview.displacementSectionIndexCount, 1, 0, 0, 0);
+                recordIndexedDraw(g_gpuMeshPreview.displacementSectionIndexCount, true);
+            }
             renderStats.surfacePass = true;
 
             // Restore the CPU root sig + constants for wireframe / grid
@@ -9682,6 +9802,18 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             else
             {
                 recordIndexedDraw(wireIndexCount, true);
+            }
+            if (g_gpuMeshPreview.displacementSectionIndexCount > 0)
+            {
+                D3D12_INDEX_BUFFER_VIEW sectionIbv{
+                    g_gpuMeshPreview.displacementSectionIndexBuffer->GetGPUVirtualAddress(),
+                    g_gpuMeshPreview.displacementSectionIndexCount * static_cast<UINT>(sizeof(UINT)),
+                    DXGI_FORMAT_R32_UINT};
+                commandList->IASetIndexBuffer(&sectionIbv);
+                commandList->SetPipelineState(g_meshPreviewDisplacementSectionWirePso.Get());
+                commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+                commandList->DrawIndexedInstanced(g_gpuMeshPreview.displacementSectionIndexCount, 1, 0, 0, 0);
+                recordIndexedDraw(g_gpuMeshPreview.displacementSectionIndexCount, true);
             }
             renderStats.wireframePass = true;
 
@@ -13166,14 +13298,16 @@ void DrawDebugPanel()
     ImGui::TextWrapped("%s", evaluation.status.c_str());
 
     const uint64_t displayedVertices = renderStats.gpuDisplacement && renderStats.displayMeshResolution > 0
-        ? static_cast<uint64_t>(renderStats.displayMeshResolution) * static_cast<uint64_t>(renderStats.displayMeshResolution)
+        ? static_cast<uint64_t>(renderStats.displayMeshResolution) * static_cast<uint64_t>(renderStats.displayMeshResolution) * 2u +
+            static_cast<uint64_t>(renderStats.displayMeshResolution) * 8u
         : static_cast<uint64_t>(g_gpuMeshPreview.vertexCount);
     const uint64_t displayedTriangles = renderStats.gpuDisplacement
         ? (renderStats.tessellation
             ? static_cast<uint64_t>(g_gpuMeshPreview.displacementPatchIndexCount / 4u) *
                 static_cast<uint64_t>(std::ceil(std::max(renderStats.tessellationMaxFactor, 1.0f))) *
-                static_cast<uint64_t>(std::ceil(std::max(renderStats.tessellationMaxFactor, 1.0f))) * 2u
-            : static_cast<uint64_t>(g_gpuMeshPreview.displacementTriIndexCount / 3u))
+                static_cast<uint64_t>(std::ceil(std::max(renderStats.tessellationMaxFactor, 1.0f))) * 2u +
+                static_cast<uint64_t>(g_gpuMeshPreview.displacementSectionIndexCount / 3u)
+            : static_cast<uint64_t>((g_gpuMeshPreview.displacementTriIndexCount + g_gpuMeshPreview.displacementSectionIndexCount) / 3u))
         : static_cast<uint64_t>(g_gpuMeshPreview.triIndexCount / 3u);
 
     ImGui::SeparatorText("Preview");
