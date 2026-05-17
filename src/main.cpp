@@ -50,7 +50,7 @@ extern LRESULT ImGui_ImplWin32_WndProcHandler(HWND hwnd, UINT msg, WPARAM wParam
 namespace
 {
 constexpr int kFrameCount = 2;
-constexpr int kSrvDescriptorCount = 64;
+constexpr int kSrvDescriptorCount = 128;
 constexpr float kFullFrameSensorHeightMm = 24.0f;
 constexpr float kDefaultViewportPitch = 0.72f;
 constexpr float kDefaultViewportFovDegrees = 45.0f;
@@ -313,7 +313,7 @@ struct MeshPreviewConstants
     float shadowBias;
     float shadowEnabled;
     float maskShadingMode;  // 0 = Grayscale, 1 = GrayOrange, 2 = GrayscaleHatched
-    float colorTextureMode; // 1 = use per-vertex color (Colorize node), 0 = use albedoColor
+    float colorTextureMode; // 1 = sample Colorize texture, 0 = use albedoColor
     float lightRight[4];
     float lightUp[4];
     float lightForward[4];
@@ -449,6 +449,12 @@ struct GpuMeshPreview
     D3D12_CPU_DESCRIPTOR_HANDLE displacementMaskSrvCpu{};
     D3D12_GPU_DESCRIPTOR_HANDLE displacementMaskSrvGpu{};
     bool displacementSrvAllocated = false;
+    D3D12_CPU_DESCRIPTOR_HANDLE meshResourceTableCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE meshResourceTableGpu{};
+    bool meshResourceTableAllocated = false;
+    ComPtr<ID3D12Resource> colorizeTexture;
+    int colorizeTextureResolution = 0;
+    uint64_t colorizeTextureUploadKey = 0;
     ComPtr<ID3D12Resource> displacementTriIndexBuffer;
     ComPtr<ID3D12Resource> displacementEdgeIndexBuffer;
     int displacementMeshResolution = 0;
@@ -785,6 +791,42 @@ void AllocateSrvDescriptor(ImGui_ImplDX12_InitInfo*, D3D12_CPU_DESCRIPTOR_HANDLE
     throw std::runtime_error("No free ImGui SRV descriptors");
 }
 
+void AllocateSrvDescriptorRange(int count, D3D12_CPU_DESCRIPTOR_HANDLE* outCpuHandle, D3D12_GPU_DESCRIPTOR_HANDLE* outGpuHandle)
+{
+    if (count <= 0 || count > kSrvDescriptorCount)
+    {
+        throw std::runtime_error("Invalid SRV descriptor range size");
+    }
+    for (int i = 0; i <= kSrvDescriptorCount - count; ++i)
+    {
+        bool available = true;
+        for (int j = 0; j < count; ++j)
+        {
+            if (g_srvDescriptorUsed[i + j])
+            {
+                available = false;
+                break;
+            }
+        }
+        if (!available)
+        {
+            continue;
+        }
+
+        for (int j = 0; j < count; ++j)
+        {
+            g_srvDescriptorUsed[i + j] = true;
+        }
+        *outCpuHandle = g_srvHeap->GetCPUDescriptorHandleForHeapStart();
+        *outGpuHandle = g_srvHeap->GetGPUDescriptorHandleForHeapStart();
+        outCpuHandle->ptr += static_cast<SIZE_T>(i) * g_srvDescriptorSize;
+        outGpuHandle->ptr += static_cast<UINT64>(i) * g_srvDescriptorSize;
+        return;
+    }
+
+    throw std::runtime_error("No free contiguous SRV descriptor range");
+}
+
 void FreeSrvDescriptor(ImGui_ImplDX12_InitInfo*, D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle, D3D12_GPU_DESCRIPTOR_HANDLE)
 {
     const D3D12_CPU_DESCRIPTOR_HANDLE start = g_srvHeap->GetCPUDescriptorHandleForHeapStart();
@@ -976,6 +1018,9 @@ void CleanupD3D()
     g_meshPreviewDisplacementCbv.Reset();
     g_gpuMeshPreview.displacementHeightTexture.Reset();
     g_gpuMeshPreview.displacementMaskTexture.Reset();
+    g_gpuMeshPreview.colorizeTexture.Reset();
+    g_gpuMeshPreview.colorizeTextureResolution = 0;
+    g_gpuMeshPreview.colorizeTextureUploadKey = 0;
     g_gpuMeshPreview.displacementTriIndexBuffer.Reset();
     g_gpuMeshPreview.displacementEdgeIndexBuffer.Reset();
     g_gpuMeshPreview.displacementSrvAllocated = false;
@@ -1232,7 +1277,7 @@ std::filesystem::path ScreenshotDirectory()
         const std::filesystem::path parent = g_projectPath.parent_path();
         if (!parent.empty())
         {
-            return parent;
+            return parent / "screenshots";
         }
     }
     return std::filesystem::current_path() / "screenshots";
@@ -1247,6 +1292,26 @@ void RevealFileInExplorer(const std::filesystem::path& path)
 
     const std::wstring args = L"/select,\"" + std::filesystem::absolute(path).wstring() + L"\"";
     ShellExecuteW(nullptr, L"open", L"explorer.exe", args.c_str(), nullptr, SW_SHOWNORMAL);
+}
+
+void OpenFolderInExplorer(const std::filesystem::path& folder)
+{
+    if (folder.empty())
+    {
+        return;
+    }
+
+    ShellExecuteW(nullptr, L"open", std::filesystem::absolute(folder).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+}
+
+std::filesystem::path ProjectFolder()
+{
+    if (g_projectPath.empty())
+    {
+        return {};
+    }
+    const std::filesystem::path parent = g_projectPath.parent_path();
+    return parent.empty() ? std::filesystem::current_path() : parent;
 }
 
 std::filesystem::path NormalizedProjectPath(const std::filesystem::path& path)
@@ -2865,23 +2930,16 @@ bool EnsureMeshPreviewPipeline(std::string* error)
     if (g_meshPreviewSurfacePso) return true;
     if (!g_device) { if (error) *error = "D3D12 device not initialized"; return false; }
 
-    D3D12_DESCRIPTOR_RANGE shadowRange{};
-    shadowRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    shadowRange.NumDescriptors = 1;
-    shadowRange.BaseShaderRegister = 0;
-    shadowRange.RegisterSpace = 0;
-    shadowRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-
-    D3D12_DESCRIPTOR_RANGE cloudShadowRange{};
-    cloudShadowRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    cloudShadowRange.NumDescriptors = 1;
-    cloudShadowRange.BaseShaderRegister = 1;
-    cloudShadowRange.RegisterSpace = 0;
-    cloudShadowRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+    D3D12_DESCRIPTOR_RANGE meshResourceRange{};
+    meshResourceRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    meshResourceRange.NumDescriptors = 5; // t0 shadow, t1 cloud shadow, t2/t3 displacement, t4 Colorize
+    meshResourceRange.BaseShaderRegister = 0;
+    meshResourceRange.RegisterSpace = 0;
+    meshResourceRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
     // Root parameter budget: 60 (mesh constants) + 2 (cloud shadow CBV)
-    // + 1 (shadow table) + 1 (cloud shadow table) = 64 DWORDs (the limit).
-    D3D12_ROOT_PARAMETER rootParams[4]{};
+    // + 1 (mesh resource table) = 63 DWORDs.
+    D3D12_ROOT_PARAMETER rootParams[3]{};
     rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     rootParams[0].Constants.ShaderRegister = 0;
     rootParams[0].Constants.RegisterSpace = 0;
@@ -2893,12 +2951,8 @@ bool EnsureMeshPreviewPipeline(std::string* error)
     rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     rootParams[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     rootParams[2].DescriptorTable.NumDescriptorRanges = 1;
-    rootParams[2].DescriptorTable.pDescriptorRanges = &shadowRange;
+    rootParams[2].DescriptorTable.pDescriptorRanges = &meshResourceRange;
     rootParams[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
-    rootParams[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    rootParams[3].DescriptorTable.NumDescriptorRanges = 1;
-    rootParams[3].DescriptorTable.pDescriptorRanges = &cloudShadowRange;
-    rootParams[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
     D3D12_STATIC_SAMPLER_DESC samplers[2]{};
     samplers[0].Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
@@ -2919,7 +2973,7 @@ bool EnsureMeshPreviewPipeline(std::string* error)
     samplers[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
     D3D12_ROOT_SIGNATURE_DESC rsDesc{};
-    rsDesc.NumParameters = 4;
+    rsDesc.NumParameters = 3;
     rsDesc.pParameters = rootParams;
     rsDesc.NumStaticSamplers = 2;
     rsDesc.pStaticSamplers = samplers;
@@ -3080,9 +3134,15 @@ bool EnsureMeshPreviewDisplacementPipeline(std::string* error)
     maskRange.BaseShaderRegister = 3; // t3
     maskRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
+    D3D12_DESCRIPTOR_RANGE colorRange{};
+    colorRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    colorRange.NumDescriptors = 1;
+    colorRange.BaseShaderRegister = 4; // t4
+    colorRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
     // Budget: 2 (mesh CBV) + 2 (cloud shadow CBV) + 4 (displacement consts)
-    // + 1*4 (4 SRV tables) = 12 DWORDs of 64.
-    D3D12_ROOT_PARAMETER rootParams[7]{};
+    // + 1*5 (5 SRV tables) = 13 DWORDs of 64.
+    D3D12_ROOT_PARAMETER rootParams[8]{};
     rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParams[0].Descriptor.ShaderRegister = 0;
     rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
@@ -3109,6 +3169,10 @@ bool EnsureMeshPreviewDisplacementPipeline(std::string* error)
     rootParams[6].DescriptorTable.NumDescriptorRanges = 1;
     rootParams[6].DescriptorTable.pDescriptorRanges = &maskRange;
     rootParams[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+    rootParams[7].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[7].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[7].DescriptorTable.pDescriptorRanges = &colorRange;
+    rootParams[7].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
     D3D12_STATIC_SAMPLER_DESC samplers[2]{};
     samplers[0].Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
@@ -3474,6 +3538,188 @@ bool UploadDisplacementHeightfield(ID3D12GraphicsCommandList* commandList, const
     (void)s_keepAlive;
 
     return true;
+}
+
+D3D12_CPU_DESCRIPTOR_HANDLE OffsetCpuSrv(D3D12_CPU_DESCRIPTOR_HANDLE base, int offset)
+{
+    base.ptr += static_cast<SIZE_T>(offset) * g_srvDescriptorSize;
+    return base;
+}
+
+D3D12_GPU_DESCRIPTOR_HANDLE OffsetGpuSrv(D3D12_GPU_DESCRIPTOR_HANDLE base, int offset)
+{
+    base.ptr += static_cast<UINT64>(offset) * g_srvDescriptorSize;
+    return base;
+}
+
+bool EnsureMeshResourceTable(std::string* error)
+{
+    if (g_gpuMeshPreview.meshResourceTableAllocated)
+    {
+        return true;
+    }
+    if (!g_device)
+    {
+        if (error) *error = "D3D12 device not initialized";
+        return false;
+    }
+    try
+    {
+        AllocateSrvDescriptorRange(5, &g_gpuMeshPreview.meshResourceTableCpu, &g_gpuMeshPreview.meshResourceTableGpu);
+        g_gpuMeshPreview.meshResourceTableAllocated = true;
+        return true;
+    }
+    catch (const std::exception& ex)
+    {
+        if (error) *error = ex.what();
+        return false;
+    }
+}
+
+bool UploadColorizeTexture(ID3D12GraphicsCommandList* commandList, const rock::ColorGrid& colorGrid, uint64_t graphVersion, std::string* error)
+{
+    if (colorGrid.resolution < 2 ||
+        colorGrid.pixels.size() < static_cast<size_t>(colorGrid.resolution) * static_cast<size_t>(colorGrid.resolution) * 4u)
+    {
+        return true;
+    }
+    if (!EnsureMeshResourceTable(error))
+    {
+        return false;
+    }
+    if (g_gpuMeshPreview.colorizeTextureUploadKey == graphVersion && graphVersion != 0)
+    {
+        return true;
+    }
+
+    const int n = colorGrid.resolution;
+    if (!g_gpuMeshPreview.colorizeTexture || g_gpuMeshPreview.colorizeTextureResolution != n)
+    {
+        g_gpuMeshPreview.colorizeTexture.Reset();
+        const D3D12_HEAP_PROPERTIES defaultHeap = HeapProperties(D3D12_HEAP_TYPE_DEFAULT);
+        const D3D12_RESOURCE_DESC desc = Texture2DResourceDesc(static_cast<UINT>(n), static_cast<UINT>(n), DXGI_FORMAT_R8G8B8A8_UNORM);
+        HRESULT hr = g_device->CreateCommittedResource(
+            &defaultHeap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+            IID_PPV_ARGS(&g_gpuMeshPreview.colorizeTexture));
+        if (FAILED(hr))
+        {
+            if (error) *error = "Create Colorize texture failed";
+            return false;
+        }
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+        srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Texture2D.MipLevels = 1;
+        g_device->CreateShaderResourceView(
+            g_gpuMeshPreview.colorizeTexture.Get(), &srvDesc,
+            OffsetCpuSrv(g_gpuMeshPreview.meshResourceTableCpu, 4));
+
+        g_gpuMeshPreview.colorizeTextureResolution = n;
+        g_gpuMeshPreview.colorizeTextureUploadKey = 0;
+    }
+
+    const UINT64 rowPitch = (static_cast<UINT64>(n) * 4u + D3D12_TEXTURE_DATA_PITCH_ALIGNMENT - 1) & ~(D3D12_TEXTURE_DATA_PITCH_ALIGNMENT - 1);
+    const UINT64 totalBytes = rowPitch * static_cast<UINT64>(n);
+
+    const D3D12_HEAP_PROPERTIES uploadHeap = HeapProperties(D3D12_HEAP_TYPE_UPLOAD);
+    D3D12_RESOURCE_DESC uploadDesc{};
+    uploadDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    uploadDesc.Width = totalBytes;
+    uploadDesc.Height = 1;
+    uploadDesc.DepthOrArraySize = 1;
+    uploadDesc.MipLevels = 1;
+    uploadDesc.Format = DXGI_FORMAT_UNKNOWN;
+    uploadDesc.SampleDesc.Count = 1;
+    uploadDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    ComPtr<ID3D12Resource> uploadBuffer;
+    HRESULT hr = g_device->CreateCommittedResource(
+        &uploadHeap, D3D12_HEAP_FLAG_NONE, &uploadDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+        IID_PPV_ARGS(&uploadBuffer));
+    if (FAILED(hr))
+    {
+        if (error) *error = "Create Colorize upload buffer failed";
+        return false;
+    }
+
+    void* mapped = nullptr;
+    D3D12_RANGE readRange{0, 0};
+    uploadBuffer->Map(0, &readRange, &mapped);
+    for (int z = 0; z < n; ++z)
+    {
+        void* row = static_cast<char*>(mapped) + static_cast<UINT64>(z) * rowPitch;
+        const uint8_t* src = colorGrid.pixels.data() + static_cast<size_t>(z) * static_cast<size_t>(n) * 4u;
+        std::memcpy(row, src, static_cast<size_t>(n) * 4u);
+    }
+    uploadBuffer->Unmap(0, nullptr);
+
+    if (g_gpuMeshPreview.colorizeTextureUploadKey != 0)
+    {
+        D3D12_RESOURCE_BARRIER toCopy{};
+        toCopy.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        toCopy.Transition.pResource = g_gpuMeshPreview.colorizeTexture.Get();
+        toCopy.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        toCopy.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        toCopy.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+        commandList->ResourceBarrier(1, &toCopy);
+    }
+
+    D3D12_TEXTURE_COPY_LOCATION dst{};
+    dst.pResource = g_gpuMeshPreview.colorizeTexture.Get();
+    dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    dst.SubresourceIndex = 0;
+    D3D12_TEXTURE_COPY_LOCATION src{};
+    src.pResource = uploadBuffer.Get();
+    src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    src.PlacedFootprint.Offset = 0;
+    src.PlacedFootprint.Footprint.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    src.PlacedFootprint.Footprint.Width = static_cast<UINT>(n);
+    src.PlacedFootprint.Footprint.Height = static_cast<UINT>(n);
+    src.PlacedFootprint.Footprint.Depth = 1;
+    src.PlacedFootprint.Footprint.RowPitch = static_cast<UINT>(rowPitch);
+    commandList->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+
+    D3D12_RESOURCE_BARRIER toSrv{};
+    toSrv.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    toSrv.Transition.pResource = g_gpuMeshPreview.colorizeTexture.Get();
+    toSrv.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    toSrv.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+    toSrv.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    commandList->ResourceBarrier(1, &toSrv);
+
+    g_gpuMeshPreview.colorizeTextureUploadKey = graphVersion;
+    static ComPtr<ID3D12Resource> s_colorUploadKeepAlive;
+    s_colorUploadKeepAlive = uploadBuffer;
+    (void)s_colorUploadKeepAlive;
+    return true;
+}
+
+void UpdateMeshResourceTable(D3D12_GPU_DESCRIPTOR_HANDLE cloudShadowGpu)
+{
+    if (!g_gpuMeshPreview.meshResourceTableAllocated)
+    {
+        return;
+    }
+
+    const D3D12_CPU_DESCRIPTOR_HANDLE src[] = {
+        g_gpuMeshPreview.shadowSrvCpu,
+        (cloudShadowGpu.ptr == g_gpuClouds.shadowSrvGpu.ptr && g_gpuClouds.shadowSrvAllocated)
+            ? g_gpuClouds.shadowSrvCpu
+            : g_gpuClouds.dummyShadowSrvCpu,
+        g_gpuMeshPreview.displacementHeightSrvCpu.ptr ? g_gpuMeshPreview.displacementHeightSrvCpu : g_gpuClouds.dummyShadowSrvCpu,
+        g_gpuMeshPreview.displacementMaskSrvCpu.ptr ? g_gpuMeshPreview.displacementMaskSrvCpu : g_gpuClouds.dummyShadowSrvCpu,
+        g_gpuClouds.dummyShadowSrvCpu,
+    };
+    for (int i = 0; i < 4; ++i)
+    {
+        g_device->CopyDescriptorsSimple(1, OffsetCpuSrv(g_gpuMeshPreview.meshResourceTableCpu, i), src[i], D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    }
+    if (!g_gpuMeshPreview.colorizeTexture)
+    {
+        g_device->CopyDescriptorsSimple(1, OffsetCpuSrv(g_gpuMeshPreview.meshResourceTableCpu, 4), src[4], D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    }
 }
 
 
@@ -8079,6 +8325,19 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             // contents are filled below from `constants` so we defer this
             // to just before the surface draw.
         }
+        bool colorTextureReady = false;
+        if (g_graph.Evaluation().previewIsColor)
+        {
+            const rock::ColorGrid& colorGrid = g_graph.Evaluation().previewColorGrid;
+            colorTextureReady =
+                colorGrid.resolution >= 2 &&
+                colorGrid.pixels.size() >= static_cast<size_t>(colorGrid.resolution) * static_cast<size_t>(colorGrid.resolution) * 4u;
+            if (colorTextureReady)
+            {
+                std::string ignoredErr;
+                colorTextureReady = UploadColorizeTexture(commandList.Get(), colorGrid, currentVersion, &ignoredErr);
+            }
+        }
 
         if (g_gpuMeshPreview.colorState != D3D12_RESOURCE_STATE_RENDER_TARGET)
         {
@@ -8133,7 +8392,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         constants.farPlane   = 20000.0f;
         constants.maskPreview = g_graph.Evaluation().previewShowsMask ? 1.0f : 0.0f;
         constants.maskShadingMode = static_cast<float>(g_graph.Settings().preview.maskShading);
-        constants.colorTextureMode = g_graph.Evaluation().previewIsColor ? 1.0f : 0.0f;
+        constants.colorTextureMode = colorTextureReady ? 1.0f : 0.0f;
         constants.lightingMode = static_cast<float>(g_graph.Settings().preview.lightingMode);
         const float azimuth = g_graph.Settings().preview.sunAzimuthDegrees * 3.1415926535f / 180.0f;
         const float elevation = g_graph.Settings().preview.sunElevationDegrees * 3.1415926535f / 180.0f;
@@ -8145,7 +8404,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         constants.albedoColor[0] = g_graph.Settings().preview.pbrAlbedo[0];
         constants.albedoColor[1] = g_graph.Settings().preview.pbrAlbedo[1];
         constants.albedoColor[2] = g_graph.Settings().preview.pbrAlbedo[2];
-        constants.albedoColor[3] = 1.0f;
+        constants.albedoColor[3] = colorTextureReady ? std::max(previewGrid.terrainSizeMeters, 1.0f) : 1.0f;
         constants.sunIntensity = g_graph.Settings().preview.sunIntensity;
         constants.ambientStrength = g_graph.Settings().preview.ambientStrength;
         constants.shadowStrength = g_graph.Settings().preview.shadowStrength;
@@ -8292,6 +8551,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
                 commandList->SetGraphicsRootDescriptorTable(4, g_gpuClouds.dummyShadowSrvGpu);
                 commandList->SetGraphicsRootDescriptorTable(5, g_gpuMeshPreview.displacementHeightSrvGpu);
                 commandList->SetGraphicsRootDescriptorTable(6, g_gpuMeshPreview.displacementMaskSrvGpu);
+                commandList->SetGraphicsRootDescriptorTable(7, g_gpuClouds.dummyShadowSrvGpu);
 
                 D3D12_INDEX_BUFFER_VIEW shadowIbv{
                     g_gpuMeshPreview.displacementTriIndexBuffer->GetGPUVirtualAddress(),
@@ -8311,8 +8571,6 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
                 {
                     commandList->SetGraphicsRootConstantBufferView(1, g_gpuClouds.meshCbUploadBuffer->GetGPUVirtualAddress());
                 }
-                commandList->SetGraphicsRootDescriptorTable(2, g_gpuMeshPreview.shadowSrvGpu);
-                commandList->SetGraphicsRootDescriptorTable(3, g_gpuClouds.dummyShadowSrvGpu);
                 if (hasMeshVertices)
                 {
                     commandList->IASetVertexBuffers(0, 1, &vbv);
@@ -8461,11 +8719,17 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         {
             commandList->SetGraphicsRootConstantBufferView(1, g_gpuClouds.meshCbUploadBuffer->GetGPUVirtualAddress());
         }
-        commandList->SetGraphicsRootDescriptorTable(2, g_gpuMeshPreview.shadowSrvGpu);
         D3D12_GPU_DESCRIPTOR_HANDLE cloudShadowGpu = cloudShadowReady && g_gpuClouds.shadowSrvAllocated
             ? g_gpuClouds.shadowSrvGpu
             : g_gpuClouds.dummyShadowSrvGpu;
-        commandList->SetGraphicsRootDescriptorTable(3, cloudShadowGpu);
+        std::string meshResourceError;
+        if (!EnsureMeshResourceTable(&meshResourceError))
+        {
+            if (error) *error = meshResourceError;
+            return false;
+        }
+        UpdateMeshResourceTable(cloudShadowGpu);
+        commandList->SetGraphicsRootDescriptorTable(2, g_gpuMeshPreview.meshResourceTableGpu);
 
         if (showSurface && displacementReady && g_gpuMeshPreview.displacementTriIndexCount > 0)
         {
@@ -8499,6 +8763,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             commandList->SetGraphicsRootDescriptorTable(4, cloudShadowGpu);
             commandList->SetGraphicsRootDescriptorTable(5, g_gpuMeshPreview.displacementHeightSrvGpu);
             commandList->SetGraphicsRootDescriptorTable(6, g_gpuMeshPreview.displacementMaskSrvGpu);
+            commandList->SetGraphicsRootDescriptorTable(7, g_gpuMeshPreview.meshResourceTableAllocated ? OffsetGpuSrv(g_gpuMeshPreview.meshResourceTableGpu, 4) : g_gpuClouds.dummyShadowSrvGpu);
 
             D3D12_INDEX_BUFFER_VIEW ibv{
                 g_gpuMeshPreview.displacementTriIndexBuffer->GetGPUVirtualAddress(),
@@ -8519,8 +8784,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             {
                 commandList->SetGraphicsRootConstantBufferView(1, g_gpuClouds.meshCbUploadBuffer->GetGPUVirtualAddress());
             }
-            commandList->SetGraphicsRootDescriptorTable(2, g_gpuMeshPreview.shadowSrvGpu);
-            commandList->SetGraphicsRootDescriptorTable(3, cloudShadowGpu);
+            commandList->SetGraphicsRootDescriptorTable(2, g_gpuMeshPreview.meshResourceTableGpu);
             // Re-bind the CPU vertex buffer for grid / wireframe.
             if (hasMeshVertices)
             {
@@ -8541,6 +8805,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             constants.albedoColor[1] = g_graph.Settings().preview.gridColor[1];
             constants.albedoColor[2] = g_graph.Settings().preview.gridColor[2];
             constants.albedoColor[3] = 1.0f;
+            constants.colorTextureMode = 0.0f;
             commandList->SetGraphicsRoot32BitConstants(0, sizeof(constants) / 4, &constants, 0);
             D3D12_VERTEX_BUFFER_VIEW gridVbv{};
             gridVbv.BufferLocation = g_gpuMeshPreview.gridVertexBuffer->GetGPUVirtualAddress();
@@ -8561,6 +8826,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             constants.albedoColor[1] = 0.20f;
             constants.albedoColor[2] = 0.19f;
             constants.albedoColor[3] = 1.0f;
+            constants.colorTextureMode = 0.0f;
             commandList->SetGraphicsRoot32BitConstants(0, sizeof(constants) / 4, &constants, 0);
             D3D12_INDEX_BUFFER_VIEW ibv{g_gpuMeshPreview.edgeIndexBuffer->GetGPUVirtualAddress(), g_gpuMeshPreview.edgeIndexCount * sizeof(UINT), DXGI_FORMAT_R32_UINT};
             commandList->IASetIndexBuffer(&ibv);
@@ -12011,7 +12277,6 @@ void DrawUi()
         if (terrain::CaptureWindowScreenshot(g_hwnd, ScreenshotDirectory(), &screenshotPath, &error))
         {
             g_projectStatus = "Screenshot saved " + PathToUtf8(screenshotPath);
-            RevealFileInExplorer(screenshotPath);
         }
         else
         {
@@ -12090,6 +12355,11 @@ void DrawUi()
                         g_projectStatus = "Save failed: " + error;
                     }
                 }
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("プロジェクトの保存場所を開く", nullptr, false, !g_projectPath.empty()))
+            {
+                OpenFolderInExplorer(ProjectFolder());
             }
             ImGui::Separator();
             if (ImGui::MenuItem("終了"))

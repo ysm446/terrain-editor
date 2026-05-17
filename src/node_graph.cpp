@@ -2974,7 +2974,8 @@ MeshData NodeGraph::BuildMeshFromHeightPipelineCached(const HeightfieldPipeline&
         return BuildMeshFromHeightPipeline(pipeline, resolution, message, previewField, previewGrid);
     }
 
-    HeightfieldGrid grid = EvaluateHeightPipelineCached(pipeline, message, previewField, nullptr);
+    uint64_t heightHash = 0;
+    HeightfieldGrid grid = EvaluateHeightPipelineCached(pipeline, message, previewField, &heightHash);
     if (grid.resolution <= 0)
     {
         return {};
@@ -2983,7 +2984,22 @@ MeshData NodeGraph::BuildMeshFromHeightPipelineCached(const HeightfieldPipeline&
     {
         *previewGrid = grid;
     }
-    return BuildMeshFromHeightfield(grid, resolution);
+
+    uint64_t meshInputHash = heightHash;
+    HashCombine(meshInputHash, static_cast<uint64_t>(previewField));
+    MeshNodeCache& meshCache = meshCache_[sourceNodeId];
+    if (!meshCache.valid ||
+        meshCache.resolution != resolution ||
+        meshCache.inputHash != meshInputHash ||
+        meshCache.previewField != previewField)
+    {
+        meshCache.mesh = BuildMeshFromHeightfield(grid, resolution);
+        meshCache.valid = true;
+        meshCache.resolution = resolution;
+        meshCache.inputHash = meshInputHash;
+        meshCache.previewField = previewField;
+    }
+    return meshCache.mesh;
 }
 
 NodeGraph NodeGraph::CreateDefaultTerrainGraph()
@@ -3393,6 +3409,7 @@ void NodeGraph::ApplyEvaluationResultFrom(const NodeGraph& evaluatedGraph)
     heightfieldCache_ = evaluatedGraph.heightfieldCache_;
     maskCache_ = evaluatedGraph.maskCache_;
     colorCache_ = evaluatedGraph.colorCache_;
+    meshCache_ = evaluatedGraph.meshCache_;
     evaluation_ = evaluatedGraph.evaluation_;
 }
 
@@ -3704,8 +3721,9 @@ void NodeGraph::Evaluate(int previewMeshResolution)
     } progressGuard;
     g_currentlyEvaluatingNodeId.store(0, std::memory_order_relaxed);
 
-    // Colorize preview: evaluate color grid, build geometry from Heightmap input
-    // (or flat plane if no Heightmap), then bake color into vertex colors.
+    // Colorize preview: evaluate color grid and build geometry from Heightmap
+    // input (or flat plane if no Heightmap). The 3D viewport samples the color
+    // grid as a texture instead of baking it into vertex colors.
     evaluation_.previewIsColor = false;
     evaluation_.previewColorGrid = {};
     const Node* previewNode = FindNode(evaluation_.previewNodeId);
@@ -3737,24 +3755,6 @@ void NodeGraph::Evaluate(int previewMeshResolution)
             evaluation_.previewMesh = BuildFlatMaskMesh(heightGrid, previewMeshResolution);
         }
         evaluation_.previewHeightfield = heightGrid;
-
-        // Bake color grid into mesh vertex colors.
-        if (colorGrid.resolution > 0 && !evaluation_.previewMesh.vertices.empty())
-        {
-            const int cres = colorGrid.resolution;
-            const float terrainSize = std::max(heightGrid.terrainSizeMeters, 1.0f);
-            for (MeshVertex& v : evaluation_.previewMesh.vertices)
-            {
-                const float u = v.x / terrainSize + 0.5f;
-                const float t = 0.5f - v.z / terrainSize;
-                const int xi = std::clamp(static_cast<int>(u * static_cast<float>(cres - 1)), 0, cres - 1);
-                const int zi = std::clamp(static_cast<int>(t * static_cast<float>(cres - 1)), 0, cres - 1);
-                const size_t idx = (static_cast<size_t>(zi) * static_cast<size_t>(cres) + static_cast<size_t>(xi)) * 4;
-                v.r = static_cast<float>(colorGrid.pixels[idx + 0]) / 255.0f;
-                v.g = static_cast<float>(colorGrid.pixels[idx + 1]) / 255.0f;
-                v.b = static_cast<float>(colorGrid.pixels[idx + 2]) / 255.0f;
-            }
-        }
 
         evaluation_.previewIsColor = true;
         evaluation_.previewShowsMask = false;

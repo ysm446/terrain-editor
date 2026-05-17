@@ -21,7 +21,7 @@ cbuffer Constants : register(b0)
     float shadowBias;
     float shadowEnabled;
     float maskShadingMode;  // 0 = Grayscale, 1 = GrayOrange, 2 = GrayscaleHatched
-    float colorTextureMode; // 1 = use per-vertex color (Colorize node), 0 = use albedoColor
+    float colorTextureMode; // 1 = sample Colorize texture, 0 = use albedoColor
     float4 lightRight;
     float4 lightUp;
     float4 lightForward;
@@ -59,6 +59,7 @@ Texture2D<float> cloudShadowMap : register(t1);
 // VS reads them, the standard VSMain ignores them.
 Texture2D<float> displacementHeights : register(t2);
 Texture2D<float> displacementMask : register(t3);
+Texture2D<float4> colorTexture : register(t4);
 SamplerState shadowSampler : register(s0);
 SamplerState linearSampler : register(s1);
 
@@ -296,6 +297,12 @@ float3 DebugShadowColor(float3 worldPos)
     return lerp(float3(0.02, 0.02, 0.025), float3(1.0, 0.95, 0.82), visible) + delta * float3(0.0, 0.18, 0.0);
 }
 
+float2 ColorTextureUv(float3 worldPos)
+{
+    float terrainSize = max(albedoColor.a, 1.0);
+    return float2(worldPos.x / terrainSize + 0.5, 0.5 - worldPos.z / terrainSize);
+}
+
 float4 PSSurface(VSOut i) : SV_TARGET
 {
     float3 n = normalize(i.worldNor);
@@ -318,7 +325,7 @@ float4 PSSurface(VSOut i) : SV_TARGET
     float3 highland = float3(0.54, 0.52, 0.46);
     float3 slopeTint = float3(0.43, 0.39, 0.34);
     float3 baseColor = (colorTextureMode > 0.5)
-        ? i.vertexColor
+        ? colorTexture.Sample(linearSampler, ColorTextureUv(i.worldPos)).rgb
         : lerp(lerp(lowland, highland, height), slopeTint, slope * 0.42);
 
     float3 col = baseColor * light;
@@ -363,7 +370,9 @@ float4 PSSurface(VSOut i) : SV_TARGET
         float3 bounceTint = skyGroundColor.rgb * ambientStrength * shadowAmount * 0.55;
 
         float3 slopeMicroShade = lerp(float3(0.78, 0.80, 0.82), float3(1.06, 1.05, 1.02), viewFacing);
-        float3 effectiveAlbedo = (colorTextureMode > 0.5) ? i.vertexColor : albedoColor.rgb;
+        float3 effectiveAlbedo = (colorTextureMode > 0.5)
+            ? colorTexture.Sample(linearSampler, ColorTextureUv(i.worldPos)).rgb
+            : albedoColor.rgb;
         col = effectiveAlbedo * (skyAmbient * ambientCloudMix + sunTint + bounceTint) * slopeMicroShade;
         col = lerp(col, dot(col, float3(0.299, 0.587, 0.114)).xxx, shadowAmount * 0.18);
         col += pow(saturate(ndl), 24.0) * sunIntensity * visibility * cloudShadowFactor * 0.045;

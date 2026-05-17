@@ -674,6 +674,15 @@ private:
         ColorGrid grid;
     };
 
+    struct MeshNodeCache
+    {
+        bool valid = false;
+        int resolution = 0;
+        uint64_t inputHash = 0;
+        HeightfieldPreviewField previewField = HeightfieldPreviewField::Heightmap;
+        MeshData mesh;
+    };
+
     ColorGrid EvaluateColorGridForNodeCached(const Node& node, int depth, uint64_t* outputHash);
 
     std::vector<Node> nodes_;
@@ -682,6 +691,7 @@ private:
     std::unordered_map<GraphId, HeightfieldNodeCache> heightfieldCache_;
     std::unordered_map<GraphId, MaskNodeCache> maskCache_;
     std::unordered_map<GraphId, ColorNodeCache> colorCache_;
+    std::unordered_map<GraphId, MeshNodeCache> meshCache_;
     EvaluationSummary evaluation_;
     GraphId nextGraphId_ = 1;
 };
