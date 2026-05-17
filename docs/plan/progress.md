@@ -13,6 +13,7 @@
 
 ## 2026-05-18
 
+- 予定タスクに、`Mask Fluvial` で太い流れを作る改善と、谷まで届かない支流だけのマスクを作る改善を追加した。
 - `Mask Fluvial` に `Simulation Mode` を追加し、従来の `Flow Accumulation` に加えて、粒子の通過密度を `Mask` 化する `Particles` モードを選べるようにした。粒子モード用に `Particle Count` / `Lifetime` / `Inertia (%)` / `Step Length (m)` / `Seed` を追加し、既定は従来互換の `Flow Accumulation` のままにした。
 
 - `Mask Fluvial` ノードに `Largest Detail Level (m)` を追加し、流向計算前の解析用ハイトだけを分離ガウスブラーでならして、小さな凹凸をどの程度無視するかを選べるようにした。
