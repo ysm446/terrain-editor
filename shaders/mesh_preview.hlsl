@@ -73,6 +73,10 @@ cbuffer DisplacementConstants : register(b2)
     float displacementTerrainSize;
     float displacementHalfSize;
     float displacementWorldDX;
+    float tessellationMinFactor;
+    float tessellationMaxFactor;
+    float tessellationNearDistance;
+    float tessellationFarDistance;
 };
 
 float3 LightSpace01(float3 worldPos)
@@ -200,6 +204,108 @@ float4 VSDisplacementShadow(uint vid : SV_VertexID) : SV_POSITION
     float u = (float)x / (displacementGridResolution - 1.0);
     float v = (float)z / (displacementGridResolution - 1.0);
     float3 worldPos = SampleDisplacedWorldPos(u, v);
+    float3 lightUv = LightSpace01(worldPos);
+    return float4(lightUv.x * 2.0 - 1.0, lightUv.y * 2.0 - 1.0, saturate(lightUv.z), 1.0);
+}
+
+struct PatchControlPoint
+{
+    float2 uv : TEXCOORD0;
+};
+
+struct PatchTessFactors
+{
+    float edge[4] : SV_TessFactor;
+    float inside[2] : SV_InsideTessFactor;
+};
+
+PatchControlPoint VSDisplacementPatch(uint vid : SV_VertexID)
+{
+    uint M = (uint)displacementGridResolution;
+    uint x = vid % M;
+    uint z = vid / M;
+
+    PatchControlPoint o;
+    o.uv = float2(
+        (float)x / (displacementGridResolution - 1.0),
+        (float)z / (displacementGridResolution - 1.0));
+    return o;
+}
+
+float TessFactorForUv(float2 uv)
+{
+    float3 worldPos = SampleDisplacedWorldPos(uv.x, uv.y);
+    float dist = length(worldPos - cameraPosition.xyz);
+    float t = saturate((dist - tessellationNearDistance) / max(tessellationFarDistance - tessellationNearDistance, 1.0));
+    return lerp(tessellationMaxFactor, tessellationMinFactor, t);
+}
+
+PatchTessFactors HSDisplacementConstants(InputPatch<PatchControlPoint, 4> patch, uint patchId : SV_PrimitiveID)
+{
+    PatchTessFactors o;
+    float2 uv0 = patch[0].uv;
+    float2 uv1 = patch[1].uv;
+    float2 uv2 = patch[2].uv;
+    float2 uv3 = patch[3].uv;
+
+    o.edge[0] = TessFactorForUv((uv0 + uv1) * 0.5);
+    o.edge[1] = TessFactorForUv((uv1 + uv2) * 0.5);
+    o.edge[2] = TessFactorForUv((uv2 + uv3) * 0.5);
+    o.edge[3] = TessFactorForUv((uv3 + uv0) * 0.5);
+    float inside = (o.edge[0] + o.edge[1] + o.edge[2] + o.edge[3]) * 0.25;
+    o.inside[0] = inside;
+    o.inside[1] = inside;
+    return o;
+}
+
+[domain("quad")]
+[partitioning("fractional_even")]
+[outputtopology("triangle_cw")]
+[outputcontrolpoints(4)]
+[patchconstantfunc("HSDisplacementConstants")]
+PatchControlPoint HSDisplacement(InputPatch<PatchControlPoint, 4> patch, uint controlPointId : SV_OutputControlPointID)
+{
+    return patch[controlPointId];
+}
+
+float2 InterpolatePatchUv(OutputPatch<PatchControlPoint, 4> patch, float2 uv)
+{
+    float2 top = lerp(patch[0].uv, patch[1].uv, uv.x);
+    float2 bottom = lerp(patch[3].uv, patch[2].uv, uv.x);
+    return lerp(top, bottom, uv.y);
+}
+
+[domain("quad")]
+VSOut DSDisplacement(PatchTessFactors factors, float2 domainUv : SV_DomainLocation, const OutputPatch<PatchControlPoint, 4> patch)
+{
+    float2 terrainUv = InterpolatePatchUv(patch, domainUv);
+    float3 worldPos = SampleDisplacedWorldPos(terrainUv.x, terrainUv.y);
+    float3 worldNor = SampleDisplacedNormal(terrainUv.x, terrainUv.y);
+    float maskVal = displacementMask.SampleLevel(linearSampler, terrainUv, 0).r;
+
+    float3 view = worldPos - cameraPosition.xyz;
+    float cx = dot(view, cameraRight.xyz);
+    float cy = dot(view, cameraUp.xyz);
+    float d  = dot(view, cameraForward.xyz);
+
+    VSOut o;
+    o.pos = float4(
+        cx * projScaleX + panNdcX * d,
+        cy * projScaleY + panNdcY * d,
+        (d - nearPlane) / (farPlane - nearPlane) * d,
+        d);
+    o.worldNor = worldNor;
+    o.worldPos = worldPos;
+    o.mask = maskVal;
+    o.vertexColor = float3(0.0, 0.0, 0.0);
+    return o;
+}
+
+[domain("quad")]
+float4 DSDisplacementShadow(PatchTessFactors factors, float2 domainUv : SV_DomainLocation, const OutputPatch<PatchControlPoint, 4> patch) : SV_POSITION
+{
+    float2 terrainUv = InterpolatePatchUv(patch, domainUv);
+    float3 worldPos = SampleDisplacedWorldPos(terrainUv.x, terrainUv.y);
     float3 lightUv = LightSpace01(worldPos);
     return float4(lightUv.x * 2.0 - 1.0, lightUv.y * 2.0 - 1.0, saturate(lightUv.z), 1.0);
 }
@@ -513,5 +619,5 @@ float4 PSEdge(VSOut i) : SV_TARGET
     {
         return float4(0.82, 0.30, 0.30, 0.88);
     }
-    return float4(albedoColor.rgb, 0.88);
+    return float4(albedoColor.rgb, saturate(albedoColor.a));
 }

@@ -482,6 +482,11 @@ struct PreviewSettings
     bool showGrid = true;
     int lightingMode = 0;
     MeshPreviewBackend meshBackend = MeshPreviewBackend::CpuMesh;
+    bool viewportTessellation = false;
+    float tessellationMinFactor = 1.0f;
+    float tessellationMaxFactor = 8.0f;
+    float tessellationNearDistance = 450.0f;
+    float tessellationFarDistance = 4500.0f;
     float sunAzimuthDegrees = 315.0f;
     float sunElevationDegrees = 38.0f;
     float sunIntensity = 1.05f;
