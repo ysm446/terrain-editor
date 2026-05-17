@@ -32,6 +32,7 @@ SedimentGpuEvaluator g_sedimentGpuEvaluator = nullptr;
 RockGpuEvaluator g_rockGpuEvaluator = nullptr;
 MaskFluvialGpuEvaluator g_maskFluvialGpuEvaluator = nullptr;
 SnowGpuEvaluator g_snowGpuEvaluator = nullptr;
+ColorizeGpuEvaluator g_colorizeGpuEvaluator = nullptr;
 std::atomic<GraphId> g_currentlyEvaluatingNodeId{0};
 
 struct HeightmapImage
@@ -106,6 +107,18 @@ uint64_t HashMaskBlendSettings(const MaskBlendSettings& settings)
     return hash;
 }
 
+uint64_t HashMaskCurvatureSettings(const MaskCurvatureSettings& settings, int resolution)
+{
+    uint64_t hash = 1099511628211ull;
+    HashCombine(hash, static_cast<uint64_t>(settings.mode));
+    HashCombine(hash, static_cast<uint64_t>(settings.radius));
+    HashCombine(hash, HashFloat(settings.sensitivityMeters));
+    HashCombine(hash, HashFloat(settings.threshold));
+    HashCombine(hash, HashFloat(settings.gamma));
+    HashCombine(hash, static_cast<uint64_t>(resolution));
+    return hash;
+}
+
 uint64_t HashRockSettings(const RockSettings& settings, int resolution)
 {
     uint64_t hash = 6364136223846793005ull;
@@ -160,6 +173,7 @@ uint64_t HashSnowSettings(const SnowSettings& settings, int resolution)
 uint64_t HashColorizeSettings(const ColorizeSettings& settings)
 {
     uint64_t hash = 7450123456789012345ull;
+    HashCombine(hash, static_cast<uint64_t>(settings.backend));
     for (const ColorStop& stop : settings.stops)
     {
         HashCombine(hash, HashFloat(stop.position));
@@ -888,6 +902,16 @@ static ColorGrid GenerateColorize(
 
     const bool hasMask = (mask != nullptr && mask->resolution == res);
     const std::vector<ColorStop>& stops = settings.stops;
+    if (settings.backend == ColorizeBackend::GpuCompute && g_colorizeGpuEvaluator != nullptr)
+    {
+        std::string ignoredError;
+        if (g_colorizeGpuEvaluator(grid, settings, gradientMask, hasMask ? mask : nullptr, &ignoredError))
+        {
+            return grid;
+        }
+        grid.pixels.assign(n * 4, 0);
+    }
+
     ParallelForRows(res, [&](int z) {
         for (int x = 0; x < res; ++x)
         {
@@ -986,6 +1010,99 @@ MaskGrid BlendMaskGrids(const MaskGrid& a, const MaskGrid& b, MaskBlendMode mode
         result.values[i] = std::clamp(std::lerp(va, blended, t), 0.0f, 1.0f);
     }
     return result;
+}
+
+std::vector<float> BoxBlurHeights(const HeightfieldGrid& grid, int radius)
+{
+    const int n = grid.resolution;
+    const size_t cellCount = static_cast<size_t>(n) * static_cast<size_t>(n);
+    if (n <= 0 || grid.heights.size() < cellCount || radius <= 0)
+    {
+        return grid.heights;
+    }
+
+    radius = std::clamp(radius, 1, 64);
+    std::vector<float> horizontal(cellCount, 0.0f);
+    std::vector<float> blurred(cellCount, 0.0f);
+
+    ParallelForRows(n, [&](int z) {
+        std::vector<float> prefix(static_cast<size_t>(n) + 1u, 0.0f);
+        const size_t row = static_cast<size_t>(z) * static_cast<size_t>(n);
+        for (int x = 0; x < n; ++x)
+        {
+            prefix[static_cast<size_t>(x) + 1u] = prefix[static_cast<size_t>(x)] + grid.heights[row + static_cast<size_t>(x)];
+        }
+        for (int x = 0; x < n; ++x)
+        {
+            const int left = std::max(0, x - radius);
+            const int right = std::min(n - 1, x + radius);
+            const float sum = prefix[static_cast<size_t>(right) + 1u] - prefix[static_cast<size_t>(left)];
+            horizontal[row + static_cast<size_t>(x)] = sum / static_cast<float>(right - left + 1);
+        }
+    });
+
+    ParallelForRows(n, [&](int x) {
+        std::vector<float> prefix(static_cast<size_t>(n) + 1u, 0.0f);
+        for (int z = 0; z < n; ++z)
+        {
+            prefix[static_cast<size_t>(z) + 1u] = prefix[static_cast<size_t>(z)] +
+                horizontal[static_cast<size_t>(z) * static_cast<size_t>(n) + static_cast<size_t>(x)];
+        }
+        for (int z = 0; z < n; ++z)
+        {
+            const int top = std::max(0, z - radius);
+            const int bottom = std::min(n - 1, z + radius);
+            const float sum = prefix[static_cast<size_t>(bottom) + 1u] - prefix[static_cast<size_t>(top)];
+            blurred[static_cast<size_t>(z) * static_cast<size_t>(n) + static_cast<size_t>(x)] =
+                sum / static_cast<float>(bottom - top + 1);
+        }
+    });
+
+    return blurred;
+}
+
+void ApplyMaskCurvature(HeightfieldGrid& grid, const MaskCurvatureSettings& settings)
+{
+    const int n = grid.resolution;
+    const size_t cellCount = static_cast<size_t>(n) * static_cast<size_t>(n);
+    if (n <= 0 || grid.heights.size() < cellCount)
+    {
+        return;
+    }
+
+    const int radius = std::clamp(settings.radius, 1, 64);
+    const float sensitivity = std::max(settings.sensitivityMeters, 0.0001f);
+    const float threshold = std::clamp(settings.threshold, 0.0f, 0.99f);
+    const float gamma = std::clamp(settings.gamma, 0.05f, 8.0f);
+    const std::vector<float> blurred = BoxBlurHeights(grid, radius);
+
+    grid.mask.assign(cellCount, 0.0f);
+    ParallelForRows(n, [&](int z) {
+        const size_t row = static_cast<size_t>(z) * static_cast<size_t>(n);
+        for (int x = 0; x < n; ++x)
+        {
+            const size_t i = row + static_cast<size_t>(x);
+            const float delta = grid.heights[i] - blurred[i];
+            float curvature = 0.0f;
+            switch (settings.mode)
+            {
+            case MaskCurvatureMode::Ridges:
+                curvature = delta;
+                break;
+            case MaskCurvatureMode::Valleys:
+                curvature = -delta;
+                break;
+            case MaskCurvatureMode::Absolute:
+            default:
+                curvature = std::abs(delta);
+                break;
+            }
+
+            float value = std::clamp(curvature / sensitivity, 0.0f, 1.0f);
+            value = std::clamp((value - threshold) / std::max(1.0f - threshold, 0.0001f), 0.0f, 1.0f);
+            grid.mask[i] = std::pow(value, gamma);
+        }
+    });
 }
 
 // Multi-Scale Erosion — CPU port of Schott et al. (SIGGRAPH 2024) shaders:
@@ -2763,6 +2880,9 @@ void ApplyHeightfieldOperation(HeightfieldGrid& grid, const HeightfieldPipeline:
     case HeightfieldPipeline::HeightfieldOperation::Kind::MultiScaleErosion:
         ApplyMultiScaleErosion(grid, operation.multiScaleErosion);
         break;
+    case HeightfieldPipeline::HeightfieldOperation::Kind::MaskCurvature:
+        ApplyMaskCurvature(grid, operation.maskCurvature);
+        break;
     case HeightfieldPipeline::HeightfieldOperation::Kind::MaskFluvial:
         ApplyMaskFluvial(grid, operation.maskFluvial);
         break;
@@ -2786,6 +2906,8 @@ uint64_t HashHeightfieldOperation(const HeightfieldPipeline::HeightfieldOperatio
         return HashHeightmapBlurSettings(operation.heightmapBlur, resolution);
     case HeightfieldPipeline::HeightfieldOperation::Kind::MultiScaleErosion:
         return HashMultiScaleErosionSettings(operation.multiScaleErosion, resolution);
+    case HeightfieldPipeline::HeightfieldOperation::Kind::MaskCurvature:
+        return HashMaskCurvatureSettings(operation.maskCurvature, resolution);
     case HeightfieldPipeline::HeightfieldOperation::Kind::MaskFluvial:
         return HashMaskFluvialSettings(operation.maskFluvial, resolution);
     case HeightfieldPipeline::HeightfieldOperation::Kind::Rock:
@@ -2811,6 +2933,10 @@ HeightfieldPipeline::HeightfieldOperation MakeHeightfieldOperation(const Node& n
     case NodeKind::MultiScaleErosion:
         operation.kind = HeightfieldPipeline::HeightfieldOperation::Kind::MultiScaleErosion;
         operation.multiScaleErosion = node.multiScaleErosion;
+        break;
+    case NodeKind::MaskCurvature:
+        operation.kind = HeightfieldPipeline::HeightfieldOperation::Kind::MaskCurvature;
+        operation.maskCurvature = node.maskCurvature;
         break;
     case NodeKind::MaskFluvial:
         operation.kind = HeightfieldPipeline::HeightfieldOperation::Kind::MaskFluvial;
@@ -2841,6 +2967,7 @@ bool IsHeightfieldOperationNode(NodeKind kind)
     {
     case NodeKind::HeightmapBlur:
     case NodeKind::MultiScaleErosion:
+    case NodeKind::MaskCurvature:
     case NodeKind::MaskFluvial:
     case NodeKind::Rock:
     case NodeKind::Sediment:
@@ -3189,6 +3316,10 @@ GraphId NodeGraph::CreateNode(NodeKind kind)
         AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
         AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
         break;
+    case NodeKind::MaskCurvature:
+        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
+        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
+        break;
     case NodeKind::Rock:
         AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
         AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
@@ -3362,6 +3493,8 @@ HeightfieldPipeline NodeGraph::PipelineFor(PreviewStage stage) const
         return PipelineTo(NodeKind::Shape);
     case PreviewStage::MultiScaleErosion:
         return PipelineTo(NodeKind::MultiScaleErosion);
+    case PreviewStage::MaskCurvature:
+        return PipelineTo(NodeKind::MaskCurvature);
     case PreviewStage::MaskFluvial:
         return PipelineTo(NodeKind::MaskFluvial);
     case PreviewStage::Rock:
@@ -3375,6 +3508,7 @@ HeightfieldPipeline NodeGraph::PipelineFor(PreviewStage stage) const
         if (const Node* node = FindFirstNode(NodeKind::Snow)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::Sediment)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::Rock)) { return PipelineToNode(*node); }
+        if (const Node* node = FindFirstNode(NodeKind::MaskCurvature)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::MaskFluvial)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::MultiScaleErosion)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::HeightmapBlur)) { return PipelineToNode(*node); }
@@ -3501,14 +3635,13 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
         if (outputHash != nullptr) { *outputHash = cache.outputHash; }
         return cache.grid;
     }
-    if (node.kind == NodeKind::MaskFluvial)
+    if (node.kind == NodeKind::MaskCurvature || node.kind == NodeKind::MaskFluvial)
     {
-        // Mask Fluvial reads a heightfield, so it can't be evaluated through
-        // the mask-graph path on its own. Build the heightfield pipeline up
-        // to this node, run it through the heightfield cache, and lift the
-        // resulting grid.mask out as a MaskGrid. Caching is fully delegated
-        // to the heightfield cache — we just thread its outputHash back so
-        // downstream MaskBlend can detect changes correctly.
+        // Heightfield-derived mask nodes read a heightfield, so they can't be
+        // evaluated through the mask-graph path on their own. Build the
+        // heightfield pipeline up to this node, run it through the heightfield
+        // cache, and lift the resulting grid.mask out as a MaskGrid. Caching
+        // is fully delegated to the heightfield cache.
         HeightfieldPipeline pipeline = PipelineToNode(node);
         uint64_t hash = 0;
         HeightfieldGrid grid = EvaluateHeightPipelineCached(pipeline, nullptr, HeightfieldPreviewField::Mask, &hash);
@@ -3524,7 +3657,7 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
         // kinds (Mask Noise / Mask Blend) plus Mask Fluvial, which evaluates
         // through the heightfield cache but is presented here as a MaskGrid.
         const auto isMaskProducer = [](NodeKind kind) {
-            return IsMaskOnlyNodeKind(kind) || kind == NodeKind::MaskFluvial;
+            return IsMaskOnlyNodeKind(kind) || kind == NodeKind::MaskCurvature || kind == NodeKind::MaskFluvial;
         };
         uint64_t aHash = 0;
         uint64_t bHash = 0;
@@ -3940,6 +4073,8 @@ std::string_view ToString(NodeKind kind)
         return "Mask Noise";
     case NodeKind::MaskBlend:
         return "Mask Blend";
+    case NodeKind::MaskCurvature:
+        return "Mask Curvature";
     case NodeKind::MaskFluvial:
         return "Mask Fluvial";
     case NodeKind::Rock:
@@ -3971,6 +4106,8 @@ std::string_view ToString(PreviewStage stage)
         return "Mask Noise";
     case PreviewStage::MaskBlend:
         return "Mask Blend";
+    case PreviewStage::MaskCurvature:
+        return "Mask Curvature";
     case PreviewStage::MaskFluvial:
         return "Mask Fluvial";
     case PreviewStage::Rock:
@@ -4019,6 +4156,8 @@ PreviewStage PreviewStageFor(NodeKind kind)
         return PreviewStage::MaskNoise;
     case NodeKind::MaskBlend:
         return PreviewStage::MaskBlend;
+    case NodeKind::MaskCurvature:
+        return PreviewStage::MaskCurvature;
     case NodeKind::MaskFluvial:
         return PreviewStage::MaskFluvial;
     case NodeKind::Rock:
@@ -4072,6 +4211,11 @@ void SetMaskFluvialGpuEvaluator(MaskFluvialGpuEvaluator evaluator)
 void SetSnowGpuEvaluator(SnowGpuEvaluator evaluator)
 {
     g_snowGpuEvaluator = evaluator;
+}
+
+void SetColorizeGpuEvaluator(ColorizeGpuEvaluator evaluator)
+{
+    g_colorizeGpuEvaluator = evaluator;
 }
 
 std::atomic<GraphId>& CurrentlyEvaluatingNodeId()

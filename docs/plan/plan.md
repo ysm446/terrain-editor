@@ -11,7 +11,7 @@
 ## 優先候補
 
 - `Crumbling` または `Debris` ノードの検討と実装。
-- マスク系ノード (`Mask Invert` / `Mask Curvature` / `Mask Levels`) の検討と実装。
+- マスク系ノード (`Mask Invert` / `Mask Levels`) の検討と実装。
 - `Colorize` ノードの検討と実装。
 - 既存ノードの見た目とパラメータ挙動の調整。
 - GPU 対応済みノードの検証とフォールバック確認。
@@ -22,7 +22,6 @@
 
 - `Crumbling` または `Debris`: 入力の `Heightmap` と `Mask` から、崩落した岩や石を地形上に転がして散布するノード。
 - `Mask Invert`: 入力マスクを反転し、必要に応じて底や天井を操作できるマスク加工ノード。
-- `Mask Curvature`: 入力 `Heightmap` から曲率を計算して返すマスク系ノード。尾根、谷、凹凸の検出に使う想定。
 - `Mask Levels`: 入力マスク画像の level を調整するマスク系ノード。黒点、白点、中間調、コントラスト調整のような用途を想定。
 - `Colorize`: カラー系またはテクスチャー系ノード。入力は `Heightmap`、`Mask`、`Gradient Mask`、出力は `Color Texture` を想定する。`Gradient Mask` の値でグラデーション上の参照位置を決め、`Mask` で適用範囲を制御し、`Heightmap` は主にプレビュー用に使う。ピッカーで画面上のマウス軌道から色を拾い、サンプル列をグラデーションに落とし込んで取得できる仕組みも検討する。
 
@@ -35,7 +34,6 @@
 - ノード名は、崖や斜面の崩れを強調するなら `Crumbling`、転石や岩屑の散布を強調するなら `Debris` が候補。
 - 実装前に、発生条件、転がる方向、停止条件、堆積表現、既存 `Rock` / `Sediment` ノードとの役割分担を整理する。
 - `Mask Invert` は単純な反転だけでなく、底や天井の調整をどのパラメータ名で扱うかを決める。
-- `Mask Curvature` は曲率の符号、正規化方法、尾根/谷の分離をどう扱うかを決める。
 - `Mask Levels` は既存のマスク値域 `[0, 1]` の中で、どの level 操作を最初に入れるかを決める。
 - `Colorize` はカラー系またはテクスチャー系ノードとして扱う。入力は `Heightmap`、`Mask`、`Gradient Mask`、出力は `Color Texture` を基本案にする。
 - `Colorize` の `Gradient Mask` はグラデーション割り当てに使い、値 `0..1` をカラーランプ上の位置として解釈する。

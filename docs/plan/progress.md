@@ -11,6 +11,13 @@
 - 作りたい予定のカラー系ノードとして、画面上のマウス軌道から色を拾ってグラデーション化する `Colorize` ノードを記録。
 - `Colorize` はカラー系またはテクスチャー系ノードとして扱い、入力 `Heightmap` / `Mask` / `Gradient Mask`、出力 `Color Texture` を基本案にすることを記録。
 
+## 2026-05-17
+
+- `Mask Curvature` ノードを追加。
+- 入力 `Heightmap` から局所平均との差分を計算し、`Ridges`、`Valleys`、`Absolute` の曲率マスクを出力できるようにした。
+- `Radius`、`Sensitivity (m)`、`Threshold (%)`、`Gamma` で検出スケールと出力カーブを調整できるようにした。
+- `docs/nodes/mask/mask_curvature/` にノード説明とアルゴリズムメモを追加。
+
 ## 完了したこと
 
 - 進捗、ゴール、計画を分けて記録できる場所を用意。
@@ -23,5 +30,5 @@
 
 - `Crumbling` / `Debris` ノードの仕様を詰める。
 - 発生条件、転がる方向、停止条件、堆積表現、出力形式を決める。
-- `Mask Invert` の底/天井操作、`Mask Curvature` の曲率正規化、`Mask Levels` の level 操作仕様を決める。
+- `Mask Invert` の底/天井操作、`Mask Levels` の level 操作仕様を決める。
 - `Colorize` の色ピック対象、サンプル方法、グラデーションキー化、プレビュー方法を決める。

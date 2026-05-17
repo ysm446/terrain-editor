@@ -26,6 +26,7 @@ enum class NodeKind
     Sediment = 13,
     Snow = 14,
     Colorize = 15,
+    MaskCurvature = 16,
 };
 
 enum class PinKind
@@ -78,6 +79,12 @@ enum class MaskNoiseBackend
     GpuCompute,
 };
 
+enum class ColorizeBackend
+{
+    CpuParallel,
+    GpuCompute,
+};
+
 enum class ShapeKind
 {
     Hemisphere,
@@ -90,6 +97,13 @@ enum class MaskBlendMode
     Multiply,
     Min,
     Max,
+};
+
+enum class MaskCurvatureMode
+{
+    Ridges,
+    Valleys,
+    Absolute,
 };
 
 enum class FlowAccumulationAlgorithm
@@ -152,6 +166,7 @@ enum class PreviewStage
     Sediment = 12,
     Snow = 13,
     Colorize = 14,
+    MaskCurvature = 15,
 };
 
 enum class HeightfieldPreviewField
@@ -211,6 +226,19 @@ struct MaskBlendSettings
 {
     MaskBlendMode mode = MaskBlendMode::Add;
     float intensity = 1.0f;
+};
+
+// Heightfield -> mask. Compares each height sample with a blurred local
+// neighbourhood to detect convex ridges, concave valleys, or both as an
+// absolute curvature mask. The output only writes the mask channel; the input
+// heightfield itself is passed through unchanged for preview chaining.
+struct MaskCurvatureSettings
+{
+    MaskCurvatureMode mode = MaskCurvatureMode::Absolute;
+    int radius = 3;
+    float sensitivityMeters = 1.0f;
+    float threshold = 0.0f;
+    float gamma = 1.0f;
 };
 
 // Heightfield + mask. Scatters rocks on a jittered Voronoi grid (used
@@ -310,6 +338,7 @@ struct ColorGrid
 struct ColorizeSettings
 {
     std::vector<ColorStop> stops = {{0.0f, 0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f, 1.0f}};
+    ColorizeBackend backend = ColorizeBackend::GpuCompute;
 };
 
 // Heightfield -> mask. Performs D8 (or MFD) flow accumulation on the
@@ -389,6 +418,7 @@ struct Node
     MultiScaleErosionSettings multiScaleErosion;
     MaskNoiseSettings maskNoise;
     MaskBlendSettings maskBlend;
+    MaskCurvatureSettings maskCurvature;
     MaskFluvialSettings maskFluvial;
     RockSettings rock;
     SedimentSettings sediment;
@@ -541,6 +571,7 @@ using SedimentGpuEvaluator = bool (*)(HeightfieldGrid& grid, const SedimentSetti
 using RockGpuEvaluator = bool (*)(HeightfieldGrid& grid, const RockSettings& settings, std::string* error);
 using MaskFluvialGpuEvaluator = bool (*)(HeightfieldGrid& grid, const MaskFluvialSettings& settings, std::string* error);
 using SnowGpuEvaluator = bool (*)(HeightfieldGrid& grid, const SnowSettings& settings, std::string* error);
+using ColorizeGpuEvaluator = bool (*)(ColorGrid& grid, const ColorizeSettings& settings, const MaskGrid& gradientMask, const MaskGrid* mask, std::string* error);
 
 struct HeightfieldPipeline
 {
@@ -550,6 +581,7 @@ struct HeightfieldPipeline
         {
             HeightmapBlur,
             MultiScaleErosion,
+            MaskCurvature,
             MaskFluvial,
             Rock,
             Sediment,
@@ -560,6 +592,7 @@ struct HeightfieldPipeline
         GraphId nodeId = 0;
         HeightmapBlurSettings heightmapBlur;
         MultiScaleErosionSettings multiScaleErosion;
+        MaskCurvatureSettings maskCurvature;
         MaskFluvialSettings maskFluvial;
         RockSettings rock;
         SedimentSettings sediment;
@@ -710,6 +743,7 @@ void SetSedimentGpuEvaluator(SedimentGpuEvaluator evaluator);
 void SetRockGpuEvaluator(RockGpuEvaluator evaluator);
 void SetMaskFluvialGpuEvaluator(MaskFluvialGpuEvaluator evaluator);
 void SetSnowGpuEvaluator(SnowGpuEvaluator evaluator);
+void SetColorizeGpuEvaluator(ColorizeGpuEvaluator evaluator);
 
 // Thread-safe progress signal: holds the GraphId of the node whose
 // evaluation kernel is currently running on a worker thread, or 0 when

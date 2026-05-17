@@ -508,6 +508,8 @@ ComPtr<ID3D12PipelineState> g_snowCopyInputHeightsPso;
 ComPtr<ID3D12PipelineState> g_snowComputeThicknessPso;
 ComPtr<ID3D12PipelineState> g_snowEnvelopeSmoothingPso;
 ComPtr<ID3D12PipelineState> g_snowApplyPso;
+ComPtr<ID3D12RootSignature> g_colorizeComputeRootSignature;
+ComPtr<ID3D12PipelineState> g_colorizeComputePso;
 ComPtr<ID3D12RootSignature> g_skyRootSignature;
 ComPtr<ID3D12PipelineState> g_skyPso;
 bool g_skyPipelineReady = false;
@@ -582,6 +584,10 @@ std::string g_snowComputeStatus = "Snow GPU Compute not initialized";
 bool g_snowComputeReady = false;
 std::mutex g_snowComputeMutex;
 std::mutex g_snowGpuRequestMutex;
+std::string g_colorizeComputeStatus = "Colorize GPU Compute not initialized";
+bool g_colorizeComputeReady = false;
+std::mutex g_colorizeComputeMutex;
+std::mutex g_colorizeGpuRequestMutex;
 std::thread::id g_mainThreadId;
 
 struct MseGpuRequestResult
@@ -670,6 +676,24 @@ struct SnowGpuRequest
 };
 
 std::vector<std::shared_ptr<SnowGpuRequest>> g_pendingSnowGpuRequests;
+
+struct ColorizeGpuRequestResult
+{
+    bool success = false;
+    rock::ColorGrid grid;
+    std::string error;
+};
+
+struct ColorizeGpuRequest
+{
+    rock::ColorizeSettings settings;
+    rock::MaskGrid gradientMask;
+    rock::MaskGrid mask;
+    bool hasMask = false;
+    std::promise<ColorizeGpuRequestResult> promise;
+};
+
+std::vector<std::shared_ptr<ColorizeGpuRequest>> g_pendingColorizeGpuRequests;
 
 struct MaskNoiseGpuRequest
 {
@@ -1061,6 +1085,9 @@ void CleanupD3D()
     g_snowApplyPso.Reset();
     g_snowComputeRootSignature.Reset();
     g_snowComputeReady = false;
+    g_colorizeComputePso.Reset();
+    g_colorizeComputeRootSignature.Reset();
+    g_colorizeComputeReady = false;
     g_skyPso.Reset();
     g_skyRootSignature.Reset();
     g_skyPipelineReady = false;
@@ -1158,6 +1185,11 @@ std::filesystem::path SnowComputeShaderPath()
     return ShaderPath("snow_compute.hlsl");
 }
 
+std::filesystem::path ColorizeComputeShaderPath()
+{
+    return ShaderPath("colorize_compute.hlsl");
+}
+
 std::filesystem::path SkyShaderPath()
 {
     return ShaderPath("sky.hlsl");
@@ -1190,6 +1222,7 @@ void ProcessPendingSedimentGpuRequests();
 void ProcessPendingRockGpuRequests();
 void ProcessPendingMaskFluvialGpuRequests();
 void ProcessPendingSnowGpuRequests();
+void ProcessPendingColorizeGpuRequests();
 void EnsurePreviewMesh();
 int CurrentPreviewMeshResolution();
 bool IsTerrainNodeKind(rock::NodeKind kind);
@@ -1997,6 +2030,13 @@ nlohmann::json MakeMaskSettingsJson(const rock::Node& node)
             {"inertia", node.maskFluvial.inertia},
             {"backend", static_cast<int>(node.maskFluvial.backend)},
         }},
+        {"maskCurvature", {
+            {"mode", static_cast<int>(node.maskCurvature.mode)},
+            {"radius", node.maskCurvature.radius},
+            {"sensitivityMeters", node.maskCurvature.sensitivityMeters},
+            {"threshold", node.maskCurvature.threshold},
+            {"gamma", node.maskCurvature.gamma},
+        }},
         {"maskBlend", {
             {"mode", static_cast<int>(node.maskBlend.mode)},
             {"intensity", node.maskBlend.intensity},
@@ -2026,7 +2066,10 @@ nlohmann::json MakeColorizeSettingsJson(const rock::Node& node)
     {
         stopsArr.push_back({{"position", s.position}, {"r", s.r}, {"g", s.g}, {"b", s.b}});
     }
-    return {{"colorize", {{"stops", stopsArr}}}};
+    return {{"colorize", {
+        {"backend", static_cast<int>(node.colorize.backend)},
+        {"stops", stopsArr},
+    }}};
 }
 
 nlohmann::json MakeRockSettingsJson(const rock::Node& node)
@@ -2134,6 +2177,7 @@ std::optional<rock::PreviewStage> ReadSerializedPreviewStage(const nlohmann::jso
     case rock::PreviewStage::MultiScaleErosion:
     case rock::PreviewStage::MaskNoise:
     case rock::PreviewStage::MaskBlend:
+    case rock::PreviewStage::MaskCurvature:
     case rock::PreviewStage::MaskFluvial:
     case rock::PreviewStage::Rock:
     case rock::PreviewStage::Sediment:
@@ -2200,6 +2244,7 @@ void ReadMaskSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     const nlohmann::json nodeMaskNoiseJson = nodeJson.value("maskNoise", nlohmann::json::object());
     const nlohmann::json nodeMaskBlendJson = nodeJson.value("maskBlend", nlohmann::json::object());
     const nlohmann::json nodeMaskFluvialJson = nodeJson.value("maskFluvial", nlohmann::json::object());
+    const nlohmann::json nodeMaskCurvatureJson = nodeJson.value("maskCurvature", nlohmann::json::object());
 
     node.maskNoise.seed = std::clamp(nodeMaskNoiseJson.value("seed", node.maskNoise.seed), 0, 999999);
     node.maskNoise.octaves = std::clamp(nodeMaskNoiseJson.value("octaves", node.maskNoise.octaves), 1, 12);
@@ -2220,6 +2265,16 @@ void ReadMaskSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
         node.maskBlend.mode = static_cast<rock::MaskBlendMode>(modeInt);
     }
     node.maskBlend.intensity = std::clamp(nodeMaskBlendJson.value("intensity", node.maskBlend.intensity), 0.0f, 1.0f);
+    {
+        const int modeInt = std::clamp(nodeMaskCurvatureJson.value("mode", static_cast<int>(node.maskCurvature.mode)),
+                                        static_cast<int>(rock::MaskCurvatureMode::Ridges),
+                                        static_cast<int>(rock::MaskCurvatureMode::Absolute));
+        node.maskCurvature.mode = static_cast<rock::MaskCurvatureMode>(modeInt);
+    }
+    node.maskCurvature.radius = std::clamp(nodeMaskCurvatureJson.value("radius", node.maskCurvature.radius), 1, 64);
+    node.maskCurvature.sensitivityMeters = std::clamp(nodeMaskCurvatureJson.value("sensitivityMeters", node.maskCurvature.sensitivityMeters), 0.001f, 1000.0f);
+    node.maskCurvature.threshold = std::clamp(nodeMaskCurvatureJson.value("threshold", node.maskCurvature.threshold), 0.0f, 0.99f);
+    node.maskCurvature.gamma = std::clamp(nodeMaskCurvatureJson.value("gamma", node.maskCurvature.gamma), 0.05f, 8.0f);
     {
         const int algoInt = std::clamp(nodeMaskFluvialJson.value("algorithm", static_cast<int>(node.maskFluvial.algorithm)),
                                         static_cast<int>(rock::FlowAccumulationAlgorithm::D8),
@@ -2340,6 +2395,12 @@ void ReadSnowSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
 void ReadColorizeSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
 {
     const nlohmann::json colorizeJson = nodeJson.value("colorize", nlohmann::json::object());
+    {
+        const int backendInt = std::clamp(colorizeJson.value("backend", static_cast<int>(node.colorize.backend)),
+                                          static_cast<int>(rock::ColorizeBackend::CpuParallel),
+                                          static_cast<int>(rock::ColorizeBackend::GpuCompute));
+        node.colorize.backend = static_cast<rock::ColorizeBackend>(backendInt);
+    }
     if (!colorizeJson.contains("stops") || !colorizeJson["stops"].is_array())
     {
         return;
@@ -4421,6 +4482,325 @@ void ProcessPendingMaskNoiseGpuRequests()
         result.grid.resolution = request->resolution;
         result.grid.values.assign(static_cast<size_t>(request->resolution) * static_cast<size_t>(request->resolution), 0.0f);
         result.success = RunMaskNoiseComputeImmediate(result.grid, request->settings, &result.error);
+        request->promise.set_value(std::move(result));
+    }
+}
+
+struct ColorizeShaderConstants
+{
+    UINT resolution;
+    UINT cellCount;
+    UINT stopCount;
+    UINT hasMask;
+};
+static_assert(sizeof(ColorizeShaderConstants) == 4 * sizeof(UINT), "ColorizeShaderConstants must be 4 DWORDs");
+
+bool EnsureColorizeComputePipeline(std::string* error)
+{
+    if (g_colorizeComputeReady && g_colorizeComputeRootSignature && g_colorizeComputePso)
+    {
+        return true;
+    }
+    if (!g_device)
+    {
+        if (error) *error = "D3D12 device is not available";
+        g_colorizeComputeStatus = "Colorize GPU Compute unavailable";
+        return false;
+    }
+
+    D3D12_DESCRIPTOR_RANGE srvRange{};
+    srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    srvRange.NumDescriptors = 3;
+    srvRange.BaseShaderRegister = 0;
+    srvRange.RegisterSpace = 0;
+    srvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_DESCRIPTOR_RANGE uavRange{};
+    uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    uavRange.NumDescriptors = 1;
+    uavRange.BaseShaderRegister = 0;
+    uavRange.RegisterSpace = 0;
+    uavRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_ROOT_PARAMETER rootParams[3]{};
+    rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    rootParams[0].Constants.ShaderRegister = 0;
+    rootParams[0].Constants.RegisterSpace = 0;
+    rootParams[0].Constants.Num32BitValues = 4;
+    rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[1].DescriptorTable.pDescriptorRanges = &srvRange;
+    rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    rootParams[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[2].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[2].DescriptorTable.pDescriptorRanges = &uavRange;
+    rootParams[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    D3D12_ROOT_SIGNATURE_DESC rsDesc{};
+    rsDesc.NumParameters = _countof(rootParams);
+    rsDesc.pParameters = rootParams;
+    rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+    ComPtr<ID3DBlob> sigBlob, errBlob;
+    HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
+    if (FAILED(hr))
+    {
+        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Serialize Colorize root sig failed";
+        g_colorizeComputeStatus = "Colorize GPU Compute root signature failed";
+        return false;
+    }
+    hr = g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_colorizeComputeRootSignature));
+    if (FAILED(hr))
+    {
+        if (error) *error = "Create Colorize root sig failed";
+        g_colorizeComputeStatus = "Colorize GPU Compute root signature failed";
+        return false;
+    }
+
+    const std::filesystem::path shaderPath = ColorizeComputeShaderPath();
+    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
+#if defined(_DEBUG)
+    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+#endif
+
+    ComPtr<ID3DBlob> csBlob;
+    errBlob.Reset();
+    const HRESULT compileHr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE,
+                                                 "CSColorize", "cs_5_0", compileFlags, 0, &csBlob, &errBlob);
+    if (FAILED(compileHr))
+    {
+        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile Colorize shader failed";
+        g_colorizeComputeStatus = "Colorize shader compile failed";
+        return false;
+    }
+
+    D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{};
+    psoDesc.pRootSignature = g_colorizeComputeRootSignature.Get();
+    psoDesc.CS = {csBlob->GetBufferPointer(), csBlob->GetBufferSize()};
+    hr = g_device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&g_colorizeComputePso));
+    if (FAILED(hr))
+    {
+        if (error) *error = "Create Colorize PSO failed";
+        g_colorizeComputeStatus = "Colorize PSO failed";
+        return false;
+    }
+
+    g_colorizeComputeReady = true;
+    g_colorizeComputeStatus = "Colorize GPU Compute dispatch ready";
+    return true;
+}
+
+bool RunColorizeComputeImmediate(rock::ColorGrid& grid, const rock::ColorizeSettings& settings, const rock::MaskGrid& gradientMask, const rock::MaskGrid* mask, std::string* error)
+{
+    std::lock_guard<std::mutex> lock(g_colorizeComputeMutex);
+    if (!EnsureColorizeComputePipeline(error))
+    {
+        return false;
+    }
+
+    const UINT resolution = static_cast<UINT>(std::clamp(gradientMask.resolution, 0, 4096));
+    if (resolution < 2 || gradientMask.values.size() < static_cast<size_t>(resolution) * static_cast<size_t>(resolution))
+    {
+        if (error) *error = "Invalid Gradient Mask for Colorize GPU Compute";
+        return false;
+    }
+    const bool hasMask = mask != nullptr &&
+        mask->resolution == static_cast<int>(resolution) &&
+        mask->values.size() >= static_cast<size_t>(resolution) * static_cast<size_t>(resolution);
+    const UINT64 cellCount = static_cast<UINT64>(resolution) * static_cast<UINT64>(resolution);
+    const UINT64 maskByteSize = cellCount * sizeof(float);
+    std::vector<rock::ColorStop> sourceStops = settings.stops;
+    if (sourceStops.empty())
+    {
+        sourceStops = {
+            {0.0f, 0.0f, 0.0f, 0.0f},
+            {1.0f, 1.0f, 1.0f, 1.0f},
+        };
+    }
+    const UINT stopCount = static_cast<UINT>(std::min<size_t>(sourceStops.size(), 256));
+    struct GpuStop { float position; float r; float g; float b; };
+    std::vector<GpuStop> stops;
+    stops.reserve(stopCount);
+    for (UINT i = 0; i < stopCount; ++i)
+    {
+        const rock::ColorStop& s = sourceStops[i];
+        stops.push_back({std::clamp(s.position, 0.0f, 1.0f), s.r, s.g, s.b});
+    }
+
+    const UINT64 stopByteSize = std::max<UINT64>(static_cast<UINT64>(stops.size()) * sizeof(GpuStop), sizeof(GpuStop));
+    const UINT64 outputByteSize = cellCount * sizeof(uint32_t);
+    const D3D12_HEAP_PROPERTIES defaultHeap = HeapProperties(D3D12_HEAP_TYPE_DEFAULT);
+    const D3D12_HEAP_PROPERTIES readbackHeap = HeapProperties(D3D12_HEAP_TYPE_READBACK);
+    const D3D12_RESOURCE_DESC outputGpuDesc = BufferResourceDesc(outputByteSize, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    const D3D12_RESOURCE_DESC outputCpuDesc = BufferResourceDesc(outputByteSize);
+
+    ComPtr<ID3D12Resource> gradientUpload = CreateUploadBuffer(gradientMask.values.data(), maskByteSize, "Create Colorize gradient upload failed");
+    ComPtr<ID3D12Resource> maskUpload = CreateUploadBuffer(hasMask ? mask->values.data() : gradientMask.values.data(), maskByteSize, "Create Colorize mask upload failed");
+    ComPtr<ID3D12Resource> stopsUpload = CreateUploadBuffer(stops.data(), stopByteSize, "Create Colorize stops upload failed");
+    ComPtr<ID3D12Resource> output;
+    ComPtr<ID3D12Resource> readback;
+    HRESULT hr = g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &outputGpuDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&output));
+    if (FAILED(hr)) { if (error) *error = "Create Colorize output buffer failed"; return false; }
+    hr = g_device->CreateCommittedResource(&readbackHeap, D3D12_HEAP_FLAG_NONE, &outputCpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readback));
+    if (FAILED(hr)) { if (error) *error = "Create Colorize readback buffer failed"; return false; }
+
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    heapDesc.NumDescriptors = 4;
+    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    ComPtr<ID3D12DescriptorHeap> descriptorHeap;
+    hr = g_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&descriptorHeap));
+    if (FAILED(hr)) { if (error) *error = "Create Colorize descriptor heap failed"; return false; }
+    const UINT descriptorSize = g_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    auto cpuHandle = [&](UINT index) {
+        D3D12_CPU_DESCRIPTOR_HANDLE handle = descriptorHeap->GetCPUDescriptorHandleForHeapStart();
+        handle.ptr += static_cast<SIZE_T>(index) * descriptorSize;
+        return handle;
+    };
+    auto gpuHandle = [&](UINT index) {
+        D3D12_GPU_DESCRIPTOR_HANDLE handle = descriptorHeap->GetGPUDescriptorHandleForHeapStart();
+        handle.ptr += static_cast<UINT64>(index) * descriptorSize;
+        return handle;
+    };
+
+    auto createFloatSrv = [&](ID3D12Resource* resource, UINT64 elementCount, D3D12_CPU_DESCRIPTOR_HANDLE dst) {
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+        srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Buffer.NumElements = static_cast<UINT>(elementCount);
+        srvDesc.Buffer.StructureByteStride = sizeof(float);
+        g_device->CreateShaderResourceView(resource, &srvDesc, dst);
+    };
+    createFloatSrv(gradientUpload.Get(), cellCount, cpuHandle(0));
+    createFloatSrv(maskUpload.Get(), cellCount, cpuHandle(1));
+    D3D12_SHADER_RESOURCE_VIEW_DESC stopsSrv{};
+    stopsSrv.Format = DXGI_FORMAT_UNKNOWN;
+    stopsSrv.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+    stopsSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    stopsSrv.Buffer.NumElements = stopCount;
+    stopsSrv.Buffer.StructureByteStride = sizeof(GpuStop);
+    g_device->CreateShaderResourceView(stopsUpload.Get(), &stopsSrv, cpuHandle(2));
+    D3D12_UNORDERED_ACCESS_VIEW_DESC outputUav{};
+    outputUav.Format = DXGI_FORMAT_UNKNOWN;
+    outputUav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+    outputUav.Buffer.NumElements = static_cast<UINT>(cellCount);
+    outputUav.Buffer.StructureByteStride = sizeof(uint32_t);
+    g_device->CreateUnorderedAccessView(output.Get(), nullptr, &outputUav, cpuHandle(3));
+
+    ComPtr<ID3D12CommandAllocator> allocator;
+    ComPtr<ID3D12GraphicsCommandList> commandList;
+    ThrowIfFailed(g_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)), "Create Colorize command allocator failed");
+    ThrowIfFailed(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&commandList)), "Create Colorize command list failed");
+
+    ColorizeShaderConstants constants{};
+    constants.resolution = resolution;
+    constants.cellCount = static_cast<UINT>(cellCount);
+    constants.stopCount = stopCount;
+    constants.hasMask = hasMask ? 1u : 0u;
+
+    ID3D12DescriptorHeap* heaps[] = {descriptorHeap.Get()};
+    commandList->SetDescriptorHeaps(1, heaps);
+    commandList->SetComputeRootSignature(g_colorizeComputeRootSignature.Get());
+    commandList->SetPipelineState(g_colorizeComputePso.Get());
+    commandList->SetComputeRoot32BitConstants(0, 4, &constants, 0);
+    commandList->SetComputeRootDescriptorTable(1, gpuHandle(0));
+    commandList->SetComputeRootDescriptorTable(2, gpuHandle(3));
+    const UINT groupCount = (resolution + 7u) / 8u;
+    commandList->Dispatch(groupCount, groupCount, 1);
+
+    D3D12_RESOURCE_BARRIER toCopy{};
+    toCopy.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    toCopy.Transition.pResource = output.Get();
+    toCopy.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    toCopy.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    toCopy.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    commandList->ResourceBarrier(1, &toCopy);
+    commandList->CopyBufferRegion(readback.Get(), 0, output.Get(), 0, outputByteSize);
+    ThrowIfFailed(commandList->Close(), "Close Colorize command list failed");
+
+    ID3D12CommandList* lists[] = {commandList.Get()};
+    g_commandQueue->ExecuteCommandLists(1, lists);
+    const UINT64 fenceValue = ++g_fenceLastSignaledValue;
+    ThrowIfFailed(g_commandQueue->Signal(g_fence.Get(), fenceValue), "Signal Colorize fence failed");
+    WaitForFenceValue(fenceValue);
+
+    void* mapped = nullptr;
+    const D3D12_RANGE readRange{0, static_cast<SIZE_T>(outputByteSize)};
+    ThrowIfFailed(readback->Map(0, &readRange, &mapped), "Map Colorize readback failed");
+    const uint32_t* packed = static_cast<const uint32_t*>(mapped);
+    grid.resolution = static_cast<int>(resolution);
+    grid.pixels.resize(static_cast<size_t>(cellCount) * 4u);
+    for (UINT64 i = 0; i < cellCount; ++i)
+    {
+        const uint32_t p = packed[i];
+        grid.pixels[i * 4u + 0u] = static_cast<uint8_t>(p & 0xffu);
+        grid.pixels[i * 4u + 1u] = static_cast<uint8_t>((p >> 8) & 0xffu);
+        grid.pixels[i * 4u + 2u] = static_cast<uint8_t>((p >> 16) & 0xffu);
+        grid.pixels[i * 4u + 3u] = static_cast<uint8_t>((p >> 24) & 0xffu);
+    }
+    const D3D12_RANGE emptyWriteRange{0, 0};
+    readback->Unmap(0, &emptyWriteRange);
+
+    g_colorizeComputeStatus = "Colorize GPU Compute evaluated";
+    return true;
+}
+
+bool RunColorizeCompute(rock::ColorGrid& grid, const rock::ColorizeSettings& settings, const rock::MaskGrid& gradientMask, const rock::MaskGrid* mask, std::string* error)
+{
+    if (std::this_thread::get_id() == g_mainThreadId)
+    {
+        return RunColorizeComputeImmediate(grid, settings, gradientMask, mask, error);
+    }
+
+    auto request = std::make_shared<ColorizeGpuRequest>();
+    request->settings = settings;
+    request->gradientMask = gradientMask;
+    request->hasMask = mask != nullptr;
+    if (mask != nullptr)
+    {
+        request->mask = *mask;
+    }
+    std::future<ColorizeGpuRequestResult> future = request->promise.get_future();
+    {
+        std::lock_guard<std::mutex> lock(g_colorizeGpuRequestMutex);
+        g_pendingColorizeGpuRequests.push_back(request);
+    }
+    g_colorizeComputeStatus = "Colorize GPU Compute queued on main thread";
+
+    ColorizeGpuRequestResult result = future.get();
+    if (!result.success)
+    {
+        if (error) *error = result.error;
+        return false;
+    }
+    grid = std::move(result.grid);
+    return true;
+}
+
+void ProcessPendingColorizeGpuRequests()
+{
+    if (std::this_thread::get_id() != g_mainThreadId)
+    {
+        return;
+    }
+
+    std::vector<std::shared_ptr<ColorizeGpuRequest>> requests;
+    {
+        std::lock_guard<std::mutex> lock(g_colorizeGpuRequestMutex);
+        requests.swap(g_pendingColorizeGpuRequests);
+    }
+
+    for (const std::shared_ptr<ColorizeGpuRequest>& request : requests)
+    {
+        ColorizeGpuRequestResult result;
+        result.success = RunColorizeComputeImmediate(
+            result.grid,
+            request->settings,
+            request->gradientMask,
+            request->hasMask ? &request->mask : nullptr,
+            &result.error);
         request->promise.set_value(std::move(result));
     }
 }
@@ -7287,6 +7667,7 @@ bool IsTerrainNodeKind(rock::NodeKind kind)
         kind == rock::NodeKind::MultiScaleErosion ||
         kind == rock::NodeKind::MaskNoise ||
         kind == rock::NodeKind::MaskBlend ||
+        kind == rock::NodeKind::MaskCurvature ||
         kind == rock::NodeKind::MaskFluvial ||
         kind == rock::NodeKind::Rock ||
         kind == rock::NodeKind::Sediment ||
@@ -7619,6 +8000,7 @@ void WaitForAsyncEvaluationForShutdown()
         ProcessPendingRockGpuRequests();
         ProcessPendingMaskFluvialGpuRequests();
         ProcessPendingSnowGpuRequests();
+        ProcessPendingColorizeGpuRequests();
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 
@@ -9429,6 +9811,7 @@ ImVec4 NodeAccentColor(rock::NodeKind kind)
         return heightfieldGreen;
     case rock::NodeKind::MaskNoise:
     case rock::NodeKind::MaskBlend:
+    case rock::NodeKind::MaskCurvature:
     case rock::NodeKind::MaskFluvial:
         return maskOrange;
     case rock::NodeKind::Colorize:
@@ -9454,6 +9837,8 @@ ImVec2 InitialNodePosition(rock::NodeKind kind)
         return ImVec2(40.0f, 520.0f);
     case rock::NodeKind::MaskBlend:
         return ImVec2(320.0f, 520.0f);
+    case rock::NodeKind::MaskCurvature:
+        return ImVec2(600.0f, 520.0f);
     case rock::NodeKind::MaskFluvial:
         return ImVec2(880.0f, 240.0f);
     case rock::NodeKind::Rock:
@@ -10193,6 +10578,7 @@ void DrawNodeGraph()
         {
             addNodeMenuItem(rock::NodeKind::MaskNoise);
             addNodeMenuItem(rock::NodeKind::MaskBlend);
+            addNodeMenuItem(rock::NodeKind::MaskCurvature);
             addNodeMenuItem(rock::NodeKind::MaskFluvial);
             ImGui::EndMenu();
         }
@@ -11032,6 +11418,50 @@ bool DrawMaskBlendProperties(rock::Node& editableNode)
     return true;
 }
 
+bool DrawMaskCurvatureProperties(rock::Node& editableNode)
+{
+    if (!ImGui::BeginTable("MaskCurvatureRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        return false;
+    }
+
+    ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 200.0f);
+    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+    rock::MaskCurvatureSettings& mc = editableNode.maskCurvature;
+    mc.radius = std::clamp(mc.radius, 1, 64);
+    mc.sensitivityMeters = std::clamp(mc.sensitivityMeters, 0.001f, 1000.0f);
+    mc.threshold = std::clamp(mc.threshold, 0.0f, 0.99f);
+    mc.gamma = std::clamp(mc.gamma, 0.05f, 8.0f);
+
+    int modeInt = static_cast<int>(mc.mode);
+    if (DrawPropertyComboRow("Mode", "MaskCurvatureMode", &modeInt, "Ridges\0Valleys\0Absolute\0\0", "Ridges は周囲より高い凸部、Valleys は周囲より低い凹部、Absolute は両方を検出します。", static_cast<int>(rock::MaskCurvatureSettings{}.mode)))
+    {
+        mc.mode = static_cast<rock::MaskCurvatureMode>(std::clamp(modeInt,
+            static_cast<int>(rock::MaskCurvatureMode::Ridges),
+            static_cast<int>(rock::MaskCurvatureMode::Absolute)));
+        EvaluateGraph();
+    }
+    if (DrawPropertyIntRow("Radius", "MaskCurvatureRadius", &mc.radius, 1, 64, rock::MaskCurvatureSettings{}.radius, "Mask curvature radius changed", true, "周囲平均との差分を見る半径です。小さいほど細かい凹凸、大きいほど広い尾根や谷を拾います。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Sensitivity (m)", "MaskCurvatureSensitivity", &mc.sensitivityMeters, 0.001f, 1000.0f, rock::MaskCurvatureSettings{}.sensitivityMeters, "Mask curvature sensitivity changed", true, "この高さ差で mask=1 になります。小さいほど弱い曲率も明るくなります。", "%.3f"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyPercentRow("Threshold (%)", "MaskCurvatureThreshold", &mc.threshold, 0.0f, 0.99f, rock::MaskCurvatureSettings{}.threshold, "Mask curvature threshold changed", "正規化後の下限です。上げるほど弱い曲率を落として、強い尾根や谷だけを残します。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Gamma", "MaskCurvatureGamma", &mc.gamma, 0.05f, 8.0f, rock::MaskCurvatureSettings{}.gamma, "Mask curvature gamma changed", true, "出力 mask のカーブです。1 未満で微細な曲率を明るく、1 より大きいと強い曲率だけを強調します。"))
+    {
+        EvaluateGraph();
+    }
+
+    ImGui::EndTable();
+    return true;
+}
+
 // グラデーションバーを ImDrawList で描画するヘルパー。stops は position 昇順でソート済み前提。
 static void DrawGradientBar(ImDrawList* dl, ImVec2 barMin, ImVec2 barMax, const std::vector<rock::ColorStop>& stops)
 {
@@ -11085,6 +11515,18 @@ bool DrawColorizeProperties(rock::Node& editableNode)
     else if (cs.stops.size() == 1) { cs.stops.push_back({1.0f, 1.0f, 1.0f, 1.0f}); }
 
     bool changed = false;
+
+    const char* backendItems[] = {"CPU", "GPU"};
+    int backendIndex = static_cast<int>(cs.backend);
+    ImGui::SetNextItemWidth(120.0f);
+    if (ImGui::Combo("Backend", &backendIndex, backendItems, IM_ARRAYSIZE(backendItems)))
+    {
+        cs.backend = static_cast<rock::ColorizeBackend>(std::clamp(
+            backendIndex,
+            static_cast<int>(rock::ColorizeBackend::CpuParallel),
+            static_cast<int>(rock::ColorizeBackend::GpuCompute)));
+        changed = true;
+    }
 
     // --- グラデーションバー ---
     ImGui::Spacing();
@@ -11709,6 +12151,11 @@ void DrawPropertiesPanel()
     }
 
     if (selectedNode->kind == rock::NodeKind::MaskBlend && DrawMaskBlendProperties(*editableNode))
+    {
+        return;
+    }
+
+    if (selectedNode->kind == rock::NodeKind::MaskCurvature && DrawMaskCurvatureProperties(*editableNode))
     {
         return;
     }
@@ -12677,6 +13124,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         rock::SetRockGpuEvaluator(RunRockCompute);
         rock::SetMaskFluvialGpuEvaluator(RunMaskFluvialCompute);
         rock::SetSnowGpuEvaluator(RunSnowCompute);
+        rock::SetColorizeGpuEvaluator(RunColorizeCompute);
 
         ShowWindow(g_hwnd, showCommand);
         UpdateWindow(g_hwnd);
@@ -12741,6 +13189,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
             ProcessPendingRockGpuRequests();
             ProcessPendingMaskFluvialGpuRequests();
             ProcessPendingSnowGpuRequests();
+            ProcessPendingColorizeGpuRequests();
             PollAsyncEvaluation();
             DrawUi();
             ImGui::Render();
@@ -12761,6 +13210,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         rock::SetRockGpuEvaluator(nullptr);
         rock::SetMaskFluvialGpuEvaluator(nullptr);
         rock::SetSnowGpuEvaluator(nullptr);
+        rock::SetColorizeGpuEvaluator(nullptr);
         CleanupD3D();
         DestroyWindow(g_hwnd);
         UnregisterClassW(wc.lpszClassName, wc.hInstance);

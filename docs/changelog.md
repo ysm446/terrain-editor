@@ -2,6 +2,14 @@
 
 ## 未リリース
 
+## 3.17.11 - 2026-05-17 09:25
+
+- `Mask Curvature` ノードを追加しました。入力 Heightmap の局所平均との差分から Ridges / Valleys / Absolute の曲率マスクを生成し、Radius、Sensitivity、Threshold、Gamma で検出範囲と出力カーブを調整できます。
+
+## 3.17.10 - 2026-05-17 09:05
+
+- `Colorize` ノードに CPU / GPU バックエンドを追加し、GPU バックエンドでは Gradient Mask / Mask / ストップ列から `ColorGrid` を compute shader で生成するようにしました。GPU が使えない場合は CPU 実装へ自動フォールバックします。
+
 ## 3.17.9 - 2026-05-17 08:40
 
 - `Colorize` ノードの 3D プレビューを頂点カラー焼き込みではなく、`ColorGrid` を GPU テクスチャとしてアップロードしてサンプリングする方式に変更しました。細かい色変化やマスク境界を、メッシュ頂点密度に依存せず表示できるようにしました。
