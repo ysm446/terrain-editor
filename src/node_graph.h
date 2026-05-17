@@ -63,6 +63,20 @@ enum class RockBackend
     GpuCompute,
 };
 
+enum class RockStyle
+{
+    Classic,
+    Polygonal,
+    Shard,
+};
+
+enum class RockOrientationRule
+{
+    Flat,
+    FollowGround,
+    SlopeOriented,
+};
+
 enum class MaskFluvialBackend
 {
     CpuReference,
@@ -271,6 +285,9 @@ struct MaskSlopeSettings
 // carving step.
 struct RockSettings
 {
+    RockStyle style = RockStyle::Polygonal; // New nodes default to sharper low-poly rocks; old projects without this key are migrated to Classic.
+    RockOrientationRule orientationRule = RockOrientationRule::Flat;
+    int layerCount = 1;
     int seed = 0;
     float density = 8.0f;            // Scatter pitch (m). Spacing between rock centres.
     float coverage = 1.0f;           // 0..1, fraction of scatter points that become a rock.

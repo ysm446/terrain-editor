@@ -2090,6 +2090,9 @@ nlohmann::json MakeRockSettingsJson(const rock::Node& node)
 {
     return {
         {"rock", {
+            {"style", static_cast<int>(node.rock.style)},
+            {"orientationRule", static_cast<int>(node.rock.orientationRule)},
+            {"layerCount", node.rock.layerCount},
             {"seed", node.rock.seed},
             {"density", node.rock.density},
             {"coverage", node.rock.coverage},
@@ -2336,6 +2339,24 @@ void ReadRockSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
 {
     const nlohmann::json nodeRockJson = nodeJson.value("rock", nlohmann::json::object());
 
+    if (nodeRockJson.contains("style"))
+    {
+        const int styleInt = nodeRockJson.value("style", static_cast<int>(node.rock.style));
+        node.rock.style = static_cast<rock::RockStyle>(std::clamp(styleInt,
+            static_cast<int>(rock::RockStyle::Classic),
+            static_cast<int>(rock::RockStyle::Shard)));
+    }
+    else
+    {
+        node.rock.style = rock::RockStyle::Classic;
+    }
+    {
+        const int orientationInt = nodeRockJson.value("orientationRule", static_cast<int>(node.rock.orientationRule));
+        node.rock.orientationRule = static_cast<rock::RockOrientationRule>(std::clamp(orientationInt,
+            static_cast<int>(rock::RockOrientationRule::Flat),
+            static_cast<int>(rock::RockOrientationRule::SlopeOriented)));
+    }
+    node.rock.layerCount = std::clamp(nodeRockJson.value("layerCount", node.rock.layerCount), 1, 8);
     node.rock.seed = std::clamp(nodeRockJson.value("seed", node.rock.seed), 0, 999999);
     node.rock.density = std::clamp(nodeRockJson.value("density", node.rock.density), 0.5f, 1000.0f);
     node.rock.coverage = std::clamp(nodeRockJson.value("coverage", node.rock.coverage), 0.0f, 1.0f);
@@ -5297,9 +5318,14 @@ struct RockShaderConstants
     float maxReach;
     float domeExp;
     int   needPolyhedral;
-    int   pad0;
+    int   rockStyle;
+
+    int   orientationRule;
+    int   layerCount;
+    int   pad2;
+    int   pad3;
 };
-static_assert(sizeof(RockShaderConstants) == 20 * sizeof(UINT), "RockShaderConstants must be 20 DWORDs");
+static_assert(sizeof(RockShaderConstants) == 24 * sizeof(UINT), "RockShaderConstants must be 24 DWORDs");
 
 bool EnsureRockComputePipeline(std::string* error)
 {
@@ -5327,7 +5353,7 @@ bool EnsureRockComputePipeline(std::string* error)
     rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     rootParams[0].Constants.ShaderRegister = 0;
     rootParams[0].Constants.RegisterSpace = 0;
-    rootParams[0].Constants.Num32BitValues = 20;
+    rootParams[0].Constants.Num32BitValues = 24;
     rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
@@ -5500,12 +5526,19 @@ bool RunRockComputeImmediate(rock::HeightfieldGrid& grid, const rock::RockSettin
     const float rockSizeMaxCells = rockSizeMaxM / density;
     const float aspectVar = std::clamp(settings.aspectVariation, 0.0f, 1.0f);
     const float maxDomeRadius = rockSizeMaxCells * 0.5f;
-    const float maxAspect = std::pow(2.0f, aspectVar);
-    const float maxReach = maxDomeRadius * maxAspect;
-    const int searchRadius = std::max(1, static_cast<int>(std::ceil(maxReach - 0.05f)));
     const float edgeSharpness = std::clamp(settings.edgeSharpness, 0.0f, 1.0f);
     const float facetSharpness = std::clamp(settings.facetSharpness, 0.0f, 1.0f);
-    const float domeExp = 1.0f + facetSharpness * 1.5f * (1.0f - edgeSharpness);
+    const int rockStyle = std::clamp(static_cast<int>(settings.style), 0, 2);
+    const bool polygonalStyle = rockStyle != static_cast<int>(rock::RockStyle::Classic);
+    const bool shardStyle = rockStyle == static_cast<int>(rock::RockStyle::Shard);
+    const float styleAspectBoost = shardStyle ? 0.65f : 0.0f;
+    const float maxAspect = std::pow(2.0f, aspectVar + styleAspectBoost);
+    const float maxReach = maxDomeRadius * maxAspect;
+    const int searchRadius = std::max(1, static_cast<int>(std::ceil(maxReach - 0.05f)));
+    const float effectiveEdgeSharpness = polygonalStyle ? std::max(edgeSharpness, 0.65f) : edgeSharpness;
+    const float domeExp = polygonalStyle ? 1.0f : (1.0f + facetSharpness * 1.5f * (1.0f - edgeSharpness));
+    const int orientationRule = std::clamp(static_cast<int>(settings.orientationRule), 0, 2);
+    const int layerCount = std::clamp(settings.layerCount, 1, 8);
 
     RockShaderConstants k{};
     k.resolution        = resolution;
@@ -5526,9 +5559,13 @@ bool RunRockComputeImmediate(rock::HeightfieldGrid& grid, const rock::RockSettin
     k.searchRadius      = searchRadius;
     k.maxReach          = maxReach;
     k.domeExp           = domeExp;
-    k.needPolyhedral    = (edgeSharpness > 0.0f) ? 1 : 0;
-    k.pad0              = 0;
-    commandList->SetComputeRoot32BitConstants(0, 20, &k, 0);
+    k.needPolyhedral    = (effectiveEdgeSharpness > 0.0f) ? 1 : 0;
+    k.rockStyle         = rockStyle;
+    k.orientationRule   = orientationRule;
+    k.layerCount        = layerCount;
+    k.pad2              = 0;
+    k.pad3              = 0;
+    commandList->SetComputeRoot32BitConstants(0, 24, &k, 0);
 
     commandList->SetPipelineState(g_rockComputePso.Get());
     const UINT groupCount = (resolution + 7u) / 8u;
@@ -12058,6 +12095,13 @@ bool DrawRockProperties(rock::Node& editableNode)
     ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 210.0f);
     ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
     rock::RockSettings& rk = editableNode.rock;
+    rk.style = static_cast<rock::RockStyle>(std::clamp(static_cast<int>(rk.style),
+        static_cast<int>(rock::RockStyle::Classic),
+        static_cast<int>(rock::RockStyle::Shard)));
+    rk.orientationRule = static_cast<rock::RockOrientationRule>(std::clamp(static_cast<int>(rk.orientationRule),
+        static_cast<int>(rock::RockOrientationRule::Flat),
+        static_cast<int>(rock::RockOrientationRule::SlopeOriented)));
+    rk.layerCount = std::clamp(rk.layerCount, 1, 8);
     rk.density = std::clamp(rk.density, 0.5f, 1000.0f);
     rk.coverage = std::clamp(rk.coverage, 0.0f, 1.0f);
     rk.rockSizeMinM = std::clamp(rk.rockSizeMinM, 0.1f, 200.0f);
@@ -12081,6 +12125,30 @@ bool DrawRockProperties(rock::Node& editableNode)
                 static_cast<int>(rock::RockBackend::GpuCompute)));
             EvaluateGraph();
         }
+    }
+    {
+        int styleInt = static_cast<int>(rk.style);
+        if (DrawPropertyComboRow("Rock Style", "RockStyle", &styleInt, "Classic\0Polygonal\0Shard\0\0", "岩の基本シェープです。Classic は従来の丸みを残した多角形ドーム、Polygonal はオフセンター頂点を持つ低ポリゴン岩、Shard はより細長い破片状の岩を生成します。", static_cast<int>(rock::RockSettings{}.style)))
+        {
+            rk.style = static_cast<rock::RockStyle>(std::clamp(styleInt,
+                static_cast<int>(rock::RockStyle::Classic),
+                static_cast<int>(rock::RockStyle::Shard)));
+            EvaluateGraph();
+        }
+    }
+    {
+        int orientationInt = static_cast<int>(rk.orientationRule);
+        if (DrawPropertyComboRow("Orientation Rule", "RockOrientationRule", &orientationInt, "Flat\0Follow Ground\0Slope Oriented\0\0", "岩の向きと斜面への沿わせ方です。Flat は従来通り水平基準で加算、Follow Ground は斜面距離と法線の上向き成分を使って地形に沿わせ、Slope Oriented は岩の回転を斜面方向へ寄せます。", static_cast<int>(rock::RockSettings{}.orientationRule)))
+        {
+            rk.orientationRule = static_cast<rock::RockOrientationRule>(std::clamp(orientationInt,
+                static_cast<int>(rock::RockOrientationRule::Flat),
+                static_cast<int>(rock::RockOrientationRule::SlopeOriented)));
+            EvaluateGraph();
+        }
+    }
+    if (DrawPropertyIntRow("Layer Count", "RockLayerCount", &rk.layerCount, 1, 8, rock::RockSettings{}.layerCount, "Rock layer count changed", true, "重ねる岩散布レイヤー数です。増やすほど別シードのグリッドを重ねて密度と不規則さが増えますが、評価コストもほぼ比例して上がります。"))
+    {
+        EvaluateGraph();
     }
     if (DrawPropertyIntRow("Seed", "RockSeed", &rk.seed, 0, 999999, rock::RockSettings{}.seed, "Rock seed changed", true, "ハッシュのオフセットです。同じパラメータでも異なる岩配置を得るために使います。"))
     {

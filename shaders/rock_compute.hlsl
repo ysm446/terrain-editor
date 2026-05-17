@@ -52,7 +52,12 @@ cbuffer RockConstants : register(b0)
     float maxReach;
     float domeExp;
     int   needPolyhedral; // 0 / 1
-    int   pad0;
+    int   rockStyle;      // 0 = Classic, 1 = Polygonal, 2 = Shard
+
+    int   orientationRule; // 0 = Flat, 1 = Follow Ground, 2 = Slope Oriented
+    int   layerCount;
+    int   pad2;
+    int   pad3;
 };
 
 RWStructuredBuffer<float> InputHeights  : register(u0);
@@ -158,19 +163,49 @@ void CSRock(uint3 dispatchThreadID : SV_DispatchThreadID)
     int polyCountSeed  = seed * 1009  + 13513;
     int polyAngleSeed  = seed * 137   + 60013;
     int polyRadiusSeed = seed * 251   + 70003;
+    int apexSeedX      = seed * 1181  + 42043;
+    int apexSeedZ      = seed * 1871  + 52189;
+
+    bool polygonalStyle = rockStyle != 0;
+    bool shardStyle = rockStyle == 2;
+    float effectiveEdgeSharpness = polygonalStyle ? max(edgeSharpness, 0.65f) : edgeSharpness;
+    float effectiveFacetSharpness = polygonalStyle ? max(facetSharpness, 0.7f) : facetSharpness;
+    float styleAspectBoost = shardStyle ? 0.65f : 0.0f;
+    int lc = clamp(layerCount, 1, 8);
+
+    float gradX = 0.0f;
+    float gradZ = 0.0f;
+    float slopeLen = 0.0f;
+    float normalUp = 1.0f;
+    if (orientationRule != 0)
+    {
+        uint xm = (x > 0u) ? (x - 1u) : 0u;
+        uint xp = min(resolution - 1u, x + 1u);
+        uint zm = (z > 0u) ? (z - 1u) : 0u;
+        uint zp = min(resolution - 1u, z + 1u);
+        float cellSizeMeters = max(terrainSizeMeters, 1.0f) / max((float)(resolution - 1u), 1.0f);
+        float invTwoCellMeters = 1.0f / (2.0f * cellSizeMeters);
+        gradX = (InputHeights[z * resolution + xp] - InputHeights[z * resolution + xm]) * invTwoCellMeters;
+        gradZ = (InputHeights[zp * resolution + x] - InputHeights[zm * resolution + x]) * invTwoCellMeters;
+        slopeLen = sqrt(gradX * gradX + gradZ * gradZ);
+        normalUp = 1.0f / sqrt(1.0f + slopeLen * slopeLen);
+    }
 
     float bestRockH = 0.0f;
     float bestDome = 0.0f;
 
     int sr = searchRadius;
-    for (int dz = -sr; dz <= sr; ++dz)
+    for (int layer = 0; layer < lc; ++layer)
     {
-        for (int dx = -sr; dx <= sr; ++dx)
+        int layerSeed = (seed + layer * 1009) * 1667 + 104729;
+        for (int dz = -sr; dz <= sr; ++dz)
         {
+            for (int dx = -sr; dx <= sr; ++dx)
+            {
             int gx = baseCx + dx;
             int gz = baseCz + dz;
-            float jx = HashFloat01(gx, gz, seed) * 0.9f - 0.45f;
-            float jz = HashFloat01(gx, gz, seed + 73) * 0.9f - 0.45f;
+            float jx = HashFloat01(gx, gz, layerSeed) * 0.9f - 0.45f;
+            float jz = HashFloat01(gx, gz, layerSeed + 73) * 0.9f - 0.45f;
             float sx = (float)gx + 0.5f + jx;
             float sz = (float)gz + 0.5f + jz;
             float ddx = cellX - sx;
@@ -178,21 +213,24 @@ void CSRock(uint3 dispatchThreadID : SV_DispatchThreadID)
             float d_iso = sqrt(ddx * ddx + ddz * ddz);
             if (d_iso >= maxReach) continue;
 
-            float cellRandom = HashFloat01(gx, gz, seed + 17);
+            float cellRandom = HashFloat01(gx, gz, layerSeed + 17);
             if (cellRandom > coverage) continue;
 
-            float sizeRand = HashFloat01(gx, gz, sizeSeed);
+            float sizeRand = HashFloat01(gx, gz, sizeSeed + layerSeed);
             float rockSizeCells = rockSizeMinCells + sizeRand * (rockSizeMaxCells - rockSizeMinCells);
             float domeRadius_per = rockSizeCells * 0.5f;
 
-            float rotRand = HashFloat01(gx, gz, rotSeed);
-            float theta = (rotRand - 0.5f) * 2.0f * 3.14159265358979323846f * rotationVar;
+            float rotRand = HashFloat01(gx, gz, rotSeed + layerSeed);
+            float randomTheta = (rotRand - 0.5f) * 2.0f * 3.14159265358979323846f * rotationVar;
+            float slopeTheta = (slopeLen > 1e-4f) ? atan2(gradZ, gradX) : 0.0f;
+            float theta = (orientationRule == 2 && slopeLen > 1e-4f) ? (slopeTheta + randomTheta) : randomTheta;
             float cosT = cos(theta);
             float sinT = sin(theta);
 
-            float aspectRand = HashFloat01(gx, gz, aspectSeed);
-            float aspect = pow(2.0f, aspectVar * (2.0f * aspectRand - 1.0f));
-            float axisRand = HashFloat01(gx, gz, aspectAxisSeed);
+            float aspectRand = HashFloat01(gx, gz, aspectSeed + layerSeed);
+            float aspectExp = aspectVar * (2.0f * aspectRand - 1.0f) + styleAspectBoost;
+            float aspect = pow(2.0f, aspectExp);
+            float axisRand = HashFloat01(gx, gz, aspectAxisSeed + layerSeed);
             float aspect_x = (axisRand < 0.5f) ? aspect : (1.0f / aspect);
             float aspect_z = 1.0f / aspect_x;
 
@@ -200,48 +238,84 @@ void CSRock(uint3 dispatchThreadID : SV_DispatchThreadID)
             float rz_unrot = -ddx * sinT + ddz * cosT;
             float rx = rx_unrot / aspect_x;
             float rz = rz_unrot / aspect_z;
-            float d_local = sqrt(rx * rx + rz * rz);
+            float slopeAlong = (orientationRule != 0) ? (gradX * ddx + gradZ * ddz) : 0.0f;
+            float d_local = sqrt(rx * rx + rz * rz + slopeAlong * slopeAlong);
             if (d_local >= domeRadius_per) continue;
 
-            float heightRand = HashFloat01(gx, gz, seed + 53);
-            float cellHeight = rockHeight * (1.0f - heightJitter + heightJitter * 2.0f * heightRand);
+            float heightRand = HashFloat01(gx, gz, layerSeed + 53);
+            float orientationHeightScale = (orientationRule == 1) ? normalUp : 1.0f;
+            float cellHeight = rockHeight * orientationHeightScale * (1.0f - heightJitter + heightJitter * 2.0f * heightRand);
 
             float radialT = saturate(1.0f - d_local / max(domeRadius_per, 1e-6f));
 
             float polyhedralT = 0.0f;
+            float topPlaneMask = 0.0f;
             if (needPolyhedral != 0)
             {
-                int facetCount = 4 + (int)(HashFloat01(gx, gz, polyCountSeed) * 4.0f); // 4..7
+                int facetCount = min(7, 4 + (int)(HashFloat01(gx, gz, polyCountSeed + layerSeed) * 4.0f)); // 4..7
+                if (polygonalStyle)
+                {
+                    float styleCount = HashFloat01(gx, gz, polyCountSeed + layerSeed + 97);
+                    facetCount = shardStyle
+                        ? min(6, 4 + (int)(styleCount * 3.0f))
+                        : min(8, 5 + (int)(styleCount * 4.0f));
+                }
                 float facetCountF = (float)facetCount;
                 float kPi = 3.14159265358979323846f;
                 float baseInradius = domeRadius_per * cos(kPi / facetCountF);
                 float edgeAngularSpan = (2.0f * kPi) / facetCountF;
-                float polyDist = 1e30f;
-                // facetCount is dynamic (4..7) so we cap at 7 with an early-out branch.
+                float apexRange = shardStyle ? 0.42f : 0.28f;
+                float apexX = polygonalStyle ? ((HashFloat01(gx, gz, apexSeedX + layerSeed) - 0.5f) * 2.0f * baseInradius * apexRange) : 0.0f;
+                float apexZ = polygonalStyle ? ((HashFloat01(gx, gz, apexSeedZ + layerSeed) - 0.5f) * 2.0f * baseInradius * apexRange) : 0.0f;
+                float polyDist = polygonalStyle ? 1.0f : 1e30f;
+                // facetCount is dynamic (4..8) so we cap at 8 with an early-out branch.
                 [loop]
-                for (int fi = 0; fi < 7; ++fi)
+                for (int fi = 0; fi < 8; ++fi)
                 {
                     if (fi >= facetCount) break;
                     float baseAngle = (float)fi * edgeAngularSpan;
-                    float aJit = (HashFloat01(gx, gz, polyAngleSeed + fi * 17) - 0.5f) * (edgeAngularSpan * 0.5f);
+                    float aJit = (HashFloat01(gx, gz, polyAngleSeed + layerSeed + fi * 17) - 0.5f) * (edgeAngularSpan * 0.5f);
                     float theta_i = baseAngle + aJit;
                     float n_x = cos(theta_i);
                     float n_z = sin(theta_i);
-                    float rJit = HashFloat01(gx, gz, polyRadiusSeed + fi * 23);
-                    float r_i = baseInradius * (1.0f - rJit * 0.3f);
+                    float rJit = HashFloat01(gx, gz, polyRadiusSeed + layerSeed + fi * 23);
+                    float radiusJitter = polygonalStyle ? 0.18f : 0.3f;
+                    float r_i = baseInradius * (1.0f - rJit * radiusJitter);
                     float interiorDist = r_i - (rx * n_x + rz * n_z);
-                    polyDist = min(polyDist, interiorDist);
+                    if (polygonalStyle)
+                    {
+                        float apexDist = r_i - (apexX * n_x + apexZ * n_z);
+                        float normalizedDist = interiorDist / max(apexDist, 1e-4f);
+                        polyDist = min(polyDist, normalizedDist);
+                    }
+                    else
+                    {
+                        polyDist = min(polyDist, interiorDist);
+                    }
                 }
                 if (polyDist <= 0.0f) continue; // outside polygon — hard clip
-                polyhedralT = saturate(polyDist / max(baseInradius, 1e-4f));
+                if (polygonalStyle)
+                {
+                    float topCut = shardStyle ? 0.92f : 0.64f;
+                    polyhedralT = saturate(polyDist / topCut);
+                    if (!shardStyle)
+                    {
+                        float topT = (polyDist - topCut) / max(1.0f - topCut, 1e-4f);
+                        topPlaneMask = Smoothstep01(topT);
+                    }
+                }
+                else
+                {
+                    polyhedralT = saturate(polyDist / max(baseInradius, 1e-4f));
+                }
             }
 
-            float t = (1.0f - edgeSharpness) * radialT + edgeSharpness * polyhedralT;
+            float t = (1.0f - effectiveEdgeSharpness) * radialT + effectiveEdgeSharpness * polyhedralT;
             if (t <= 0.0f) continue;
             float dome = pow(t, domeExp);
 
-            float subOffX = HashFloat01(gx, gz, subOffsetSeedX) * 1024.0f;
-            float subOffZ = HashFloat01(gx, gz, subOffsetSeedZ) * 1024.0f;
+            float subOffX = HashFloat01(gx, gz, subOffsetSeedX + layerSeed) * 1024.0f;
+            float subOffZ = HashFloat01(gx, gz, subOffsetSeedZ + layerSeed) * 1024.0f;
             float sub_f1 = 0.0f, sub_f2 = 0.0f;
             int sub_cx = 0, sub_cz = 0;
             VoronoiF1F2(subOffX + rx * facetScale, subOffZ + rz * facetScale,
@@ -250,7 +324,7 @@ void CSRock(uint3 dispatchThreadID : SV_DispatchThreadID)
             float facetH = HashFloat01(sub_cx, sub_cz, facetSeedI) - 0.5f;
             float edgeT = saturate((sub_f2 - sub_f1) * 4.0f);
             float facetTerm = facetH * edgeT - (1.0f - edgeT) * 0.25f;
-            float surfaceMod = (1.0f - facetSharpness) * smoothBump + facetSharpness * facetTerm;
+            float surfaceMod = ((1.0f - effectiveFacetSharpness) * smoothBump + effectiveFacetSharpness * facetTerm) * (1.0f - topPlaneMask);
 
             float rockH = cellHeight * dome * (1.0f + bumpiness * surfaceMod);
             if (rockH > bestRockH)
@@ -258,6 +332,7 @@ void CSRock(uint3 dispatchThreadID : SV_DispatchThreadID)
                 bestRockH = rockH;
                 bestDome = dome;
             }
+        }
         }
     }
 

@@ -2,6 +2,19 @@
 
 ## 未リリース
 
+## 3.17.17 - 2026-05-17 18:31
+
+- `Rock` ノードに `Orientation Rule` (`Flat` / `Follow Ground` / `Slope Oriented`) と `Layer Count` を追加しました。`Flat` は従来通り水平基準で加算し、`Follow Ground` は入力 Heightmap の勾配から斜面距離と法線の上向き成分を使って岩を地形に沿わせ、`Slope Oriented` は岩の回転を斜面方向へ寄せます。`Layer Count` は別シードの岩散布レイヤーを重ねて、密度と不規則さを増やします。
+
+## 3.17.16 - 2026-05-17 18:06
+
+- `Rock` ノードの `Rock Style = Polygonal` を調整し、中央が尖る多角錐ではなく、上面が平面に切り落とされた低ポリゴン岩になりやすい形へ変更しました。上面の表面ディテールも弱め、カット面が崩れにくいようにしました。
+
+## 3.17.15 - 2026-05-17 17:59
+
+- `Rock` ノードに `Rock Style` を追加しました。`Classic` は従来互換、`Polygonal` はオフセンター頂点を持つ低ポリゴン状の岩、`Shard` はより細長い破片状の岩を生成します。新規 Rock は `Polygonal` を既定にし、既存プロジェクトは `style` が無い場合 `Classic` として読み込むため見た目を保ちます。
+- `Rock` の CPU 実装で Seed 派生値を unsigned wrap 明示に変更し、高い Seed 値でも CPU/GPU の決定論的なハッシュ計算が崩れないようにしました。
+
 ## 3.17.14 - 2026-05-17 10:30
 
 - `Mask Slope` ノードを追加しました。入力 Heightmap の傾斜角から Mask を生成し、Slope Min / Slope Max / Gamma / Invert で急斜面または平地マスクを作れるようにしました。
