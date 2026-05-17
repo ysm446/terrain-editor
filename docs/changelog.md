@@ -5,6 +5,11 @@
 - 予定タスクに、スプラインパスのネットワークから山脈や尾根の土台になる `Heightmap` と `Mask` を作る `Spline` ノードを追加しました。
 - `docs/plan/terrain_workflow.md` を追加し、岩、土、植生、砂礫を分けて考える地形制作の基礎フローを整理しました。
 
+## 0.18.17 - 2026-05-18 08:12
+
+- `Crumbling` ノードを追加しました。入力 `Heightmap` と `Emission Mask` から崩落粒子を発生させ、低い方向へ流して岩屑を堆積し、`Heightmap` / `Mask` / `Unique Mask` を出力します。
+- `Crumbling` には `Physics Count`、`Debris Amount`、`Debris Min Size (m)`、`Debris Max Size (m)`、`Rock Style`、`Gravity`、`Seed` を追加しました。`Unique Mask` は `Colorize` の `Gradient Mask` へ接続して岩片ごとの色分けに使えます。
+
 ## 0.18.16 - 2026-05-18 07:01
 
 - `Mask Fluvial` ノードに `Simulation Mode` を追加し、従来の `Flow Accumulation` に加えて `Particles` を選べるようにしました。`Particles` は解析用ハイトの勾配に沿って粒子を流し、通過密度を `Mask` として出力します。地形自体は変更しません。

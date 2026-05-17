@@ -111,4 +111,4 @@
 - 土マスクから植生マスクを作るノード
 - 低木と小高木の分布を作るノード
 
-既存の `Rock`、`Sediment`、`Mask Slope`、`Mask Height`、`Mask Curvature`、`Mask Noise`、`Mask Fluvial` は、この流れの部品として使えます。今後追加する `Crumbling` / `Debris`、`Spline`、`River` / `Lake` も、岩、砂礫、水路、山脈の基礎条件を作るノードとしてつなげられます。
+既存の `Rock`、`Crumbling`、`Sediment`、`Mask Slope`、`Mask Height`、`Mask Curvature`、`Mask Noise`、`Mask Fluvial` は、この流れの部品として使えます。今後追加する `Spline`、`River` / `Lake` も、岩、砂礫、水路、山脈の基礎条件を作るノードとしてつなげられます。

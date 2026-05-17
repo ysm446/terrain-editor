@@ -30,6 +30,7 @@ enum class NodeKind
     MaskLevels = 17,
     MaskSlope = 18,
     MaskHeight = 19,
+    Crumbling = 20,
 };
 
 enum class PinKind
@@ -200,6 +201,7 @@ enum class PreviewStage
     MaskLevels = 16,
     MaskSlope = 17,
     MaskHeight = 18,
+    Crumbling = 19,
 };
 
 enum class HeightfieldPreviewField
@@ -299,6 +301,17 @@ struct MaskHeightSettings
     float featherMeters = 0.0f;
     float gamma = 1.0f;
     bool invert = false;
+};
+
+struct CrumblingSettings
+{
+    int physicsCount = 48;
+    float debrisAmount = 0.65f;
+    float debrisSizeMinM = 2.0f;
+    float debrisSizeMaxM = 8.0f;
+    RockStyle style = RockStyle::Shard;
+    float gravity = 0.75f;
+    int seed = 0;
 };
 
 // Heightfield + mask. Scatters rocks on a jittered Voronoi grid (used
@@ -489,6 +502,7 @@ struct Node
     MaskLevelsSettings maskLevels;
     MaskSlopeSettings maskSlope;
     MaskHeightSettings maskHeight;
+    CrumblingSettings crumbling;
     MaskFluvialSettings maskFluvial;
     RockSettings rock;
     SedimentSettings sediment;
@@ -672,6 +686,7 @@ struct HeightfieldPipeline
             MaskCurvature,
             MaskSlope,
             MaskHeight,
+            Crumbling,
             MaskFluvial,
             Rock,
             Sediment,
@@ -685,6 +700,7 @@ struct HeightfieldPipeline
         MaskCurvatureSettings maskCurvature;
         MaskSlopeSettings maskSlope;
         MaskHeightSettings maskHeight;
+        CrumblingSettings crumbling;
         MaskFluvialSettings maskFluvial;
         RockSettings rock;
         SedimentSettings sediment;

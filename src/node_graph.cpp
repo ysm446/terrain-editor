@@ -152,6 +152,20 @@ uint64_t HashMaskHeightSettings(const MaskHeightSettings& settings, int resoluti
     return hash;
 }
 
+uint64_t HashCrumblingSettings(const CrumblingSettings& settings, int resolution)
+{
+    uint64_t hash = 1493897469210471337ull;
+    HashCombine(hash, static_cast<uint64_t>(settings.physicsCount));
+    HashCombine(hash, HashFloat(settings.debrisAmount));
+    HashCombine(hash, HashFloat(settings.debrisSizeMinM));
+    HashCombine(hash, HashFloat(settings.debrisSizeMaxM));
+    HashCombine(hash, static_cast<uint64_t>(settings.style));
+    HashCombine(hash, HashFloat(settings.gravity));
+    HashCombine(hash, static_cast<uint64_t>(settings.seed));
+    HashCombine(hash, static_cast<uint64_t>(resolution));
+    return hash;
+}
+
 uint64_t HashRockSettings(const RockSettings& settings, int resolution)
 {
     uint64_t hash = 6364136223846793005ull;
@@ -2579,6 +2593,229 @@ void ApplyRock(HeightfieldGrid& grid, const RockSettings& settings)
     });
 }
 
+struct CrumblingParticle
+{
+    float x = 0.0f;
+    float z = 0.0f;
+    float sizeCells = 1.0f;
+    float height = 0.0f;
+    float rotation = 0.0f;
+    float aspect = 1.0f;
+    float unique = 0.0f;
+};
+
+void ApplyCrumbling(HeightfieldGrid& grid, const CrumblingSettings& settings, const MaskGrid* emissionMask)
+{
+    const int n = grid.resolution;
+    const size_t cellCount = static_cast<size_t>(n) * static_cast<size_t>(n);
+    if (n < 2 || grid.heights.size() < cellCount)
+    {
+        return;
+    }
+
+    grid.mask.assign(cellCount, 0.0f);
+    grid.uniqueMask.assign(cellCount, 0.0f);
+
+    const float terrainSize = std::max(grid.terrainSizeMeters, 1.0f);
+    const float cellSize = terrainSize / static_cast<float>(std::max(1, n - 1));
+    const int physicsCount = std::clamp(settings.physicsCount, 0, 512);
+    const float amount = std::clamp(settings.debrisAmount, 0.0f, 1.0f);
+    if (amount <= 0.0f)
+    {
+        return;
+    }
+    const float minSizeM = std::clamp(settings.debrisSizeMinM, 0.1f, 1000.0f);
+    const float maxSizeM = std::clamp(std::max(settings.debrisSizeMaxM, minSizeM), 0.1f, 1000.0f);
+    const float minSizeCells = std::max(0.5f, minSizeM / cellSize);
+    const float maxSizeCells = std::max(minSizeCells, maxSizeM / cellSize);
+    const float gravity = std::clamp(settings.gravity, 0.0f, 1.0f);
+    const int style = std::clamp(static_cast<int>(settings.style),
+        static_cast<int>(RockStyle::Classic),
+        static_cast<int>(RockStyle::Shard));
+    const bool polygonalStyle = style != static_cast<int>(RockStyle::Classic);
+    const bool shardStyle = style == static_cast<int>(RockStyle::Shard);
+    const int targetParticles = std::clamp(static_cast<int>(std::round(256.0f + amount * 12000.0f)), 1, 12000);
+    const int maxAttempts = targetParticles * 10;
+    const float invTwoCell = 1.0f / (2.0f * cellSize);
+    const float kPi = 3.14159265358979323846f;
+
+    const auto hash01 = [](uint32_t& state) {
+        state = state * 1664525u + 1013904223u;
+        return static_cast<float>((state >> 8) & 0xFFFFFFu) / static_cast<float>(0xFFFFFFu);
+    };
+    const auto sampleMask = [&](float gx, float gz) {
+        if (emissionMask == nullptr || emissionMask->resolution <= 1 || emissionMask->values.empty())
+        {
+            return 1.0f;
+        }
+        const float u = std::clamp(gx / static_cast<float>(n - 1), 0.0f, 1.0f);
+        const float v = std::clamp(gz / static_cast<float>(n - 1), 0.0f, 1.0f);
+        return std::clamp(SampleHeightfieldValue(emissionMask->values, emissionMask->resolution, u, v), 0.0f, 1.0f);
+    };
+    const auto sampleHeight = [&](float gx, float gz) {
+        const float u = std::clamp(gx / static_cast<float>(n - 1), 0.0f, 1.0f);
+        const float v = std::clamp(gz / static_cast<float>(n - 1), 0.0f, 1.0f);
+        return SampleHeightfieldValue(grid.heights, n, u, v);
+    };
+    const auto gradientAt = [&](float gx, float gz, float& gradX, float& gradZ) {
+        const float hL = sampleHeight(gx - 1.0f, gz);
+        const float hR = sampleHeight(gx + 1.0f, gz);
+        const float hD = sampleHeight(gx, gz - 1.0f);
+        const float hU = sampleHeight(gx, gz + 1.0f);
+        gradX = (hR - hL) * invTwoCell;
+        gradZ = (hU - hD) * invTwoCell;
+    };
+
+    std::vector<CrumblingParticle> particles;
+    particles.reserve(static_cast<size_t>(targetParticles));
+    uint32_t state = static_cast<uint32_t>(settings.seed) * 747796405u + 2891336453u;
+    for (int attempt = 0; attempt < maxAttempts && static_cast<int>(particles.size()) < targetParticles; ++attempt)
+    {
+        const float x0 = hash01(state) * static_cast<float>(n - 1);
+        const float z0 = hash01(state) * static_cast<float>(n - 1);
+        const float source = sampleMask(x0, z0);
+        if (hash01(state) > source * amount)
+        {
+            continue;
+        }
+
+        const float sizeT = hash01(state);
+        const float sizeCells = minSizeCells + sizeT * (maxSizeCells - minSizeCells);
+        const float sizeMeters = sizeCells * cellSize;
+        float x = x0;
+        float z = z0;
+        float dirX = hash01(state) * 2.0f - 1.0f;
+        float dirZ = hash01(state) * 2.0f - 1.0f;
+        float dirLen = std::sqrt(dirX * dirX + dirZ * dirZ);
+        if (dirLen > 1e-4f)
+        {
+            dirX /= dirLen;
+            dirZ /= dirLen;
+        }
+        const float stepCells = std::clamp(sizeCells * (0.18f + gravity * 0.34f), 0.25f, 8.0f);
+        for (int step = 0; step < physicsCount; ++step)
+        {
+            float gradX = 0.0f;
+            float gradZ = 0.0f;
+            gradientAt(x, z, gradX, gradZ);
+            float downX = -gradX;
+            float downZ = -gradZ;
+            const float downLen = std::sqrt(downX * downX + downZ * downZ);
+            if (downLen < 1e-5f)
+            {
+                break;
+            }
+            downX /= downLen;
+            downZ /= downLen;
+
+            const float wander = (hash01(state) - 0.5f) * (1.0f - gravity) * 0.75f;
+            const float cosW = std::cos(wander);
+            const float sinW = std::sin(wander);
+            const float wx = downX * cosW - downZ * sinW;
+            const float wz = downX * sinW + downZ * cosW;
+            dirX = std::lerp(dirX, wx, 0.35f + gravity * 0.55f);
+            dirZ = std::lerp(dirZ, wz, 0.35f + gravity * 0.55f);
+            dirLen = std::sqrt(dirX * dirX + dirZ * dirZ);
+            if (dirLen < 1e-5f)
+            {
+                break;
+            }
+            dirX /= dirLen;
+            dirZ /= dirLen;
+
+            const float nextX = x + dirX * stepCells;
+            const float nextZ = z + dirZ * stepCells;
+            if (nextX <= 0.0f || nextX >= static_cast<float>(n - 1) ||
+                nextZ <= 0.0f || nextZ >= static_cast<float>(n - 1))
+            {
+                break;
+            }
+            const float h0 = sampleHeight(x, z);
+            const float h1 = sampleHeight(nextX, nextZ);
+            x = nextX;
+            z = nextZ;
+            if (h0 - h1 < cellSize * 0.003f && step > physicsCount / 4)
+            {
+                break;
+            }
+        }
+
+        CrumblingParticle p;
+        p.x = x;
+        p.z = z;
+        p.sizeCells = sizeCells;
+        p.height = sizeMeters * (0.10f + 0.18f * amount) * (0.65f + 0.7f * hash01(state));
+        p.rotation = std::atan2(dirZ, dirX) + (hash01(state) - 0.5f) * kPi * (shardStyle ? 0.35f : 1.0f);
+        const float aspectBoost = shardStyle ? 1.2f : (polygonalStyle ? 0.45f : 0.15f);
+        p.aspect = std::pow(2.0f, aspectBoost * hash01(state));
+        p.unique = hash01(state);
+        particles.push_back(p);
+    }
+
+    std::vector<float> debrisHeight(cellCount, 0.0f);
+    for (const CrumblingParticle& p : particles)
+    {
+        const float radius = std::max(0.5f, p.sizeCells * 0.5f);
+        const float reach = radius * std::max(p.aspect, 1.0f / p.aspect) * 1.1f;
+        const int minX = std::clamp(static_cast<int>(std::floor(p.x - reach)), 0, n - 1);
+        const int maxX = std::clamp(static_cast<int>(std::ceil(p.x + reach)), 0, n - 1);
+        const int minZ = std::clamp(static_cast<int>(std::floor(p.z - reach)), 0, n - 1);
+        const int maxZ = std::clamp(static_cast<int>(std::ceil(p.z + reach)), 0, n - 1);
+        const float cosT = std::cos(p.rotation);
+        const float sinT = std::sin(p.rotation);
+        const int facets = shardStyle ? 4 : 6;
+        const float inradius = radius * std::cos(kPi / static_cast<float>(facets));
+        for (int z = minZ; z <= maxZ; ++z)
+        {
+            for (int x = minX; x <= maxX; ++x)
+            {
+                const float dx = static_cast<float>(x) - p.x;
+                const float dz = static_cast<float>(z) - p.z;
+                const float rx = (dx * cosT + dz * sinT) / p.aspect;
+                const float rz = (-dx * sinT + dz * cosT) * p.aspect;
+                const float dist = std::sqrt(rx * rx + rz * rz);
+                if (dist >= radius)
+                {
+                    continue;
+                }
+                float t = std::clamp(1.0f - dist / radius, 0.0f, 1.0f);
+                if (polygonalStyle)
+                {
+                    float polyDist = std::numeric_limits<float>::max();
+                    for (int i = 0; i < facets; ++i)
+                    {
+                        const float a = (static_cast<float>(i) + p.unique) * (2.0f * kPi / static_cast<float>(facets));
+                        const float interior = inradius - (rx * std::cos(a) + rz * std::sin(a));
+                        polyDist = std::min(polyDist, interior);
+                    }
+                    if (polyDist <= 0.0f)
+                    {
+                        continue;
+                    }
+                    t = std::clamp(polyDist / std::max(inradius, 1e-4f), 0.0f, 1.0f);
+                }
+                const float dome = shardStyle ? t : rock_node::Smoothstep01(t);
+                const float h = p.height * dome;
+                const size_t idx = static_cast<size_t>(z) * static_cast<size_t>(n) + static_cast<size_t>(x);
+                if (h > debrisHeight[idx])
+                {
+                    debrisHeight[idx] = h;
+                    grid.mask[idx] = std::max(grid.mask[idx], dome);
+                    grid.uniqueMask[idx] = p.unique;
+                }
+            }
+        }
+    }
+    ParallelForRows(n, [&](int z) {
+        const size_t rowBase = static_cast<size_t>(z) * static_cast<size_t>(n);
+        for (int x = 0; x < n; ++x)
+        {
+            const size_t idx = rowBase + static_cast<size_t>(x);
+            grid.heights[idx] += debrisHeight[idx];
+        }
+    });
+}
+
 // Snow node.
 //
 // 「雪を降らせる」フィルタ。ベースとなる emissionAmount [m] の雪を
@@ -3377,6 +3614,9 @@ void ApplyHeightfieldOperation(HeightfieldGrid& grid, const HeightfieldPipeline:
     case HeightfieldPipeline::HeightfieldOperation::Kind::MaskHeight:
         ApplyMaskHeight(grid, operation.maskHeight);
         break;
+    case HeightfieldPipeline::HeightfieldOperation::Kind::Crumbling:
+        ApplyCrumbling(grid, operation.crumbling, nullptr);
+        break;
     case HeightfieldPipeline::HeightfieldOperation::Kind::MaskFluvial:
         ApplyMaskFluvial(grid, operation.maskFluvial);
         break;
@@ -3406,6 +3646,8 @@ uint64_t HashHeightfieldOperation(const HeightfieldPipeline::HeightfieldOperatio
         return HashMaskSlopeSettings(operation.maskSlope, resolution);
     case HeightfieldPipeline::HeightfieldOperation::Kind::MaskHeight:
         return HashMaskHeightSettings(operation.maskHeight, resolution);
+    case HeightfieldPipeline::HeightfieldOperation::Kind::Crumbling:
+        return HashCrumblingSettings(operation.crumbling, resolution);
     case HeightfieldPipeline::HeightfieldOperation::Kind::MaskFluvial:
         return HashMaskFluvialSettings(operation.maskFluvial, resolution);
     case HeightfieldPipeline::HeightfieldOperation::Kind::Rock:
@@ -3444,6 +3686,10 @@ HeightfieldPipeline::HeightfieldOperation MakeHeightfieldOperation(const Node& n
         operation.kind = HeightfieldPipeline::HeightfieldOperation::Kind::MaskHeight;
         operation.maskHeight = node.maskHeight;
         break;
+    case NodeKind::Crumbling:
+        operation.kind = HeightfieldPipeline::HeightfieldOperation::Kind::Crumbling;
+        operation.crumbling = node.crumbling;
+        break;
     case NodeKind::MaskFluvial:
         operation.kind = HeightfieldPipeline::HeightfieldOperation::Kind::MaskFluvial;
         operation.maskFluvial = node.maskFluvial;
@@ -3476,6 +3722,7 @@ bool IsHeightfieldOperationNode(NodeKind kind)
     case NodeKind::MaskCurvature:
     case NodeKind::MaskSlope:
     case NodeKind::MaskHeight:
+    case NodeKind::Crumbling:
     case NodeKind::MaskFluvial:
     case NodeKind::Rock:
     case NodeKind::Sediment:
@@ -3566,7 +3813,36 @@ HeightfieldGrid NodeGraph::EvaluateHeightPipelineCached(const HeightfieldPipelin
             continue;
         }
 
-        const uint64_t parameterHash = HashHeightfieldOperation(operation, simulationResolution);
+        uint64_t parameterHash = HashHeightfieldOperation(operation, simulationResolution);
+        MaskGrid crumblingEmissionMask;
+        bool hasCrumblingEmissionMask = false;
+        if (operation.kind == HeightfieldPipeline::HeightfieldOperation::Kind::Crumbling)
+        {
+            if (const Node* operationNode = FindNode(operation.nodeId);
+                operationNode != nullptr && operationNode->inputs.size() >= 2)
+            {
+                const UpstreamConnection upstream = FindUpstreamConnectionForPin(operationNode->inputs[1].id);
+                const auto isMaskProducer = [](NodeKind kind) {
+                    return IsMaskOnlyNodeKind(kind) ||
+                        kind == NodeKind::MaskCurvature ||
+                        kind == NodeKind::MaskSlope ||
+                        kind == NodeKind::MaskHeight ||
+                        kind == NodeKind::MaskFluvial ||
+                        kind == NodeKind::Rock ||
+                        kind == NodeKind::Crumbling ||
+                        kind == NodeKind::Sediment ||
+                        kind == NodeKind::Snow ||
+                        kind == NodeKind::MultiScaleErosion;
+                };
+                if (upstream.node != nullptr && isMaskProducer(upstream.node->kind))
+                {
+                    uint64_t maskHash = 0;
+                    crumblingEmissionMask = EvaluateMaskGridForNodeCached(*upstream.node, 0, &maskHash, upstream.outputPin ? std::string_view(upstream.outputPin->label) : std::string_view{});
+                    hasCrumblingEmissionMask = crumblingEmissionMask.resolution > 0;
+                    HashCombine(parameterHash, maskHash);
+                }
+            }
+        }
         HeightfieldNodeCache& operationCache = heightfieldCache_[operation.nodeId];
         if (!operationCache.valid ||
             operationCache.resolution != simulationResolution ||
@@ -3575,7 +3851,14 @@ HeightfieldGrid NodeGraph::EvaluateHeightPipelineCached(const HeightfieldPipelin
         {
             g_currentlyEvaluatingNodeId.store(operation.nodeId, std::memory_order_relaxed);
             HeightfieldGrid operationGrid = grid;
-            ApplyHeightfieldOperation(operationGrid, operation);
+            if (operation.kind == HeightfieldPipeline::HeightfieldOperation::Kind::Crumbling)
+            {
+                ApplyCrumbling(operationGrid, operation.crumbling, hasCrumblingEmissionMask ? &crumblingEmissionMask : nullptr);
+            }
+            else
+            {
+                ApplyHeightfieldOperation(operationGrid, operation);
+            }
             operationCache.grid = std::move(operationGrid);
             operationCache.message.clear();
             operationCache.valid = true;
@@ -3835,6 +4118,13 @@ GraphId NodeGraph::CreateNode(NodeKind kind)
         AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
         AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
         break;
+    case NodeKind::Crumbling:
+        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
+        AddPin(nodeId, PinKind::Input, ValueType::Mask, "Emission Mask");
+        AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
+        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
+        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Unique Mask");
+        break;
     case NodeKind::Rock:
         AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
         AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
@@ -4048,6 +4338,8 @@ HeightfieldPipeline NodeGraph::PipelineFor(PreviewStage stage) const
         return PipelineTo(NodeKind::MaskSlope);
     case PreviewStage::MaskHeight:
         return PipelineTo(NodeKind::MaskHeight);
+    case PreviewStage::Crumbling:
+        return PipelineTo(NodeKind::Crumbling);
     case PreviewStage::MaskFluvial:
         return PipelineTo(NodeKind::MaskFluvial);
     case PreviewStage::Rock:
@@ -4060,6 +4352,7 @@ HeightfieldPipeline NodeGraph::PipelineFor(PreviewStage stage) const
     default:
         if (const Node* node = FindFirstNode(NodeKind::Snow)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::Sediment)) { return PipelineToNode(*node); }
+        if (const Node* node = FindFirstNode(NodeKind::Crumbling)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::Rock)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::MaskHeight)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::MaskSlope)) { return PipelineToNode(*node); }
@@ -4200,6 +4493,7 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
     if (node.kind == NodeKind::MaskCurvature ||
         node.kind == NodeKind::MaskSlope ||
         node.kind == NodeKind::MaskHeight ||
+        node.kind == NodeKind::Crumbling ||
         node.kind == NodeKind::MaskFluvial ||
         node.kind == NodeKind::Rock ||
         node.kind == NodeKind::Sediment ||
@@ -4251,6 +4545,7 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
                 kind == NodeKind::MaskCurvature ||
                 kind == NodeKind::MaskSlope ||
                 kind == NodeKind::MaskHeight ||
+                kind == NodeKind::Crumbling ||
                 kind == NodeKind::MaskFluvial ||
                 kind == NodeKind::Rock ||
                 kind == NodeKind::Sediment ||
@@ -4313,6 +4608,7 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
                     kind == NodeKind::MaskCurvature ||
                     kind == NodeKind::MaskSlope ||
                     kind == NodeKind::MaskHeight ||
+                    kind == NodeKind::Crumbling ||
                     kind == NodeKind::MaskFluvial ||
                     kind == NodeKind::Rock ||
                     kind == NodeKind::Sediment ||
@@ -4744,6 +5040,8 @@ std::string_view ToString(NodeKind kind)
         return "Mask Slope";
     case NodeKind::MaskHeight:
         return "Mask Height";
+    case NodeKind::Crumbling:
+        return "Crumbling";
     case NodeKind::MaskCurvature:
         return "Mask Curvature";
     case NodeKind::MaskFluvial:
@@ -4783,6 +5081,8 @@ std::string_view ToString(PreviewStage stage)
         return "Mask Slope";
     case PreviewStage::MaskHeight:
         return "Mask Height";
+    case PreviewStage::Crumbling:
+        return "Crumbling";
     case PreviewStage::MaskCurvature:
         return "Mask Curvature";
     case PreviewStage::MaskFluvial:
@@ -4839,6 +5139,8 @@ PreviewStage PreviewStageFor(NodeKind kind)
         return PreviewStage::MaskSlope;
     case NodeKind::MaskHeight:
         return PreviewStage::MaskHeight;
+    case NodeKind::Crumbling:
+        return PreviewStage::Crumbling;
     case NodeKind::MaskCurvature:
         return PreviewStage::MaskCurvature;
     case NodeKind::MaskFluvial:

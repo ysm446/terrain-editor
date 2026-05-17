@@ -11,7 +11,7 @@
 
 ## 優先候補
 
-- `Crumbling` または `Debris` ノードの検討と実装。
+- `Crumbling` ノードの初期実装は完了。今後は見た目、速度、発生/停止条件を調整する。
 - マスク系ノード (`Mask Invert`) の検討と実装。
 - 標高条件から作る基本マスクノードの追加改善。
 - `Mask Slope` など、地形条件から作る基本マスクノードの拡充。
@@ -26,7 +26,7 @@
 
 ## 予定ノード
 
-- `Crumbling` または `Debris`: 入力の `Heightmap` と `Mask` から、崩落した岩や石を地形上に転がして散布するノード。
+- `Crumbling`: 入力の `Heightmap` と `Emission Mask` から、崩落した岩や石を地形上に転がして散布するノード。出力は `Heightmap`、`Mask`、`Unique Mask`。
 - `Mask Invert`: 入力マスクを反転し、必要に応じて底や天井を操作できるマスク加工ノード。
 - `Mask Height`: 入力 `Heightmap` の標高から、指定した高さ範囲または地形全体の正規化標高グラデーションの `Mask` を生成するノード。実スケールの Min / Max、高さ範囲のフェード、Full Range、Invert は実装済み。
 - `Mask Slope`: 入力 `Heightmap` の傾斜角から、急斜面または平地の `Mask` を生成するノード。
@@ -36,12 +36,9 @@
 
 ## 次の作業メモ
 
-- `Crumbling` または `Debris` ノードを次の主な候補にする。
-- 入力は `Heightmap` と `Mask` を想定する。
-- マスクで指定された領域から崩落した岩や石を発生させ、地形上を転がして散布する。
-- 出力は、少なくとも岩屑が反映された `Heightmap` または堆積量 `Mask` を検討する。
-- ノード名は、崖や斜面の崩れを強調するなら `Crumbling`、転石や岩屑の散布を強調するなら `Debris` が候補。
-- 実装前に、発生条件、転がる方向、停止条件、堆積表現、既存 `Rock` / `Sediment` ノードとの役割分担を整理する。
+- `Crumbling` は初期実装済み。`Physics Count` が大きいほど斜面下方へ長く流れ、`Debris Amount`、`Debris Min/Max Size (m)`、`Rock Style`、`Gravity`、`Seed` で岩屑の量、サイズ、形、流れ方を調整する。
+- `Crumbling` の入力は `Heightmap` と `Emission Mask`、出力は `Heightmap`、`Mask`、`Unique Mask`。
+- `Crumbling` の次の改善では、発生密度のスケール感、停止条件、堆積の高さ、`Rock` ノードとの形状差、CPU 評価速度を確認する。
 - `Mask Invert` は単純な反転だけでなく、底や天井の調整をどのパラメータ名で扱うかを決める。
 - `Mask Invert` は `Mask Levels` の `Invert` で代用できるため、単独ノードとして本当に必要かは保留する。
 - `Mask Height` は実装済み。絶対標高帯はメートル単位、相対標高グラデーションは `Use Full Range` で扱う。

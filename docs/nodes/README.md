@@ -10,6 +10,7 @@ Terrain Editor のノード関連ドキュメントをまとめるフォルダ�
 | Shape | [shape_node.md](heightfield/shape/shape_node.md) | [アルゴリズム入門](heightfield/shape/shape_algorithm_guide.md) |
 | Heightmap Blur | [heightmap_blur_node.md](heightfield/heightmap_blur/heightmap_blur_node.md) | [アルゴリズム入門](heightfield/heightmap_blur/heightmap_blur_algorithm_guide.md) |
 | Multi-Scale Erosion | [multi_scale_erosion_node.md](heightfield/multi_scale_erosion/multi_scale_erosion_node.md) | [アルゴリズム入門](heightfield/multi_scale_erosion/multi_scale_erosion_algorithm_guide.md) |
+| Crumbling | [crumbling_node.md](heightfield/crumbling/crumbling_node.md) | [アルゴリズム入門](heightfield/crumbling/crumbling_algorithm_guide.md) |
 | Rock | [rock_node.md](heightfield/rock/rock_node.md) | [アルゴリズム入門](heightfield/rock/rock_algorithm_guide.md) |
 | Sediment | [sediment_node.md](heightfield/sediment/sediment_node.md) | [アルゴリズム入門](heightfield/sediment/sediment_algorithm_guide.md) |
 | Snow | [snow_node.md](heightfield/snow/snow_node.md) | [アルゴリズム入門](heightfield/snow/snow_algorithm_guide.md) |

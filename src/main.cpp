@@ -2303,6 +2303,21 @@ nlohmann::json MakeRockSettingsJson(const rock::Node& node)
     };
 }
 
+nlohmann::json MakeCrumblingSettingsJson(const rock::Node& node)
+{
+    return {
+        {"crumbling", {
+            {"physicsCount", node.crumbling.physicsCount},
+            {"debrisAmount", node.crumbling.debrisAmount},
+            {"debrisSizeMinM", node.crumbling.debrisSizeMinM},
+            {"debrisSizeMaxM", node.crumbling.debrisSizeMaxM},
+            {"style", static_cast<int>(node.crumbling.style)},
+            {"gravity", node.crumbling.gravity},
+            {"seed", node.crumbling.seed},
+        }},
+    };
+}
+
 nlohmann::json MakeSedimentSettingsJson(const rock::Node& node)
 {
     return {
@@ -2326,6 +2341,7 @@ nlohmann::json MakeNodeSettingsJson(const rock::Node& node)
     nodeJson.update(MakeBasicHeightfieldSettingsJson(node));
     nodeJson.update(MakeMultiScaleErosionSettingsJson(node));
     nodeJson.update(MakeMaskSettingsJson(node));
+    nodeJson.update(MakeCrumblingSettingsJson(node));
     nodeJson.update(MakeRockSettingsJson(node));
     nodeJson.update(MakeSedimentSettingsJson(node));
     nodeJson.update(MakeSnowSettingsJson(node));
@@ -2389,6 +2405,7 @@ std::optional<rock::PreviewStage> ReadSerializedPreviewStage(const nlohmann::jso
     case rock::PreviewStage::MaskLevels:
     case rock::PreviewStage::MaskSlope:
     case rock::PreviewStage::MaskHeight:
+    case rock::PreviewStage::Crumbling:
     case rock::PreviewStage::MaskCurvature:
     case rock::PreviewStage::MaskFluvial:
     case rock::PreviewStage::Rock:
@@ -2621,6 +2638,27 @@ void ReadRockSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     }
 }
 
+void ReadCrumblingSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
+{
+    const nlohmann::json nodeCrumblingJson = nodeJson.value("crumbling", nlohmann::json::object());
+    node.crumbling.physicsCount = std::clamp(nodeCrumblingJson.value("physicsCount", node.crumbling.physicsCount), 0, 512);
+    node.crumbling.debrisAmount = std::clamp(nodeCrumblingJson.value("debrisAmount", node.crumbling.debrisAmount), 0.0f, 1.0f);
+    node.crumbling.debrisSizeMinM = std::clamp(nodeCrumblingJson.value("debrisSizeMinM", node.crumbling.debrisSizeMinM), 0.1f, 1000.0f);
+    node.crumbling.debrisSizeMaxM = std::clamp(nodeCrumblingJson.value("debrisSizeMaxM", node.crumbling.debrisSizeMaxM), 0.1f, 1000.0f);
+    if (node.crumbling.debrisSizeMaxM < node.crumbling.debrisSizeMinM)
+    {
+        std::swap(node.crumbling.debrisSizeMinM, node.crumbling.debrisSizeMaxM);
+    }
+    {
+        const int styleInt = std::clamp(nodeCrumblingJson.value("style", static_cast<int>(node.crumbling.style)),
+            static_cast<int>(rock::RockStyle::Classic),
+            static_cast<int>(rock::RockStyle::Shard));
+        node.crumbling.style = static_cast<rock::RockStyle>(styleInt);
+    }
+    node.crumbling.gravity = std::clamp(nodeCrumblingJson.value("gravity", node.crumbling.gravity), 0.0f, 1.0f);
+    node.crumbling.seed = std::clamp(nodeCrumblingJson.value("seed", node.crumbling.seed), 0, 999999);
+}
+
 void ReadSedimentSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
 {
     const nlohmann::json nodeSedimentJson = nodeJson.value("sediment", nlohmann::json::object());
@@ -2695,6 +2733,7 @@ void ReadNodeSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     ReadBasicHeightfieldSettingsJson(nodeJson, node);
     ReadMultiScaleErosionSettingsJson(nodeJson, node);
     ReadMaskSettingsJson(nodeJson, node);
+    ReadCrumblingSettingsJson(nodeJson, node);
     ReadRockSettingsJson(nodeJson, node);
     ReadSedimentSettingsJson(nodeJson, node);
     ReadSnowSettingsJson(nodeJson, node);
@@ -8474,6 +8513,7 @@ bool IsTerrainNodeKind(rock::NodeKind kind)
         kind == rock::NodeKind::MaskLevels ||
         kind == rock::NodeKind::MaskSlope ||
         kind == rock::NodeKind::MaskHeight ||
+        kind == rock::NodeKind::Crumbling ||
         kind == rock::NodeKind::MaskCurvature ||
         kind == rock::NodeKind::MaskFluvial ||
         kind == rock::NodeKind::Rock ||
@@ -11137,6 +11177,7 @@ ImVec4 NodeAccentColor(rock::NodeKind kind)
     case rock::NodeKind::Shape:
     case rock::NodeKind::HeightmapBlur:
     case rock::NodeKind::MultiScaleErosion:
+    case rock::NodeKind::Crumbling:
     case rock::NodeKind::Rock:
     case rock::NodeKind::Sediment:
     case rock::NodeKind::Snow:
@@ -11182,8 +11223,10 @@ ImVec2 InitialNodePosition(rock::NodeKind kind)
         return ImVec2(600.0f, 800.0f);
     case rock::NodeKind::MaskFluvial:
         return ImVec2(880.0f, 240.0f);
-    case rock::NodeKind::Rock:
+    case rock::NodeKind::Crumbling:
         return ImVec2(880.0f, 380.0f);
+    case rock::NodeKind::Rock:
+        return ImVec2(880.0f, 450.0f);
     case rock::NodeKind::Sediment:
         return ImVec2(880.0f, 520.0f);
     case rock::NodeKind::Snow:
@@ -11912,6 +11955,7 @@ void DrawNodeGraph()
             addNodeMenuItem(rock::NodeKind::Shape);
             addNodeMenuItem(rock::NodeKind::HeightmapBlur);
             addNodeMenuItem(rock::NodeKind::MultiScaleErosion);
+            addNodeMenuItem(rock::NodeKind::Crumbling);
             addNodeMenuItem(rock::NodeKind::Rock);
             addNodeMenuItem(rock::NodeKind::Sediment);
             addNodeMenuItem(rock::NodeKind::Snow);
@@ -13683,6 +13727,67 @@ bool DrawRockProperties(rock::Node& editableNode)
     return true;
 }
 
+bool DrawCrumblingProperties(rock::Node& editableNode)
+{
+    if (!ImGui::BeginTable("CrumblingRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        return false;
+    }
+
+    ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 210.0f);
+    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+    rock::CrumblingSettings& cr = editableNode.crumbling;
+    cr.physicsCount = std::clamp(cr.physicsCount, 0, 512);
+    cr.debrisAmount = std::clamp(cr.debrisAmount, 0.0f, 1.0f);
+    cr.debrisSizeMinM = std::clamp(cr.debrisSizeMinM, 0.1f, 1000.0f);
+    cr.debrisSizeMaxM = std::clamp(std::max(cr.debrisSizeMaxM, cr.debrisSizeMinM), 0.1f, 1000.0f);
+    cr.style = static_cast<rock::RockStyle>(std::clamp(static_cast<int>(cr.style),
+        static_cast<int>(rock::RockStyle::Classic),
+        static_cast<int>(rock::RockStyle::Shard)));
+    cr.gravity = std::clamp(cr.gravity, 0.0f, 1.0f);
+    cr.seed = std::clamp(cr.seed, 0, 999999);
+
+    if (DrawPropertyIntRow("Physics Count", "CrumblingPhysicsCount", &cr.physicsCount, 0, 512, rock::CrumblingSettings{}.physicsCount, "Crumbling physics count changed", true, "崩落粒子を下方向へ進めるステップ数です。大きいほど岩屑が斜面下部へ長く流れて、広くばらけます。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyPercentRow("Debris Amount (%)", "CrumblingDebrisAmount", &cr.debrisAmount, 0.0f, 1.0f, rock::CrumblingSettings{}.debrisAmount, "Crumbling debris amount changed", "Emission Mask から発生する岩屑の量です。上げるほど粒子数と盛り上がりが増えます。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Debris Min Size (m)", "CrumblingDebrisSizeMin", &cr.debrisSizeMinM, 0.1f, 200.0f, rock::CrumblingSettings{}.debrisSizeMinM, "Crumbling debris min size changed", true, "崩落岩片の最小直径です。小さいほど細かい砂礫、大きいほど転石寄りになります。", "%.2f", 0, 0.1f, 1000.0f))
+    {
+        if (cr.debrisSizeMaxM < cr.debrisSizeMinM) cr.debrisSizeMaxM = cr.debrisSizeMinM;
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Debris Max Size (m)", "CrumblingDebrisSizeMax", &cr.debrisSizeMaxM, 0.1f, 200.0f, rock::CrumblingSettings{}.debrisSizeMaxM, "Crumbling debris max size changed", true, "崩落岩片の最大直径です。Min < Max で範囲内からランダムに大きさを選びます。", "%.2f", 0, 0.1f, 1000.0f))
+    {
+        if (cr.debrisSizeMaxM < cr.debrisSizeMinM) cr.debrisSizeMinM = cr.debrisSizeMaxM;
+        EvaluateGraph();
+    }
+    {
+        int styleInt = static_cast<int>(cr.style);
+        if (DrawPropertyComboRow("Rock Style", "CrumblingRockStyle", &styleInt, "Classic\0Polygonal\0Shard\0\0", "岩片の基本シェープです。Classic は丸み、Polygonal は低ポリゴン状、Shard は斜面に流れた破片状の形になります。", static_cast<int>(rock::CrumblingSettings{}.style)))
+        {
+            cr.style = static_cast<rock::RockStyle>(std::clamp(styleInt,
+                static_cast<int>(rock::RockStyle::Classic),
+                static_cast<int>(rock::RockStyle::Shard)));
+            EvaluateGraph();
+        }
+    }
+    if (DrawPropertyPercentRow("Gravity (%)", "CrumblingGravity", &cr.gravity, 0.0f, 1.0f, rock::CrumblingSettings{}.gravity, "Crumbling gravity changed", "低い方へ流れる強さです。高いほど直線的に下り、低いほど地形の細部やランダムな散り方が残ります。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyIntRow("Seed", "CrumblingSeed", &cr.seed, 0, 999999, rock::CrumblingSettings{}.seed, "Crumbling seed changed", true, "岩屑の発生位置とばらつきのシードです。"))
+    {
+        EvaluateGraph();
+    }
+
+    ImGui::EndTable();
+    return true;
+}
+
 bool DrawSedimentProperties(rock::Node& editableNode)
 {
     if (!ImGui::BeginTable("SedimentRows", 2, ImGuiTableFlags_SizingStretchProp))
@@ -13895,6 +14000,11 @@ void DrawPropertiesPanel()
     }
 
     if (selectedNode->kind == rock::NodeKind::MaskFluvial && DrawMaskFluvialProperties(*editableNode))
+    {
+        return;
+    }
+
+    if (selectedNode->kind == rock::NodeKind::Crumbling && DrawCrumblingProperties(*editableNode))
     {
         return;
     }
