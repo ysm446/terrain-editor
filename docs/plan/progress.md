@@ -15,6 +15,8 @@
 
 - `Crumbling` ノードを追加した。入力 `Heightmap` と `Emission Mask` から崩落粒子を発生させ、低い方向へ流して岩屑を堆積し、`Heightmap` / `Mask` / `Unique Mask` を出力する。
 - `Crumbling` に `Physics Count` / `Debris Amount` / `Debris Min Size (m)` / `Debris Max Size (m)` / `Rock Style` / `Gravity` / `Seed` を追加し、プロジェクト保存と読み込みに対応した。
+- `Crumbling` の初期結果は方向性として良好。次の調整では、現在の低い方向へ流れるまとまりを残しつつ、岩屑がもう少しランダムに散らばるようにする。
+- `Crumbling` のランダム散布改善案として、`Gravity` とは別に左右の散りを制御する `Spread`、地形凹凸で曲がるような `Bounce` / `Deflection`、空間ノイズで流路を曲げる `Path Noise`、発生点をずらす `Emission Jitter`、小さい岩ほど遠くへ流れるサイズ依存移動を候補にした。
 - 予定タスクに、`Mask Fluvial` で太い流れを作る改善と、谷まで届かない支流だけのマスクを作る改善を追加した。
 - `Mask Fluvial` に `Simulation Mode` を追加し、従来の `Flow Accumulation` に加えて、粒子の通過密度を `Mask` 化する `Particles` モードを選べるようにした。粒子モード用に `Particle Count` / `Lifetime` / `Inertia (%)` / `Step Length (m)` / `Seed` を追加し、既定は従来互換の `Flow Accumulation` のままにした。
 
@@ -86,7 +88,7 @@
 
 ## 残っていること
 
-- `Crumbling` ノードの見た目、発生密度、停止条件、堆積量、CPU 評価速度を実地確認して調整する。
+- `Crumbling` ノードの見た目、発生密度、停止条件、堆積量、CPU 評価速度、ランダムな散らばり方を実地確認して調整する。
 - `Mask Invert` を単独ノードとして残すか、`Mask Levels` の `Invert` に統合した扱いにするか決める。
 - `Colorize` の色ピック対象、サンプル方法、グラデーションキー化をさらに調整する。
 - `Spline` ノードのパス編集 UI、保存形式、出力形式、山脈生成と水路ガイドの役割分担を決める。

@@ -11,7 +11,7 @@
 
 ## 優先候補
 
-- `Crumbling` ノードの初期実装は完了。今後は見た目、速度、発生/停止条件を調整する。
+- `Crumbling` ノードの初期実装は完了。今後は見た目、速度、発生/停止条件、ランダムな散らばり方を調整する。
 - マスク系ノード (`Mask Invert`) の検討と実装。
 - 標高条件から作る基本マスクノードの追加改善。
 - `Mask Slope` など、地形条件から作る基本マスクノードの拡充。
@@ -38,7 +38,10 @@
 
 - `Crumbling` は初期実装済み。`Physics Count` が大きいほど斜面下方へ長く流れ、`Debris Amount`、`Debris Min/Max Size (m)`、`Rock Style`、`Gravity`、`Seed` で岩屑の量、サイズ、形、流れ方を調整する。
 - `Crumbling` の入力は `Heightmap` と `Emission Mask`、出力は `Heightmap`、`Mask`、`Unique Mask`。
-- `Crumbling` の次の改善では、発生密度のスケール感、停止条件、堆積の高さ、`Rock` ノードとの形状差、CPU 評価速度を確認する。
+- `Crumbling` の次の改善では、発生密度のスケール感、停止条件、堆積の高さ、`Rock` ノードとの形状差、CPU 評価速度、ランダムな散らばり方を確認する。
+- `Crumbling` の散らばり改善は、まず `Spread (%)` を追加して左右方向のばらけ方を `Gravity` と分離する案を優先する。`Gravity` は低い方へ流れる強さ、`Spread` は進行方向から横へ逸れる強さとして扱う。
+- パラメータを増やさずに入れられる改善として、小さい岩ほど遠くへ流れ、大きい岩ほど早めに止まるサイズ依存移動を検討する。
+- 追加候補として、地形凹凸で進行方向が曲がる `Bounce` / `Deflection`、空間ノイズで流路を揺らす `Path Noise`、Emission Mask の発生点をずらす `Emission Jitter` も検討する。
 - `Mask Invert` は単純な反転だけでなく、底や天井の調整をどのパラメータ名で扱うかを決める。
 - `Mask Invert` は `Mask Levels` の `Invert` で代用できるため、単独ノードとして本当に必要かは保留する。
 - `Mask Height` は実装済み。絶対標高帯はメートル単位、相対標高グラデーションは `Use Full Range` で扱う。
