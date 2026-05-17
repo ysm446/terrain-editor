@@ -1802,13 +1802,30 @@ bool LoadAppSettings(std::string* error = nullptr)
         g_recentProjectPaths.clear();
         if (root.contains("recentProjects") && root["recentProjects"].is_array())
         {
+            constexpr size_t kMaxRecentProjects = 8;
             for (const nlohmann::json& recentJson : root["recentProjects"])
             {
                 if (!recentJson.is_string())
                 {
                     continue;
                 }
-                AddRecentProjectPath(PathFromUtf8(recentJson.get<std::string>()));
+                const std::filesystem::path normalized = NormalizedProjectPath(PathFromUtf8(recentJson.get<std::string>()));
+                if (!ProjectPathExists(normalized))
+                {
+                    continue;
+                }
+                const auto duplicate = std::ranges::find_if(g_recentProjectPaths, [&](const std::filesystem::path& recentPath) {
+                    return NormalizedProjectPath(recentPath) == normalized;
+                });
+                if (duplicate != g_recentProjectPaths.end())
+                {
+                    continue;
+                }
+                g_recentProjectPaths.push_back(normalized);
+                if (g_recentProjectPaths.size() >= kMaxRecentProjects)
+                {
+                    break;
+                }
             }
         }
 
