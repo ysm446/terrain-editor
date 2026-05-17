@@ -50,6 +50,22 @@
 - キャッシュキーは入力ハッシュ + パラメータハッシュ。他ノードの編集や `Output Curve` 切り替えで該当ノードのみ再評価されます。
 - Pit Fill と Inertia は内部固定値です。ユーザー向けの調整は、見た目に効きやすい `Largest Detail Level`、`Flow Concentration`、出力カーブ系に絞っています。
 
+## 粒子モード
+
+`Simulation Mode` を `Particles` にすると、MFD の流量累積ではなく、解析用ハイトの勾配に沿って粒子を流し、その通過密度を `Mask` にします。地形自体は変更しません。
+
+| 設定 | 役割 |
+| --- | --- |
+| `Particle Count` | 流す粒子数。多いほど密度が安定しますが計算時間も増えます。 |
+| `Lifetime` | 1 粒子が最大何ステップ流れるか。大きいほど長い流路になります。 |
+| `Inertia (%)` | 進行方向を保持する強さ。高いほど滑らかに直進し、低いほど局所勾配や細かい揺らぎへ反応します。 |
+| `Step Length (m)` | 1 ステップで進む距離。小さいほど細かく地形を追い、大きいほど粗く長い線になります。 |
+| `Seed` | 粒子の初期配置と揺らぎのシード。 |
+
+`Largest Detail Level (m)` は粒子モードでも使われます。流向を読む前の解析用ハイトをならすため、小さい値では細かい支流や揺らぎが増え、大きい値では大局的な谷筋を追いやすくなります。
+
+現状の粒子モードは CPU 評価です。`Backend` が GPU の場合でも、`Simulation Mode = Particles` では CPU 側で評価します。
+
 ## GPU Compute バックエンド
 
 `Backend` プルダウンで `GPU` を選ぶと [shaders/mask_fluvial_compute.hlsl](../../../../shaders/mask_fluvial_compute.hlsl) の compute shader 群で評価します。CPU 側の sort + 降順トポロジカル走査は本質的に逐次なので GPU 直接移植できないため、**Jacobi 反復ゲザー (iterative scatter via gather)** という別アルゴリズムで置き換えています。

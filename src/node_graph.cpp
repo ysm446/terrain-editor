@@ -223,6 +223,7 @@ uint64_t HashColorizeSettings(const ColorizeSettings& settings)
 uint64_t HashMaskFluvialSettings(const MaskFluvialSettings& settings, int resolution)
 {
     uint64_t hash = 8589869056ull;
+    HashCombine(hash, static_cast<uint64_t>(settings.simulationMode));
     HashCombine(hash, static_cast<uint64_t>(settings.outputCurve));
     HashCombine(hash, HashFloat(settings.accumulationThreshold));
     HashCombine(hash, HashFloat(settings.gamma));
@@ -230,6 +231,11 @@ uint64_t HashMaskFluvialSettings(const MaskFluvialSettings& settings, int resolu
     HashCombine(hash, HashFloat(settings.power));
     HashCombine(hash, HashFloat(settings.largestDetailLevelM));
     HashCombine(hash, HashFloat(settings.mfdExponent));
+    HashCombine(hash, static_cast<uint64_t>(settings.particleCount));
+    HashCombine(hash, static_cast<uint64_t>(settings.particleLifetime));
+    HashCombine(hash, HashFloat(settings.particleInertia));
+    HashCombine(hash, HashFloat(settings.particleStepLengthM));
+    HashCombine(hash, static_cast<uint64_t>(settings.particleSeed));
     HashCombine(hash, static_cast<uint64_t>(settings.backend));
     HashCombine(hash, static_cast<uint64_t>(resolution));
     return hash;
@@ -1762,6 +1768,181 @@ void ApplyMultiScaleErosion(HeightfieldGrid& grid, const MultiScaleErosionSettin
     grid.age.assign(targetCellCount, 0.0f);
 }
 
+float SampleGridBilinear(const std::vector<float>& values, int n, float x, float z)
+{
+    x = std::clamp(x, 0.0f, static_cast<float>(n - 1));
+    z = std::clamp(z, 0.0f, static_cast<float>(n - 1));
+    const int x0 = std::clamp(static_cast<int>(std::floor(x)), 0, n - 1);
+    const int z0 = std::clamp(static_cast<int>(std::floor(z)), 0, n - 1);
+    const int x1 = std::min(x0 + 1, n - 1);
+    const int z1 = std::min(z0 + 1, n - 1);
+    const float tx = x - static_cast<float>(x0);
+    const float tz = z - static_cast<float>(z0);
+    const float h00 = values[static_cast<size_t>(z0) * n + x0];
+    const float h10 = values[static_cast<size_t>(z0) * n + x1];
+    const float h01 = values[static_cast<size_t>(z1) * n + x0];
+    const float h11 = values[static_cast<size_t>(z1) * n + x1];
+    const float hx0 = h00 + (h10 - h00) * tx;
+    const float hx1 = h01 + (h11 - h01) * tx;
+    return hx0 + (hx1 - hx0) * tz;
+}
+
+void SplatGridBilinear(std::vector<float>& values, int n, float x, float z, float amount)
+{
+    if (x < 0.0f || z < 0.0f || x > static_cast<float>(n - 1) || z > static_cast<float>(n - 1))
+    {
+        return;
+    }
+    const int x0 = std::clamp(static_cast<int>(std::floor(x)), 0, n - 1);
+    const int z0 = std::clamp(static_cast<int>(std::floor(z)), 0, n - 1);
+    const int x1 = std::min(x0 + 1, n - 1);
+    const int z1 = std::min(z0 + 1, n - 1);
+    const float tx = x - static_cast<float>(x0);
+    const float tz = z - static_cast<float>(z0);
+    values[static_cast<size_t>(z0) * n + x0] += amount * (1.0f - tx) * (1.0f - tz);
+    values[static_cast<size_t>(z0) * n + x1] += amount * tx * (1.0f - tz);
+    values[static_cast<size_t>(z1) * n + x0] += amount * (1.0f - tx) * tz;
+    values[static_cast<size_t>(z1) * n + x1] += amount * tx * tz;
+}
+
+void ConvertFluvialAccumulationToMask(HeightfieldGrid& grid, const MaskFluvialSettings& settings, const std::vector<float>& accum, float thresholdUnits)
+{
+    const int n = grid.resolution;
+    const size_t cellCount = static_cast<size_t>(n) * static_cast<size_t>(n);
+    grid.mask.assign(cellCount, 0.0f);
+    if (accum.empty())
+    {
+        return;
+    }
+
+    const float maxAccum = std::max(1e-6f, *std::max_element(accum.begin(), accum.end()));
+    if (settings.outputCurve == MaskFluvialOutputCurve::Threshold)
+    {
+        const float thresholdLow = std::max(0.0f, thresholdUnits);
+        const float softness = std::clamp(settings.softness, 0.001f, 4.0f);
+        const float thresholdHigh = thresholdLow + std::max(maxAccum * softness, 1e-6f);
+        const float power = std::clamp(settings.power, 0.1f, 8.0f);
+        const float invRange = 1.0f / std::max(thresholdHigh - thresholdLow, 1e-6f);
+        ParallelForRows(n, [&](int z) {
+            const size_t rowBase = static_cast<size_t>(z) * static_cast<size_t>(n);
+            for (int x = 0; x < n; ++x)
+            {
+                const size_t idx = rowBase + static_cast<size_t>(x);
+                float t = std::clamp((accum[idx] - thresholdLow) * invRange, 0.0f, 1.0f);
+                t = t * t * (3.0f - 2.0f * t);
+                grid.mask[idx] = std::pow(t, power);
+            }
+        });
+        return;
+    }
+
+    const float gamma = std::clamp(settings.gamma, 0.05f, 8.0f);
+    const float adjustedMax = std::max(maxAccum - thresholdUnits, 1e-6f);
+    if (settings.outputCurve == MaskFluvialOutputCurve::Log)
+    {
+        const float invLogMax = 1.0f / std::log1p(adjustedMax);
+        ParallelForRows(n, [&](int z) {
+            const size_t rowBase = static_cast<size_t>(z) * static_cast<size_t>(n);
+            for (int x = 0; x < n; ++x)
+            {
+                const size_t idx = rowBase + static_cast<size_t>(x);
+                const float v = std::max(0.0f, accum[idx] - thresholdUnits);
+                grid.mask[idx] = std::pow(std::clamp(std::log1p(v) * invLogMax, 0.0f, 1.0f), gamma);
+            }
+        });
+        return;
+    }
+
+    const float invMax = 1.0f / adjustedMax;
+    ParallelForRows(n, [&](int z) {
+        const size_t rowBase = static_cast<size_t>(z) * static_cast<size_t>(n);
+        for (int x = 0; x < n; ++x)
+        {
+            const size_t idx = rowBase + static_cast<size_t>(x);
+            const float v = std::max(0.0f, accum[idx] - thresholdUnits) * invMax;
+            grid.mask[idx] = std::pow(std::clamp(v, 0.0f, 1.0f), gamma);
+        }
+    });
+}
+
+void ApplyMaskFluvialParticles(HeightfieldGrid& grid, const MaskFluvialSettings& settings, const std::vector<float>& heights, float cellSize)
+{
+    const int n = grid.resolution;
+    const size_t cellCount = static_cast<size_t>(n) * static_cast<size_t>(n);
+    std::vector<float> hits(cellCount, 0.0f);
+
+    const int particleCount = std::clamp(settings.particleCount, 1, 200000);
+    const int lifetime = std::clamp(settings.particleLifetime, 1, 2048);
+    const float inertia = std::clamp(settings.particleInertia, 0.0f, 0.98f);
+    const float stepCells = std::clamp(settings.particleStepLengthM / std::max(cellSize, 1e-6f), 0.25f, 8.0f);
+
+    std::mt19937 rng(static_cast<uint32_t>(settings.particleSeed));
+    std::uniform_real_distribution<float> spawnDist(1.0f, static_cast<float>(std::max(1, n - 2)));
+    std::uniform_real_distribution<float> unitDist(0.0f, 1.0f);
+
+    for (int particle = 0; particle < particleCount; ++particle)
+    {
+        float x = spawnDist(rng);
+        float z = spawnDist(rng);
+        float vx = 0.0f;
+        float vz = 0.0f;
+        for (int age = 0; age < lifetime; ++age)
+        {
+            if (x < 1.0f || z < 1.0f || x > static_cast<float>(n - 2) || z > static_cast<float>(n - 2))
+            {
+                break;
+            }
+
+            const float gx = 0.5f * (SampleGridBilinear(heights, n, x + 1.0f, z) - SampleGridBilinear(heights, n, x - 1.0f, z));
+            const float gz = 0.5f * (SampleGridBilinear(heights, n, x, z + 1.0f) - SampleGridBilinear(heights, n, x, z - 1.0f));
+            float dx = -gx;
+            float dz = -gz;
+            float len = std::sqrt(dx * dx + dz * dz);
+            if (len <= 1e-8f)
+            {
+                const float angle = unitDist(rng) * 6.28318530718f;
+                dx = std::cos(angle);
+                dz = std::sin(angle);
+            }
+            else
+            {
+                dx /= len;
+                dz /= len;
+                const float jitterAngle = (unitDist(rng) * 2.0f - 1.0f) * (1.0f - inertia) * 0.35f;
+                const float cs = std::cos(jitterAngle);
+                const float sn = std::sin(jitterAngle);
+                const float jx = dx * cs - dz * sn;
+                const float jz = dx * sn + dz * cs;
+                dx = jx;
+                dz = jz;
+            }
+
+            vx = vx * inertia + dx * (1.0f - inertia);
+            vz = vz * inertia + dz * (1.0f - inertia);
+            len = std::sqrt(vx * vx + vz * vz);
+            if (len <= 1e-8f)
+            {
+                vx = dx;
+                vz = dz;
+            }
+            else
+            {
+                vx /= len;
+                vz /= len;
+            }
+
+            const float ageWeight = 1.0f - 0.35f * (static_cast<float>(age) / static_cast<float>(std::max(1, lifetime - 1)));
+            SplatGridBilinear(hits, n, x, z, ageWeight);
+            x += vx * stepCells;
+            z += vz * stepCells;
+        }
+    }
+
+    const float maxHit = std::max(1e-6f, *std::max_element(hits.begin(), hits.end()));
+    const float threshold = std::clamp(settings.accumulationThreshold, 0.0f, 1.0f) * maxHit;
+    ConvertFluvialAccumulationToMask(grid, settings, hits, threshold);
+}
+
 // Mask Fluvial: MFD flow accumulation -> river-stream mask.
 // Heights pass through. Fills grid.mask with a normalized 0..1 mask
 // where the upstream-cell count exceeds accumulationThreshold.
@@ -1774,7 +1955,8 @@ void ApplyMaskFluvial(HeightfieldGrid& grid, const MaskFluvialSettings& settings
         return;
     }
 
-    if (settings.backend == MaskFluvialBackend::GpuCompute && g_maskFluvialGpuEvaluator != nullptr)
+    if (settings.simulationMode == MaskFluvialSimulationMode::FlowAccumulation &&
+        settings.backend == MaskFluvialBackend::GpuCompute && g_maskFluvialGpuEvaluator != nullptr)
     {
         std::string ignoredError;
         if (g_maskFluvialGpuEvaluator(grid, settings, &ignoredError))
@@ -1868,6 +2050,12 @@ void ApplyMaskFluvial(HeightfieldGrid& grid, const MaskFluvialSettings& settings
             }
         });
         std::swap(filled, next);
+    }
+
+    if (settings.simulationMode == MaskFluvialSimulationMode::Particles)
+    {
+        ApplyMaskFluvialParticles(grid, settings, filled, cellSize);
+        return;
     }
 
     // 3. Sort cell indices by height descending. Accumulation must process

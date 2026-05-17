@@ -2199,6 +2199,7 @@ nlohmann::json MakeMaskSettingsJson(const rock::Node& node)
             {"backend", static_cast<int>(node.maskNoise.backend)},
         }},
         {"maskFluvial", {
+            {"simulationMode", static_cast<int>(node.maskFluvial.simulationMode)},
             {"algorithm", static_cast<int>(node.maskFluvial.algorithm)},
             {"outputCurve", static_cast<int>(node.maskFluvial.outputCurve)},
             {"accumulationThreshold", node.maskFluvial.accumulationThreshold},
@@ -2207,6 +2208,11 @@ nlohmann::json MakeMaskSettingsJson(const rock::Node& node)
             {"power", node.maskFluvial.power},
             {"largestDetailLevelM", node.maskFluvial.largestDetailLevelM},
             {"mfdExponent", node.maskFluvial.mfdExponent},
+            {"particleCount", node.maskFluvial.particleCount},
+            {"particleLifetime", node.maskFluvial.particleLifetime},
+            {"particleInertia", node.maskFluvial.particleInertia},
+            {"particleStepLengthM", node.maskFluvial.particleStepLengthM},
+            {"particleSeed", node.maskFluvial.particleSeed},
             {"backend", static_cast<int>(node.maskFluvial.backend)},
         }},
         {"maskCurvature", {
@@ -2507,6 +2513,12 @@ void ReadMaskSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     node.maskHeight.gamma = std::clamp(nodeMaskHeightJson.value("gamma", node.maskHeight.gamma), 0.05f, 8.0f);
     node.maskHeight.invert = nodeMaskHeightJson.value("invert", node.maskHeight.invert);
     {
+        const int modeInt = std::clamp(nodeMaskFluvialJson.value("simulationMode", static_cast<int>(node.maskFluvial.simulationMode)),
+                                       static_cast<int>(rock::MaskFluvialSimulationMode::FlowAccumulation),
+                                       static_cast<int>(rock::MaskFluvialSimulationMode::Particles));
+        node.maskFluvial.simulationMode = static_cast<rock::MaskFluvialSimulationMode>(modeInt);
+    }
+    {
         (void)nodeMaskFluvialJson.value("algorithm", static_cast<int>(node.maskFluvial.algorithm));
         node.maskFluvial.algorithm = rock::FlowAccumulationAlgorithm::MFD;
     }
@@ -2526,6 +2538,11 @@ void ReadMaskSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     node.maskFluvial.mfdExponent = std::clamp(nodeMaskFluvialJson.value("mfdExponent", node.maskFluvial.mfdExponent), 0.1f, 16.0f);
     (void)nodeMaskFluvialJson.value("inertia", node.maskFluvial.inertia);
     node.maskFluvial.inertia = rock::MaskFluvialSettings{}.inertia;
+    node.maskFluvial.particleCount = std::clamp(nodeMaskFluvialJson.value("particleCount", node.maskFluvial.particleCount), 1, 200000);
+    node.maskFluvial.particleLifetime = std::clamp(nodeMaskFluvialJson.value("particleLifetime", node.maskFluvial.particleLifetime), 1, 2048);
+    node.maskFluvial.particleInertia = std::clamp(nodeMaskFluvialJson.value("particleInertia", node.maskFluvial.particleInertia), 0.0f, 0.98f);
+    node.maskFluvial.particleStepLengthM = std::clamp(nodeMaskFluvialJson.value("particleStepLengthM", node.maskFluvial.particleStepLengthM), 0.01f, 1024.0f);
+    node.maskFluvial.particleSeed = std::clamp(nodeMaskFluvialJson.value("particleSeed", node.maskFluvial.particleSeed), 0, 999999);
     {
         const int backendInt = std::clamp(nodeMaskFluvialJson.value("backend", static_cast<int>(node.maskFluvial.backend)),
                                            static_cast<int>(rock::MaskFluvialBackend::CpuReference),
@@ -13427,6 +13444,11 @@ bool DrawMaskFluvialProperties(rock::Node& editableNode)
     mf.inertia = rock::MaskFluvialSettings{}.inertia;
     mf.largestDetailLevelM = std::clamp(mf.largestDetailLevelM, 1.0f, 1024.0f);
     mf.mfdExponent = std::clamp(mf.mfdExponent, 0.1f, 16.0f);
+    mf.particleCount = std::clamp(mf.particleCount, 1, 200000);
+    mf.particleLifetime = std::clamp(mf.particleLifetime, 1, 2048);
+    mf.particleInertia = std::clamp(mf.particleInertia, 0.0f, 0.98f);
+    mf.particleStepLengthM = std::clamp(mf.particleStepLengthM, 0.01f, 1024.0f);
+    mf.particleSeed = std::clamp(mf.particleSeed, 0, 999999);
 
     {
         int backendInt = static_cast<int>(mf.backend);
@@ -13435,6 +13457,17 @@ bool DrawMaskFluvialProperties(rock::Node& editableNode)
             mf.backend = static_cast<rock::MaskFluvialBackend>(std::clamp(backendInt,
                 static_cast<int>(rock::MaskFluvialBackend::CpuReference),
                 static_cast<int>(rock::MaskFluvialBackend::GpuCompute)));
+            EvaluateGraph();
+        }
+    }
+
+    {
+        int modeInt = static_cast<int>(mf.simulationMode);
+        if (DrawPropertyComboRow("Simulation Mode", "MaskFluvialSimulationMode", &modeInt, "Flow Accumulation\0Particles\0\0", "Flow Accumulation は従来の MFD 流量累積です。Particles は粒子を地形勾配に沿って流し、通過密度を Mask にします。粒子モードは現状 CPU 評価です。", static_cast<int>(rock::MaskFluvialSettings{}.simulationMode)))
+        {
+            mf.simulationMode = static_cast<rock::MaskFluvialSimulationMode>(std::clamp(modeInt,
+                static_cast<int>(rock::MaskFluvialSimulationMode::FlowAccumulation),
+                static_cast<int>(rock::MaskFluvialSimulationMode::Particles)));
             EvaluateGraph();
         }
     }
@@ -13496,6 +13529,30 @@ bool DrawMaskFluvialProperties(rock::Node& editableNode)
     if (DrawPropertyFloatRow("Flow Concentration", "MaskFluvialMfdExponent", &mf.mfdExponent, 0.1f, 16.0f, rock::MaskFluvialSettings{}.mfdExponent, "Mask fluvial flow concentration changed", true, "MFD の下流分配の集中度です。大きいほど主流に集まり、小さいほど流域・湿地帯のように面で広がります。"))
     {
         EvaluateGraph();
+    }
+
+    if (mf.simulationMode == rock::MaskFluvialSimulationMode::Particles)
+    {
+        if (DrawPropertyIntRow("Particle Count", "MaskFluvialParticleCount", &mf.particleCount, 1, 200000, rock::MaskFluvialSettings{}.particleCount, "Mask fluvial particle count changed", true, "流す粒子数です。多いほど密度が安定しますが計算時間も増えます。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyIntRow("Lifetime", "MaskFluvialParticleLifetime", &mf.particleLifetime, 1, 2048, rock::MaskFluvialSettings{}.particleLifetime, "Mask fluvial particle lifetime changed", true, "粒子が最大何ステップ流れるかです。大きいほど長い流路になります。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyPercentRow("Inertia (%)", "MaskFluvialParticleInertia", &mf.particleInertia, 0.0f, 0.98f, rock::MaskFluvialSettings{}.particleInertia, "Mask fluvial particle inertia changed", "進行方向を保持する強さです。高いほど直進し、低いほど局所勾配や細かい揺らぎへ反応します。"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Step Length (m)", "MaskFluvialParticleStepLength", &mf.particleStepLengthM, 0.01f, 1024.0f, rock::MaskFluvialSettings{}.particleStepLengthM, "Mask fluvial particle step changed", true, "粒子が 1 ステップで進む距離です。大きいほど粗く長い線、小さいほど細かく地形を追う線になります。", "%.2f"))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyIntRow("Seed", "MaskFluvialParticleSeed", &mf.particleSeed, 0, 999999, rock::MaskFluvialSettings{}.particleSeed, "Mask fluvial particle seed changed", true, "粒子の初期配置と揺らぎのシードです。"))
+        {
+            EvaluateGraph();
+        }
     }
 
     ImGui::EndTable();

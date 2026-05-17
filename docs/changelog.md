@@ -5,6 +5,12 @@
 - 予定タスクに、スプラインパスのネットワークから山脈や尾根の土台になる `Heightmap` と `Mask` を作る `Spline` ノードを追加しました。
 - `docs/plan/terrain_workflow.md` を追加し、岩、土、植生、砂礫を分けて考える地形制作の基礎フローを整理しました。
 
+## 0.18.16 - 2026-05-18 07:01
+
+- `Mask Fluvial` ノードに `Simulation Mode` を追加し、従来の `Flow Accumulation` に加えて `Particles` を選べるようにしました。`Particles` は解析用ハイトの勾配に沿って粒子を流し、通過密度を `Mask` として出力します。地形自体は変更しません。
+- `Particles` モード用に `Particle Count`、`Lifetime`、`Inertia (%)`、`Step Length (m)`、`Seed` を追加しました。`Inertia` を上げるほど進行方向を保った滑らかな線になり、下げるほど局所勾配や細かい揺らぎへ反応します。
+- 既存プロジェクトの見た目を保つため、既定の `Simulation Mode` は従来どおり `Flow Accumulation` のままです。粒子モードは現在 CPU 評価で、`Backend` が GPU の場合でも粒子モードでは CPU 側で評価します。
+
 ## 0.18.15 - 2026-05-18 06:12
 
 - `Mask Fluvial` ノードに `Largest Detail Level (m)` を追加しました。`4 m` / `8 m` / `16 m` / `32 m` / `64 m` から選択でき、流向計算前の解析用ハイトを分離ガウスブラーでならして、小さな凹凸をどの程度無視するかを調整できます。入力ハイトフィールド自体は変更せず、CPU / GPU の両バックエンドに反映します。

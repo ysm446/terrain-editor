@@ -84,6 +84,12 @@ enum class MaskFluvialBackend
     GpuCompute,
 };
 
+enum class MaskFluvialSimulationMode
+{
+    FlowAccumulation,
+    Particles,
+};
+
 enum class SnowBackend
 {
     CpuReference,
@@ -406,6 +412,7 @@ struct ColorizeSettings
 // binary river extraction or Linear for a non-log continuous map.
 struct MaskFluvialSettings
 {
+    MaskFluvialSimulationMode simulationMode = MaskFluvialSimulationMode::FlowAccumulation;
     FlowAccumulationAlgorithm algorithm = FlowAccumulationAlgorithm::MFD; // Legacy serialized field. Mask Fluvial now evaluates as MFD.
     MaskFluvialOutputCurve outputCurve = MaskFluvialOutputCurve::Log;
     // In Log/Linear modes: noise floor — cells with fewer upstream cells
@@ -421,6 +428,11 @@ struct MaskFluvialSettings
     float largestDetailLevelM = 8.0f; // m. Low-pass scale for flow-direction analysis; larger values ignore smaller terrain wrinkles.
     float mfdExponent = 4.0f;     // Flow concentration. Higher = more channelised, lower = more distributed.
     float inertia = 0.0f;         // Legacy serialized setting. Internally fixed to the default.
+    int particleCount = 32768;    // Particle mode: number of deterministic droplets traced across the heightfield.
+    int particleLifetime = 96;    // Particle mode: maximum trail length in steps.
+    float particleInertia = 0.55f; // Particle mode: higher keeps direction, lower follows local slope more eagerly.
+    float particleStepLengthM = 4.0f; // Particle mode: distance travelled per step in metres.
+    int particleSeed = 1337;
     MaskFluvialBackend backend = MaskFluvialBackend::GpuCompute; // CPU 厳密 (sort + topological walk) vs GPU 反復 (Jacobi gather, ~2*resolution iters; 視覚的に同等だが数値は完全一致せず). 既定 GPU. シェーダー / ディスパッチ失敗時は CPU に自動フォールバック.
 };
 

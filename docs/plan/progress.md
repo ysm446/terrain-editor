@@ -13,6 +13,8 @@
 
 ## 2026-05-18
 
+- `Mask Fluvial` に `Simulation Mode` を追加し、従来の `Flow Accumulation` に加えて、粒子の通過密度を `Mask` 化する `Particles` モードを選べるようにした。粒子モード用に `Particle Count` / `Lifetime` / `Inertia (%)` / `Step Length (m)` / `Seed` を追加し、既定は従来互換の `Flow Accumulation` のままにした。
+
 - `Mask Fluvial` ノードに `Largest Detail Level (m)` を追加し、流向計算前の解析用ハイトだけを分離ガウスブラーでならして、小さな凹凸をどの程度無視するかを選べるようにした。
 - `Mask Fluvial` の `Algorithm` UI を外し、自然な流路マスク向けに MFD 固定へ寄せた。旧 D8 保存値は読み込み時に MFD として扱う。
 - `Mask Fluvial` の `Pit Fill Iterations` と `Inertia (%)` を UI から外し、内部既定値へ固定した。調整軸を見た目に効きやすい項目へ絞った。

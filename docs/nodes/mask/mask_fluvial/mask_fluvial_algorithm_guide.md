@@ -24,6 +24,17 @@
 ステップ 4 の累積ループは「上流先に処理する」という依存性があるため逐次実行です。
 それ以外 (内部 Pit Fill, Sort, 出力変換) は並列化されています。
 
+## Simulation Mode
+
+`Mask Fluvial` は 2 つの評価方式を持ちます。
+
+| Mode | 内容 |
+| --- | --- |
+| `Flow Accumulation` | 従来の MFD 流量累積。決定論的で、樹枝状の drainage map を安定して出します。 |
+| `Particles` | 粒子を解析用ハイトの勾配に沿って流し、通過密度を mask 化します。`Lifetime` や `Inertia` で線の長さ・揺らぎを調整できます。 |
+
+既定は互換性のため `Flow Accumulation` です。`Particles` は現在 CPU 評価です。
+
 ## 1. Largest Detail Level — 流路判定スケール
 
 入力ハイトフィールドは変更せず、流向計算に使う解析用ハイトだけを分離ガウスブラーします。
