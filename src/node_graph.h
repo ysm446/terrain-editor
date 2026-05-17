@@ -474,6 +474,7 @@ struct Link
 
 struct PreviewSettings
 {
+    int simulationResolution = 512;
     int resolution = 512;
     int lod = 0;
     bool showSurface = true;
@@ -641,6 +642,7 @@ struct HeightfieldPipeline
     };
 
     bool hasSource = false;
+    int simulationResolution = 512;
     GraphId heightmapNodeId = 0;
     HeightmapLoadSettings heightmap;
     bool useShape = false;

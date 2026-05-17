@@ -2,6 +2,11 @@
 
 ## 未リリース
 
+## 3.17.19 - 2026-05-17 19:38
+
+- `Simulation Resolution` を `Import Heightmap` / `Shape` / `Mask Noise` のノードプロパティから外し、右ペインの `設定` タブ先頭にグローバル設定として移動しました。あわせて表示用の `Resolution` は `Viewport Mesh Resolution` に改名し、計算解像度と表示メッシュ解像度の違いが分かるようにしました。
+- 既存プロジェクトにノード単位の `simulationResolution` が保存されている場合は、読み込み時に最大値をグローバル `Simulation Resolution` として採用する互換処理を追加しました。
+
 ## 3.17.18 - 2026-05-17 19:22
 
 - マスクプレビューの 3D 表示で、CPU Mesh 経路でも頂点に焼き込んだ mask 値ではなく、評価済みの mask テクスチャーをピクセルシェーダーでサンプルするようにしました。マスクの細かさがプレビューメッシュ解像度ではなく Simulation Resolution に従うため、`Mask Noise`、`Mask Blend`、`Mask Slope`、`Mask Curvature`、`Mask Fluvial` などの表示がより細かく安定します。

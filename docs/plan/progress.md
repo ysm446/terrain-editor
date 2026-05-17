@@ -13,6 +13,7 @@
 
 ## 2026-05-17
 
+- `Simulation Resolution` をノード単位の設定からグローバル設定へ移し、右ペインの `設定` タブ先頭で `Simulation Resolution` / `Viewport Mesh Resolution` を並べて調整できるようにした。
 - マスクプレビューの 3D 表示で、CPU Mesh 経路も頂点 mask 値ではなく mask テクスチャーをピクセルシェーダーでサンプルするようにした。
 - `Mask Curvature` ノードを追加。
 - 入力 `Heightmap` から局所平均との差分を計算し、`Ridges`、`Valleys`、`Absolute` の曲率マスクを出力できるようにした。

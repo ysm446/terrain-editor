@@ -163,6 +163,7 @@ rock::NodeGraph g_graph = rock::NodeGraph::CreateDefaultTerrainGraph();
 std::string g_exportStatus = "No export yet";
 std::string g_projectStatus = "No project file";
 std::string g_lastEvaluationDuration = "Eval --";
+bool g_projectSettingsHadSimulationResolution = false;
 std::filesystem::path g_projectPath;
 std::wstring g_windowTitle;
 std::vector<std::filesystem::path> g_recentProjectPaths;
@@ -1477,6 +1478,7 @@ bool SaveAppSettings(std::string* error = nullptr)
             {"fps", g_ui.showFps},
             {"meshSurface", settings.preview.showSurface},
             {"meshWireframe", settings.preview.showWireframe},
+            {"simulationResolution", settings.preview.simulationResolution},
             {"previewResolution", settings.preview.resolution},
             {"previewLod", settings.preview.lod},
             {"lightingMode", settings.preview.lightingMode},
@@ -1615,6 +1617,7 @@ bool LoadAppSettings(std::string* error = nullptr)
         g_ui.showFps = visibilityJson.value("fps", g_ui.showFps);
         settings.preview.showSurface = visibilityJson.value("meshSurface", settings.preview.showSurface);
         settings.preview.showWireframe = visibilityJson.value("meshWireframe", settings.preview.showWireframe);
+        settings.preview.simulationResolution = NearestResolutionPreset(visibilityJson.value("simulationResolution", settings.preview.simulationResolution));
         settings.preview.resolution = NearestResolutionPreset(visibilityJson.value("previewResolution", settings.preview.resolution));
         settings.preview.lod = std::clamp(visibilityJson.value("previewLod", settings.preview.lod), 0, 4);
         settings.preview.lightingMode = std::clamp(visibilityJson.value("lightingMode", settings.preview.lightingMode), 0, 1);
@@ -1964,13 +1967,11 @@ nlohmann::json MakeBasicHeightfieldSettingsJson(const rock::Node& node)
             {"scaleMeters", node.heightmap.scaleMeters},
             {"relativeVerticalScalePercent", node.heightmap.relativeVerticalScalePercent},
             {"verticalOffsetMeters", node.heightmap.verticalOffsetMeters},
-            {"simulationResolution", node.heightmap.simulationResolution},
         }},
         {"shape", {
             {"kind", static_cast<int>(node.shape.kind)},
             {"scaleMeters", node.shape.scaleMeters},
             {"relativeHeightPercent", node.shape.relativeHeightPercent},
-            {"simulationResolution", node.shape.simulationResolution},
         }},
         {"heightmapBlur", {
             {"radius", node.heightmapBlur.radius},
@@ -2017,7 +2018,6 @@ nlohmann::json MakeMaskSettingsJson(const rock::Node& node)
             {"frequency", node.maskNoise.frequency},
             {"lacunarity", node.maskNoise.lacunarity},
             {"persistence", node.maskNoise.persistence},
-            {"simulationResolution", node.maskNoise.simulationResolution},
             {"backend", static_cast<int>(node.maskNoise.backend)},
         }},
         {"maskFluvial", {
@@ -2501,6 +2501,7 @@ nlohmann::json MakeProjectSettingsJson()
             {"cloudsEnabled", clouds.enabled},
         }},
         {"preview", {
+            {"simulationResolution", preview.simulationResolution},
             {"lightingMode", preview.lightingMode},
             {"meshBackend", static_cast<int>(preview.meshBackend)},
             {"showGrid", preview.showGrid},
@@ -2759,6 +2760,8 @@ void ReadPreviewSettingsJson(const nlohmann::json& settingsJson, rock::PreviewSe
         return;
     }
 
+    preview.simulationResolution = NearestResolutionPreset(previewJson.value("simulationResolution", preview.simulationResolution));
+    g_projectSettingsHadSimulationResolution = previewJson.contains("simulationResolution");
     preview.lightingMode = std::clamp(previewJson.value("lightingMode", preview.lightingMode), 0, 1);
     const int backendInt = std::clamp(previewJson.value("meshBackend", static_cast<int>(preview.meshBackend)),
                                       static_cast<int>(rock::MeshPreviewBackend::CpuMesh),
@@ -2809,6 +2812,7 @@ void ReadProjectSettingsJson(const nlohmann::json& root)
     rock::SkySettings& sky = graphSettings.sky;
     rock::CloudSettings& clouds = graphSettings.clouds;
 
+    g_projectSettingsHadSimulationResolution = false;
     ReadSkySettingsJson(settingsJson, sky);
     ReadCloudSettingsJson(settingsJson, clouds);
     ReadPreviewSettingsJson(settingsJson, preview, sky);
@@ -2893,6 +2897,33 @@ void ReadSerializedNodesJson(const nlohmann::json& root)
     {
         g_graph.ReplaceNodes(std::move(nodes));
     }
+}
+
+void MigrateLegacySimulationResolutionFromNodes()
+{
+    if (g_projectSettingsHadSimulationResolution)
+    {
+        return;
+    }
+
+    int resolution = 0;
+    for (const rock::Node& node : g_graph.Nodes())
+    {
+        if (node.kind == rock::NodeKind::HeightmapLoad)
+        {
+            resolution = std::max(resolution, node.heightmap.simulationResolution);
+        }
+        else if (node.kind == rock::NodeKind::Shape)
+        {
+            resolution = std::max(resolution, node.shape.simulationResolution);
+        }
+        else if (node.kind == rock::NodeKind::MaskNoise)
+        {
+            resolution = std::max(resolution, node.maskNoise.simulationResolution);
+        }
+    }
+    g_graph.Settings().preview.simulationResolution = NearestResolutionPreset(
+        resolution > 0 ? resolution : rock::PreviewSettings{}.simulationResolution);
 }
 
 void ReadViewportJson(const nlohmann::json& root)
@@ -3015,6 +3046,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
 
         ReadProjectSettingsJson(root);
         ReadSerializedNodesJson(root);
+        MigrateLegacySimulationResolutionFromNodes();
         ReadViewportJson(root);
         ReadSerializedLinksJson(root);
         ReadSelectedNodesJson(root);
@@ -11234,7 +11266,6 @@ bool DrawHeightmapLoadProperties(rock::Node& editableNode)
     editableNode.heightmap.scaleMeters = std::clamp(editableNode.heightmap.scaleMeters, 1.0f, 8096.0f);
     editableNode.heightmap.relativeVerticalScalePercent = std::clamp(editableNode.heightmap.relativeVerticalScalePercent, 0.0f, 100.0f);
     editableNode.heightmap.verticalOffsetMeters = std::clamp(editableNode.heightmap.verticalOffsetMeters, -4096.0f, 4096.0f);
-    editableNode.heightmap.simulationResolution = NearestResolutionPreset(editableNode.heightmap.simulationResolution);
 
     if (DrawPropertyPathRow("File", "HeightmapFile", &editableNode.heightmap.path, "Heightmap file changed", "読み込むハイトマップ画像です。明るいピクセルほど高い地形として扱います。"))
     {
@@ -11252,11 +11283,6 @@ bool DrawHeightmapLoadProperties(rock::Node& editableNode)
     {
         EvaluateGraph();
     }
-    if (DrawResolutionPresetRow("Simulation Resolution", "HeightmapSimulationResolution", &editableNode.heightmap.simulationResolution, rock::HeightmapLoadSettings{}.simulationResolution, "Heightmap simulation resolution changed", true, "侵食や地形処理に使う内部ハイトフィールド解像度です。表示設定の Resolution はメッシュ表示の細かさだけを変更します。"))
-    {
-        EvaluateGraph();
-    }
-
     ImGui::EndTable();
     return true;
 }
@@ -11273,7 +11299,6 @@ bool DrawShapeProperties(rock::Node& editableNode)
     rock::ShapeSettings& shape = editableNode.shape;
     shape.scaleMeters = std::clamp(shape.scaleMeters, 1.0f, 8096.0f);
     shape.relativeHeightPercent = std::clamp(shape.relativeHeightPercent, 0.0f, 100.0f);
-    shape.simulationResolution = NearestResolutionPreset(shape.simulationResolution);
 
     int shapeKind = static_cast<int>(shape.kind);
     if (DrawPropertyComboRow("Shape Type", "ShapeType", &shapeKind, "Hemisphere\0Pyramid\0", "デバッグ用の基本ハイトフィールド形状です。", static_cast<int>(rock::ShapeSettings{}.kind)))
@@ -11290,11 +11315,6 @@ bool DrawShapeProperties(rock::Node& editableNode)
     {
         EvaluateGraph();
     }
-    if (DrawResolutionPresetRow("Simulation Resolution", "ShapeSimulationResolution", &shape.simulationResolution, rock::ShapeSettings{}.simulationResolution, "Shape simulation resolution changed", true, "侵食や地形処理に使う内部ハイトフィールド解像度です。表示設定の Resolution はメッシュ表示の細かさだけを変更します。"))
-    {
-        EvaluateGraph();
-    }
-
     ImGui::EndTable();
     return true;
 }
@@ -11476,7 +11496,6 @@ bool DrawMaskNoiseProperties(rock::Node& editableNode)
     mn.frequency = std::clamp(mn.frequency, 0.0f, 256.0f);
     mn.lacunarity = std::clamp(mn.lacunarity, 0.0f, 8.0f);
     mn.persistence = std::clamp(mn.persistence, 0.0f, 1.0f);
-    mn.simulationResolution = NearestResolutionPreset(mn.simulationResolution);
 
     {
         int backendInt = static_cast<int>(mn.backend);
@@ -11508,11 +11527,6 @@ bool DrawMaskNoiseProperties(rock::Node& editableNode)
     {
         EvaluateGraph();
     }
-    if (DrawResolutionPresetRow("Simulation Resolution", "MaskNoiseSimulationResolution", &mn.simulationResolution, rock::MaskNoiseSettings{}.simulationResolution, "Mask noise simulation resolution changed", true, "Mask の評価解像度です。高いほど細かい模様を解像できます。"))
-    {
-        EvaluateGraph();
-    }
-
     ImGui::EndTable();
     return true;
 }
@@ -12438,7 +12452,7 @@ void DrawDisplaySettingsPanel()
     const float headerRightPadding = 10.0f;
     const float sectionWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x - headerRightPadding);
     ImGui::BeginChild("PreviewDisplaySection", ImVec2(sectionWidth, 0.0f), false);
-    if (!ImGui::CollapsingHeader("プレビュー画面", ImGuiTreeNodeFlags_DefaultOpen))
+    if (!ImGui::CollapsingHeader("設定", ImGuiTreeNodeFlags_DefaultOpen))
     {
         ImGui::EndChild();
         return;
@@ -12449,15 +12463,13 @@ void DrawDisplaySettingsPanel()
         ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 112.0f);
         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
 
-        if (DrawPropertyBoolRow("Mesh Preview", "DisplayMeshPreview", &g_ui.meshPreview, "Mesh preview visibility changed", nullptr, UiState{}.meshPreview, true))
+        ImGui::SeparatorText("解像度");
+        if (DrawResolutionPresetRow("Simulation Resolution", "GlobalSimulationResolution", &settings.preview.simulationResolution, rock::PreviewSettings{}.simulationResolution, "Simulation resolution changed", false, "ノードグラフ全体の地形・マスク評価解像度です。高いほど細かく計算できますが、評価時間とメモリ使用量が増えます。"))
         {
-            SaveAppSettingsSilently();
+            g_graph.MarkDirty("Simulation resolution changed");
+            EvaluateGraph();
         }
-        if (DrawPropertyBoolRow("FPS", "DisplayFps", &g_ui.showFps, "FPS visibility changed", nullptr, UiState{}.showFps, true))
-        {
-            SaveAppSettingsSilently();
-        }
-        if (DrawResolutionPresetRow("Resolution", "DisplayPreviewResolution", &settings.preview.resolution, rock::PreviewSettings{}.resolution, "Preview resolution changed", false))
+        if (DrawResolutionPresetRow("Viewport Mesh Resolution", "DisplayPreviewResolution", &settings.preview.resolution, rock::PreviewSettings{}.resolution, "Preview mesh resolution changed", false, "3D プレビュー用メッシュの細かさです。Simulation Resolution は変えず、表示の分割数だけを変更します。"))
         {
             EvaluateGraph();
             SaveAppSettingsSilently();
@@ -12465,6 +12477,16 @@ void DrawDisplaySettingsPanel()
         if (DrawPropertyIntRow("LOD", "DisplayPreviewLod", &settings.preview.lod, 0, 4, rock::PreviewSettings{}.lod, "Preview LOD changed", false))
         {
             EvaluateGraph();
+            SaveAppSettingsSilently();
+        }
+
+        ImGui::SeparatorText("プレビュー画面");
+        if (DrawPropertyBoolRow("Mesh Preview", "DisplayMeshPreview", &g_ui.meshPreview, "Mesh preview visibility changed", nullptr, UiState{}.meshPreview, true))
+        {
+            SaveAppSettingsSilently();
+        }
+        if (DrawPropertyBoolRow("FPS", "DisplayFps", &g_ui.showFps, "FPS visibility changed", nullptr, UiState{}.showFps, true))
+        {
             SaveAppSettingsSilently();
         }
         {
@@ -13194,7 +13216,7 @@ void DrawUi()
             EndInspectorTabContent();
             EndStyledTabItem(defaultTabStyle);
         }
-        if (BeginStyledTabItem("表示設定"))
+        if (BeginStyledTabItem("設定"))
         {
             BeginInspectorTabContent();
             DrawDisplaySettingsPanel();

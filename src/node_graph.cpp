@@ -61,7 +61,6 @@ uint64_t HashHeightmapSettings(const HeightmapLoadSettings& settings, int resolu
     HashCombine(hash, HashFloat(settings.scaleMeters));
     HashCombine(hash, HashFloat(settings.relativeVerticalScalePercent));
     HashCombine(hash, HashFloat(settings.verticalOffsetMeters));
-    HashCombine(hash, static_cast<uint64_t>(settings.simulationResolution));
     HashCombine(hash, static_cast<uint64_t>(resolution));
     return hash;
 }
@@ -72,7 +71,6 @@ uint64_t HashShapeSettings(const ShapeSettings& settings, int resolution)
     HashCombine(hash, static_cast<uint64_t>(settings.kind));
     HashCombine(hash, HashFloat(settings.scaleMeters));
     HashCombine(hash, HashFloat(settings.relativeHeightPercent));
-    HashCombine(hash, static_cast<uint64_t>(settings.simulationResolution));
     HashCombine(hash, static_cast<uint64_t>(resolution));
     return hash;
 }
@@ -87,7 +85,7 @@ uint64_t HashHeightmapBlurSettings(const HeightmapBlurSettings& settings, int re
     return hash;
 }
 
-uint64_t HashMaskNoiseSettings(const MaskNoiseSettings& settings)
+uint64_t HashMaskNoiseSettings(const MaskNoiseSettings& settings, int resolution)
 {
     uint64_t hash = 1099511628211ull;
     HashCombine(hash, static_cast<uint64_t>(settings.seed));
@@ -95,7 +93,7 @@ uint64_t HashMaskNoiseSettings(const MaskNoiseSettings& settings)
     HashCombine(hash, HashFloat(settings.frequency));
     HashCombine(hash, HashFloat(settings.lacunarity));
     HashCombine(hash, HashFloat(settings.persistence));
-    HashCombine(hash, static_cast<uint64_t>(settings.simulationResolution));
+    HashCombine(hash, static_cast<uint64_t>(resolution));
     HashCombine(hash, static_cast<uint64_t>(settings.backend));
     return hash;
 }
@@ -3226,9 +3224,10 @@ bool IsHeightfieldOperationNode(NodeKind kind)
 
 MeshData BuildMeshFromHeightPipeline(const HeightfieldPipeline& pipeline, int resolution, std::string* message, HeightfieldPreviewField previewField = HeightfieldPreviewField::Heightmap, HeightfieldGrid* previewGrid = nullptr)
 {
+    const int simulationResolution = std::clamp(pipeline.simulationResolution, 2, 2048);
     HeightfieldGrid grid = pipeline.useShape
-        ? BuildHeightfieldFromShape(pipeline.shape, std::clamp(pipeline.shape.simulationResolution, 2, 2048), message)
-        : BuildHeightfieldFromHeightmap(pipeline.heightmap, std::clamp(pipeline.heightmap.simulationResolution, 2, 2048), message);
+        ? BuildHeightfieldFromShape(pipeline.shape, simulationResolution, message)
+        : BuildHeightfieldFromHeightmap(pipeline.heightmap, simulationResolution, message);
     if (grid.resolution <= 0)
     {
         return {};
@@ -3260,9 +3259,7 @@ HeightfieldGrid NodeGraph::EvaluateHeightPipelineCached(const HeightfieldPipelin
         return {};
     }
 
-    const int simulationResolution = pipeline.useShape
-        ? std::clamp(pipeline.shape.simulationResolution, 2, 2048)
-        : std::clamp(pipeline.heightmap.simulationResolution, 2, 2048);
+    const int simulationResolution = std::clamp(pipeline.simulationResolution, 2, 2048);
     uint64_t inputHash = 0;
     const uint64_t sourceHash = pipeline.useShape
         ? HashShapeSettings(pipeline.shape, simulationResolution)
@@ -3902,12 +3899,14 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
     }
     if (node.kind == NodeKind::MaskNoise)
     {
-        const uint64_t parameterHash = HashMaskNoiseSettings(node.maskNoise);
+        MaskNoiseSettings settings = node.maskNoise;
+        settings.simulationResolution = std::clamp(settings_.preview.simulationResolution, 2, 2048);
+        const uint64_t parameterHash = HashMaskNoiseSettings(settings, settings.simulationResolution);
         MaskNodeCache& cache = maskCache_[node.id];
         if (!cache.valid || cache.inputHash != 0 || cache.parameterHash != parameterHash)
         {
             g_currentlyEvaluatingNodeId.store(node.id, std::memory_order_relaxed);
-            cache.grid = GenerateMaskNoise(node.maskNoise);
+            cache.grid = GenerateMaskNoise(settings);
             cache.valid = true;
             cache.inputHash = 0;
             cache.parameterHash = parameterHash;
@@ -4147,6 +4146,7 @@ HeightfieldPipeline NodeGraph::PipelineTo(NodeKind targetKind) const
 HeightfieldPipeline NodeGraph::PipelineToNode(const Node& targetNode) const
 {
     HeightfieldPipeline pipeline;
+    pipeline.simulationResolution = std::clamp(settings_.preview.simulationResolution, 2, 2048);
     const Node* node = &targetNode;
     int guard = 0;
     while (node != nullptr && guard++ < 16)
