@@ -223,11 +223,32 @@ struct UiState
 {
     bool meshPreview = true;
     bool showFps = true;
+    bool showDrawStats = false;
     float rightPaneWidth = 0.0f;
     float nodePaneHeight = 0.0f;
 };
 
 UiState g_ui;
+
+struct PreviewRenderStats
+{
+    uint32_t drawCalls = 0;
+    uint32_t indexedDrawCalls = 0;
+    uint64_t submittedVertices = 0;
+    uint64_t submittedIndices = 0;
+    uint64_t submittedTriangles = 0;
+    uint64_t submittedLines = 0;
+    int renderTargetWidth = 0;
+    int renderTargetHeight = 0;
+    int displayMeshResolution = 0;
+    bool gpuDisplacement = false;
+    bool surfacePass = false;
+    bool wireframePass = false;
+    bool gridPass = false;
+    bool shadowPass = false;
+    bool skyPass = false;
+    bool cloudsPass = false;
+};
 
 enum class ViewportDisplayMode
 {
@@ -462,6 +483,7 @@ struct GpuMeshPreview
     UINT displacementTriIndexCount = 0;
     UINT displacementEdgeIndexCount = 0;
     uint64_t displacementHeightUploadKey = 0;
+    PreviewRenderStats renderStats;
 
     D3D12_RESOURCE_STATES colorState = D3D12_RESOURCE_STATE_COMMON;
     D3D12_RESOURCE_STATES shadowState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
@@ -1476,6 +1498,7 @@ bool SaveAppSettings(std::string* error = nullptr)
         root["previewVisibility"] = {
             {"mesh", g_ui.meshPreview},
             {"fps", g_ui.showFps},
+            {"drawStats", g_ui.showDrawStats},
             {"meshSurface", settings.preview.showSurface},
             {"meshWireframe", settings.preview.showWireframe},
             {"simulationResolution", settings.preview.simulationResolution},
@@ -1615,6 +1638,7 @@ bool LoadAppSettings(std::string* error = nullptr)
         const nlohmann::json visibilityJson = root.value("previewVisibility", nlohmann::json::object());
         g_ui.meshPreview = visibilityJson.value("mesh", g_ui.meshPreview);
         g_ui.showFps = visibilityJson.value("fps", g_ui.showFps);
+        g_ui.showDrawStats = visibilityJson.value("drawStats", g_ui.showDrawStats);
         settings.preview.showSurface = visibilityJson.value("meshSurface", settings.preview.showSurface);
         settings.preview.showWireframe = visibilityJson.value("meshWireframe", settings.preview.showWireframe);
         settings.preview.simulationResolution = NearestResolutionPreset(visibilityJson.value("simulationResolution", settings.preview.simulationResolution));
@@ -7040,16 +7064,16 @@ AtmosphereSamples SampleAtmosphericEnvironment(const rock::SkySettings& sky,
 // Records a fullscreen sky pass into the supplied command list. Caller is
 // responsible for: render target / viewport / scissor already bound, and
 // re-binding any other root signatures it needs after the call returns.
-void RenderSkyPass(ID3D12GraphicsCommandList* commandList, const rock::SkySettings& sky, const SkyShaderConstants& base)
+bool RenderSkyPass(ID3D12GraphicsCommandList* commandList, const rock::SkySettings& sky, const SkyShaderConstants& base)
 {
     if (sky.mode != rock::SkyMode::Atmospheric)
     {
-        return;
+        return false;
     }
     std::string ignoredError;
     if (!EnsureSkyPipeline(&ignoredError))
     {
-        return;
+        return false;
     }
 
     const float density = std::clamp(sky.atmosphereDensity, 0.05f, 8.0f);
@@ -7059,7 +7083,7 @@ void RenderSkyPass(ID3D12GraphicsCommandList* commandList, const rock::SkySettin
     const bool lutReady = EnsureAtmosphereMultiScatterLut(density, mieS, mieG, &lutError);
     if (!lutReady || !g_atmosphereMultiScatterSrvAllocated)
     {
-        return;
+        return false;
     }
 
     SkyShaderConstants constants = base;
@@ -7089,6 +7113,7 @@ void RenderSkyPass(ID3D12GraphicsCommandList* commandList, const rock::SkySettin
     // bound from the prior shadow pass. We leave them alone so the surface
     // draw below doesn't need to rebind the main mesh VB.
     commandList->DrawInstanced(3, 1, 0, 0);
+    return true;
 }
 
 // 128^3 cloud density volume — small enough to regenerate quickly when params
@@ -7483,18 +7508,18 @@ bool EnsureCloudVolume(int seed, std::string* error)
 // Records the cloud render pass into the supplied command list. Caller must
 // have the color RT bound and the cloud volume in PIXEL_SHADER_RESOURCE state.
 // Caller is responsible for re-binding any other root signatures it needs.
-void RenderCloudPass(ID3D12GraphicsCommandList* commandList,
-                    const rock::CloudSettings& clouds,
-                    const CloudRenderShaderConstants& base,
-                    float windOffsetX,
-                    float windOffsetZ,
-                    float fieldCenterX,
-                    float fieldCenterZ,
-                    D3D12_GPU_DESCRIPTOR_HANDLE depthSrvGpu)
+bool RenderCloudPass(ID3D12GraphicsCommandList* commandList,
+                     const rock::CloudSettings& clouds,
+                     const CloudRenderShaderConstants& base,
+                     float windOffsetX,
+                     float windOffsetZ,
+                     float fieldCenterX,
+                     float fieldCenterZ,
+                     D3D12_GPU_DESCRIPTOR_HANDLE depthSrvGpu)
 {
-    if (!clouds.enabled) return;
-    if (!g_gpuClouds.volumeReady || !g_gpuClouds.volumeTexture) return;
-    if (!g_cloudPipelinesReady) return;
+    if (!clouds.enabled) return false;
+    if (!g_gpuClouds.volumeReady || !g_gpuClouds.volumeTexture) return false;
+    if (!g_cloudPipelinesReady) return false;
 
     CloudRenderShaderConstants c = base;
     c.cloudColor[0] = clouds.color[0];
@@ -7527,6 +7552,7 @@ void RenderCloudPass(ID3D12GraphicsCommandList* commandList,
     commandList->SetGraphicsRootDescriptorTable(2, depthSrvGpu);
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     commandList->DrawInstanced(3, 1, 0, 0);
+    return true;
 }
 
 // Mirrors cbuffer in shaders/cloud_shadow.hlsl. 24 DWORDs.
@@ -8699,7 +8725,11 @@ void DrawMeshEdgePreview(ImDrawList* drawList, const ImVec2& min, const ImVec2& 
 bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface, bool showWireframe, std::string* error)
 {
     const bool showGrid = g_graph.Settings().preview.showGrid;
-    if (!showSurface && !showWireframe && !showGrid) return true;
+    if (!showSurface && !showWireframe && !showGrid)
+    {
+        g_gpuMeshPreview.renderStats = {};
+        return true;
+    }
     if (!EnsureMeshPreviewPipeline(error)) return false;
 
     const float viewportWidth = std::max(1.0f, max.x - min.x);
@@ -8715,6 +8745,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
 
     const rock::MeshData& mesh = g_graph.Evaluation().previewMesh;
     const uint64_t currentVersion = g_graph.Evaluation().version;
+    const bool useDisplacement = g_graph.Settings().preview.meshBackend == rock::MeshPreviewBackend::GpuDisplacement;
     const bool meshHasVertices = !mesh.vertices.empty();
     const bool meshDirty = (g_gpuMeshPreview.graphVersion != currentVersion || (meshHasVertices && !g_gpuMeshPreview.vertexBuffer));
     const bool viewportDirty =
@@ -8776,6 +8807,37 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
 
     try
     {
+        PreviewRenderStats renderStats{};
+        renderStats.renderTargetWidth = targetWidth;
+        renderStats.renderTargetHeight = targetHeight;
+        renderStats.displayMeshResolution = CurrentPreviewMeshResolution();
+        renderStats.gpuDisplacement = useDisplacement;
+        const auto recordDraw = [&](UINT vertexCount, bool triangles) {
+            ++renderStats.drawCalls;
+            renderStats.submittedVertices += vertexCount;
+            if (triangles)
+            {
+                renderStats.submittedTriangles += vertexCount / 3u;
+            }
+            else
+            {
+                renderStats.submittedLines += vertexCount / 2u;
+            }
+        };
+        const auto recordIndexedDraw = [&](UINT indexCount, bool triangles) {
+            ++renderStats.drawCalls;
+            ++renderStats.indexedDrawCalls;
+            renderStats.submittedIndices += indexCount;
+            if (triangles)
+            {
+                renderStats.submittedTriangles += indexCount / 3u;
+            }
+            else
+            {
+                renderStats.submittedLines += indexCount / 2u;
+            }
+        };
+
         // Phase 2c-1: skip the CPU mesh upload (vb / ib / edge ib) when
         // the GPU displacement backend is on. The CPU mesh struct is still
         // built (Evaluate needs it for the 2D edge preview / OBJ export),
@@ -8783,7 +8845,6 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         // mode are silently disabled — Phase 2c-2 will re-add a
         // displacement shadow path once we're sure the CPU-skip itself is
         // stable.
-        const bool useDisplacement = g_graph.Settings().preview.meshBackend == rock::MeshPreviewBackend::GpuDisplacement;
         if (meshDirty)
         {
             if (!useDisplacement)
@@ -9094,6 +9155,8 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
                 commandList->SetPipelineState(g_meshPreviewDisplacementShadowPso.Get());
                 commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
                 commandList->DrawIndexedInstanced(g_gpuMeshPreview.displacementTriIndexCount, 1, 0, 0, 0);
+                recordIndexedDraw(g_gpuMeshPreview.displacementTriIndexCount, true);
+                renderStats.shadowPass = true;
 
                 // Restore CPU root sig + bindings for the surface / grid
                 // draws below (they assume the CPU root sig is current).
@@ -9115,6 +9178,8 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
                 commandList->SetPipelineState(g_meshPreviewShadowPso.Get());
                 commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
                 commandList->DrawIndexedInstanced(g_gpuMeshPreview.triIndexCount, 1, 0, 0, 0);
+                recordIndexedDraw(g_gpuMeshPreview.triIndexCount, true);
+                renderStats.shadowPass = true;
             }
 
             D3D12_RESOURCE_BARRIER shadowToSrv{};
@@ -9151,7 +9216,11 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         skyBase.sunDirection[0] = constants.sunDirection[0];
         skyBase.sunDirection[1] = constants.sunDirection[1];
         skyBase.sunDirection[2] = constants.sunDirection[2];
-        RenderSkyPass(commandList.Get(), g_graph.Settings().sky, skyBase);
+        if (RenderSkyPass(commandList.Get(), g_graph.Settings().sky, skyBase))
+        {
+            recordDraw(3, true);
+            renderStats.skyPass = true;
+        }
 
         // Cloud shadow texture: regenerated each frame from the same cloud
         // volume the cloud render pass uses. Before the mesh draw so the
@@ -9307,6 +9376,8 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             commandList->SetPipelineState(g_meshPreviewDisplacementSurfacePso.Get());
             commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             commandList->DrawIndexedInstanced(g_gpuMeshPreview.displacementTriIndexCount, 1, 0, 0, 0);
+            recordIndexedDraw(g_gpuMeshPreview.displacementTriIndexCount, true);
+            renderStats.surfacePass = true;
 
             // Restore the CPU root sig + constants for wireframe / grid
             // draws below (those still expect the CPU mesh root sig).
@@ -9330,6 +9401,8 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             commandList->SetPipelineState(g_meshPreviewSurfacePso.Get());
             commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             commandList->DrawIndexedInstanced(g_gpuMeshPreview.triIndexCount, 1, 0, 0, 0);
+            recordIndexedDraw(g_gpuMeshPreview.triIndexCount, true);
+            renderStats.surfacePass = true;
         }
         if (showGrid && g_gpuMeshPreview.gridVertexCount > 0)
         {
@@ -9347,6 +9420,8 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             commandList->SetPipelineState(g_meshPreviewGridPso.Get());
             commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
             commandList->DrawInstanced(g_gpuMeshPreview.gridVertexCount, 1, 0, 0);
+            recordDraw(g_gpuMeshPreview.gridVertexCount, false);
+            renderStats.gridPass = true;
             if (hasMeshVertices)
             {
                 commandList->IASetVertexBuffers(0, 1, &vbv);
@@ -9365,6 +9440,8 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             commandList->SetPipelineState(g_meshPreviewWirePso.Get());
             commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
             commandList->DrawIndexedInstanced(g_gpuMeshPreview.edgeIndexCount, 1, 0, 0, 0);
+            recordIndexedDraw(g_gpuMeshPreview.edgeIndexCount, false);
+            renderStats.wireframePass = true;
         }
 
         // Cloud pass: now that terrain has written depth, transition depth to
@@ -9436,10 +9513,14 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             std::string cloudVolumeError;
             if (EnsureCloudVolume(cloudSettings.seed, &cloudVolumeError))
             {
-                RenderCloudPass(commandList.Get(), cloudSettings, cloudBase,
-                                windOffsetX, windOffsetZ,
-                                boundsCenter.x, boundsCenter.z,
-                                g_gpuMeshPreview.depthSrvGpu);
+                if (RenderCloudPass(commandList.Get(), cloudSettings, cloudBase,
+                                    windOffsetX, windOffsetZ,
+                                    boundsCenter.x, boundsCenter.z,
+                                    g_gpuMeshPreview.depthSrvGpu))
+                {
+                    recordDraw(3, true);
+                    renderStats.cloudsPass = true;
+                }
             }
         }
 
@@ -9458,6 +9539,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         ThrowIfFailed(g_commandQueue->Signal(g_fence.Get(), fenceVal), "Signal mesh preview failed");
         WaitForFenceValue(fenceVal);
 
+        g_gpuMeshPreview.renderStats = renderStats;
         g_gpuMeshPreview.yaw           = g_viewport.yaw;
         g_gpuMeshPreview.pitch         = g_viewport.pitch;
         g_gpuMeshPreview.fovDegrees    = g_viewport.fovDegrees;
@@ -9740,17 +9822,37 @@ void DrawViewportCube(const ImVec2& min, const ImVec2& max, float timeSeconds)
         preview.gridCellSizeMeters);
     drawList->AddText(ImVec2(min.x + 82.0f, min.y + 36.0f), ThemeColor("mutedText", ImVec4(0.54f, 0.59f, 0.56f, 1.0f)), gridInfo.c_str());
     DrawViewportDisplayMenu(min);
+    float overlayTop = min.y + 14.0f;
     if (g_ui.showFps)
     {
         char fpsText[32]{};
         std::snprintf(fpsText, sizeof(fpsText), "FPS %.1f", ImGui::GetIO().Framerate);
         const ImVec2 fpsSize = ImGui::CalcTextSize(fpsText);
         const ImVec2 fpsPadding(9.0f, 5.0f);
-        const ImVec2 fpsMax(max.x - 14.0f, min.y + 14.0f + fpsSize.y + fpsPadding.y * 2.0f);
-        const ImVec2 fpsMin(fpsMax.x - fpsSize.x - fpsPadding.x * 2.0f, min.y + 14.0f);
+        const ImVec2 fpsMax(max.x - 14.0f, overlayTop + fpsSize.y + fpsPadding.y * 2.0f);
+        const ImVec2 fpsMin(fpsMax.x - fpsSize.x - fpsPadding.x * 2.0f, overlayTop);
         drawList->AddRectFilled(fpsMin, fpsMax, IM_COL32(8, 10, 10, 168), 4.0f);
         drawList->AddRect(fpsMin, fpsMax, ThemeColor("border", ImVec4(0.20f, 0.23f, 0.22f, 0.70f)), 4.0f);
         drawList->AddText(ImVec2(fpsMin.x + fpsPadding.x, fpsMin.y + fpsPadding.y), ThemeColor("accentText", ImVec4(0.86f, 0.88f, 0.85f, 1.0f)), fpsText);
+        overlayTop = fpsMax.y + 6.0f;
+    }
+    if (g_ui.showDrawStats)
+    {
+        const PreviewRenderStats& stats = g_gpuMeshPreview.renderStats;
+        const std::string statsText = std::format(
+            "Draw Calls {}\nVerts {}  Tris {}\nRT {} x {}",
+            stats.drawCalls,
+            stats.submittedVertices,
+            stats.submittedTriangles,
+            stats.renderTargetWidth,
+            stats.renderTargetHeight);
+        const ImVec2 statsSize = ImGui::CalcTextSize(statsText.c_str());
+        const ImVec2 statsPadding(9.0f, 6.0f);
+        const ImVec2 statsMax(max.x - 14.0f, overlayTop + statsSize.y + statsPadding.y * 2.0f);
+        const ImVec2 statsMin(statsMax.x - statsSize.x - statsPadding.x * 2.0f, overlayTop);
+        drawList->AddRectFilled(statsMin, statsMax, IM_COL32(8, 10, 10, 168), 4.0f);
+        drawList->AddRect(statsMin, statsMax, ThemeColor("border", ImVec4(0.20f, 0.23f, 0.22f, 0.70f)), 4.0f);
+        drawList->AddText(ImVec2(statsMin.x + statsPadding.x, statsMin.y + statsPadding.y), ThemeColor("accentText", ImVec4(0.86f, 0.88f, 0.85f, 1.0f)), statsText.c_str());
     }
     DrawViewportAxisGizmo(drawList, min, max);
 }
@@ -12705,11 +12807,19 @@ void DrawCameraPanel()
 void DrawDebugPanel()
 {
     rock::GraphSettings& settings = g_graph.Settings();
+    const rock::EvaluationSummary& evaluation = g_graph.Evaluation();
+    const PreviewRenderStats& renderStats = g_gpuMeshPreview.renderStats;
     ImGui::SeparatorText("Viewport Debug");
     if (ImGui::BeginTable("DebugViewportRows", 2, ImGuiTableFlags_SizingStretchProp))
     {
         ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 112.0f);
         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+        if (DrawPropertyBoolRow("Draw Calls", "DebugDrawCalls", &g_ui.showDrawStats, "Draw stats visibility changed",
+                "Shows the latest preview draw-call count in the viewport overlay.",
+                UiState{}.showDrawStats, true))
+        {
+            SaveAppSettingsSilently();
+        }
         if (DrawPropertyBoolRow("Wireframe", "DebugWireframe", &settings.preview.showWireframe, "Wireframe visibility changed",
                 "Shows mesh edges for topology debugging. High viewport resolutions can make this expensive.",
                 rock::PreviewSettings{}.showWireframe, true))
@@ -12720,15 +12830,39 @@ void DrawDebugPanel()
     }
 
     ImGui::Spacing();
-    const rock::EvaluationSummary& evaluation = g_graph.Evaluation();
     ImGui::Text("Graph Version: %llu", static_cast<unsigned long long>(evaluation.version));
     ImGui::Text("%s", g_lastEvaluationDuration.c_str());
     ImGui::TextColored(evaluation.dirty ? ImVec4(0.90f, 0.64f, 0.30f, 1.0f) : ImVec4(0.54f, 0.78f, 0.58f, 1.0f), "%s", evaluation.dirty ? "Dirty" : "Evaluated");
     ImGui::TextWrapped("%s", evaluation.status.c_str());
 
+    const uint64_t displayedVertices = renderStats.gpuDisplacement && renderStats.displayMeshResolution > 0
+        ? static_cast<uint64_t>(renderStats.displayMeshResolution) * static_cast<uint64_t>(renderStats.displayMeshResolution)
+        : static_cast<uint64_t>(g_gpuMeshPreview.vertexCount);
+    const uint64_t displayedTriangles = renderStats.gpuDisplacement
+        ? static_cast<uint64_t>(g_gpuMeshPreview.displacementTriIndexCount / 3u)
+        : static_cast<uint64_t>(g_gpuMeshPreview.triIndexCount / 3u);
+
     ImGui::SeparatorText("Preview");
     ImGui::Text("Stage: %s", rock::ToString(evaluation.previewStage).data());
-    ImGui::SeparatorText("Mesh Topology");
+    ImGui::Text("Backend: %s", renderStats.gpuDisplacement ? "GPU Displacement" : "CPU Mesh");
+    ImGui::Text("Render Target: %d x %d", renderStats.renderTargetWidth, renderStats.renderTargetHeight);
+    ImGui::Text("Draw Calls: %u (%u indexed)", renderStats.drawCalls, renderStats.indexedDrawCalls);
+    ImGui::Text("Submitted: %llu verts / %llu tris / %llu lines",
+        static_cast<unsigned long long>(renderStats.submittedVertices),
+        static_cast<unsigned long long>(renderStats.submittedTriangles),
+        static_cast<unsigned long long>(renderStats.submittedLines));
+    ImGui::Text("Passes: %s%s%s%s%s%s",
+        renderStats.shadowPass ? "Shadow " : "",
+        renderStats.skyPass ? "Sky " : "",
+        renderStats.surfacePass ? "Surface " : "",
+        renderStats.gridPass ? "Grid " : "",
+        renderStats.wireframePass ? "Wireframe " : "",
+        renderStats.cloudsPass ? "Clouds " : "");
+    ImGui::SeparatorText("Displayed Mesh");
+    ImGui::Text("Mesh Resolution: %d", renderStats.displayMeshResolution);
+    ImGui::Text("Vertices: %llu", static_cast<unsigned long long>(displayedVertices));
+    ImGui::Text("Triangles: %llu", static_cast<unsigned long long>(displayedTriangles));
+    ImGui::SeparatorText("Evaluated Mesh");
     ImGui::Text("Vertices: %zu", evaluation.previewMesh.vertices.size());
     ImGui::Text("Edges: %zu", evaluation.previewMesh.edges.size());
     ImGui::Text("Triangles: %zu", evaluation.previewMesh.triangles.size());
