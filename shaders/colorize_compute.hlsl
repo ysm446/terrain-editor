@@ -4,11 +4,13 @@ cbuffer Constants : register(b0)
     uint cellCount;
     uint stopCount;
     uint hasMask;
+    uint hasBaseColor;
 };
 
 StructuredBuffer<float> GradientMask : register(t0);
 StructuredBuffer<float> MaskInput : register(t1);
 StructuredBuffer<float4> Stops : register(t2); // x = position, yzw = rgb
+StructuredBuffer<uint> BaseColor : register(t3); // packed RGBA8
 RWStructuredBuffer<uint> Output : register(u0); // packed RGBA8
 
 float3 SampleStops(float t)
@@ -45,6 +47,15 @@ uint PackRgba8(float4 c)
     return (v.r & 255u) | ((v.g & 255u) << 8) | ((v.b & 255u) << 16) | ((v.a & 255u) << 24);
 }
 
+float4 UnpackRgba8(uint p)
+{
+    return float4(
+        (float)(p & 255u),
+        (float)((p >> 8) & 255u),
+        (float)((p >> 16) & 255u),
+        (float)((p >> 24) & 255u)) / 255.0;
+}
+
 [numthreads(8, 8, 1)]
 void CSColorize(uint3 id : SV_DispatchThreadID)
 {
@@ -62,5 +73,13 @@ void CSColorize(uint3 id : SV_DispatchThreadID)
     float t = saturate(GradientMask[index]);
     float3 rgb = SampleStops(t);
     float alpha = hasMask != 0 ? saturate(MaskInput[index]) : 1.0;
-    Output[index] = PackRgba8(float4(rgb, alpha));
+    if (hasBaseColor != 0)
+    {
+        float4 baseColor = UnpackRgba8(BaseColor[index]);
+        Output[index] = PackRgba8(float4(lerp(baseColor.rgb, rgb, alpha), 1.0));
+    }
+    else
+    {
+        Output[index] = PackRgba8(float4(rgb, 1.0));
+    }
 }

@@ -17,6 +17,9 @@
 - 入力 `Heightmap` から局所平均との差分を計算し、`Ridges`、`Valleys`、`Absolute` の曲率マスクを出力できるようにした。
 - `Radius`、`Sensitivity (m)`、`Threshold (%)`、`Gamma` で検出スケールと出力カーブを調整できるようにした。
 - `docs/nodes/mask/mask_curvature/` にノード説明とアルゴリズムメモを追加。
+- `Colorize` ノードに `Base Color` 入力を追加し、`Mask` でグラデーション色を既存カラーへ合成できるようにした。
+- `Mask Levels` ノードを追加し、Black Point / White Point / Gamma / Invert でマスクを整えられるようにした。
+- `Mask Slope` ノードを追加し、Heightmap の傾斜角から急斜面/平地マスクを作れるようにした。
 
 ## 完了したこと
 
@@ -30,5 +33,5 @@
 
 - `Crumbling` / `Debris` ノードの仕様を詰める。
 - 発生条件、転がる方向、停止条件、堆積表現、出力形式を決める。
-- `Mask Invert` の底/天井操作、`Mask Levels` の level 操作仕様を決める。
-- `Colorize` の色ピック対象、サンプル方法、グラデーションキー化、プレビュー方法を決める。
+- `Mask Invert` を単独ノードとして残すか、`Mask Levels` の `Invert` に統合した扱いにするか決める。
+- `Colorize` の色ピック対象、サンプル方法、グラデーションキー化をさらに調整する。

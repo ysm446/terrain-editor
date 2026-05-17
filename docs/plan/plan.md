@@ -11,7 +11,8 @@
 ## 優先候補
 
 - `Crumbling` または `Debris` ノードの検討と実装。
-- マスク系ノード (`Mask Invert` / `Mask Levels`) の検討と実装。
+- マスク系ノード (`Mask Invert`) の検討と実装。
+- `Mask Slope` など、地形条件から作る基本マスクノードの拡充。
 - `Colorize` ノードの検討と実装。
 - 既存ノードの見た目とパラメータ挙動の調整。
 - GPU 対応済みノードの検証とフォールバック確認。
@@ -22,8 +23,8 @@
 
 - `Crumbling` または `Debris`: 入力の `Heightmap` と `Mask` から、崩落した岩や石を地形上に転がして散布するノード。
 - `Mask Invert`: 入力マスクを反転し、必要に応じて底や天井を操作できるマスク加工ノード。
-- `Mask Levels`: 入力マスク画像の level を調整するマスク系ノード。黒点、白点、中間調、コントラスト調整のような用途を想定。
-- `Colorize`: カラー系またはテクスチャー系ノード。入力は `Heightmap`、`Mask`、`Gradient Mask`、出力は `Color Texture` を想定する。`Gradient Mask` の値でグラデーション上の参照位置を決め、`Mask` で適用範囲を制御し、`Heightmap` は主にプレビュー用に使う。ピッカーで画面上のマウス軌道から色を拾い、サンプル列をグラデーションに落とし込んで取得できる仕組みも検討する。
+- `Mask Slope`: 入力 `Heightmap` の傾斜角から、急斜面または平地の `Mask` を生成するノード。
+- `Colorize`: カラー系またはテクスチャー系ノード。入力は `Heightmap`、`Base Color`、`Mask`、`Gradient Mask`、出力は `Color Texture` を想定する。`Gradient Mask` の値でグラデーション上の参照位置を決め、`Mask` で `Base Color` への合成強度を制御し、`Heightmap` は主にプレビュー用に使う。ピッカーで画面上のマウス軌道から色を拾い、サンプル列をグラデーションに落とし込んで取得できる仕組みも検討する。
 
 ## 次の作業メモ
 
@@ -34,10 +35,11 @@
 - ノード名は、崖や斜面の崩れを強調するなら `Crumbling`、転石や岩屑の散布を強調するなら `Debris` が候補。
 - 実装前に、発生条件、転がる方向、停止条件、堆積表現、既存 `Rock` / `Sediment` ノードとの役割分担を整理する。
 - `Mask Invert` は単純な反転だけでなく、底や天井の調整をどのパラメータ名で扱うかを決める。
-- `Mask Levels` は既存のマスク値域 `[0, 1]` の中で、どの level 操作を最初に入れるかを決める。
-- `Colorize` はカラー系またはテクスチャー系ノードとして扱う。入力は `Heightmap`、`Mask`、`Gradient Mask`、出力は `Color Texture` を基本案にする。
+- `Mask Invert` は `Mask Levels` の `Invert` で代用できるため、単独ノードとして本当に必要かは保留する。
+- `Mask Slope` は `Slope Min/Max` で急斜面を抽出し、`Invert` で平地マスクとしても使える基本部品にする。
+- `Colorize` はカラー系またはテクスチャー系ノードとして扱う。入力は `Heightmap`、`Base Color`、`Mask`、`Gradient Mask`、出力は `Color Texture` を基本案にする。
 - `Colorize` の `Gradient Mask` はグラデーション割り当てに使い、値 `0..1` をカラーランプ上の位置として解釈する。
-- `Colorize` の `Mask` は着色範囲や合成強度の制御に使う。
+- `Colorize` の `Mask` は `Base Color` への合成強度の制御に使う。
 - `Colorize` の `Heightmap` は、地形形状を見ながら色を調整するためのプレビュー用途を主目的にする。
 - `Colorize` は、まずアプリ内のプレビューや画像領域から色をピックする仕様を優先する。OS 全体の画面色取得は環境依存が大きいため、必要になったら別途検討する。
 - マウス軌道から拾った色は、距離または時系列でサンプルし、重複色の間引き、平滑化、グラデーションキー化を行う案を検討する。

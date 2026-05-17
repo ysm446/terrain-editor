@@ -689,7 +689,9 @@ struct ColorizeGpuRequest
     rock::ColorizeSettings settings;
     rock::MaskGrid gradientMask;
     rock::MaskGrid mask;
+    rock::ColorGrid baseColor;
     bool hasMask = false;
+    bool hasBaseColor = false;
     std::promise<ColorizeGpuRequestResult> promise;
 };
 
@@ -2037,6 +2039,18 @@ nlohmann::json MakeMaskSettingsJson(const rock::Node& node)
             {"threshold", node.maskCurvature.threshold},
             {"gamma", node.maskCurvature.gamma},
         }},
+        {"maskLevels", {
+            {"blackPoint", node.maskLevels.blackPoint},
+            {"whitePoint", node.maskLevels.whitePoint},
+            {"gamma", node.maskLevels.gamma},
+            {"invert", node.maskLevels.invert},
+        }},
+        {"maskSlope", {
+            {"slopeMinDeg", node.maskSlope.slopeMinDeg},
+            {"slopeMaxDeg", node.maskSlope.slopeMaxDeg},
+            {"gamma", node.maskSlope.gamma},
+            {"invert", node.maskSlope.invert},
+        }},
         {"maskBlend", {
             {"mode", static_cast<int>(node.maskBlend.mode)},
             {"intensity", node.maskBlend.intensity},
@@ -2177,6 +2191,8 @@ std::optional<rock::PreviewStage> ReadSerializedPreviewStage(const nlohmann::jso
     case rock::PreviewStage::MultiScaleErosion:
     case rock::PreviewStage::MaskNoise:
     case rock::PreviewStage::MaskBlend:
+    case rock::PreviewStage::MaskLevels:
+    case rock::PreviewStage::MaskSlope:
     case rock::PreviewStage::MaskCurvature:
     case rock::PreviewStage::MaskFluvial:
     case rock::PreviewStage::Rock:
@@ -2245,6 +2261,8 @@ void ReadMaskSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     const nlohmann::json nodeMaskBlendJson = nodeJson.value("maskBlend", nlohmann::json::object());
     const nlohmann::json nodeMaskFluvialJson = nodeJson.value("maskFluvial", nlohmann::json::object());
     const nlohmann::json nodeMaskCurvatureJson = nodeJson.value("maskCurvature", nlohmann::json::object());
+    const nlohmann::json nodeMaskLevelsJson = nodeJson.value("maskLevels", nlohmann::json::object());
+    const nlohmann::json nodeMaskSlopeJson = nodeJson.value("maskSlope", nlohmann::json::object());
 
     node.maskNoise.seed = std::clamp(nodeMaskNoiseJson.value("seed", node.maskNoise.seed), 0, 999999);
     node.maskNoise.octaves = std::clamp(nodeMaskNoiseJson.value("octaves", node.maskNoise.octaves), 1, 12);
@@ -2275,6 +2293,18 @@ void ReadMaskSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     node.maskCurvature.sensitivityMeters = std::clamp(nodeMaskCurvatureJson.value("sensitivityMeters", node.maskCurvature.sensitivityMeters), 0.001f, 1000.0f);
     node.maskCurvature.threshold = std::clamp(nodeMaskCurvatureJson.value("threshold", node.maskCurvature.threshold), 0.0f, 0.99f);
     node.maskCurvature.gamma = std::clamp(nodeMaskCurvatureJson.value("gamma", node.maskCurvature.gamma), 0.05f, 8.0f);
+    node.maskLevels.blackPoint = std::clamp(nodeMaskLevelsJson.value("blackPoint", node.maskLevels.blackPoint), 0.0f, 1.0f);
+    node.maskLevels.whitePoint = std::clamp(nodeMaskLevelsJson.value("whitePoint", node.maskLevels.whitePoint), 0.0f, 1.0f);
+    node.maskLevels.gamma = std::clamp(nodeMaskLevelsJson.value("gamma", node.maskLevels.gamma), 0.05f, 8.0f);
+    node.maskLevels.invert = nodeMaskLevelsJson.value("invert", node.maskLevels.invert);
+    node.maskSlope.slopeMinDeg = std::clamp(nodeMaskSlopeJson.value("slopeMinDeg", node.maskSlope.slopeMinDeg), 0.0f, 89.9f);
+    node.maskSlope.slopeMaxDeg = std::clamp(nodeMaskSlopeJson.value("slopeMaxDeg", node.maskSlope.slopeMaxDeg), 0.0f, 89.9f);
+    if (node.maskSlope.slopeMaxDeg < node.maskSlope.slopeMinDeg)
+    {
+        std::swap(node.maskSlope.slopeMinDeg, node.maskSlope.slopeMaxDeg);
+    }
+    node.maskSlope.gamma = std::clamp(nodeMaskSlopeJson.value("gamma", node.maskSlope.gamma), 0.05f, 8.0f);
+    node.maskSlope.invert = nodeMaskSlopeJson.value("invert", node.maskSlope.invert);
     {
         const int algoInt = std::clamp(nodeMaskFluvialJson.value("algorithm", static_cast<int>(node.maskFluvial.algorithm)),
                                         static_cast<int>(rock::FlowAccumulationAlgorithm::D8),
@@ -4492,8 +4522,9 @@ struct ColorizeShaderConstants
     UINT cellCount;
     UINT stopCount;
     UINT hasMask;
+    UINT hasBaseColor;
 };
-static_assert(sizeof(ColorizeShaderConstants) == 4 * sizeof(UINT), "ColorizeShaderConstants must be 4 DWORDs");
+static_assert(sizeof(ColorizeShaderConstants) == 5 * sizeof(UINT), "ColorizeShaderConstants must be 5 DWORDs");
 
 bool EnsureColorizeComputePipeline(std::string* error)
 {
@@ -4510,7 +4541,7 @@ bool EnsureColorizeComputePipeline(std::string* error)
 
     D3D12_DESCRIPTOR_RANGE srvRange{};
     srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    srvRange.NumDescriptors = 3;
+    srvRange.NumDescriptors = 4;
     srvRange.BaseShaderRegister = 0;
     srvRange.RegisterSpace = 0;
     srvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
@@ -4526,7 +4557,7 @@ bool EnsureColorizeComputePipeline(std::string* error)
     rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     rootParams[0].Constants.ShaderRegister = 0;
     rootParams[0].Constants.RegisterSpace = 0;
-    rootParams[0].Constants.Num32BitValues = 4;
+    rootParams[0].Constants.Num32BitValues = 5;
     rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
@@ -4591,7 +4622,7 @@ bool EnsureColorizeComputePipeline(std::string* error)
     return true;
 }
 
-bool RunColorizeComputeImmediate(rock::ColorGrid& grid, const rock::ColorizeSettings& settings, const rock::MaskGrid& gradientMask, const rock::MaskGrid* mask, std::string* error)
+bool RunColorizeComputeImmediate(rock::ColorGrid& grid, const rock::ColorizeSettings& settings, const rock::MaskGrid& gradientMask, const rock::MaskGrid* mask, const rock::ColorGrid* baseColor, std::string* error)
 {
     std::lock_guard<std::mutex> lock(g_colorizeComputeMutex);
     if (!EnsureColorizeComputePipeline(error))
@@ -4608,6 +4639,9 @@ bool RunColorizeComputeImmediate(rock::ColorGrid& grid, const rock::ColorizeSett
     const bool hasMask = mask != nullptr &&
         mask->resolution == static_cast<int>(resolution) &&
         mask->values.size() >= static_cast<size_t>(resolution) * static_cast<size_t>(resolution);
+    const bool hasBaseColor = baseColor != nullptr &&
+        baseColor->resolution > 0 &&
+        baseColor->pixels.size() >= static_cast<size_t>(baseColor->resolution) * static_cast<size_t>(baseColor->resolution) * 4u;
     const UINT64 cellCount = static_cast<UINT64>(resolution) * static_cast<UINT64>(resolution);
     const UINT64 maskByteSize = cellCount * sizeof(float);
     std::vector<rock::ColorStop> sourceStops = settings.stops;
@@ -4628,6 +4662,28 @@ bool RunColorizeComputeImmediate(rock::ColorGrid& grid, const rock::ColorizeSett
         stops.push_back({std::clamp(s.position, 0.0f, 1.0f), s.r, s.g, s.b});
     }
 
+    std::vector<uint32_t> basePixels(static_cast<size_t>(cellCount), 0xff000000u);
+    if (hasBaseColor)
+    {
+        for (UINT y = 0; y < resolution; ++y)
+        {
+            const float v = resolution > 1 ? static_cast<float>(y) / static_cast<float>(resolution - 1u) : 0.0f;
+            const int baseY = std::clamp(static_cast<int>(std::round(v * static_cast<float>(baseColor->resolution - 1))), 0, baseColor->resolution - 1);
+            for (UINT x = 0; x < resolution; ++x)
+            {
+                const float u = resolution > 1 ? static_cast<float>(x) / static_cast<float>(resolution - 1u) : 0.0f;
+                const int baseX = std::clamp(static_cast<int>(std::round(u * static_cast<float>(baseColor->resolution - 1))), 0, baseColor->resolution - 1);
+                const size_t src = (static_cast<size_t>(baseY) * static_cast<size_t>(baseColor->resolution) + static_cast<size_t>(baseX)) * 4u;
+                const uint32_t r = baseColor->pixels[src + 0u];
+                const uint32_t g = baseColor->pixels[src + 1u];
+                const uint32_t b = baseColor->pixels[src + 2u];
+                const uint32_t a = baseColor->pixels[src + 3u];
+                basePixels[static_cast<size_t>(y) * static_cast<size_t>(resolution) + static_cast<size_t>(x)] =
+                    (r & 255u) | ((g & 255u) << 8) | ((b & 255u) << 16) | ((a & 255u) << 24);
+            }
+        }
+    }
+
     const UINT64 stopByteSize = std::max<UINT64>(static_cast<UINT64>(stops.size()) * sizeof(GpuStop), sizeof(GpuStop));
     const UINT64 outputByteSize = cellCount * sizeof(uint32_t);
     const D3D12_HEAP_PROPERTIES defaultHeap = HeapProperties(D3D12_HEAP_TYPE_DEFAULT);
@@ -4638,6 +4694,7 @@ bool RunColorizeComputeImmediate(rock::ColorGrid& grid, const rock::ColorizeSett
     ComPtr<ID3D12Resource> gradientUpload = CreateUploadBuffer(gradientMask.values.data(), maskByteSize, "Create Colorize gradient upload failed");
     ComPtr<ID3D12Resource> maskUpload = CreateUploadBuffer(hasMask ? mask->values.data() : gradientMask.values.data(), maskByteSize, "Create Colorize mask upload failed");
     ComPtr<ID3D12Resource> stopsUpload = CreateUploadBuffer(stops.data(), stopByteSize, "Create Colorize stops upload failed");
+    ComPtr<ID3D12Resource> baseUpload = CreateUploadBuffer(basePixels.data(), outputByteSize, "Create Colorize base upload failed");
     ComPtr<ID3D12Resource> output;
     ComPtr<ID3D12Resource> readback;
     HRESULT hr = g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &outputGpuDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&output));
@@ -4647,7 +4704,7 @@ bool RunColorizeComputeImmediate(rock::ColorGrid& grid, const rock::ColorizeSett
 
     D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
     heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    heapDesc.NumDescriptors = 4;
+    heapDesc.NumDescriptors = 5;
     heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     ComPtr<ID3D12DescriptorHeap> descriptorHeap;
     hr = g_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&descriptorHeap));
@@ -4682,12 +4739,19 @@ bool RunColorizeComputeImmediate(rock::ColorGrid& grid, const rock::ColorizeSett
     stopsSrv.Buffer.NumElements = stopCount;
     stopsSrv.Buffer.StructureByteStride = sizeof(GpuStop);
     g_device->CreateShaderResourceView(stopsUpload.Get(), &stopsSrv, cpuHandle(2));
+    D3D12_SHADER_RESOURCE_VIEW_DESC baseSrv{};
+    baseSrv.Format = DXGI_FORMAT_UNKNOWN;
+    baseSrv.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+    baseSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    baseSrv.Buffer.NumElements = static_cast<UINT>(cellCount);
+    baseSrv.Buffer.StructureByteStride = sizeof(uint32_t);
+    g_device->CreateShaderResourceView(baseUpload.Get(), &baseSrv, cpuHandle(3));
     D3D12_UNORDERED_ACCESS_VIEW_DESC outputUav{};
     outputUav.Format = DXGI_FORMAT_UNKNOWN;
     outputUav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
     outputUav.Buffer.NumElements = static_cast<UINT>(cellCount);
     outputUav.Buffer.StructureByteStride = sizeof(uint32_t);
-    g_device->CreateUnorderedAccessView(output.Get(), nullptr, &outputUav, cpuHandle(3));
+    g_device->CreateUnorderedAccessView(output.Get(), nullptr, &outputUav, cpuHandle(4));
 
     ComPtr<ID3D12CommandAllocator> allocator;
     ComPtr<ID3D12GraphicsCommandList> commandList;
@@ -4699,14 +4763,15 @@ bool RunColorizeComputeImmediate(rock::ColorGrid& grid, const rock::ColorizeSett
     constants.cellCount = static_cast<UINT>(cellCount);
     constants.stopCount = stopCount;
     constants.hasMask = hasMask ? 1u : 0u;
+    constants.hasBaseColor = hasBaseColor ? 1u : 0u;
 
     ID3D12DescriptorHeap* heaps[] = {descriptorHeap.Get()};
     commandList->SetDescriptorHeaps(1, heaps);
     commandList->SetComputeRootSignature(g_colorizeComputeRootSignature.Get());
     commandList->SetPipelineState(g_colorizeComputePso.Get());
-    commandList->SetComputeRoot32BitConstants(0, 4, &constants, 0);
+    commandList->SetComputeRoot32BitConstants(0, 5, &constants, 0);
     commandList->SetComputeRootDescriptorTable(1, gpuHandle(0));
-    commandList->SetComputeRootDescriptorTable(2, gpuHandle(3));
+    commandList->SetComputeRootDescriptorTable(2, gpuHandle(4));
     const UINT groupCount = (resolution + 7u) / 8u;
     commandList->Dispatch(groupCount, groupCount, 1);
 
@@ -4747,11 +4812,11 @@ bool RunColorizeComputeImmediate(rock::ColorGrid& grid, const rock::ColorizeSett
     return true;
 }
 
-bool RunColorizeCompute(rock::ColorGrid& grid, const rock::ColorizeSettings& settings, const rock::MaskGrid& gradientMask, const rock::MaskGrid* mask, std::string* error)
+bool RunColorizeCompute(rock::ColorGrid& grid, const rock::ColorizeSettings& settings, const rock::MaskGrid& gradientMask, const rock::MaskGrid* mask, const rock::ColorGrid* baseColor, std::string* error)
 {
     if (std::this_thread::get_id() == g_mainThreadId)
     {
-        return RunColorizeComputeImmediate(grid, settings, gradientMask, mask, error);
+        return RunColorizeComputeImmediate(grid, settings, gradientMask, mask, baseColor, error);
     }
 
     auto request = std::make_shared<ColorizeGpuRequest>();
@@ -4761,6 +4826,11 @@ bool RunColorizeCompute(rock::ColorGrid& grid, const rock::ColorizeSettings& set
     if (mask != nullptr)
     {
         request->mask = *mask;
+    }
+    request->hasBaseColor = baseColor != nullptr;
+    if (baseColor != nullptr)
+    {
+        request->baseColor = *baseColor;
     }
     std::future<ColorizeGpuRequestResult> future = request->promise.get_future();
     {
@@ -4800,6 +4870,7 @@ void ProcessPendingColorizeGpuRequests()
             request->settings,
             request->gradientMask,
             request->hasMask ? &request->mask : nullptr,
+            request->hasBaseColor ? &request->baseColor : nullptr,
             &result.error);
         request->promise.set_value(std::move(result));
     }
@@ -7667,6 +7738,8 @@ bool IsTerrainNodeKind(rock::NodeKind kind)
         kind == rock::NodeKind::MultiScaleErosion ||
         kind == rock::NodeKind::MaskNoise ||
         kind == rock::NodeKind::MaskBlend ||
+        kind == rock::NodeKind::MaskLevels ||
+        kind == rock::NodeKind::MaskSlope ||
         kind == rock::NodeKind::MaskCurvature ||
         kind == rock::NodeKind::MaskFluvial ||
         kind == rock::NodeKind::Rock ||
@@ -9811,6 +9884,8 @@ ImVec4 NodeAccentColor(rock::NodeKind kind)
         return heightfieldGreen;
     case rock::NodeKind::MaskNoise:
     case rock::NodeKind::MaskBlend:
+    case rock::NodeKind::MaskLevels:
+    case rock::NodeKind::MaskSlope:
     case rock::NodeKind::MaskCurvature:
     case rock::NodeKind::MaskFluvial:
         return maskOrange;
@@ -9837,8 +9912,12 @@ ImVec2 InitialNodePosition(rock::NodeKind kind)
         return ImVec2(40.0f, 520.0f);
     case rock::NodeKind::MaskBlend:
         return ImVec2(320.0f, 520.0f);
-    case rock::NodeKind::MaskCurvature:
+    case rock::NodeKind::MaskLevels:
         return ImVec2(600.0f, 520.0f);
+    case rock::NodeKind::MaskSlope:
+        return ImVec2(600.0f, 660.0f);
+    case rock::NodeKind::MaskCurvature:
+        return ImVec2(600.0f, 800.0f);
     case rock::NodeKind::MaskFluvial:
         return ImVec2(880.0f, 240.0f);
     case rock::NodeKind::Rock:
@@ -9923,6 +10002,8 @@ ImVec4 PinTypeColor(rock::ValueType valueType)
         return ImVec4(0.70f, 0.93f, 0.78f, 1.0f);
     case rock::ValueType::Mask:
         return ImVec4(0.82f, 0.64f, 0.36f, 1.0f);
+    case rock::ValueType::ColorTexture:
+        return ImVec4(0.78f, 0.42f, 0.96f, 1.0f);
     case rock::ValueType::Mesh:
     default:
         return ImVec4(0.52f, 0.58f, 0.56f, 1.0f);
@@ -10578,6 +10659,8 @@ void DrawNodeGraph()
         {
             addNodeMenuItem(rock::NodeKind::MaskNoise);
             addNodeMenuItem(rock::NodeKind::MaskBlend);
+            addNodeMenuItem(rock::NodeKind::MaskLevels);
+            addNodeMenuItem(rock::NodeKind::MaskSlope);
             addNodeMenuItem(rock::NodeKind::MaskCurvature);
             addNodeMenuItem(rock::NodeKind::MaskFluvial);
             ImGui::EndMenu();
@@ -11418,6 +11501,82 @@ bool DrawMaskBlendProperties(rock::Node& editableNode)
     return true;
 }
 
+bool DrawMaskLevelsProperties(rock::Node& editableNode)
+{
+    if (!ImGui::BeginTable("MaskLevelsRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        return false;
+    }
+
+    ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 200.0f);
+    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+    rock::MaskLevelsSettings& ml = editableNode.maskLevels;
+    ml.blackPoint = std::clamp(ml.blackPoint, 0.0f, 1.0f);
+    ml.whitePoint = std::clamp(ml.whitePoint, 0.0f, 1.0f);
+    ml.gamma = std::clamp(ml.gamma, 0.05f, 8.0f);
+
+    if (DrawPropertyPercentRow("Black Point (%)", "MaskLevelsBlackPoint", &ml.blackPoint, 0.0f, 1.0f, rock::MaskLevelsSettings{}.blackPoint, "Mask levels black point changed", "この値以下を黒にします。上げるほど弱いマスクを切り落とします。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyPercentRow("White Point (%)", "MaskLevelsWhitePoint", &ml.whitePoint, 0.0f, 1.0f, rock::MaskLevelsSettings{}.whitePoint, "Mask levels white point changed", "この値以上を白にします。下げるほどマスクが早く飽和します。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Gamma", "MaskLevelsGamma", &ml.gamma, 0.05f, 8.0f, rock::MaskLevelsSettings{}.gamma, "Mask levels gamma changed", true, "中間調のカーブです。1 未満で暗部を持ち上げ、1 より大きいと強い部分だけを残します。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyBoolRow("Invert", "MaskLevelsInvert", &ml.invert, "Mask levels invert toggled", "出力マスクを反転します。", rock::MaskLevelsSettings{}.invert))
+    {
+        EvaluateGraph();
+    }
+
+    ImGui::EndTable();
+    return true;
+}
+
+bool DrawMaskSlopeProperties(rock::Node& editableNode)
+{
+    if (!ImGui::BeginTable("MaskSlopeRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        return false;
+    }
+
+    ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 200.0f);
+    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+    rock::MaskSlopeSettings& ms = editableNode.maskSlope;
+    ms.slopeMinDeg = std::clamp(ms.slopeMinDeg, 0.0f, 89.9f);
+    ms.slopeMaxDeg = std::clamp(ms.slopeMaxDeg, 0.0f, 89.9f);
+    if (ms.slopeMaxDeg < ms.slopeMinDeg)
+    {
+        std::swap(ms.slopeMinDeg, ms.slopeMaxDeg);
+    }
+    ms.gamma = std::clamp(ms.gamma, 0.05f, 8.0f);
+
+    if (DrawPropertyFloatRow("Slope Min (deg)", "MaskSlopeMinDeg", &ms.slopeMinDeg, 0.0f, 89.9f, rock::MaskSlopeSettings{}.slopeMinDeg, "Mask slope min changed", true, "この角度以下を黒にします。上げるほど急な斜面だけを残します。", "%.1f"))
+    {
+        if (ms.slopeMaxDeg < ms.slopeMinDeg) ms.slopeMaxDeg = ms.slopeMinDeg;
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Slope Max (deg)", "MaskSlopeMaxDeg", &ms.slopeMaxDeg, 0.0f, 89.9f, rock::MaskSlopeSettings{}.slopeMaxDeg, "Mask slope max changed", true, "この角度以上を白にします。Min との差を広げるほど境界が滑らかになります。", "%.1f"))
+    {
+        if (ms.slopeMaxDeg < ms.slopeMinDeg) ms.slopeMinDeg = ms.slopeMaxDeg;
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Gamma", "MaskSlopeGamma", &ms.gamma, 0.05f, 8.0f, rock::MaskSlopeSettings{}.gamma, "Mask slope gamma changed", true, "出力 mask のカーブです。1 未満で弱い斜面を明るく、1 より大きいと急斜面だけを強調します。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyBoolRow("Invert", "MaskSlopeInvert", &ms.invert, "Mask slope invert toggled", "出力マスクを反転します。平地マスクを作るときに使います。", rock::MaskSlopeSettings{}.invert))
+    {
+        EvaluateGraph();
+    }
+
+    ImGui::EndTable();
+    return true;
+}
+
 bool DrawMaskCurvatureProperties(rock::Node& editableNode)
 {
     if (!ImGui::BeginTable("MaskCurvatureRows", 2, ImGuiTableFlags_SizingStretchProp))
@@ -12151,6 +12310,16 @@ void DrawPropertiesPanel()
     }
 
     if (selectedNode->kind == rock::NodeKind::MaskBlend && DrawMaskBlendProperties(*editableNode))
+    {
+        return;
+    }
+
+    if (selectedNode->kind == rock::NodeKind::MaskLevels && DrawMaskLevelsProperties(*editableNode))
+    {
+        return;
+    }
+
+    if (selectedNode->kind == rock::NodeKind::MaskSlope && DrawMaskSlopeProperties(*editableNode))
     {
         return;
     }

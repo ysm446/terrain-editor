@@ -27,6 +27,8 @@ enum class NodeKind
     Snow = 14,
     Colorize = 15,
     MaskCurvature = 16,
+    MaskLevels = 17,
+    MaskSlope = 18,
 };
 
 enum class PinKind
@@ -167,6 +169,8 @@ enum class PreviewStage
     Snow = 13,
     Colorize = 14,
     MaskCurvature = 15,
+    MaskLevels = 16,
+    MaskSlope = 17,
 };
 
 enum class HeightfieldPreviewField
@@ -239,6 +243,22 @@ struct MaskCurvatureSettings
     float sensitivityMeters = 1.0f;
     float threshold = 0.0f;
     float gamma = 1.0f;
+};
+
+struct MaskLevelsSettings
+{
+    float blackPoint = 0.0f;
+    float whitePoint = 1.0f;
+    float gamma = 1.0f;
+    bool invert = false;
+};
+
+struct MaskSlopeSettings
+{
+    float slopeMinDeg = 25.0f;
+    float slopeMaxDeg = 60.0f;
+    float gamma = 1.0f;
+    bool invert = false;
 };
 
 // Heightfield + mask. Scatters rocks on a jittered Voronoi grid (used
@@ -332,9 +352,9 @@ struct ColorGrid
     std::vector<uint8_t> pixels; // RGBA8, row-major
 };
 
-// Heightmap (optional) + Mask (optional) + Gradient Mask → Color Texture.
+// Heightmap (optional) + Base Color (optional) + Mask (optional) + Gradient Mask → Color Texture.
 // Gradient Mask の各ピクセル値 (0..1) をグラデーション上の参照位置として色を決定し、
-// Mask で適用強度 (アルファ) を制御する。Heightmap は 3D プレビュー用の地形形状にのみ使用。
+// Base Color がある場合は Mask を合成強度として上書き合成する。Heightmap は 3D プレビュー用の地形形状にのみ使用。
 struct ColorizeSettings
 {
     std::vector<ColorStop> stops = {{0.0f, 0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f, 1.0f}};
@@ -419,6 +439,8 @@ struct Node
     MaskNoiseSettings maskNoise;
     MaskBlendSettings maskBlend;
     MaskCurvatureSettings maskCurvature;
+    MaskLevelsSettings maskLevels;
+    MaskSlopeSettings maskSlope;
     MaskFluvialSettings maskFluvial;
     RockSettings rock;
     SedimentSettings sediment;
@@ -571,7 +593,7 @@ using SedimentGpuEvaluator = bool (*)(HeightfieldGrid& grid, const SedimentSetti
 using RockGpuEvaluator = bool (*)(HeightfieldGrid& grid, const RockSettings& settings, std::string* error);
 using MaskFluvialGpuEvaluator = bool (*)(HeightfieldGrid& grid, const MaskFluvialSettings& settings, std::string* error);
 using SnowGpuEvaluator = bool (*)(HeightfieldGrid& grid, const SnowSettings& settings, std::string* error);
-using ColorizeGpuEvaluator = bool (*)(ColorGrid& grid, const ColorizeSettings& settings, const MaskGrid& gradientMask, const MaskGrid* mask, std::string* error);
+using ColorizeGpuEvaluator = bool (*)(ColorGrid& grid, const ColorizeSettings& settings, const MaskGrid& gradientMask, const MaskGrid* mask, const ColorGrid* baseColor, std::string* error);
 
 struct HeightfieldPipeline
 {
@@ -582,6 +604,7 @@ struct HeightfieldPipeline
             HeightmapBlur,
             MultiScaleErosion,
             MaskCurvature,
+            MaskSlope,
             MaskFluvial,
             Rock,
             Sediment,
@@ -593,6 +616,7 @@ struct HeightfieldPipeline
         HeightmapBlurSettings heightmapBlur;
         MultiScaleErosionSettings multiScaleErosion;
         MaskCurvatureSettings maskCurvature;
+        MaskSlopeSettings maskSlope;
         MaskFluvialSettings maskFluvial;
         RockSettings rock;
         SedimentSettings sediment;

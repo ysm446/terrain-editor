@@ -2,6 +2,19 @@
 
 ## 未リリース
 
+## 3.17.14 - 2026-05-17 10:30
+
+- `Mask Slope` ノードを追加しました。入力 Heightmap の傾斜角から Mask を生成し、Slope Min / Slope Max / Gamma / Invert で急斜面または平地マスクを作れるようにしました。
+
+## 3.17.13 - 2026-05-17 10:05
+
+- `Mask Levels` ノードを追加しました。入力 Mask の Black Point / White Point / Gamma を調整でき、Invert も同じノード内で処理できます。
+
+## 3.17.12 - 2026-05-17 09:45
+
+- `Colorize` ノードに `Base Color` 入力を追加し、`Mask` を合成強度として既存の色にグラデーション色を重ねられるようにしました。
+- `Color Texture` のピンとリンクを紫で表示するようにし、`Colorize` の mask 合成が `Base Color` 接続時だけ RGB 出力に反映されるようにしました。`Base Color` 未接続時の `Mask` 入力は無視します。
+
 ## 3.17.11 - 2026-05-17 09:25
 
 - `Mask Curvature` ノードを追加しました。入力 Heightmap の局所平均との差分から Ridges / Valleys / Absolute の曲率マスクを生成し、Radius、Sensitivity、Threshold、Gamma で検出範囲と出力カーブを調整できます。

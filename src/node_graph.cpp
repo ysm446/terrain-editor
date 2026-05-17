@@ -6,6 +6,7 @@
 #include <execution>
 #include <filesystem>
 #include <format>
+#include <iterator>
 #include <limits>
 #include <mutex>
 #include <numeric>
@@ -115,6 +116,27 @@ uint64_t HashMaskCurvatureSettings(const MaskCurvatureSettings& settings, int re
     HashCombine(hash, HashFloat(settings.sensitivityMeters));
     HashCombine(hash, HashFloat(settings.threshold));
     HashCombine(hash, HashFloat(settings.gamma));
+    HashCombine(hash, static_cast<uint64_t>(resolution));
+    return hash;
+}
+
+uint64_t HashMaskLevelsSettings(const MaskLevelsSettings& settings)
+{
+    uint64_t hash = 1469598103934665603ull;
+    HashCombine(hash, HashFloat(settings.blackPoint));
+    HashCombine(hash, HashFloat(settings.whitePoint));
+    HashCombine(hash, HashFloat(settings.gamma));
+    HashCombine(hash, static_cast<uint64_t>(settings.invert ? 1 : 0));
+    return hash;
+}
+
+uint64_t HashMaskSlopeSettings(const MaskSlopeSettings& settings, int resolution)
+{
+    uint64_t hash = 7809847782465536322ull;
+    HashCombine(hash, HashFloat(settings.slopeMinDeg));
+    HashCombine(hash, HashFloat(settings.slopeMaxDeg));
+    HashCombine(hash, HashFloat(settings.gamma));
+    HashCombine(hash, static_cast<uint64_t>(settings.invert ? 1 : 0));
     HashCombine(hash, static_cast<uint64_t>(resolution));
     return hash;
 }
@@ -888,7 +910,8 @@ static std::array<float, 3> SampleColorGradient(const std::vector<ColorStop>& st
 static ColorGrid GenerateColorize(
     const ColorizeSettings& settings,
     const MaskGrid& gradientMask,
-    const MaskGrid* mask)
+    const MaskGrid* mask,
+    const ColorGrid* baseColor)
 {
     ColorGrid grid;
     if (gradientMask.resolution <= 0)
@@ -901,11 +924,14 @@ static ColorGrid GenerateColorize(
     grid.pixels.resize(n * 4);
 
     const bool hasMask = (mask != nullptr && mask->resolution == res);
+    const bool hasBaseColor = baseColor != nullptr &&
+        baseColor->resolution > 0 &&
+        baseColor->pixels.size() >= static_cast<size_t>(baseColor->resolution) * static_cast<size_t>(baseColor->resolution) * 4u;
     const std::vector<ColorStop>& stops = settings.stops;
     if (settings.backend == ColorizeBackend::GpuCompute && g_colorizeGpuEvaluator != nullptr)
     {
         std::string ignoredError;
-        if (g_colorizeGpuEvaluator(grid, settings, gradientMask, hasMask ? mask : nullptr, &ignoredError))
+        if (g_colorizeGpuEvaluator(grid, settings, gradientMask, hasMask ? mask : nullptr, hasBaseColor ? baseColor : nullptr, &ignoredError))
         {
             return grid;
         }
@@ -919,10 +945,28 @@ static ColorGrid GenerateColorize(
             const float t = std::clamp(gradientMask.values[i], 0.0f, 1.0f);
             const auto [r, g, b] = SampleColorGradient(stops, t);
             const float a = hasMask ? std::clamp(mask->values[i], 0.0f, 1.0f) : 1.0f;
-            grid.pixels[i * 4 + 0] = static_cast<uint8_t>(std::clamp(r * 255.0f, 0.0f, 255.0f));
-            grid.pixels[i * 4 + 1] = static_cast<uint8_t>(std::clamp(g * 255.0f, 0.0f, 255.0f));
-            grid.pixels[i * 4 + 2] = static_cast<uint8_t>(std::clamp(b * 255.0f, 0.0f, 255.0f));
-            grid.pixels[i * 4 + 3] = static_cast<uint8_t>(std::clamp(a * 255.0f, 0.0f, 255.0f));
+            float outR = r;
+            float outG = g;
+            float outB = b;
+            float outA = 1.0f;
+            if (hasBaseColor)
+            {
+                const float u = res > 1 ? static_cast<float>(x) / static_cast<float>(res - 1) : 0.0f;
+                const float v = res > 1 ? static_cast<float>(z) / static_cast<float>(res - 1) : 0.0f;
+                const int baseX = std::clamp(static_cast<int>(std::round(u * static_cast<float>(baseColor->resolution - 1))), 0, baseColor->resolution - 1);
+                const int baseZ = std::clamp(static_cast<int>(std::round(v * static_cast<float>(baseColor->resolution - 1))), 0, baseColor->resolution - 1);
+                const size_t bi = (static_cast<size_t>(baseZ) * static_cast<size_t>(baseColor->resolution) + static_cast<size_t>(baseX)) * 4u;
+                const float br = static_cast<float>(baseColor->pixels[bi + 0u]) / 255.0f;
+                const float bg = static_cast<float>(baseColor->pixels[bi + 1u]) / 255.0f;
+                const float bb = static_cast<float>(baseColor->pixels[bi + 2u]) / 255.0f;
+                outR = std::lerp(br, r, a);
+                outG = std::lerp(bg, g, a);
+                outB = std::lerp(bb, b, a);
+            }
+            grid.pixels[i * 4 + 0] = static_cast<uint8_t>(std::clamp(outR * 255.0f, 0.0f, 255.0f));
+            grid.pixels[i * 4 + 1] = static_cast<uint8_t>(std::clamp(outG * 255.0f, 0.0f, 255.0f));
+            grid.pixels[i * 4 + 2] = static_cast<uint8_t>(std::clamp(outB * 255.0f, 0.0f, 255.0f));
+            grid.pixels[i * 4 + 3] = static_cast<uint8_t>(std::clamp(outA * 255.0f, 0.0f, 255.0f));
         }
     });
     return grid;
@@ -1009,6 +1053,52 @@ MaskGrid BlendMaskGrids(const MaskGrid& a, const MaskGrid& b, MaskBlendMode mode
         }
         result.values[i] = std::clamp(std::lerp(va, blended, t), 0.0f, 1.0f);
     }
+    return result;
+}
+
+MaskGrid ApplyMaskLevels(const MaskGrid& source, const MaskLevelsSettings& settings)
+{
+    if (source.resolution <= 0 || source.values.empty())
+    {
+        return {};
+    }
+
+    const int n = source.resolution;
+    const size_t cellCount = static_cast<size_t>(n) * static_cast<size_t>(n);
+    MaskGrid result;
+    result.resolution = n;
+    result.values.assign(cellCount, 0.0f);
+
+    float black = std::clamp(settings.blackPoint, 0.0f, 1.0f);
+    float white = std::clamp(settings.whitePoint, 0.0f, 1.0f);
+    if (white < black)
+    {
+        std::swap(black, white);
+    }
+    const float invRange = 1.0f / std::max(white - black, 0.0001f);
+    const float gamma = std::clamp(settings.gamma, 0.05f, 8.0f);
+    const float exponent = 1.0f / gamma;
+    const size_t count = std::min(cellCount, source.values.size());
+
+    ParallelForRows(n, [&](int z) {
+        const size_t row = static_cast<size_t>(z) * static_cast<size_t>(n);
+        for (int x = 0; x < n; ++x)
+        {
+            const size_t i = row + static_cast<size_t>(x);
+            if (i >= count)
+            {
+                continue;
+            }
+            float value = std::clamp((source.values[i] - black) * invRange, 0.0f, 1.0f);
+            value = std::pow(value, exponent);
+            if (settings.invert)
+            {
+                value = 1.0f - value;
+            }
+            result.values[i] = value;
+        }
+    });
+
     return result;
 }
 
@@ -1115,6 +1205,62 @@ void ApplyMaskCurvature(HeightfieldGrid& grid, const MaskCurvatureSettings& sett
 // the previous iteration's stream/sediment field. SPE/Deposition use the same
 // D8 weighted-flow direction (`flow_p` exponent on slope). Thermal is a 3x3
 // stencil with wraparound boundary, matching the shader.
+void ApplyMaskSlope(HeightfieldGrid& grid, const MaskSlopeSettings& settings)
+{
+    const int n = grid.resolution;
+    const size_t cellCount = static_cast<size_t>(n) * static_cast<size_t>(n);
+    if (n < 2 || grid.heights.size() < cellCount)
+    {
+        return;
+    }
+
+    float minDeg = std::clamp(settings.slopeMinDeg, 0.0f, 89.9f);
+    float maxDeg = std::clamp(settings.slopeMaxDeg, 0.0f, 89.9f);
+    if (maxDeg < minDeg)
+    {
+        std::swap(minDeg, maxDeg);
+    }
+
+    const float invRange = 1.0f / std::max(maxDeg - minDeg, 0.0001f);
+    const float gamma = std::clamp(settings.gamma, 0.05f, 8.0f);
+    const float exponent = 1.0f / gamma;
+    const float terrainSize = std::max(grid.terrainSizeMeters, 1.0f);
+    const float cellSize = terrainSize / static_cast<float>(std::max(1, n - 1));
+    const float invTwoCell = 1.0f / (2.0f * cellSize);
+    const float radToDeg = 57.29577951308232f;
+
+    grid.mask.assign(cellCount, 0.0f);
+    ParallelForRows(n, [&](int z) {
+        const int zm = std::max(0, z - 1);
+        const int zp = std::min(n - 1, z + 1);
+        const size_t rowBase = static_cast<size_t>(z) * static_cast<size_t>(n);
+        const size_t rowAbove = static_cast<size_t>(zm) * static_cast<size_t>(n);
+        const size_t rowBelow = static_cast<size_t>(zp) * static_cast<size_t>(n);
+        for (int x = 0; x < n; ++x)
+        {
+            const int xm = std::max(0, x - 1);
+            const int xp = std::min(n - 1, x + 1);
+            const float hXm = grid.heights[rowBase + static_cast<size_t>(xm)];
+            const float hXp = grid.heights[rowBase + static_cast<size_t>(xp)];
+            const float hZm = grid.heights[rowAbove + static_cast<size_t>(x)];
+            const float hZp = grid.heights[rowBelow + static_cast<size_t>(x)];
+            const float dhdx = (hXp - hXm) * invTwoCell;
+            const float dhdz = (hZp - hZm) * invTwoCell;
+            const float slopeTan = std::sqrt(dhdx * dhdx + dhdz * dhdz);
+            const float slopeDeg = std::atan(slopeTan) * radToDeg;
+
+            float value = std::clamp((slopeDeg - minDeg) * invRange, 0.0f, 1.0f);
+            value = value * value * (3.0f - 2.0f * value);
+            value = std::pow(value, exponent);
+            if (settings.invert)
+            {
+                value = 1.0f - value;
+            }
+            grid.mask[rowBase + static_cast<size_t>(x)] = value;
+        }
+    });
+}
+
 namespace mse
 {
 // Coarsest resolution in the multi-grid pyramid. Anything coarser than this
@@ -2883,6 +3029,9 @@ void ApplyHeightfieldOperation(HeightfieldGrid& grid, const HeightfieldPipeline:
     case HeightfieldPipeline::HeightfieldOperation::Kind::MaskCurvature:
         ApplyMaskCurvature(grid, operation.maskCurvature);
         break;
+    case HeightfieldPipeline::HeightfieldOperation::Kind::MaskSlope:
+        ApplyMaskSlope(grid, operation.maskSlope);
+        break;
     case HeightfieldPipeline::HeightfieldOperation::Kind::MaskFluvial:
         ApplyMaskFluvial(grid, operation.maskFluvial);
         break;
@@ -2908,6 +3057,8 @@ uint64_t HashHeightfieldOperation(const HeightfieldPipeline::HeightfieldOperatio
         return HashMultiScaleErosionSettings(operation.multiScaleErosion, resolution);
     case HeightfieldPipeline::HeightfieldOperation::Kind::MaskCurvature:
         return HashMaskCurvatureSettings(operation.maskCurvature, resolution);
+    case HeightfieldPipeline::HeightfieldOperation::Kind::MaskSlope:
+        return HashMaskSlopeSettings(operation.maskSlope, resolution);
     case HeightfieldPipeline::HeightfieldOperation::Kind::MaskFluvial:
         return HashMaskFluvialSettings(operation.maskFluvial, resolution);
     case HeightfieldPipeline::HeightfieldOperation::Kind::Rock:
@@ -2937,6 +3088,10 @@ HeightfieldPipeline::HeightfieldOperation MakeHeightfieldOperation(const Node& n
     case NodeKind::MaskCurvature:
         operation.kind = HeightfieldPipeline::HeightfieldOperation::Kind::MaskCurvature;
         operation.maskCurvature = node.maskCurvature;
+        break;
+    case NodeKind::MaskSlope:
+        operation.kind = HeightfieldPipeline::HeightfieldOperation::Kind::MaskSlope;
+        operation.maskSlope = node.maskSlope;
         break;
     case NodeKind::MaskFluvial:
         operation.kind = HeightfieldPipeline::HeightfieldOperation::Kind::MaskFluvial;
@@ -2968,6 +3123,7 @@ bool IsHeightfieldOperationNode(NodeKind kind)
     case NodeKind::HeightmapBlur:
     case NodeKind::MultiScaleErosion:
     case NodeKind::MaskCurvature:
+    case NodeKind::MaskSlope:
     case NodeKind::MaskFluvial:
     case NodeKind::Rock:
     case NodeKind::Sediment:
@@ -3320,6 +3476,10 @@ GraphId NodeGraph::CreateNode(NodeKind kind)
         AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
         AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
         break;
+    case NodeKind::MaskSlope:
+        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
+        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
+        break;
     case NodeKind::Rock:
         AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
         AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
@@ -3343,8 +3503,13 @@ GraphId NodeGraph::CreateNode(NodeKind kind)
         AddPin(nodeId, PinKind::Input, ValueType::Mask, "B");
         AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
         break;
+    case NodeKind::MaskLevels:
+        AddPin(nodeId, PinKind::Input, ValueType::Mask, "Mask");
+        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
+        break;
     case NodeKind::Colorize:
         AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
+        AddPin(nodeId, PinKind::Input, ValueType::ColorTexture, "Base Color");
         AddPin(nodeId, PinKind::Input, ValueType::Mask, "Mask");
         AddPin(nodeId, PinKind::Input, ValueType::Mask, "Gradient Mask");
         AddPin(nodeId, PinKind::Output, ValueType::ColorTexture, "Color Texture");
@@ -3360,6 +3525,30 @@ void NodeGraph::ReplaceNodes(std::vector<Node> nodes)
 {
     nodes_ = std::move(nodes);
     RebuildNextGraphId();
+    for (Node& node : nodes_)
+    {
+        if (node.kind == NodeKind::Colorize)
+        {
+            const bool hasBaseColorInput = std::ranges::any_of(node.inputs, [](const Pin& pin) {
+                return pin.valueType == ValueType::ColorTexture && pin.label == "Base Color";
+            });
+            if (!hasBaseColorInput)
+            {
+                Pin baseColorPin{AllocateGraphId(), node.id, PinKind::Input, ValueType::ColorTexture, "Base Color"};
+                const auto heightInputIt = std::ranges::find_if(node.inputs, [](const Pin& pin) {
+                    return pin.valueType == ValueType::HeightField && pin.label == "Heightmap";
+                });
+                if (heightInputIt != node.inputs.end())
+                {
+                    node.inputs.insert(std::next(heightInputIt), std::move(baseColorPin));
+                }
+                else
+                {
+                    node.inputs.push_back(std::move(baseColorPin));
+                }
+            }
+        }
+    }
     MarkDirty("Project nodes loaded");
 }
 
@@ -3495,6 +3684,8 @@ HeightfieldPipeline NodeGraph::PipelineFor(PreviewStage stage) const
         return PipelineTo(NodeKind::MultiScaleErosion);
     case PreviewStage::MaskCurvature:
         return PipelineTo(NodeKind::MaskCurvature);
+    case PreviewStage::MaskSlope:
+        return PipelineTo(NodeKind::MaskSlope);
     case PreviewStage::MaskFluvial:
         return PipelineTo(NodeKind::MaskFluvial);
     case PreviewStage::Rock:
@@ -3508,6 +3699,7 @@ HeightfieldPipeline NodeGraph::PipelineFor(PreviewStage stage) const
         if (const Node* node = FindFirstNode(NodeKind::Snow)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::Sediment)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::Rock)) { return PipelineToNode(*node); }
+        if (const Node* node = FindFirstNode(NodeKind::MaskSlope)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::MaskCurvature)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::MaskFluvial)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::MultiScaleErosion)) { return PipelineToNode(*node); }
@@ -3635,7 +3827,7 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
         if (outputHash != nullptr) { *outputHash = cache.outputHash; }
         return cache.grid;
     }
-    if (node.kind == NodeKind::MaskCurvature || node.kind == NodeKind::MaskFluvial)
+    if (node.kind == NodeKind::MaskCurvature || node.kind == NodeKind::MaskSlope || node.kind == NodeKind::MaskFluvial)
     {
         // Heightfield-derived mask nodes read a heightfield, so they can't be
         // evaluated through the mask-graph path on their own. Build the
@@ -3657,7 +3849,7 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
         // kinds (Mask Noise / Mask Blend) plus Mask Fluvial, which evaluates
         // through the heightfield cache but is presented here as a MaskGrid.
         const auto isMaskProducer = [](NodeKind kind) {
-            return IsMaskOnlyNodeKind(kind) || kind == NodeKind::MaskCurvature || kind == NodeKind::MaskFluvial;
+            return IsMaskOnlyNodeKind(kind) || kind == NodeKind::MaskCurvature || kind == NodeKind::MaskSlope || kind == NodeKind::MaskFluvial;
         };
         uint64_t aHash = 0;
         uint64_t bHash = 0;
@@ -3702,12 +3894,47 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
         if (outputHash != nullptr) { *outputHash = cache.outputHash; }
         return cache.grid;
     }
+    if (node.kind == NodeKind::MaskLevels)
+    {
+        uint64_t inputHash = 0;
+        MaskGrid input;
+        if (!node.inputs.empty())
+        {
+            if (const Node* upstream = FindUpstreamForPin(node.inputs[0].id))
+            {
+                const auto isMaskProducer = [](NodeKind kind) {
+                    return IsMaskOnlyNodeKind(kind) || kind == NodeKind::MaskCurvature || kind == NodeKind::MaskSlope || kind == NodeKind::MaskFluvial;
+                };
+                if (isMaskProducer(upstream->kind))
+                {
+                    input = EvaluateMaskGridForNodeCached(*upstream, depth + 1, &inputHash);
+                }
+            }
+        }
+
+        const uint64_t parameterHash = HashMaskLevelsSettings(node.maskLevels);
+        MaskNodeCache& cache = maskCache_[node.id];
+        if (!cache.valid || cache.inputHash != inputHash || cache.parameterHash != parameterHash)
+        {
+            g_currentlyEvaluatingNodeId.store(node.id, std::memory_order_relaxed);
+            cache.grid = ApplyMaskLevels(input, node.maskLevels);
+            cache.valid = true;
+            cache.inputHash = inputHash;
+            cache.parameterHash = parameterHash;
+            cache.outputHash = inputHash;
+            HashCombine(cache.outputHash, parameterHash);
+            HashCombine(cache.outputHash, static_cast<uint64_t>(node.id));
+        }
+        if (outputHash != nullptr) { *outputHash = cache.outputHash; }
+        return cache.grid;
+    }
     if (outputHash != nullptr) { *outputHash = 0; }
     return {};
 }
 
-// Gradient Mask (inputs[2]) と Mask (inputs[1]) を評価して ColorGrid を生成する。
-// inputs[0] (Heightmap) はここでは評価しない (3D プレビュー用に Evaluate() で別途処理)。
+// Gradient Mask と Mask を評価して ColorGrid を生成する。
+// Base Color がある場合は Mask を合成強度として上書き合成する。
+// Heightmap はここでは評価しない (3D プレビュー用に Evaluate() で別途処理)。
 ColorGrid NodeGraph::EvaluateColorGridForNodeCached(const Node& node, int depth, uint64_t* outputHash)
 {
     if (depth > 16)
@@ -3721,25 +3948,34 @@ ColorGrid NodeGraph::EvaluateColorGridForNodeCached(const Node& node, int depth,
         return {};
     }
 
-    // inputs[2] = Gradient Mask
+    const auto findInput = [&](std::string_view label, ValueType valueType) -> const Pin* {
+        const auto it = std::ranges::find_if(node.inputs, [&](const Pin& pin) {
+            return pin.valueType == valueType && pin.label == label;
+        });
+        return it != node.inputs.end() ? &*it : nullptr;
+    };
+
+    const Pin* gradientInput = findInput("Gradient Mask", ValueType::Mask);
+    const Pin* maskInput = findInput("Mask", ValueType::Mask);
+    const Pin* baseInput = findInput("Base Color", ValueType::ColorTexture);
+
     uint64_t gradientHash = 0;
     MaskGrid gradientMask;
-    if (node.inputs.size() >= 3)
+    if (gradientInput != nullptr)
     {
-        const Node* upstream = FindUpstreamForPin(node.inputs[2].id);
+        const Node* upstream = FindUpstreamForPin(gradientInput->id);
         if (upstream != nullptr)
         {
             gradientMask = EvaluateMaskGridForNodeCached(*upstream, depth + 1, &gradientHash);
         }
     }
 
-    // inputs[1] = Mask (optional)
     uint64_t maskHash = 0;
     MaskGrid maskGrid;
     bool hasMask = false;
-    if (node.inputs.size() >= 2)
+    if (maskInput != nullptr)
     {
-        const Node* upstream = FindUpstreamForPin(node.inputs[1].id);
+        const Node* upstream = FindUpstreamForPin(maskInput->id);
         if (upstream != nullptr)
         {
             maskGrid = EvaluateMaskGridForNodeCached(*upstream, depth + 1, &maskHash);
@@ -3747,16 +3983,30 @@ ColorGrid NodeGraph::EvaluateColorGridForNodeCached(const Node& node, int depth,
         }
     }
 
+    uint64_t baseHash = 0;
+    ColorGrid baseGrid;
+    bool hasBaseColor = false;
+    if (baseInput != nullptr)
+    {
+        const Node* upstream = FindUpstreamForPin(baseInput->id);
+        if (upstream != nullptr && IsColorOnlyNodeKind(upstream->kind))
+        {
+            baseGrid = EvaluateColorGridForNodeCached(*upstream, depth + 1, &baseHash);
+            hasBaseColor = baseGrid.resolution > 0;
+        }
+    }
+
     uint64_t inputHash = 0;
     HashCombine(inputHash, gradientHash);
     HashCombine(inputHash, maskHash);
+    HashCombine(inputHash, baseHash);
     const uint64_t parameterHash = HashColorizeSettings(node.colorize);
 
     ColorNodeCache& cache = colorCache_[node.id];
     if (!cache.valid || cache.inputHash != inputHash || cache.parameterHash != parameterHash)
     {
         g_currentlyEvaluatingNodeId.store(node.id, std::memory_order_relaxed);
-        cache.grid = GenerateColorize(node.colorize, gradientMask, hasMask ? &maskGrid : nullptr);
+        cache.grid = GenerateColorize(node.colorize, gradientMask, hasMask ? &maskGrid : nullptr, hasBaseColor ? &baseGrid : nullptr);
         cache.valid = true;
         cache.inputHash = inputHash;
         cache.parameterHash = parameterHash;
@@ -4073,6 +4323,10 @@ std::string_view ToString(NodeKind kind)
         return "Mask Noise";
     case NodeKind::MaskBlend:
         return "Mask Blend";
+    case NodeKind::MaskLevels:
+        return "Mask Levels";
+    case NodeKind::MaskSlope:
+        return "Mask Slope";
     case NodeKind::MaskCurvature:
         return "Mask Curvature";
     case NodeKind::MaskFluvial:
@@ -4106,6 +4360,10 @@ std::string_view ToString(PreviewStage stage)
         return "Mask Noise";
     case PreviewStage::MaskBlend:
         return "Mask Blend";
+    case PreviewStage::MaskLevels:
+        return "Mask Levels";
+    case PreviewStage::MaskSlope:
+        return "Mask Slope";
     case PreviewStage::MaskCurvature:
         return "Mask Curvature";
     case PreviewStage::MaskFluvial:
@@ -4156,6 +4414,10 @@ PreviewStage PreviewStageFor(NodeKind kind)
         return PreviewStage::MaskNoise;
     case NodeKind::MaskBlend:
         return PreviewStage::MaskBlend;
+    case NodeKind::MaskLevels:
+        return PreviewStage::MaskLevels;
+    case NodeKind::MaskSlope:
+        return PreviewStage::MaskSlope;
     case NodeKind::MaskCurvature:
         return PreviewStage::MaskCurvature;
     case NodeKind::MaskFluvial:
@@ -4175,7 +4437,7 @@ PreviewStage PreviewStageFor(NodeKind kind)
 
 bool IsMaskOnlyNodeKind(NodeKind kind)
 {
-    return kind == NodeKind::MaskNoise || kind == NodeKind::MaskBlend;
+    return kind == NodeKind::MaskNoise || kind == NodeKind::MaskBlend || kind == NodeKind::MaskLevels;
 }
 
 bool IsColorOnlyNodeKind(NodeKind kind)
