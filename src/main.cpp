@@ -1652,6 +1652,7 @@ bool SaveAppSettings(std::string* error = nullptr)
                 settings.preview.viewportBackground[2],
             }},
             {"maskShading", static_cast<int>(settings.preview.maskShading)},
+            {"maskPreviewUseNearestHeightmap", settings.preview.maskPreviewUseNearestHeightmap},
         };
         root["layout"] = {
             {"rightPaneWidth", g_ui.rightPaneWidth},
@@ -1816,6 +1817,7 @@ bool LoadAppSettings(std::string* error = nullptr)
                 static_cast<int>(rock::MaskShadingMode::Grayscale),
                 static_cast<int>(rock::MaskShadingMode::GrayscaleHatched)));
         }
+        settings.preview.maskPreviewUseNearestHeightmap = visibilityJson.value("maskPreviewUseNearestHeightmap", settings.preview.maskPreviewUseNearestHeightmap);
 
         const nlohmann::json layoutJson = root.value("layout", nlohmann::json::object());
         g_ui.rightPaneWidth = std::max(0.0f, layoutJson.value("rightPaneWidth", g_ui.rightPaneWidth));
@@ -2792,6 +2794,7 @@ nlohmann::json MakeProjectSettingsJson()
                 preview.gridColor[1],
                 preview.gridColor[2],
             }},
+            {"maskPreviewUseNearestHeightmap", preview.maskPreviewUseNearestHeightmap},
         }},
         {"sky", {
             {"mode", static_cast<int>(sky.mode)},
@@ -3073,6 +3076,7 @@ void ReadPreviewSettingsJson(const nlohmann::json& settingsJson, rock::PreviewSe
     preview.gridCellCount = std::clamp(previewJson.value("gridCellCount", preview.gridCellCount), 1, 200);
     preview.gridCellSizeMeters = std::clamp(previewJson.value("gridCellSizeMeters", preview.gridCellSizeMeters), 1.0f, 10000.0f);
     ReadColor3Json(previewJson, "gridColor", preview.gridColor, 1.0f);
+    preview.maskPreviewUseNearestHeightmap = previewJson.value("maskPreviewUseNearestHeightmap", preview.maskPreviewUseNearestHeightmap);
 }
 
 void ReadDisplaySettingsJson(const nlohmann::json& settingsJson,
@@ -14216,6 +14220,11 @@ void DrawDisplaySettingsPanel()
                 settings.preview.maskShading = static_cast<rock::MaskShadingMode>(std::clamp(maskShadingInt,
                     static_cast<int>(rock::MaskShadingMode::Grayscale),
                     static_cast<int>(rock::MaskShadingMode::GrayscaleHatched)));
+                SaveAppSettingsSilently();
+            }
+            if (DrawPropertyBoolRow("近い地形でマスク表示", "DisplayMaskUseNearestHeightmap", &settings.preview.maskPreviewUseNearestHeightmap, "Mask preview nearest heightmap toggled", "Mask Noise / Mask Blend / Mask Levels など、ハイトマップ参照を直接持たないマスクノードをプレビューするとき、入力側をたどって見つかった一番近い Heightmap を表示用の地形に使います。見つからない場合は従来どおり平面表示します。", rock::PreviewSettings{}.maskPreviewUseNearestHeightmap, true))
+            {
+                EvaluateGraph();
                 SaveAppSettingsSilently();
             }
         }

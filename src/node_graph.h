@@ -556,6 +556,7 @@ struct PreviewSettings
     std::array<float, 3> gridColor = {0.2f, 0.2f, 0.2f};
     std::array<float, 3> viewportBackground = {0.268f, 0.268f, 0.268f};
     MaskShadingMode maskShading = MaskShadingMode::Grayscale;
+    bool maskPreviewUseNearestHeightmap = false;
 };
 
 enum class SkyMode
@@ -790,6 +791,7 @@ private:
     UpstreamConnection FindUpstreamConnectionForPin(GraphId pinId) const;
     HeightfieldPipeline PipelineTo(NodeKind targetKind) const;
     HeightfieldPipeline PipelineToNode(const Node& targetNode) const;
+    const Node* FindNearestHeightfieldForMaskPreview(const Node& maskNode) const;
     HeightfieldGrid EvaluateMaskAsHeightfield(const Node& node, std::string* message);
     MaskGrid EvaluateMaskGridForNodeCached(const Node& node, int depth, uint64_t* outputHash, std::string_view outputLabel = {});
     HeightfieldGrid EvaluateHeightPipelineCached(const HeightfieldPipeline& pipeline, std::string* message, HeightfieldPreviewField previewField, uint64_t* outputHash);

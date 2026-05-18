@@ -4825,6 +4825,53 @@ HeightfieldPipeline NodeGraph::PipelineToNode(const Node& targetNode) const
     return pipeline;
 }
 
+const Node* NodeGraph::FindNearestHeightfieldForMaskPreview(const Node& maskNode) const
+{
+    std::vector<const Node*> pending;
+    std::vector<GraphId> visited;
+    pending.push_back(&maskNode);
+    visited.push_back(maskNode.id);
+
+    for (size_t index = 0; index < pending.size() && index < 64; ++index)
+    {
+        const Node* current = pending[index];
+        if (current == nullptr)
+        {
+            continue;
+        }
+
+        for (const Pin& input : current->inputs)
+        {
+            const UpstreamConnection upstream = FindUpstreamConnectionForPin(input.id);
+            const Node* upstreamNode = upstream.node;
+            if (upstreamNode == nullptr)
+            {
+                continue;
+            }
+
+            if (upstreamNode->kind == NodeKind::HeightmapLoad ||
+                upstreamNode->kind == NodeKind::Shape ||
+                IsHeightfieldOperationNode(upstreamNode->kind))
+            {
+                const HeightfieldPipeline pipeline = PipelineToNode(*upstreamNode);
+                if (pipeline.hasSource)
+                {
+                    return upstreamNode;
+                }
+            }
+
+            if (IsMaskOnlyNodeKind(upstreamNode->kind) &&
+                std::ranges::find(visited, upstreamNode->id) == visited.end())
+            {
+                pending.push_back(upstreamNode);
+                visited.push_back(upstreamNode->id);
+            }
+        }
+    }
+
+    return nullptr;
+}
+
 void NodeGraph::Evaluate(int previewMeshResolution)
 {
     if (previewMeshResolution <= 0)
@@ -4899,9 +4946,50 @@ void NodeGraph::Evaluate(int previewMeshResolution)
         evaluation_.previewHeightfield = EvaluateMaskAsHeightfield(*previewNode, &evaluation_.previewMessage);
         evaluation_.previewShowsMask = true;
         evaluation_.previewField = HeightfieldPreviewField::Mask;
-        evaluation_.previewMesh = evaluation_.previewHeightfield.resolution > 0
-            ? BuildFlatMaskMesh(evaluation_.previewHeightfield, previewMeshResolution)
-            : MeshData{};
+        if (settings_.preview.maskPreviewUseNearestHeightmap)
+        {
+            if (const Node* heightNode = FindNearestHeightfieldForMaskPreview(*previewNode))
+            {
+                HeightfieldGrid terrainGrid;
+                std::string terrainMessage;
+                const HeightfieldPipeline pipeline = PipelineToNode(*heightNode);
+                terrainGrid = EvaluateHeightPipelineCached(pipeline, &terrainMessage, HeightfieldPreviewField::Heightmap, nullptr);
+                if (terrainGrid.resolution > 0)
+                {
+                    MaskGrid maskGrid;
+                    maskGrid.resolution = evaluation_.previewHeightfield.resolution;
+                    maskGrid.values = evaluation_.previewHeightfield.mask;
+                    if (maskGrid.resolution != terrainGrid.resolution)
+                    {
+                        maskGrid = ResampleMaskGrid(maskGrid, terrainGrid.resolution);
+                    }
+                    terrainGrid.mask = std::move(maskGrid.values);
+                    evaluation_.previewHeightfield = std::move(terrainGrid);
+                    evaluation_.previewMesh = BuildMeshFromHeightfield(evaluation_.previewHeightfield, previewMeshResolution);
+                    evaluation_.previewMessage = evaluation_.previewMessage.empty()
+                        ? std::format("Mask preview on nearest heightmap ({})", terrainMessage)
+                        : std::format("{} on nearest heightmap ({})", evaluation_.previewMessage, terrainMessage);
+                }
+                else
+                {
+                    evaluation_.previewMesh = evaluation_.previewHeightfield.resolution > 0
+                        ? BuildFlatMaskMesh(evaluation_.previewHeightfield, previewMeshResolution)
+                        : MeshData{};
+                }
+            }
+            else
+            {
+                evaluation_.previewMesh = evaluation_.previewHeightfield.resolution > 0
+                    ? BuildFlatMaskMesh(evaluation_.previewHeightfield, previewMeshResolution)
+                    : MeshData{};
+            }
+        }
+        else
+        {
+            evaluation_.previewMesh = evaluation_.previewHeightfield.resolution > 0
+                ? BuildFlatMaskMesh(evaluation_.previewHeightfield, previewMeshResolution)
+                : MeshData{};
+        }
         ++evaluation_.version;
         evaluation_.dirty = false;
         evaluation_.status = std::format(
