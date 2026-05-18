@@ -672,6 +672,8 @@ struct GpuMeshPreview
     int dofApertureBlades = 0;
     float dofApertureRotationDegrees = 0.0f;
     float dofHighlightBoost = 0.0f;
+    bool dofMiniatureEnabled = false;
+    float dofMiniatureScale = 0.0f;
     PreviewRenderStats renderStats;
 
     D3D12_RESOURCE_STATES colorState = D3D12_RESOURCE_STATE_COMMON;
@@ -3067,6 +3069,8 @@ nlohmann::json MakeProjectSettingsJson()
             {"dofApertureBlades", preview.dofApertureBlades},
             {"dofApertureRotationDegrees", preview.dofApertureRotationDegrees},
             {"dofHighlightBoost", preview.dofHighlightBoost},
+            {"dofMiniatureEnabled", preview.dofMiniatureEnabled},
+            {"dofMiniatureScale", preview.dofMiniatureScale},
             {"sunAzimuthDegrees", preview.sunAzimuthDegrees},
             {"sunElevationDegrees", preview.sunElevationDegrees},
             {"sunIntensity", preview.sunIntensity},
@@ -3371,6 +3375,8 @@ void ReadPreviewSettingsJson(const nlohmann::json& settingsJson, rock::PreviewSe
     preview.dofApertureBlades = std::clamp(previewJson.value("dofApertureBlades", preview.dofApertureBlades), 3, 12);
     preview.dofApertureRotationDegrees = std::clamp(previewJson.value("dofApertureRotationDegrees", preview.dofApertureRotationDegrees), -180.0f, 180.0f);
     preview.dofHighlightBoost = std::clamp(previewJson.value("dofHighlightBoost", preview.dofHighlightBoost), 0.0f, 4.0f);
+    preview.dofMiniatureEnabled = previewJson.value("dofMiniatureEnabled", preview.dofMiniatureEnabled);
+    preview.dofMiniatureScale = std::clamp(previewJson.value("dofMiniatureScale", preview.dofMiniatureScale), 1.0f, 50.0f);
     preview.sunAzimuthDegrees = std::clamp(previewJson.value("sunAzimuthDegrees", preview.sunAzimuthDegrees), 0.0f, 360.0f);
     preview.sunElevationDegrees = std::clamp(previewJson.value("sunElevationDegrees", preview.sunElevationDegrees), -10.0f, 89.0f);
     preview.sunIntensity = std::clamp(previewJson.value("sunIntensity", preview.sunIntensity), 0.0f, 5.0f);
@@ -7802,7 +7808,7 @@ struct DepthOfFieldShaderConstants
     float apertureBlades;
     float apertureRotationRadians;
     float highlightBoost;
-    float pad0;
+    float miniatureScale;
 };
 static_assert(sizeof(DepthOfFieldShaderConstants) == 12 * sizeof(UINT));
 
@@ -10278,6 +10284,8 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.dofApertureBlades != g_graph.Settings().preview.dofApertureBlades ||
         g_gpuMeshPreview.dofApertureRotationDegrees != g_graph.Settings().preview.dofApertureRotationDegrees ||
         g_gpuMeshPreview.dofHighlightBoost != g_graph.Settings().preview.dofHighlightBoost ||
+        g_gpuMeshPreview.dofMiniatureEnabled != g_graph.Settings().preview.dofMiniatureEnabled ||
+        g_gpuMeshPreview.dofMiniatureScale != g_graph.Settings().preview.dofMiniatureScale ||
         (g_graph.Settings().sky.mode == rock::SkyMode::Atmospheric && g_graph.Settings().clouds.enabled && g_graph.Settings().clouds.animate && g_graph.Settings().clouds.windSpeedMetersPerSec > 0.0f) ||
         (showGrid && !g_gpuMeshPreview.gridVertexBuffer) ||
         (showTerrainBoundaryLines && !g_gpuMeshPreview.terrainBoundaryLineVertexBuffer) ||
@@ -11292,6 +11300,9 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             dof.apertureBlades = static_cast<float>(std::clamp(g_graph.Settings().preview.dofApertureBlades, 3, 12));
             dof.apertureRotationRadians = std::clamp(g_graph.Settings().preview.dofApertureRotationDegrees, -180.0f, 180.0f) * 3.1415926535f / 180.0f;
             dof.highlightBoost = std::clamp(g_graph.Settings().preview.dofHighlightBoost, 0.0f, 4.0f);
+            dof.miniatureScale = g_graph.Settings().preview.dofMiniatureEnabled
+                ? std::clamp(g_graph.Settings().preview.dofMiniatureScale, 1.0f, 50.0f)
+                : 1.0f;
 
             ID3D12DescriptorHeap* heaps[] = {g_srvHeap.Get()};
             commandList->SetDescriptorHeaps(1, heaps);
@@ -11388,6 +11399,8 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.dofApertureBlades = g_graph.Settings().preview.dofApertureBlades;
         g_gpuMeshPreview.dofApertureRotationDegrees = g_graph.Settings().preview.dofApertureRotationDegrees;
         g_gpuMeshPreview.dofHighlightBoost = g_graph.Settings().preview.dofHighlightBoost;
+        g_gpuMeshPreview.dofMiniatureEnabled = g_graph.Settings().preview.dofMiniatureEnabled;
+        g_gpuMeshPreview.dofMiniatureScale = g_graph.Settings().preview.dofMiniatureScale;
         g_gpuMeshPreview.colorState    = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         return true;
     }
@@ -15302,6 +15315,14 @@ void DrawCameraPanel()
                 "Circle of Confusion の換算に使うセンサー高さです。フルサイズ横位置なら 24mm が標準です。", "%.1f");
             DrawPropertyFloatRow("最大ぼけ (px)", "DofMaxBlur", &preview.dofMaxBlurPixels, 0.0f, 64.0f, rock::PreviewSettings{}.dofMaxBlurPixels, "Depth of Field max blur changed", false,
                 "表示上の最大ぼけ半径です。現実値ベースの操作感を保ちながら、重くなりすぎるぼけを抑えます。", "%.1f");
+            DrawPropertyBoolRow("Miniature", "DofMiniatureEnabled", &preview.dofMiniatureEnabled, "Depth of Field miniature toggled",
+                "地形をミニチュア撮影のように見せるため、DOF のぼけ量を明示的に強調します。物理カメラ設定はそのまま残し、表示だけを調整します。",
+                rock::PreviewSettings{}.dofMiniatureEnabled, true);
+            if (preview.dofMiniatureEnabled)
+            {
+                DrawPropertyFloatRow("Miniature Scale", "DofMiniatureScale", &preview.dofMiniatureScale, 1.0f, 50.0f, rock::PreviewSettings{}.dofMiniatureScale, "Depth of Field miniature scale changed", false,
+                    "DOF のぼけ量に掛ける倍率です。大きいほどミニチュア風の浅い焦点幅になります。", "%.1f", ImGuiSliderFlags_Logarithmic);
+            }
             int apertureShape = std::clamp(preview.dofApertureShape, 0, 4);
             if (DrawPropertyComboRow("絞り形状", "DofApertureShape", &apertureShape, "丸\0三角形\0六角形\0八角形\0カスタム\0\0",
                 "ぼけのサンプル形状です。多角形にすると絞り羽根由来の角ばったボケになります。", rock::PreviewSettings{}.dofApertureShape))

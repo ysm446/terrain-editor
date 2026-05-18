@@ -584,6 +584,8 @@ struct PreviewSettings
     int dofApertureBlades = 6;
     float dofApertureRotationDegrees = 0.0f;
     float dofHighlightBoost = 0.0f;
+    bool dofMiniatureEnabled = false;
+    float dofMiniatureScale = 10.0f;
     float sunAzimuthDegrees = 315.0f;
     float sunElevationDegrees = 38.0f;
     float sunIntensity = 1.05f;

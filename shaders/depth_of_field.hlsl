@@ -11,7 +11,7 @@ cbuffer DofConstants : register(b0)
     float apertureBlades;
     float apertureRotationRadians;
     float highlightBoost;
-    float pad0;
+    float miniatureScale;
 };
 
 Texture2D<float4> ColorBuffer : register(t0);
@@ -48,7 +48,8 @@ float SignedCircleOfConfusionPixels(float viewDistance, float imageHeightPixels)
     float sensorHeightMeters = max(sensorHeightMm, 1.0) * 0.001;
     float cocMeters = apertureMeters * focalLengthMeters * (lensDistance - focusMeters) /
                       max(lensDistance * (focusMeters - focalLengthMeters), 1e-4);
-    return clamp(cocMeters / sensorHeightMeters * imageHeightPixels, -maxBlurPixels, maxBlurPixels);
+    float scale = max(miniatureScale, 1.0);
+    return clamp(cocMeters / sensorHeightMeters * imageHeightPixels * scale, -maxBlurPixels, maxBlurPixels);
 }
 
 float ApertureBladeCount()

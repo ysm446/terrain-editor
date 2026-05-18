@@ -37,3 +37,6 @@ Terrain Editor の `Camera` カテゴリは、ビューポートで地形をど�
 プロジェクトファイルでは、`viewport` に `yaw`、`pitch`、`fovDegrees`、`orbitDistance`、`pan` を保存します。被写界深度の値は `settings.preview` に保存します。DOF の焦点距離は個別保存せず、`viewport.fovDegrees` から Camera の焦点距離として復元します。
 
 古いプロジェクトに `viewport.zoom` が保存されている場合、その値は読み込み時に無視されます。3D ビューポートの見え方は `Distance` と `FOV` / `焦点距離 (mm)` で決まります。
+## Miniature DOF
+
+`Depth of Field` の `Miniature` をオンにすると、地形をミニチュア撮影風に見せるために DOF のぼけ量を強調できます。`Miniature Scale` はその倍率で、値を大きくすると焦点幅が浅く見えます。オフの場合は従来通りの DOF 計算です。

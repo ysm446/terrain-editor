@@ -5,6 +5,11 @@
 - 予定タスクに、スプラインパスのネットワークから山脈や尾根の土台になる `Heightmap` と `Mask` を作る `Spline` ノードを追加しました。
 - `docs/plan/terrain_workflow.md` を追加し、岩、土、植生、砂礫を分けて考える地形制作の基礎フローを整理しました。
 
+## 0.18.32 - 2026-05-18 22:10
+
+- `Camera` の `Depth of Field` に `Miniature` と `Miniature Scale` を追加しました。巨大な地形をミニチュア撮影風に見せたい場合、物理カメラ設定を保ったまま DOF のぼけ量を明示的に強調できます。
+- `Miniature` は既定でオフです。オンにした場合のみ `Miniature Scale` が DOF の CoC に掛かり、プロジェクトファイルにも保存されます。
+
 ## 0.18.31 - 2026-05-18 21:20
 
 - `Scatter` ノードを D3D12 GPU compute に対応させました。`Backend` で `CPU` / `GPU` を切り替えられ、既定は `GPU` です。

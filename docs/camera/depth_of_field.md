@@ -44,3 +44,11 @@ Terrain Editor の地形はメートル単位で大きなスケールを扱う�
 被写界深度の設定はプロジェクトファイルの `settings.preview` に保存します。保存対象は `depthOfFieldEnabled`、`dofFStop`、`dofFocusDistanceMeters`、`dofSensorHeightMm`、`dofMaxBlurPixels`、`dofApertureShape`、`dofApertureBlades`、`dofApertureRotationDegrees`、`dofHighlightBoost` です。焦点距離は個別保存せず、`viewport.fovDegrees` から復元される Camera の焦点距離を使います。
 
 アプリ起動時の共通設定には被写界深度を保存しません。そのため、新規起動や新規プロジェクトでは DOF はオフから始まり、DOF がオンになるのはプロジェクトファイル側にその設定が保存されている場合だけです。
+## Miniature
+
+`Miniature` は、巨大な地形をミニチュア撮影のように見せるための表示用オプションです。通常の焦点距離、F 値、フォーカス距離、センサー高さはそのまま使い、`Miniature Scale` をオンの時だけ Circle of Confusion に掛けます。
+
+- `Miniature`: ミニチュア風 DOF 強調のオン/オフです。既定はオフです。
+- `Miniature Scale`: DOF のぼけ量に掛ける倍率です。`1.0` は従来相当で、値を大きくすると焦点幅が浅く見えます。
+
+この設定も `settings.preview` に保存されます。保存キーは `dofMiniatureEnabled` と `dofMiniatureScale` です。
