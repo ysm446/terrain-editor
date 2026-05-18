@@ -13,13 +13,13 @@
 
 ## 全体の流れ
 
-1. 入力 A と B の解像度を比較し、大きい方に合わせてリサンプルする。
+1. 入力 Foreground と Background の解像度を比較し、大きい方に合わせてリサンプルする。
 2. 各セルでブレンドモードに従って演算する。
-3. `Intensity` で演算結果と A をブレンドし、`[0, 1]` にクランプして出力する。
+3. `Intensity` で演算結果と Foreground をブレンドし、`[0, 1]` にクランプして出力する。
 
 ## 1. 解像度のリサンプル
 
-入力 A と B の解像度が異なる場合、低解像度側をバイリニア補間でアップサンプルします。
+入力 Foreground と Background の解像度が異なる場合、低解像度側をバイリニア補間でアップサンプルします。
 
 ```text
 n = max(a.resolution, b.resolution)
@@ -42,14 +42,14 @@ sample = lerp(lerp(src[x0,z0], src[x1,z0], tx),
 
 ## 2. ブレンドモード
 
-4 種類のブレンドモードを選べます。入力 A, B のセル値を `va`, `vb` としたとき:
+4 種類のブレンドモードを選べます。入力 Foreground, Background のセル値を `foreground`, `background` としたとき:
 
 | モード | 演算 | 用途 |
 | --- | --- | --- |
-| `Add` | `va + vb` | 2 つのマスクを足し合わせる。合計が 1 を超えた部分は飽和する |
-| `Multiply` | `va × vb` | どちらも白い部分だけを残す (論理 AND に近い) |
-| `Min` | `min(va, vb)` | 2 つのマスクの暗い方を残す |
-| `Max` | `max(va, vb)` | 2 つのマスクの明るい方を残す (論理 OR に近い) |
+| `Add` | `foreground + background` | 2 つのマスクを足し合わせる。合計が 1 を超えた部分は飽和する |
+| `Multiply` | `foreground × background` | どちらも白い部分だけを残す (論理 AND に近い) |
+| `Min` | `min(foreground, background)` | 2 つのマスクの暗い方を残す |
+| `Max` | `max(foreground, background)` | 2 つのマスクの明るい方を残す (論理 OR に近い) |
 
 ### 各モードの性質
 
@@ -57,7 +57,7 @@ sample = lerp(lerp(src[x0,z0], src[x1,z0], tx),
 `Mask Fluvial` (流路マスク) と `Mask Noise` を足して、ノイジーな流路帯を作るのに使えます。
 
 **Multiply**: 共通する明るい領域だけを抽出します。
-フィルタとして機能し、A のマスクを B で絞り込むときに便利です。
+フィルタとして機能し、Foreground のマスクを Background で絞り込むときに便利です。
 たとえば「流路かつ高地」のような条件を作れます。
 
 **Min**: どちらか暗い方を残します。Multiply に近いですが、0 に向かって収縮する速度が異なります。
@@ -67,33 +67,33 @@ sample = lerp(lerp(src[x0,z0], src[x1,z0], tx),
 
 ## 3. Intensity によるブレンドと最終クランプ
 
-ブレンド結果は A と `Intensity` で線形補間した後、`[0, 1]` にクランプします。
+ブレンド結果は Foreground と `Intensity` で線形補間した後、`[0, 1]` にクランプします。
 
 ```text
-blended = blend_mode(va, vb)
-result  = clamp(lerp(va, blended, intensity), 0, 1)
+blended = blend_mode(foreground, background)
+result  = clamp(lerp(foreground, blended, intensity), 0, 1)
 ```
 
-`Intensity = 0` のとき出力は A そのままです。
+`Intensity = 0` のとき出力は Foreground そのままです。
 `Intensity = 1` のとき出力はブレンド結果そのものです。
 
-`Intensity` を中間値にすると、元の A マスクとブレンド結果を混ぜられます。
-たとえば `Multiply (Intensity = 0.5)` は「A と B の共通部分を 50% だけ縮小する」効果になります。
+`Intensity` を中間値にすると、元の Foreground マスクとブレンド結果を混ぜられます。
+たとえば `Multiply (Intensity = 0.5)` は「Foreground と Background の共通部分を 50% だけ縮小する」効果になります。
 
 ## パラメータを直感で見る
 
 | パラメータ | 直感的な役割 |
 | --- | --- |
 | `Blend Mode` | Add / Multiply / Min / Max から演算を選ぶ |
-| `Blend Intensity (%)` | ブレンド結果と入力 A の混合率 |
+| `Blend Intensity (%)` | ブレンド結果と入力 Foreground の混合率 |
 
 ## 典型的な使い方
 
 ### 流路と広域ノイズの合成
 
 ```
-A: Mask Fluvial (流路マスク)
-B: Mask Noise  (大きなうねりノイズ)
+Foreground: Mask Fluvial (流路マスク)
+Background: Mask Noise  (大きなうねりノイズ)
 Mode: Max
 Intensity: 70%
 ```
@@ -103,8 +103,8 @@ Intensity: 70%
 ### ノイズでマスクを絞り込む
 
 ```
-A: Mask Fluvial (流路マスク)
-B: Mask Noise  (細かいノイズ)
+Foreground: Mask Fluvial (流路マスク)
+Background: Mask Noise  (細かいノイズ)
 Mode: Multiply
 Intensity: 100%
 ```

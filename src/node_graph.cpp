@@ -4171,8 +4171,8 @@ GraphId NodeGraph::CreateNode(NodeKind kind)
         AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
         break;
     case NodeKind::MaskBlend:
-        AddPin(nodeId, PinKind::Input, ValueType::Mask, "A");
-        AddPin(nodeId, PinKind::Input, ValueType::Mask, "B");
+        AddPin(nodeId, PinKind::Input, ValueType::Mask, "Foreground");
+        AddPin(nodeId, PinKind::Input, ValueType::Mask, "Background");
         AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
         break;
     case NodeKind::MaskLevels:
@@ -4218,6 +4218,17 @@ void NodeGraph::ReplaceNodes(std::vector<Node> nodes)
                 {
                     node.inputs.push_back(std::move(baseColorPin));
                 }
+            }
+        }
+        else if (node.kind == NodeKind::MaskBlend)
+        {
+            if (node.inputs.size() >= 1 && node.inputs[0].label == "A")
+            {
+                node.inputs[0].label = "Foreground";
+            }
+            if (node.inputs.size() >= 2 && node.inputs[1].label == "B")
+            {
+                node.inputs[1].label = "Background";
             }
         }
     }

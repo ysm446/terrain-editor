@@ -6,7 +6,7 @@
 
 | 種類 | 内容 |
 | --- | --- |
-| 入力 | `Mask A`, `Mask B` |
+| 入力 | `Foreground`, `Background` |
 | 出力 | `Mask` |
 
 ## 主な設定
@@ -14,28 +14,28 @@
 | 設定 | 役割 |
 | --- | --- |
 | `Blend Mode` | `Add` / `Multiply` / `Min` / `Max` |
-| `Blend Intensity (%)` | `A` をベースに、`A` と `Blend(A, B)` の間を補間する強さ。0 で `A` のみ、1 で完全に合成結果 |
+| `Blend Intensity (%)` | `Foreground` をベースに、`Foreground` と `Blend(Foreground, Background)` の間を補間する強さ。0 で `Foreground` のみ、1 で完全に合成結果 |
 
 ## ブレンドモードの式
 
-入力 `A` と `B` の各セル値を `a`, `b` として:
+入力 `Foreground` と `Background` の各セル値を `foreground`, `background` として:
 
 | モード | 式 | 想定用途 |
 | --- | --- | --- |
-| `Add` | `a + b` | 領域の合算(両マスクのいずれかが立っている場所をすべて含める) |
-| `Multiply` | `a * b` | 領域の絞り込み(両方のマスクが立っている場所だけを残す) |
-| `Min` | `min(a, b)` | 弱いほうに合わせる(片方が低ければ抑える) |
-| `Max` | `max(a, b)` | 強いほうに合わせる(`Add` よりサチらず、ハイライトを取り出す) |
+| `Add` | `foreground + background` | 領域の合算(両マスクのいずれかが立っている場所をすべて含める) |
+| `Multiply` | `foreground * background` | 領域の絞り込み(両方のマスクが立っている場所だけを残す) |
+| `Min` | `min(foreground, background)` | 弱いほうに合わせる(片方が低ければ抑える) |
+| `Max` | `max(foreground, background)` | 強いほうに合わせる(`Add` よりサチらず、ハイライトを取り出す) |
 
-合成後は `Blend Intensity` で `A` との補間を行い、最後に `[0, 1]` に clamp します:
+合成後は `Blend Intensity` で `Foreground` との補間を行い、最後に `[0, 1]` に clamp します:
 
 ```
-result = clamp(lerp(a, blended, intensity), 0, 1)
+result = clamp(lerp(foreground, blended, intensity), 0, 1)
 ```
 
 ## 解像度の扱い
 
-- `A` と `B` の解像度が異なる場合、低い側を高い側の解像度に **バイリニア補間でアップサンプル** してから合成します。出力解像度は両入力の最大値。
+- `Foreground` と `Background` の解像度が異なる場合、低い側を高い側の解像度に **バイリニア補間でアップサンプル** してから合成します。出力解像度は両入力の最大値。
 - 片方の入力が未接続の場合は接続済みのマスクをそのまま通します(無接続が `0` ではなく「中立」扱い)。
 
 ## メモ
