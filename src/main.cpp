@@ -11205,7 +11205,7 @@ ImVec4 NodeAccentColor(rock::NodeKind kind)
     case rock::NodeKind::MaskFluvial:
         return maskOrange;
     case rock::NodeKind::Colorize:
-        return ImVec4(0.72f, 0.38f, 0.92f, 1.0f); // 紫 (カラー系)
+        return ImVec4(0.44f, 0.50f, 0.96f, 1.0f); // 青紫 (カラー系)
     default:
         return ImVec4(0.75f, 0.75f, 0.75f, 1.0f);
     }
@@ -11322,7 +11322,7 @@ ImVec4 PinTypeColor(rock::ValueType valueType)
     case rock::ValueType::Mask:
         return ImVec4(0.82f, 0.64f, 0.36f, 1.0f);
     case rock::ValueType::ColorTexture:
-        return ImVec4(0.78f, 0.42f, 0.96f, 1.0f);
+        return ImVec4(0.54f, 0.60f, 1.0f, 1.0f);
     case rock::ValueType::Mesh:
     default:
         return ImVec4(0.52f, 0.58f, 0.56f, 1.0f);
