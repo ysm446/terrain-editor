@@ -5,6 +5,15 @@
 - 予定タスクに、スプラインパスのネットワークから山脈や尾根の土台になる `Heightmap` と `Mask` を作る `Spline` ノードを追加しました。
 - `docs/plan/terrain_workflow.md` を追加し、岩、土、植生、砂礫を分けて考える地形制作の基礎フローを整理しました。
 
+## 0.18.29 - 2026-05-18 20:14
+
+- 3D ビューポート左上に表示していた `Heightmap Preview` や座標系・グリッド情報の固定テキストを削除し、表示をすっきりさせました。
+
+## 0.18.28 - 2026-05-18 19:55
+
+- `Scatter` ノードを追加しました。入力 `Heightmap` と `Mask` から汎用的な散布形状を作り、`Heightmap` / `Mask` / `Unique Mask` を出力します。
+- `Scatter` には `Shape Type` (`Hemisphere` / `Cone`)、`Density (m)`、`Coverage (%)`、`Size Min/Max (m)`、`Height (m)`、`Height Jitter (%)`、`Rotation Variation (%)`、`Aspect Variation (%)`、`Ground Detail Level`、`Seed` を追加しました。`Height` が 0 のままでも植生分布などに使う `Mask` と `Unique Mask` を出力します。
+
 ## 0.18.27 - 2026-05-18 19:35
 
 - `Rock` ノードに `Mask` 入力を追加し、接続したマスクで岩の配置範囲を制限できるようにしました。

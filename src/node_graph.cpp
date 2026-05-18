@@ -193,6 +193,24 @@ uint64_t HashRockSettings(const RockSettings& settings, int resolution)
     return hash;
 }
 
+uint64_t HashScatterSettings(const ScatterSettings& settings, int resolution)
+{
+    uint64_t hash = 1442695040888963407ull;
+    HashCombine(hash, static_cast<uint64_t>(settings.shapeType));
+    HashCombine(hash, static_cast<uint64_t>(settings.seed));
+    HashCombine(hash, HashFloat(settings.density));
+    HashCombine(hash, HashFloat(settings.coverage));
+    HashCombine(hash, HashFloat(settings.sizeMinM));
+    HashCombine(hash, HashFloat(settings.sizeMaxM));
+    HashCombine(hash, HashFloat(settings.height));
+    HashCombine(hash, HashFloat(settings.heightJitter));
+    HashCombine(hash, HashFloat(settings.rotationVariation));
+    HashCombine(hash, HashFloat(settings.aspectVariation));
+    HashCombine(hash, HashFloat(settings.groundDetailLevelM));
+    HashCombine(hash, static_cast<uint64_t>(resolution));
+    return hash;
+}
+
 uint64_t HashSedimentSettings(const SedimentSettings& settings, int resolution)
 {
     uint64_t hash = 1099511628211ull;
@@ -2655,6 +2673,174 @@ void ApplyRock(HeightfieldGrid& grid, const RockSettings& settings, const MaskGr
     });
 }
 
+void ApplyScatter(HeightfieldGrid& grid, const ScatterSettings& settings, const MaskGrid* placementMask = nullptr)
+{
+    const int n = grid.resolution;
+    const size_t cellCount = static_cast<size_t>(n) * static_cast<size_t>(n);
+    if (n < 2 || grid.heights.size() < cellCount || settings.density <= 0.0f)
+    {
+        return;
+    }
+
+    grid.mask.assign(cellCount, 0.0f);
+    grid.uniqueMask.assign(cellCount, 0.0f);
+
+    const bool hasPlacementMask = placementMask != nullptr &&
+        placementMask->resolution > 0 &&
+        !placementMask->values.empty();
+    const float density = std::max(settings.density, 0.1f);
+    const float coverage = std::clamp(settings.coverage, 0.0f, 1.0f);
+    const float sizeMinM = std::clamp(settings.sizeMinM, 0.1f, 200.0f);
+    const float sizeMaxM = std::clamp(std::max(settings.sizeMaxM, sizeMinM), 0.1f, 200.0f);
+    const float sizeMinCells = sizeMinM / density;
+    const float sizeMaxCells = sizeMaxM / density;
+    const float height = std::max(settings.height, 0.0f);
+    const float heightJitter = std::clamp(settings.heightJitter, 0.0f, 1.0f);
+    const float rotationVar = std::clamp(settings.rotationVariation, 0.0f, 1.0f);
+    const float aspectVar = std::clamp(settings.aspectVariation, 0.0f, 1.0f);
+    const int shapeType = std::clamp(static_cast<int>(settings.shapeType),
+        static_cast<int>(ScatterShapeType::Hemisphere),
+        static_cast<int>(ScatterShapeType::Cone));
+
+    const float terrainSize = std::max(grid.terrainSizeMeters, 1.0f);
+    const float halfSize = terrainSize * 0.5f;
+    const float invStep = (n > 1) ? 1.0f / static_cast<float>(n - 1) : 0.0f;
+    const float cellSizeMeters = terrainSize / static_cast<float>(std::max(1, n - 1));
+    const float groundDetailM = std::clamp(settings.groundDetailLevelM, 0.0f, terrainSize * 0.5f);
+    const int groundRadius = groundDetailM > 0.0f
+        ? std::clamp(static_cast<int>(std::round(groundDetailM / cellSizeMeters)), 1, 128)
+        : 0;
+    const std::vector<float> groundHeights = groundRadius > 1 ? BoxBlurHeights(grid, groundRadius) : std::vector<float>();
+    const int32_t seed = settings.seed;
+    const int32_t sizeSeed = rock_node::DeriveSeed(seed, 1583u, 22441u);
+    const int32_t heightSeed = rock_node::DeriveSeed(seed, 2017u, 39019u);
+    const int32_t rotSeed = rock_node::DeriveSeed(seed, 4519u, 91173u);
+    const int32_t aspectSeed = rock_node::DeriveSeed(seed, 2381u, 33797u);
+    const int32_t aspectAxisSeed = rock_node::DeriveSeed(seed, 4093u, 51817u);
+    const int32_t uniqueSeed = rock_node::DeriveSeed(seed, 1877u, 73009u);
+
+    const auto samplePlacementMask = [&](float u, float v) {
+        if (!hasPlacementMask)
+        {
+            return 1.0f;
+        }
+        return std::clamp(SampleMaskBilinear(*placementMask, u, v), 0.0f, 1.0f);
+    };
+
+    const float maxRadiusCells = sizeMaxCells * 0.5f;
+    const float maxAspect = std::pow(2.0f, aspectVar);
+    const float maxReach = maxRadiusCells * maxAspect;
+    const int searchRadius = std::max(1, static_cast<int>(std::ceil(maxReach - 0.05f)));
+    constexpr float kPi = 3.14159265358979323846f;
+
+    ParallelForRows(n, [&](int z) {
+        const float worldZ = -halfSize + static_cast<float>(z) * invStep * terrainSize;
+        const float cellZ = worldZ / density;
+        for (int x = 0; x < n; ++x)
+        {
+            const float worldX = -halfSize + static_cast<float>(x) * invStep * terrainSize;
+            const float cellX = worldX / density;
+            const int32_t baseCx = static_cast<int32_t>(std::floor(cellX));
+            const int32_t baseCz = static_cast<int32_t>(std::floor(cellZ));
+
+            float bestShape = 0.0f;
+            float bestHeight = 0.0f;
+            float bestUnique = 0.0f;
+
+            for (int dz = -searchRadius; dz <= searchRadius; ++dz)
+            {
+                for (int dx = -searchRadius; dx <= searchRadius; ++dx)
+                {
+                    const int32_t gx = baseCx + dx;
+                    const int32_t gz = baseCz + dz;
+                    const float jx = rock_node::HashFloat01(gx, gz, seed) * 0.9f - 0.45f;
+                    const float jz = rock_node::HashFloat01(gx, gz, seed + 73) * 0.9f - 0.45f;
+                    const float sx = static_cast<float>(gx) + 0.5f + jx;
+                    const float sz = static_cast<float>(gz) + 0.5f + jz;
+                    const float siteWorldX = sx * density;
+                    const float siteWorldZ = sz * density;
+                    const float siteU = (siteWorldX + halfSize) / terrainSize;
+                    const float siteV = (siteWorldZ + halfSize) / terrainSize;
+                    const float siteMask = samplePlacementMask(siteU, siteV);
+                    if (siteMask <= 0.0f)
+                    {
+                        continue;
+                    }
+                    if (rock_node::HashFloat01(gx, gz, seed + 17) > coverage * siteMask)
+                    {
+                        continue;
+                    }
+
+                    const float ddx = cellX - sx;
+                    const float ddz = cellZ - sz;
+                    if (std::sqrt(ddx * ddx + ddz * ddz) >= maxReach)
+                    {
+                        continue;
+                    }
+
+                    const float sizeRand = rock_node::HashFloat01(gx, gz, sizeSeed);
+                    const float sizeCells = sizeMinCells + sizeRand * (sizeMaxCells - sizeMinCells);
+                    const float radiusCells = std::max(sizeCells * 0.5f, 1e-4f);
+                    const float theta = (rock_node::HashFloat01(gx, gz, rotSeed) - 0.5f) * 2.0f * kPi * rotationVar;
+                    const float cosT = std::cos(theta);
+                    const float sinT = std::sin(theta);
+                    const float aspectRand = rock_node::HashFloat01(gx, gz, aspectSeed);
+                    const float aspectExp = aspectVar * (2.0f * aspectRand - 1.0f);
+                    const float aspect = std::pow(2.0f, aspectExp);
+                    const bool longX = rock_node::HashFloat01(gx, gz, aspectAxisSeed) < 0.5f;
+                    const float aspectX = longX ? aspect : (1.0f / aspect);
+                    const float aspectZ = 1.0f / aspectX;
+                    const float rxUnrot = ddx * cosT + ddz * sinT;
+                    const float rzUnrot = -ddx * sinT + ddz * cosT;
+                    const float rx = rxUnrot / aspectX;
+                    const float rz = rzUnrot / aspectZ;
+                    const float normalizedDistance = std::sqrt(rx * rx + rz * rz) / radiusCells;
+                    if (normalizedDistance >= 1.0f)
+                    {
+                        continue;
+                    }
+
+                    const float shape = shapeType == static_cast<int>(ScatterShapeType::Cone)
+                        ? std::clamp(1.0f - normalizedDistance, 0.0f, 1.0f)
+                        : std::sqrt(std::max(0.0f, 1.0f - normalizedDistance * normalizedDistance));
+                    const float heightRand = rock_node::HashFloat01(gx, gz, heightSeed);
+                    const float cellHeight = height * (1.0f - heightJitter + heightJitter * 2.0f * heightRand);
+                    const float contribution = cellHeight * shape;
+                    if (shape > bestShape)
+                    {
+                        bestShape = shape;
+                        bestHeight = contribution;
+                        bestUnique = rock_node::HashFloat01(gx, gz, uniqueSeed);
+                    }
+                }
+            }
+
+            if (bestShape <= 0.0f)
+            {
+                continue;
+            }
+
+            const size_t idx = static_cast<size_t>(z) * static_cast<size_t>(n) + static_cast<size_t>(x);
+            const float pixelMask = samplePlacementMask(
+                static_cast<float>(x) * invStep,
+                static_cast<float>(z) * invStep);
+            if (pixelMask <= 0.0f)
+            {
+                continue;
+            }
+
+            const float originalH = grid.heights[idx];
+            const float groundH = groundHeights.empty() ? originalH : groundHeights[idx];
+            if (bestHeight > 0.0f)
+            {
+                grid.heights[idx] = std::max(originalH, groundH + bestHeight * pixelMask);
+            }
+            grid.mask[idx] = bestShape * pixelMask;
+            grid.uniqueMask[idx] = bestUnique;
+        }
+    });
+}
+
 struct CrumblingParticle
 {
     float x = 0.0f;
@@ -3685,6 +3871,9 @@ void ApplyHeightfieldOperation(HeightfieldGrid& grid, const HeightfieldPipeline:
     case HeightfieldPipeline::HeightfieldOperation::Kind::Rock:
         ApplyRock(grid, operation.rock);
         break;
+    case HeightfieldPipeline::HeightfieldOperation::Kind::Scatter:
+        ApplyScatter(grid, operation.scatter);
+        break;
     case HeightfieldPipeline::HeightfieldOperation::Kind::Sediment:
         ApplySediment(grid, operation.sediment);
         break;
@@ -3714,6 +3903,8 @@ uint64_t HashHeightfieldOperation(const HeightfieldPipeline::HeightfieldOperatio
         return HashMaskFluvialSettings(operation.maskFluvial, resolution);
     case HeightfieldPipeline::HeightfieldOperation::Kind::Rock:
         return HashRockSettings(operation.rock, resolution);
+    case HeightfieldPipeline::HeightfieldOperation::Kind::Scatter:
+        return HashScatterSettings(operation.scatter, resolution);
     case HeightfieldPipeline::HeightfieldOperation::Kind::Sediment:
         return HashSedimentSettings(operation.sediment, resolution);
     case HeightfieldPipeline::HeightfieldOperation::Kind::Snow:
@@ -3760,6 +3951,10 @@ HeightfieldPipeline::HeightfieldOperation MakeHeightfieldOperation(const Node& n
         operation.kind = HeightfieldPipeline::HeightfieldOperation::Kind::Rock;
         operation.rock = node.rock;
         break;
+    case NodeKind::Scatter:
+        operation.kind = HeightfieldPipeline::HeightfieldOperation::Kind::Scatter;
+        operation.scatter = node.scatter;
+        break;
     case NodeKind::Sediment:
         operation.kind = HeightfieldPipeline::HeightfieldOperation::Kind::Sediment;
         operation.sediment = node.sediment;
@@ -3787,6 +3982,7 @@ bool IsHeightfieldOperationNode(NodeKind kind)
     case NodeKind::Crumbling:
     case NodeKind::MaskFluvial:
     case NodeKind::Rock:
+    case NodeKind::Scatter:
     case NodeKind::Sediment:
     case NodeKind::Snow:
         return true;
@@ -3881,7 +4077,8 @@ HeightfieldGrid NodeGraph::EvaluateHeightPipelineCached(const HeightfieldPipelin
         MaskGrid inputMask;
         bool hasInputMask = false;
         if (operation.kind == HeightfieldPipeline::HeightfieldOperation::Kind::Crumbling ||
-            operation.kind == HeightfieldPipeline::HeightfieldOperation::Kind::Rock)
+            operation.kind == HeightfieldPipeline::HeightfieldOperation::Kind::Rock ||
+            operation.kind == HeightfieldPipeline::HeightfieldOperation::Kind::Scatter)
         {
             const size_t maskInputIndex = operation.kind == HeightfieldPipeline::HeightfieldOperation::Kind::Crumbling ? 1u : 1u;
             if (const Node* operationNode = FindNode(operation.nodeId);
@@ -3895,6 +4092,7 @@ HeightfieldGrid NodeGraph::EvaluateHeightPipelineCached(const HeightfieldPipelin
                         kind == NodeKind::MaskHeight ||
                         kind == NodeKind::MaskFluvial ||
                         kind == NodeKind::Rock ||
+                        kind == NodeKind::Scatter ||
                         kind == NodeKind::Crumbling ||
                         kind == NodeKind::Sediment ||
                         kind == NodeKind::Snow ||
@@ -3924,6 +4122,10 @@ HeightfieldGrid NodeGraph::EvaluateHeightPipelineCached(const HeightfieldPipelin
             else if (operation.kind == HeightfieldPipeline::HeightfieldOperation::Kind::Rock)
             {
                 ApplyRock(operationGrid, operation.rock, hasInputMask ? &inputMask : nullptr);
+            }
+            else if (operation.kind == HeightfieldPipeline::HeightfieldOperation::Kind::Scatter)
+            {
+                ApplyScatter(operationGrid, operation.scatter, hasInputMask ? &inputMask : nullptr);
             }
             else
             {
@@ -4202,6 +4404,13 @@ GraphId NodeGraph::CreateNode(NodeKind kind)
         AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
         AddPin(nodeId, PinKind::Output, ValueType::Mask, "Unique Mask");
         break;
+    case NodeKind::Scatter:
+        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
+        AddPin(nodeId, PinKind::Input, ValueType::Mask, "Mask");
+        AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
+        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
+        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Unique Mask");
+        break;
     case NodeKind::Sediment:
         AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
         AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
@@ -4276,7 +4485,7 @@ void NodeGraph::ReplaceNodes(std::vector<Node> nodes)
                 node.inputs[1].label = "Background";
             }
         }
-        else if (node.kind == NodeKind::Rock)
+        else if (node.kind == NodeKind::Rock || node.kind == NodeKind::Scatter)
         {
             const bool hasMaskInput = std::ranges::any_of(node.inputs, [](const Pin& pin) {
                 return pin.kind == PinKind::Input && pin.valueType == ValueType::Mask && pin.label == "Mask";
@@ -4447,6 +4656,8 @@ HeightfieldPipeline NodeGraph::PipelineFor(PreviewStage stage) const
         return PipelineTo(NodeKind::MaskFluvial);
     case PreviewStage::Rock:
         return PipelineTo(NodeKind::Rock);
+    case PreviewStage::Scatter:
+        return PipelineTo(NodeKind::Scatter);
     case PreviewStage::Sediment:
         return PipelineTo(NodeKind::Sediment);
     case PreviewStage::Snow:
@@ -4456,6 +4667,7 @@ HeightfieldPipeline NodeGraph::PipelineFor(PreviewStage stage) const
         if (const Node* node = FindFirstNode(NodeKind::Snow)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::Sediment)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::Crumbling)) { return PipelineToNode(*node); }
+        if (const Node* node = FindFirstNode(NodeKind::Scatter)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::Rock)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::MaskHeight)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::MaskSlope)) { return PipelineToNode(*node); }
@@ -4599,6 +4811,7 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
         node.kind == NodeKind::Crumbling ||
         node.kind == NodeKind::MaskFluvial ||
         node.kind == NodeKind::Rock ||
+        node.kind == NodeKind::Scatter ||
         node.kind == NodeKind::Sediment ||
         node.kind == NodeKind::Snow ||
         node.kind == NodeKind::MultiScaleErosion)
@@ -4651,6 +4864,7 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
                 kind == NodeKind::Crumbling ||
                 kind == NodeKind::MaskFluvial ||
                 kind == NodeKind::Rock ||
+                kind == NodeKind::Scatter ||
                 kind == NodeKind::Sediment ||
                 kind == NodeKind::Snow ||
                 kind == NodeKind::MultiScaleErosion;
@@ -4714,6 +4928,7 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
                     kind == NodeKind::Crumbling ||
                     kind == NodeKind::MaskFluvial ||
                     kind == NodeKind::Rock ||
+                    kind == NodeKind::Scatter ||
                     kind == NodeKind::Sediment ||
                     kind == NodeKind::Snow ||
                     kind == NodeKind::MultiScaleErosion;
@@ -5240,6 +5455,8 @@ std::string_view ToString(NodeKind kind)
         return "Mask Fluvial";
     case NodeKind::Rock:
         return "Rock";
+    case NodeKind::Scatter:
+        return "Scatter";
     case NodeKind::Sediment:
         return "Sediment";
     case NodeKind::Snow:
@@ -5281,6 +5498,8 @@ std::string_view ToString(PreviewStage stage)
         return "Mask Fluvial";
     case PreviewStage::Rock:
         return "Rock";
+    case PreviewStage::Scatter:
+        return "Scatter";
     case PreviewStage::Sediment:
         return "Sediment";
     case PreviewStage::Snow:
@@ -5339,6 +5558,8 @@ PreviewStage PreviewStageFor(NodeKind kind)
         return PreviewStage::MaskFluvial;
     case NodeKind::Rock:
         return PreviewStage::Rock;
+    case NodeKind::Scatter:
+        return PreviewStage::Scatter;
     case NodeKind::Sediment:
         return PreviewStage::Sediment;
     case NodeKind::Snow:

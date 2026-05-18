@@ -2440,6 +2440,25 @@ nlohmann::json MakeRockSettingsJson(const rock::Node& node)
     };
 }
 
+nlohmann::json MakeScatterSettingsJson(const rock::Node& node)
+{
+    return {
+        {"scatter", {
+            {"shapeType", static_cast<int>(node.scatter.shapeType)},
+            {"seed", node.scatter.seed},
+            {"density", node.scatter.density},
+            {"coverage", node.scatter.coverage},
+            {"sizeMinM", node.scatter.sizeMinM},
+            {"sizeMaxM", node.scatter.sizeMaxM},
+            {"height", node.scatter.height},
+            {"heightJitter", node.scatter.heightJitter},
+            {"rotationVariation", node.scatter.rotationVariation},
+            {"aspectVariation", node.scatter.aspectVariation},
+            {"groundDetailLevelM", node.scatter.groundDetailLevelM},
+        }},
+    };
+}
+
 nlohmann::json MakeCrumblingSettingsJson(const rock::Node& node)
 {
     return {
@@ -2480,6 +2499,7 @@ nlohmann::json MakeNodeSettingsJson(const rock::Node& node)
     nodeJson.update(MakeMaskSettingsJson(node));
     nodeJson.update(MakeCrumblingSettingsJson(node));
     nodeJson.update(MakeRockSettingsJson(node));
+    nodeJson.update(MakeScatterSettingsJson(node));
     nodeJson.update(MakeSedimentSettingsJson(node));
     nodeJson.update(MakeSnowSettingsJson(node));
     nodeJson.update(MakeColorizeSettingsJson(node));
@@ -2546,6 +2566,7 @@ std::optional<rock::PreviewStage> ReadSerializedPreviewStage(const nlohmann::jso
     case rock::PreviewStage::MaskCurvature:
     case rock::PreviewStage::MaskFluvial:
     case rock::PreviewStage::Rock:
+    case rock::PreviewStage::Scatter:
     case rock::PreviewStage::Sediment:
     case rock::PreviewStage::Snow:
     case rock::PreviewStage::Colorize:
@@ -2776,6 +2797,27 @@ void ReadRockSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     }
 }
 
+void ReadScatterSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
+{
+    const nlohmann::json nodeScatterJson = nodeJson.value("scatter", nlohmann::json::object());
+    {
+        const int shapeInt = std::clamp(nodeScatterJson.value("shapeType", static_cast<int>(node.scatter.shapeType)),
+            static_cast<int>(rock::ScatterShapeType::Hemisphere),
+            static_cast<int>(rock::ScatterShapeType::Cone));
+        node.scatter.shapeType = static_cast<rock::ScatterShapeType>(shapeInt);
+    }
+    node.scatter.seed = std::clamp(nodeScatterJson.value("seed", node.scatter.seed), 0, 999999);
+    node.scatter.density = std::clamp(nodeScatterJson.value("density", node.scatter.density), 0.5f, 1000.0f);
+    node.scatter.coverage = std::clamp(nodeScatterJson.value("coverage", node.scatter.coverage), 0.0f, 1.0f);
+    node.scatter.sizeMinM = std::clamp(nodeScatterJson.value("sizeMinM", node.scatter.sizeMinM), 0.1f, 200.0f);
+    node.scatter.sizeMaxM = std::clamp(std::max(nodeScatterJson.value("sizeMaxM", node.scatter.sizeMaxM), node.scatter.sizeMinM), 0.1f, 200.0f);
+    node.scatter.height = std::clamp(nodeScatterJson.value("height", node.scatter.height), 0.0f, 100.0f);
+    node.scatter.heightJitter = std::clamp(nodeScatterJson.value("heightJitter", node.scatter.heightJitter), 0.0f, 1.0f);
+    node.scatter.rotationVariation = std::clamp(nodeScatterJson.value("rotationVariation", node.scatter.rotationVariation), 0.0f, 1.0f);
+    node.scatter.aspectVariation = std::clamp(nodeScatterJson.value("aspectVariation", node.scatter.aspectVariation), 0.0f, 1.0f);
+    node.scatter.groundDetailLevelM = std::clamp(nodeScatterJson.value("groundDetailLevelM", node.scatter.groundDetailLevelM), 0.0f, 1024.0f);
+}
+
 void ReadCrumblingSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
 {
     const nlohmann::json nodeCrumblingJson = nodeJson.value("crumbling", nlohmann::json::object());
@@ -2873,6 +2915,7 @@ void ReadNodeSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     ReadMaskSettingsJson(nodeJson, node);
     ReadCrumblingSettingsJson(nodeJson, node);
     ReadRockSettingsJson(nodeJson, node);
+    ReadScatterSettingsJson(nodeJson, node);
     ReadSedimentSettingsJson(nodeJson, node);
     ReadSnowSettingsJson(nodeJson, node);
     ReadColorizeSettingsJson(nodeJson, node);
@@ -8692,6 +8735,7 @@ bool IsTerrainNodeKind(rock::NodeKind kind)
         kind == rock::NodeKind::MaskCurvature ||
         kind == rock::NodeKind::MaskFluvial ||
         kind == rock::NodeKind::Rock ||
+        kind == rock::NodeKind::Scatter ||
         kind == rock::NodeKind::Sediment ||
         kind == rock::NodeKind::Snow ||
         kind == rock::NodeKind::Colorize;
@@ -11099,33 +11143,6 @@ void DrawViewportCube(const ImVec2& min, const ImVec2& max, float timeSeconds)
                            drawMeshSurface && preview.showSurface,
                            drawMeshSurface && preview.showWireframe);
     }
-    const auto heightfieldFieldName = [](rock::HeightfieldPreviewField field) {
-        switch (field)
-        {
-        case rock::HeightfieldPreviewField::Deposits:
-            return "Deposits";
-        case rock::HeightfieldPreviewField::Flows:
-            return "Flows";
-        case rock::HeightfieldPreviewField::Age:
-            return "Age";
-        case rock::HeightfieldPreviewField::Mask:
-            return "Mask";
-        case rock::HeightfieldPreviewField::Heightmap:
-        default:
-            return "Heightmap";
-        }
-    };
-
-    const std::string title = g_graph.Evaluation().previewShowsMask
-        ? std::string(heightfieldFieldName(g_graph.Evaluation().previewField)) + " Preview"
-        : "Heightmap Preview";
-    drawList->AddText(ImVec2(min.x + 82.0f, min.y + 14.0f), ThemeColor("accentText", ImVec4(0.86f, 0.88f, 0.85f, 1.0f)), title.c_str());
-    const std::string gridInfo = std::format(
-        "Right-handed, Y-up, {} x {}, {:.0f} m cells",
-        preview.gridCellCount,
-        preview.gridCellCount,
-        preview.gridCellSizeMeters);
-    drawList->AddText(ImVec2(min.x + 82.0f, min.y + 36.0f), ThemeColor("mutedText", ImVec4(0.54f, 0.59f, 0.56f, 1.0f)), gridInfo.c_str());
     DrawViewportDisplayMenu(min);
     float overlayTop = min.y + 14.0f;
     if (g_ui.showFps)
@@ -11364,6 +11381,7 @@ ImVec4 NodeAccentColor(rock::NodeKind kind)
     case rock::NodeKind::MultiScaleErosion:
     case rock::NodeKind::Crumbling:
     case rock::NodeKind::Rock:
+    case rock::NodeKind::Scatter:
     case rock::NodeKind::Sediment:
     case rock::NodeKind::Snow:
         return heightfieldGreen;
@@ -11412,6 +11430,8 @@ ImVec2 InitialNodePosition(rock::NodeKind kind)
         return ImVec2(880.0f, 380.0f);
     case rock::NodeKind::Rock:
         return ImVec2(880.0f, 450.0f);
+    case rock::NodeKind::Scatter:
+        return ImVec2(880.0f, 590.0f);
     case rock::NodeKind::Sediment:
         return ImVec2(880.0f, 520.0f);
     case rock::NodeKind::Snow:
@@ -11913,6 +11933,7 @@ void PasteNodesFromClipboard(const ImVec2& pasteCenter)
             newMutableNode->crumbling = clipboardNode.node.crumbling;
             newMutableNode->maskFluvial = clipboardNode.node.maskFluvial;
             newMutableNode->rock = clipboardNode.node.rock;
+            newMutableNode->scatter = clipboardNode.node.scatter;
             newMutableNode->sediment = clipboardNode.node.sediment;
             newMutableNode->snow = clipboardNode.node.snow;
             newMutableNode->colorize = clipboardNode.node.colorize;
@@ -12153,6 +12174,7 @@ void DrawNodeGraph()
             addNodeMenuItem(rock::NodeKind::MultiScaleErosion);
             addNodeMenuItem(rock::NodeKind::Crumbling);
             addNodeMenuItem(rock::NodeKind::Rock);
+            addNodeMenuItem(rock::NodeKind::Scatter);
             addNodeMenuItem(rock::NodeKind::Sediment);
             addNodeMenuItem(rock::NodeKind::Snow);
             ImGui::EndMenu();
@@ -14018,6 +14040,102 @@ bool DrawRockProperties(rock::Node& editableNode)
     return true;
 }
 
+bool DrawScatterProperties(rock::Node& editableNode)
+{
+    if (!ImGui::BeginTable("ScatterRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        return false;
+    }
+
+    ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 210.0f);
+    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+    rock::ScatterSettings& sc = editableNode.scatter;
+    sc.shapeType = static_cast<rock::ScatterShapeType>(std::clamp(static_cast<int>(sc.shapeType),
+        static_cast<int>(rock::ScatterShapeType::Hemisphere),
+        static_cast<int>(rock::ScatterShapeType::Cone)));
+    sc.seed = std::clamp(sc.seed, 0, 999999);
+    sc.density = std::clamp(sc.density, 0.5f, 1000.0f);
+    sc.coverage = std::clamp(sc.coverage, 0.0f, 1.0f);
+    sc.sizeMinM = std::clamp(sc.sizeMinM, 0.1f, 200.0f);
+    sc.sizeMaxM = std::clamp(std::max(sc.sizeMaxM, sc.sizeMinM), 0.1f, 200.0f);
+    sc.height = std::clamp(sc.height, 0.0f, 100.0f);
+    sc.heightJitter = std::clamp(sc.heightJitter, 0.0f, 1.0f);
+    sc.rotationVariation = std::clamp(sc.rotationVariation, 0.0f, 1.0f);
+    sc.aspectVariation = std::clamp(sc.aspectVariation, 0.0f, 1.0f);
+
+    {
+        int shapeInt = static_cast<int>(sc.shapeType);
+        if (DrawPropertyComboRow("Shape Type", "ScatterShapeType", &shapeInt, "Hemisphere\0Cone\0\0", "散布するプロキシ形状です。Hemisphere は丸い植物や低木の分布、Cone は尖った草や小さな樹形の確認に使えます。", static_cast<int>(rock::ScatterSettings{}.shapeType)))
+        {
+            sc.shapeType = static_cast<rock::ScatterShapeType>(std::clamp(shapeInt,
+                static_cast<int>(rock::ScatterShapeType::Hemisphere),
+                static_cast<int>(rock::ScatterShapeType::Cone)));
+            EvaluateGraph();
+        }
+    }
+    if (DrawPropertyIntRow("Seed", "ScatterSeed", &sc.seed, 0, 999999, rock::ScatterSettings{}.seed, "Scatter seed changed", true, "散布位置と個体差のシードです。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Density (m)", "ScatterDensity", &sc.density, 0.5f, 200.0f, rock::ScatterSettings{}.density, "Scatter density changed", true, "scatter 中心の間隔です。植生分布では株間や群落の粒度として扱えます。", "%.2f"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyPercentRow("Coverage (%)", "ScatterCoverage", &sc.coverage, 0.0f, 1.0f, rock::ScatterSettings{}.coverage, "Scatter coverage changed", "scatter 点が実際に配置される確率です。入力 Mask がある場合は Mask の値でさらに制限されます。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Size Min (m)", "ScatterSizeMinM", &sc.sizeMinM, 0.1f, 200.0f, rock::ScatterSettings{}.sizeMinM, "Scatter size min changed", true, "散布形状の最小直径です。", "%.2f"))
+    {
+        if (sc.sizeMaxM < sc.sizeMinM) sc.sizeMaxM = sc.sizeMinM;
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Size Max (m)", "ScatterSizeMaxM", &sc.sizeMaxM, 0.1f, 200.0f, rock::ScatterSettings{}.sizeMaxM, "Scatter size max changed", true, "散布形状の最大直径です。Min < Max で範囲内からランダムに選ばれます。", "%.2f"))
+    {
+        if (sc.sizeMaxM < sc.sizeMinM) sc.sizeMinM = sc.sizeMaxM;
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Height (m)", "ScatterHeight", &sc.height, 0.0f, 50.0f, rock::ScatterSettings{}.height, "Scatter height changed", true, "形状を地形へ盛り上げる高さです。0 のままでも Mask と Unique Mask は出力されるので、植生分布用マスクとして使えます。", "%.2f"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyPercentRow("Height Jitter (%)", "ScatterHeightJitter", &sc.heightJitter, 0.0f, 1.0f, rock::ScatterSettings{}.heightJitter, "Scatter height jitter changed", "個体ごとの高さ振れ幅です。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyPercentRow("Rotation Variation (%)", "ScatterRotationVariation", &sc.rotationVariation, 0.0f, 1.0f, rock::ScatterSettings{}.rotationVariation, "Scatter rotation variation changed", "細長い個体の向きのばらつきです。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyPercentRow("Aspect Variation (%)", "ScatterAspectVariation", &sc.aspectVariation, 0.0f, 1.0f, rock::ScatterSettings{}.aspectVariation, "Scatter aspect variation changed", "個体の細長さの振れ幅です。0 で円形、上げるほど楕円形が混ざります。"))
+    {
+        EvaluateGraph();
+    }
+
+    {
+        constexpr std::array<float, 9> kGroundDetailLevels = {0.0f, 1.0f, 2.0f, 4.0f, 8.0f, 16.0f, 32.0f, 64.0f, 128.0f};
+        int detailIndex = 0;
+        float bestDistance = std::numeric_limits<float>::max();
+        for (int i = 0; i < static_cast<int>(kGroundDetailLevels.size()); ++i)
+        {
+            const float distance = std::abs(sc.groundDetailLevelM - kGroundDetailLevels[static_cast<size_t>(i)]);
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                detailIndex = i;
+            }
+        }
+        if (DrawPropertyComboRow("Ground Detail Level", "ScatterGroundDetailLevel", &detailIndex, "Max\0" "1 m\0" "2 m\0" "4 m\0" "8 m\0" "16 m\0" "32 m\0" "64 m\0" "128 m\0" "\0", "散布形状を置く底面に使う地形ディテールです。Max は入力地形そのまま、数値を上げるほど小さな凹凸をならした下地に配置します。", 0))
+        {
+            sc.groundDetailLevelM = kGroundDetailLevels[static_cast<size_t>(detailIndex)];
+            EvaluateGraph();
+        }
+    }
+
+    ImGui::EndTable();
+    return true;
+}
+
 bool DrawCrumblingProperties(rock::Node& editableNode)
 {
     if (!ImGui::BeginTable("CrumblingRows", 2, ImGuiTableFlags_SizingStretchProp))
@@ -14301,6 +14419,11 @@ void DrawPropertiesPanel()
     }
 
     if (selectedNode->kind == rock::NodeKind::Rock && DrawRockProperties(*editableNode))
+    {
+        return;
+    }
+
+    if (selectedNode->kind == rock::NodeKind::Scatter && DrawScatterProperties(*editableNode))
     {
         return;
     }

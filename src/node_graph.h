@@ -31,6 +31,7 @@ enum class NodeKind
     MaskSlope = 18,
     MaskHeight = 19,
     Crumbling = 20,
+    Scatter = 21,
 };
 
 enum class PinKind
@@ -77,6 +78,12 @@ enum class RockOrientationRule
     Flat,
     FollowGround,
     SlopeOriented,
+};
+
+enum class ScatterShapeType
+{
+    Hemisphere,
+    Cone,
 };
 
 enum class MaskFluvialBackend
@@ -208,6 +215,7 @@ enum class PreviewStage
     MaskSlope = 17,
     MaskHeight = 18,
     Crumbling = 19,
+    Scatter = 20,
 };
 
 enum class HeightfieldPreviewField
@@ -348,6 +356,24 @@ struct RockSettings
     float facetScale = 2.5f;         // Sub-cell Voronoi frequency in the rock-local frame (higher = more, smaller facets per rock).
     float groundDetailLevelM = 0.0f; // 0 = Max/full detail. Larger values smooth the placement ground and ignore smaller wrinkles.
     RockBackend backend = RockBackend::GpuCompute; // CPU reference vs GPU compute (D3D12). Defaults to GPU; falls back to CPU on shader/device failure.
+};
+
+// Heightfield + mask. Generic scatter shapes for distribution masks and simple
+// proxy geometry. Unlike Rock, this keeps the shape controls intentionally
+// simple so it can stand in for vegetation, stones, or other object placement.
+struct ScatterSettings
+{
+    ScatterShapeType shapeType = ScatterShapeType::Hemisphere;
+    int seed = 0;
+    float density = 8.0f;
+    float coverage = 1.0f;
+    float sizeMinM = 5.0f;
+    float sizeMaxM = 10.0f;
+    float height = 0.0f;
+    float heightJitter = 0.5f;
+    float rotationVariation = 1.0f;
+    float aspectVariation = 0.3f;
+    float groundDetailLevelM = 0.0f;
 };
 
 // Heightfield → heightfield + mask. GeoGen-style sediment simulation.
@@ -512,6 +538,7 @@ struct Node
     CrumblingSettings crumbling;
     MaskFluvialSettings maskFluvial;
     RockSettings rock;
+    ScatterSettings scatter;
     SedimentSettings sediment;
     SnowSettings snow;
     ColorizeSettings colorize;
@@ -705,6 +732,7 @@ struct HeightfieldPipeline
             Crumbling,
             MaskFluvial,
             Rock,
+            Scatter,
             Sediment,
             Snow,
         };
@@ -719,6 +747,7 @@ struct HeightfieldPipeline
         CrumblingSettings crumbling;
         MaskFluvialSettings maskFluvial;
         RockSettings rock;
+        ScatterSettings scatter;
         SedimentSettings sediment;
         SnowSettings snow;
     };
