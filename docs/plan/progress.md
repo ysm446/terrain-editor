@@ -2,6 +2,16 @@
 
 このファイルは、完了した作業、確認したこと、残っている注意点を共有するための場所です。
 
+## 現在の進捗サマリー
+
+- 地形キャンバスの基盤はおおむね整っている。`Terrain Size (m)`、`Simulation Resolution`、`Viewport Mesh Resolution`、`Import Heightmap` の実サイズ配置と相対パス保存に対応済み。
+- 主要な地形生成ノードとして、`Rock`、`Scatter`、`Crumbling`、`Sediment`、`Snow`、`Mask Fluvial` などを追加済み。
+- マスク系は `Mask Height`、`Mask Slope`、`Mask Curvature`、`Mask Levels` を実装済み。`Mask Invert` は単独ノードにするか保留中。
+- カラー系は `Colorize` を実装済み。アクセント色は青紫系に調整済みで、今後は色ピックやグラデーションキー化の使い勝手を詰める。
+- ビューポートは、カメラ初期化、`F` キーリセット、Depth of Field、GPU Displacement / Tessellation、地形境界表示、近い地形でのマスク表示に対応済み。
+- GPU backend は複数ノードで導入済み。`Scatter` は `Mask` 入力なし、`Ground Detail Level = Max` の場合に GPU 評価し、それ以外や失敗時は CPU にフォールバックする。
+- 次の大きな候補は、`Crumbling` のランダム散らばり改善、`Scatter` を使った植生分布ワークフローの確認、`Spline` / `River` / `Lake` の仕様整理。
+
 ## 2026-05-11
 
 - `docs/plan/` に共有スペースを作成。
@@ -96,18 +106,14 @@
 - `Rock Style = Polygonal` を中央が尖る多角錐ではなく、上面が平面に切り落とされた低ポリゴン岩へ寄せた。
 - `Rock` ノードに `Orientation Rule` と `Layer Count` を追加し、斜面への沿わせ方と複数散布レイヤーを制御できるようにした。
 
-## 完了したこと
-
-- 進捗、ゴール、計画を分けて記録できる場所を用意。
-
-## 確認したこと
-
-- `docs/plan/` ディレクトリは既存で、中身は未作成だった。
-
 ## 残っていること
 
-- `Crumbling` ノードの見た目、発生密度、停止条件、堆積量、CPU 評価速度、ランダムな散らばり方を実地確認して調整する。
+- `Crumbling` の見た目、発生密度、停止条件、堆積量、CPU 評価速度、ランダムな散らばり方を実地確認して調整する。
+- `Crumbling` の散らばり改善では、まず `Spread (%)` を `Gravity` と分けて追加する案を優先する。必要に応じて、サイズ依存移動、`Bounce` / `Deflection`、`Path Noise`、`Emission Jitter` を追加候補にする。
+- `Scatter` を植生分布用プロキシとして使い、`Mask` 入力ありのケース、`Unique Mask` の下流利用、GPU / CPU 切り替え時の体感速度を確認する。
 - `Mask Invert` を単独ノードとして残すか、`Mask Levels` の `Invert` に統合した扱いにするか決める。
 - `Colorize` の色ピック対象、サンプル方法、グラデーションキー化をさらに調整する。
 - `Spline` ノードのパス編集 UI、保存形式、出力形式、山脈生成と水路ガイドの役割分担を決める。
 - 川や湖の水域生成仕様と、水面の表示表現、エクスポート時の扱いを決める。
+- 川ノードの初期案として、始点と終点を置くと地形に沿った川筋を探索し、まず `Mask` を生成する `River Path Mask` 的な機能を検討する。地形を掘り込む処理や水面表示は、その後の段階として分けて考える。
+- パス指定なしで入力地形から自然な川網を抽出する `River Auto Mask` 的なモードも検討する。蛇行は重要な要素として、低地へ向かう制約を守りつつ谷幅内で左右に揺れる仕組みを考える。
