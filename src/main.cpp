@@ -338,6 +338,111 @@ void NormalizeLoadedViewport(bool migrateCloseOrbitDistance)
     }
 }
 
+int DaysInMonth(int month)
+{
+    static constexpr std::array<int, 12> kDays = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    const int clampedMonth = std::clamp(month, 1, 12);
+    return kDays[static_cast<size_t>(clampedMonth - 1)];
+}
+
+int DayOfYear(int month, int day)
+{
+    int total = 0;
+    const int clampedMonth = std::clamp(month, 1, 12);
+    for (int m = 1; m < clampedMonth; ++m)
+    {
+        total += DaysInMonth(m);
+    }
+    return total + std::clamp(day, 1, DaysInMonth(clampedMonth));
+}
+
+float NormalizeDegrees(float degrees)
+{
+    float normalized = std::fmod(degrees, 360.0f);
+    if (normalized < 0.0f)
+    {
+        normalized += 360.0f;
+    }
+    return normalized;
+}
+
+struct SunPositionDegrees
+{
+    float azimuth = 0.0f;
+    float elevation = 0.0f;
+};
+
+SunPositionDegrees ComputeDateTimeSunPosition(const rock::PreviewSettings& preview)
+{
+    const float latitude = std::clamp(preview.sunLatitudeDegrees, -90.0f, 90.0f) * kDegreesToRadians;
+    const float longitude = std::clamp(preview.sunLongitudeDegrees, -180.0f, 180.0f);
+    const float utcOffset = std::clamp(preview.sunUtcOffsetHours, -12.0f, 14.0f);
+    const int dayOfYear = DayOfYear(preview.sunMonth, preview.sunDay);
+    const float localHours = std::clamp(preview.sunTimeHours, 0.0f, 24.0f);
+    const float fractionalYear = (2.0f * 3.1415926535f / 365.0f) *
+        (static_cast<float>(dayOfYear - 1) + (localHours - 12.0f) / 24.0f);
+
+    const float equationOfTime = 229.18f * (
+        0.000075f +
+        0.001868f * std::cos(fractionalYear) -
+        0.032077f * std::sin(fractionalYear) -
+        0.014615f * std::cos(2.0f * fractionalYear) -
+        0.040849f * std::sin(2.0f * fractionalYear));
+    const float declination =
+        0.006918f -
+        0.399912f * std::cos(fractionalYear) +
+        0.070257f * std::sin(fractionalYear) -
+        0.006758f * std::cos(2.0f * fractionalYear) +
+        0.000907f * std::sin(2.0f * fractionalYear) -
+        0.002697f * std::cos(3.0f * fractionalYear) +
+        0.00148f * std::sin(3.0f * fractionalYear);
+
+    float trueSolarMinutes = localHours * 60.0f + equationOfTime + 4.0f * longitude - 60.0f * utcOffset;
+    trueSolarMinutes = std::fmod(trueSolarMinutes, 1440.0f);
+    if (trueSolarMinutes < 0.0f)
+    {
+        trueSolarMinutes += 1440.0f;
+    }
+
+    float hourAngleDegrees = trueSolarMinutes / 4.0f - 180.0f;
+    if (hourAngleDegrees < -180.0f)
+    {
+        hourAngleDegrees += 360.0f;
+    }
+    const float hourAngle = hourAngleDegrees * kDegreesToRadians;
+
+    const float cosZenith = std::clamp(
+        std::sin(latitude) * std::sin(declination) +
+        std::cos(latitude) * std::cos(declination) * std::cos(hourAngle),
+        -1.0f,
+        1.0f);
+    const float zenith = std::acos(cosZenith);
+    const float elevation = 90.0f - zenith / kDegreesToRadians;
+
+    const float northClockwiseAzimuth = NormalizeDegrees(
+        std::atan2(
+            std::sin(hourAngle),
+            std::cos(hourAngle) * std::sin(latitude) - std::tan(declination) * std::cos(latitude)) /
+        kDegreesToRadians + 180.0f);
+
+    return {
+        NormalizeDegrees(180.0f - northClockwiseAzimuth),
+        std::clamp(elevation, -90.0f, 90.0f),
+    };
+}
+
+SunPositionDegrees EffectiveSunPosition(const rock::PreviewSettings& preview)
+{
+    if (preview.sunDirectionMode == rock::SunDirectionMode::DateTime)
+    {
+        return ComputeDateTimeSunPosition(preview);
+    }
+    return {
+        NormalizeDegrees(preview.sunAzimuthDegrees),
+        std::clamp(preview.sunElevationDegrees, -90.0f, 90.0f),
+    };
+}
+
 struct MapViewportState
 {
     float zoom = 1.0f;
@@ -1643,6 +1748,13 @@ bool SaveAppSettings(std::string* error = nullptr)
             {"shadowStrength", settings.preview.shadowStrength},
             {"shadowMapResolution", settings.preview.shadowMapResolution},
             {"shadowBias", settings.preview.shadowBias},
+            {"sunDirectionMode", static_cast<int>(settings.preview.sunDirectionMode)},
+            {"sunLatitudeDegrees", settings.preview.sunLatitudeDegrees},
+            {"sunLongitudeDegrees", settings.preview.sunLongitudeDegrees},
+            {"sunUtcOffsetHours", settings.preview.sunUtcOffsetHours},
+            {"sunMonth", settings.preview.sunMonth},
+            {"sunDay", settings.preview.sunDay},
+            {"sunTimeHours", settings.preview.sunTimeHours},
             {"pbrAlbedo", {
                 settings.preview.pbrAlbedo[0],
                 settings.preview.pbrAlbedo[1],
@@ -1801,6 +1913,18 @@ bool LoadAppSettings(std::string* error = nullptr)
         settings.preview.shadowStrength = std::clamp(visibilityJson.value("shadowStrength", settings.preview.shadowStrength), 0.0f, 1.0f);
         settings.preview.shadowMapResolution = NearestShadowResolutionPreset(visibilityJson.value("shadowMapResolution", settings.preview.shadowMapResolution));
         settings.preview.shadowBias = std::clamp(visibilityJson.value("shadowBias", settings.preview.shadowBias), 0.0f, 0.05f);
+        {
+            const int sunModeInt = std::clamp(visibilityJson.value("sunDirectionMode", static_cast<int>(settings.preview.sunDirectionMode)),
+                static_cast<int>(rock::SunDirectionMode::Manual),
+                static_cast<int>(rock::SunDirectionMode::DateTime));
+            settings.preview.sunDirectionMode = static_cast<rock::SunDirectionMode>(sunModeInt);
+        }
+        settings.preview.sunLatitudeDegrees = std::clamp(visibilityJson.value("sunLatitudeDegrees", settings.preview.sunLatitudeDegrees), -90.0f, 90.0f);
+        settings.preview.sunLongitudeDegrees = std::clamp(visibilityJson.value("sunLongitudeDegrees", settings.preview.sunLongitudeDegrees), -180.0f, 180.0f);
+        settings.preview.sunUtcOffsetHours = std::clamp(visibilityJson.value("sunUtcOffsetHours", settings.preview.sunUtcOffsetHours), -12.0f, 14.0f);
+        settings.preview.sunMonth = std::clamp(visibilityJson.value("sunMonth", settings.preview.sunMonth), 1, 12);
+        settings.preview.sunDay = std::clamp(visibilityJson.value("sunDay", settings.preview.sunDay), 1, DaysInMonth(settings.preview.sunMonth));
+        settings.preview.sunTimeHours = std::clamp(visibilityJson.value("sunTimeHours", settings.preview.sunTimeHours), 0.0f, 24.0f);
         if (visibilityJson.contains("pbrAlbedo") && visibilityJson["pbrAlbedo"].is_array() && visibilityJson["pbrAlbedo"].size() == 3)
         {
             settings.preview.pbrAlbedo[0] = std::clamp(visibilityJson["pbrAlbedo"][0].get<float>(), 0.0f, 1.0f);
@@ -2788,6 +2912,20 @@ nlohmann::json MakeProjectSettingsJson()
             {"dofApertureBlades", preview.dofApertureBlades},
             {"dofApertureRotationDegrees", preview.dofApertureRotationDegrees},
             {"dofHighlightBoost", preview.dofHighlightBoost},
+            {"sunAzimuthDegrees", preview.sunAzimuthDegrees},
+            {"sunElevationDegrees", preview.sunElevationDegrees},
+            {"sunIntensity", preview.sunIntensity},
+            {"ambientStrength", preview.ambientStrength},
+            {"shadowStrength", preview.shadowStrength},
+            {"shadowMapResolution", preview.shadowMapResolution},
+            {"shadowBias", preview.shadowBias},
+            {"sunDirectionMode", static_cast<int>(preview.sunDirectionMode)},
+            {"sunLatitudeDegrees", preview.sunLatitudeDegrees},
+            {"sunLongitudeDegrees", preview.sunLongitudeDegrees},
+            {"sunUtcOffsetHours", preview.sunUtcOffsetHours},
+            {"sunMonth", preview.sunMonth},
+            {"sunDay", preview.sunDay},
+            {"sunTimeHours", preview.sunTimeHours},
             {"showGrid", preview.showGrid},
             {"gridCellCount", preview.gridCellCount},
             {"gridCellSizeMeters", preview.gridCellSizeMeters},
@@ -3074,6 +3212,25 @@ void ReadPreviewSettingsJson(const nlohmann::json& settingsJson, rock::PreviewSe
     preview.dofApertureBlades = std::clamp(previewJson.value("dofApertureBlades", preview.dofApertureBlades), 3, 12);
     preview.dofApertureRotationDegrees = std::clamp(previewJson.value("dofApertureRotationDegrees", preview.dofApertureRotationDegrees), -180.0f, 180.0f);
     preview.dofHighlightBoost = std::clamp(previewJson.value("dofHighlightBoost", preview.dofHighlightBoost), 0.0f, 4.0f);
+    preview.sunAzimuthDegrees = std::clamp(previewJson.value("sunAzimuthDegrees", preview.sunAzimuthDegrees), 0.0f, 360.0f);
+    preview.sunElevationDegrees = std::clamp(previewJson.value("sunElevationDegrees", preview.sunElevationDegrees), -10.0f, 89.0f);
+    preview.sunIntensity = std::clamp(previewJson.value("sunIntensity", preview.sunIntensity), 0.0f, 5.0f);
+    preview.ambientStrength = std::clamp(previewJson.value("ambientStrength", preview.ambientStrength), 0.0f, 2.0f);
+    preview.shadowStrength = std::clamp(previewJson.value("shadowStrength", preview.shadowStrength), 0.0f, 1.0f);
+    preview.shadowMapResolution = NearestShadowResolutionPreset(previewJson.value("shadowMapResolution", preview.shadowMapResolution));
+    preview.shadowBias = std::clamp(previewJson.value("shadowBias", preview.shadowBias), 0.0f, 0.05f);
+    {
+        const int sunModeInt = std::clamp(previewJson.value("sunDirectionMode", static_cast<int>(preview.sunDirectionMode)),
+            static_cast<int>(rock::SunDirectionMode::Manual),
+            static_cast<int>(rock::SunDirectionMode::DateTime));
+        preview.sunDirectionMode = static_cast<rock::SunDirectionMode>(sunModeInt);
+    }
+    preview.sunLatitudeDegrees = std::clamp(previewJson.value("sunLatitudeDegrees", preview.sunLatitudeDegrees), -90.0f, 90.0f);
+    preview.sunLongitudeDegrees = std::clamp(previewJson.value("sunLongitudeDegrees", preview.sunLongitudeDegrees), -180.0f, 180.0f);
+    preview.sunUtcOffsetHours = std::clamp(previewJson.value("sunUtcOffsetHours", preview.sunUtcOffsetHours), -12.0f, 14.0f);
+    preview.sunMonth = std::clamp(previewJson.value("sunMonth", preview.sunMonth), 1, 12);
+    preview.sunDay = std::clamp(previewJson.value("sunDay", preview.sunDay), 1, DaysInMonth(preview.sunMonth));
+    preview.sunTimeHours = std::clamp(previewJson.value("sunTimeHours", preview.sunTimeHours), 0.0f, 24.0f);
     preview.showGrid = previewJson.value("showGrid", preview.showGrid);
     preview.gridCellCount = std::clamp(previewJson.value("gridCellCount", preview.gridCellCount), 1, 200);
     preview.gridCellSizeMeters = std::clamp(previewJson.value("gridCellSizeMeters", preview.gridCellSizeMeters), 1.0f, 10000.0f);
@@ -9543,6 +9700,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
     const bool useTessellation = useDisplacement && g_graph.Settings().preview.viewportTessellation;
     const bool useDepthOfField = g_graph.Settings().preview.depthOfFieldEnabled && showSurface;
     const rock::TerrainBoundaryMode terrainBoundaryMode = g_graph.Settings().preview.terrainBoundaryMode;
+    const SunPositionDegrees sunPosition = EffectiveSunPosition(g_graph.Settings().preview);
     const bool showSectionPolygons = showSurface && terrainBoundaryMode == rock::TerrainBoundaryMode::SectionPolygon;
     const bool showTerrainBoundaryLines = showSurface && terrainBoundaryMode == rock::TerrainBoundaryMode::Lines;
     const bool meshHasVertices = !mesh.vertices.empty();
@@ -9561,8 +9719,8 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.maskShading != static_cast<int>(g_graph.Settings().preview.maskShading) ||
         g_gpuMeshPreview.terrainBoundaryMode != static_cast<int>(terrainBoundaryMode) ||
         g_gpuMeshPreview.lightingMode != g_graph.Settings().preview.lightingMode ||
-        g_gpuMeshPreview.sunAzimuthDegrees != g_graph.Settings().preview.sunAzimuthDegrees ||
-        g_gpuMeshPreview.sunElevationDegrees != g_graph.Settings().preview.sunElevationDegrees ||
+        g_gpuMeshPreview.sunAzimuthDegrees != sunPosition.azimuth ||
+        g_gpuMeshPreview.sunElevationDegrees != sunPosition.elevation ||
         g_gpuMeshPreview.sunIntensity != g_graph.Settings().preview.sunIntensity ||
         g_gpuMeshPreview.ambientStrength != g_graph.Settings().preview.ambientStrength ||
         g_gpuMeshPreview.shadowStrength != g_graph.Settings().preview.shadowStrength ||
@@ -9839,8 +9997,8 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         constants.maskShadingMode = static_cast<float>(g_graph.Settings().preview.maskShading);
         constants.colorTextureMode = (colorTextureReady ? 1.0f : 0.0f) + (previewGridTextureUploaded ? 2.0f : 0.0f);
         constants.lightingMode = static_cast<float>(g_graph.Settings().preview.lightingMode);
-        const float azimuth = g_graph.Settings().preview.sunAzimuthDegrees * 3.1415926535f / 180.0f;
-        const float elevation = g_graph.Settings().preview.sunElevationDegrees * 3.1415926535f / 180.0f;
+        const float azimuth = sunPosition.azimuth * kDegreesToRadians;
+        const float elevation = sunPosition.elevation * kDegreesToRadians;
         const float cosElevation = std::cos(elevation);
         constants.sunDirection[0] = std::sin(azimuth) * cosElevation;
         constants.sunDirection[1] = std::sin(elevation);
@@ -10672,8 +10830,8 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.maskShading   = static_cast<int>(g_graph.Settings().preview.maskShading);
         g_gpuMeshPreview.terrainBoundaryMode = static_cast<int>(terrainBoundaryMode);
         g_gpuMeshPreview.lightingMode  = g_graph.Settings().preview.lightingMode;
-        g_gpuMeshPreview.sunAzimuthDegrees = g_graph.Settings().preview.sunAzimuthDegrees;
-        g_gpuMeshPreview.sunElevationDegrees = g_graph.Settings().preview.sunElevationDegrees;
+        g_gpuMeshPreview.sunAzimuthDegrees = sunPosition.azimuth;
+        g_gpuMeshPreview.sunElevationDegrees = sunPosition.elevation;
         g_gpuMeshPreview.sunIntensity = g_graph.Settings().preview.sunIntensity;
         g_gpuMeshPreview.ambientStrength = g_graph.Settings().preview.ambientStrength;
         g_gpuMeshPreview.shadowStrength = g_graph.Settings().preview.shadowStrength;
@@ -12119,6 +12277,15 @@ bool DrawPropertyComboRow(const char* label, const char* id, int* value, const c
     return changed;
 }
 
+void DrawReadOnlyFloatRow(const char* label, float value, const char* format = "%.2f", const char* tooltip = nullptr)
+{
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    DrawPropertyLabel(label, tooltip, false);
+    ImGui::TableSetColumnIndex(1);
+    ImGui::Text(format, value);
+}
+
 bool DrawResetToDefaultButton(const char* id, bool isDefaultValue, const char* defaultValueText = nullptr)
 {
     ImGui::SameLine();
@@ -12150,6 +12317,56 @@ bool DrawResetToDefaultButton(const char* id, bool isDefaultValue, const char* d
     }
     ImGui::PopID();
     return pressed;
+}
+
+std::string FormatTimeHours(float hours)
+{
+    int totalMinutes = static_cast<int>(std::round(std::clamp(hours, 0.0f, 24.0f) * 60.0f));
+    totalMinutes = std::clamp(totalMinutes, 0, 24 * 60);
+    const int hour = totalMinutes / 60;
+    const int minute = totalMinutes % 60;
+    char buffer[16];
+    std::snprintf(buffer, sizeof(buffer), "%02d:%02d", hour, minute);
+    return buffer;
+}
+
+bool DrawTimeOfDayRow(const char* label, const char* id, float* value, float defaultValue, const char* dirtyReason, const char* tooltip = nullptr)
+{
+    bool editEnded = false;
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    DrawPropertyLabel(label, tooltip, FloatDiffersFromDefault(*value, defaultValue));
+    ImGui::TableSetColumnIndex(1);
+
+    ImGui::PushID(id);
+    const float availableWidth = ImGui::GetContentRegionAvail().x;
+    const float valueWidth = 48.0f;
+    const float resetWidth = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x;
+    const float sliderWidth = std::clamp(
+        availableWidth - valueWidth - resetWidth - ImGui::GetStyle().ItemInnerSpacing.x * 2.0f,
+        80.0f,
+        180.0f);
+    ImGui::SetNextItemWidth(sliderWidth);
+    if (ImGui::SliderFloat("##slider", value, 0.0f, 24.0f, ""))
+    {
+        *value = std::clamp(*value, 0.0f, 24.0f);
+        g_graph.MarkDirty(dirtyReason);
+    }
+    editEnded = editEnded || ImGui::IsItemDeactivatedAfterEdit();
+
+    ImGui::SameLine();
+    const std::string timeText = FormatTimeHours(*value);
+    ImGui::TextUnformatted(timeText.c_str());
+
+    const std::string defaultText = FormatTimeHours(defaultValue);
+    if (DrawResetToDefaultButton("reset", !FloatDiffersFromDefault(*value, defaultValue), defaultText.c_str()))
+    {
+        *value = std::clamp(defaultValue, 0.0f, 24.0f);
+        g_graph.MarkDirty(dirtyReason);
+        editEnded = true;
+    }
+    ImGui::PopID();
+    return editEnded;
 }
 
 struct NumericTextInputState
@@ -14265,13 +14482,58 @@ void DrawSkySettingsPanel()
             ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
 
             ImGui::SeparatorText("太陽");
-            if (DrawPropertyFloatRow("Sun Azimuth (deg)", "DisplaySunAzimuth", &settings.preview.sunAzimuthDegrees, 0.0f, 360.0f, rock::PreviewSettings{}.sunAzimuthDegrees, "Sun azimuth changed", false, "太陽の水平角度です。地形の溝が読みやすい方向へ回せます。"))
+            int sunModeInt = static_cast<int>(settings.preview.sunDirectionMode);
+            if (DrawPropertyComboRow("Sun Mode", "DisplaySunMode", &sunModeInt, "Manual\0Date Time\0\0", "Manual は方位角と高度を直接指定します。Date Time は緯度、経度、月日、時刻、UTC Offset からそれらしい太陽位置を計算します。", static_cast<int>(rock::PreviewSettings{}.sunDirectionMode)))
             {
+                settings.preview.sunDirectionMode = static_cast<rock::SunDirectionMode>(std::clamp(sunModeInt,
+                    static_cast<int>(rock::SunDirectionMode::Manual),
+                    static_cast<int>(rock::SunDirectionMode::DateTime)));
                 SaveAppSettingsSilently();
             }
-            if (DrawPropertyFloatRow("Sun Elevation (deg)", "DisplaySunElevation", &settings.preview.sunElevationDegrees, -10.0f, 89.0f, rock::PreviewSettings{}.sunElevationDegrees, "Sun elevation changed", false, "太陽の高さです。低いほど影が長く、凹凸が強調されます。0° は地平線、負値は地平より下 (夜遷移の確認用)。"))
+            if (settings.preview.sunDirectionMode == rock::SunDirectionMode::DateTime)
             {
-                SaveAppSettingsSilently();
+                if (DrawPropertyFloatRow("Latitude", "SunLatitude", &settings.preview.sunLatitudeDegrees, -90.0f, 90.0f, rock::PreviewSettings{}.sunLatitudeDegrees, "Sun latitude changed", false, "太陽位置計算に使う緯度です。北緯を正、南緯を負で指定します。"))
+                {
+                    SaveAppSettingsSilently();
+                }
+                if (DrawPropertyFloatRow("Longitude", "SunLongitude", &settings.preview.sunLongitudeDegrees, -180.0f, 180.0f, rock::PreviewSettings{}.sunLongitudeDegrees, "Sun longitude changed", false, "太陽位置計算に使う経度です。東経を正、西経を負で指定します。"))
+                {
+                    SaveAppSettingsSilently();
+                }
+                if (DrawPropertyFloatRow("UTC Offset", "SunUtcOffset", &settings.preview.sunUtcOffsetHours, -12.0f, 14.0f, rock::PreviewSettings{}.sunUtcOffsetHours, "Sun UTC offset changed", false, "日時の解釈に使う UTC からの時差です。夏時間やタイムゾーンDBは使わず、ここで指定した値をそのまま使います。", "%.1f"))
+                {
+                    SaveAppSettingsSilently();
+                }
+                if (DrawPropertyIntRow("Month", "SunMonth", &settings.preview.sunMonth, 1, 12, rock::PreviewSettings{}.sunMonth, "Sun month changed", false, "太陽位置計算に使う月です。年は固定の非うるう年として扱います。"))
+                {
+                    settings.preview.sunDay = std::clamp(settings.preview.sunDay, 1, DaysInMonth(settings.preview.sunMonth));
+                    SaveAppSettingsSilently();
+                }
+                const int maxDay = DaysInMonth(settings.preview.sunMonth);
+                if (DrawPropertyIntRow("Day", "SunDay", &settings.preview.sunDay, 1, maxDay, std::clamp(rock::PreviewSettings{}.sunDay, 1, maxDay), "Sun day changed", false, "太陽位置計算に使う日です。月に応じて最大日数を制限します。"))
+                {
+                    settings.preview.sunDay = std::clamp(settings.preview.sunDay, 1, maxDay);
+                    SaveAppSettingsSilently();
+                }
+                if (DrawTimeOfDayRow("Time", "SunTime", &settings.preview.sunTimeHours, rock::PreviewSettings{}.sunTimeHours, "Sun time changed", "ローカル時刻です。0:00 から 24:00 までをスライダーで指定します。"))
+                {
+                    SaveAppSettingsSilently();
+                }
+
+                const SunPositionDegrees computedSun = EffectiveSunPosition(settings.preview);
+                DrawReadOnlyFloatRow("Computed Azimuth", computedSun.azimuth, "%.2f", "計算されたアプリ内方位角です。0° が南(Z+)、90° が東(X+)です。");
+                DrawReadOnlyFloatRow("Computed Elevation", computedSun.elevation, "%.2f", "計算された太陽高度です。");
+            }
+            else
+            {
+                if (DrawPropertyFloatRow("Sun Azimuth (deg)", "DisplaySunAzimuth", &settings.preview.sunAzimuthDegrees, 0.0f, 360.0f, rock::PreviewSettings{}.sunAzimuthDegrees, "Sun azimuth changed", false, "太陽の水平角度です。0° が南(Z+)、90° が東(X+)です。地形の溝が読みやすい方向へ回せます。"))
+                {
+                    SaveAppSettingsSilently();
+                }
+                if (DrawPropertyFloatRow("Sun Elevation (deg)", "DisplaySunElevation", &settings.preview.sunElevationDegrees, -10.0f, 89.0f, rock::PreviewSettings{}.sunElevationDegrees, "Sun elevation changed", false, "太陽の高さです。低いほど影が長く、凹凸が強調されます。0° は地平線、負値は地平より下 (夜遷移の確認用)。"))
+                {
+                    SaveAppSettingsSilently();
+                }
             }
             if (DrawPropertyFloatRow("Sun Intensity", "DisplaySunIntensity", &settings.preview.sunIntensity, 0.0f, 5.0f, rock::PreviewSettings{}.sunIntensity, "Sun intensity changed", false, "直射光の強さです。"))
             {

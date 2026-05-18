@@ -155,6 +155,12 @@ enum class TerrainBoundaryMode
     Lines,
 };
 
+enum class SunDirectionMode
+{
+    Manual,
+    DateTime,
+};
+
 // マスクプレビューのシェーディング方式。
 // Grayscale: mask=0 を黒、mask=1 を白とする純粋な白黒ランプ (既定)。
 // GrayOrange: ライティング付きのグレー×オレンジのトーン。
@@ -550,6 +556,13 @@ struct PreviewSettings
     float shadowStrength = 0.36f;
     int shadowMapResolution = 2048;
     float shadowBias = 0.0035f;
+    SunDirectionMode sunDirectionMode = SunDirectionMode::Manual;
+    float sunLatitudeDegrees = 35.0f;
+    float sunLongitudeDegrees = 139.0f;
+    float sunUtcOffsetHours = 9.0f;
+    int sunMonth = 6;
+    int sunDay = 21;
+    float sunTimeHours = 14.0f;
     std::array<float, 3> pbrAlbedo = {0.80f, 0.80f, 0.80f};
     int gridCellCount = 10;
     float gridCellSizeMeters = 100.0f;
