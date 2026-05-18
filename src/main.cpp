@@ -178,6 +178,7 @@ bool g_projectSettingsHadSimulationResolution = false;
 std::filesystem::path g_projectPath;
 std::optional<std::filesystem::path> g_projectSavePathForSerialization;
 std::wstring g_windowTitle;
+bool g_projectDirty = false;
 std::vector<std::filesystem::path> g_recentProjectPaths;
 std::vector<std::pair<rock::GraphId, ImVec2>> g_pendingNodePositions;
 std::vector<std::pair<rock::GraphId, ImVec2>> g_nodePositionCache;
@@ -960,6 +961,10 @@ std::string MakeWindowTitleText()
 {
     std::string title = "Terrain Editor v" + std::string(TERRAIN_EDITOR_VERSION_STRING) + " ";
     title += g_projectPath.empty() ? "Untitled" : g_projectPath.filename().string();
+    if (g_projectDirty)
+    {
+        title += "*";
+    }
     return title;
 }
 
@@ -970,6 +975,10 @@ std::wstring MakeWindowTitle()
         std::to_wstring(TERRAIN_EDITOR_VERSION_MINOR) + L"." +
         std::to_wstring(TERRAIN_EDITOR_VERSION_PATCH) + L" ";
     title += g_projectPath.empty() ? L"Untitled" : g_projectPath.filename().wstring();
+    if (g_projectDirty)
+    {
+        title += L"*";
+    }
     return title;
 }
 
@@ -982,6 +991,28 @@ void UpdateWindowTitle()
         // first character. Call DefWindowProcW directly to bypass the IAT hook.
         DefWindowProcW(g_hwnd, WM_SETTEXT, 0, reinterpret_cast<LPARAM>(g_windowTitle.c_str()));
     }
+}
+
+void SetProjectDirty(bool dirty)
+{
+    if (g_projectDirty == dirty)
+    {
+        return;
+    }
+
+    g_projectDirty = dirty;
+    UpdateWindowTitle();
+}
+
+void MarkProjectDirty()
+{
+    SetProjectDirty(true);
+}
+
+void MarkGraphChanged(std::string_view reason)
+{
+    g_graph.MarkDirty(reason);
+    MarkProjectDirty();
 }
 
 void ThrowIfFailed(HRESULT hr, const char* message)
@@ -2349,6 +2380,7 @@ void UndoGraphEdit()
     g_redoStack.push_back(CaptureGraphEditSnapshot());
     ApplyGraphEditSnapshot(undoSnapshot);
     g_projectStatus = "Undo";
+    MarkProjectDirty();
 }
 
 void RedoGraphEdit()
@@ -2363,6 +2395,7 @@ void RedoGraphEdit()
     g_undoStack.push_back(CaptureGraphEditSnapshot());
     ApplyGraphEditSnapshot(redoSnapshot);
     g_projectStatus = "Redo";
+    MarkProjectDirty();
 }
 
 void NewProject()
@@ -2370,6 +2403,7 @@ void NewProject()
     ClearUndoHistory();
     g_graph = rock::NodeGraph::CreateDefaultTerrainGraph();
     g_projectPath.clear();
+    SetProjectDirty(false);
     UpdateWindowTitle();
     g_projectStatus = "New project";
     g_exportStatus = "No export yet";
@@ -3242,6 +3276,7 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
         stream << root.dump(2);
         g_projectSavePathForSerialization.reset();
         g_projectPath = path;
+        SetProjectDirty(false);
         UpdateWindowTitle();
         AddRecentProjectPath(path);
         SaveAppSettingsSilently();
@@ -3256,20 +3291,46 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
     }
 }
 
-void SaveCurrentProject()
+bool SaveCurrentProject()
 {
     const std::optional<std::filesystem::path> path =
         g_projectPath.empty() ? ShowProjectFileDialog(true) : std::optional<std::filesystem::path>(g_projectPath);
     if (!path)
     {
-        return;
+        return false;
     }
 
     std::string error;
     if (!SaveProjectToFile(*path, &error))
     {
         g_projectStatus = "Save failed: " + error;
+        return false;
     }
+
+    return true;
+}
+
+bool ConfirmSaveUnsavedChanges()
+{
+    if (!g_projectDirty)
+    {
+        return true;
+    }
+
+    const int result = MessageBoxW(
+        g_hwnd,
+        L"保存されていない変更があります。\n\n変更を保存しますか？",
+        L"未保存の変更",
+        MB_ICONWARNING | MB_YESNOCANCEL | MB_DEFBUTTON1);
+    if (result == IDYES)
+    {
+        return SaveCurrentProject();
+    }
+    if (result == IDNO)
+    {
+        return true;
+    }
+    return false;
 }
 
 void ReadColor3Json(const nlohmann::json& ownerJson, const char* key, std::array<float, 3>& target, float maxValue)
@@ -3726,6 +3787,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
         ReadNodePositionsJson(root);
 
         g_projectPath = path;
+        SetProjectDirty(false);
         UpdateWindowTitle();
         AddRecentProjectPath(path);
         SaveAppSettingsSilently();
@@ -9392,7 +9454,7 @@ static void ProcessDragSamples(rock::GraphId nodeId, const std::vector<std::arra
         node->colorize.stops.push_back(stop);
     }
 
-    g_graph.MarkDirty("Drag color sampled");
+    MarkGraphChanged("Drag color sampled");
     EvaluateGraph();
     SetForegroundWindow(g_hwnd);
 }
@@ -12452,6 +12514,7 @@ void PasteNodesFromClipboard(const ImVec2& pasteCenter)
     g_pendingSelectedNodeIds = pastedNodeIds;
     g_selectedNodeId = pastedNodeIds.empty() ? 0 : pastedNodeIds.front();
     g_projectStatus = std::format("Pasted {} node{}", pastedNodeIds.size(), pastedNodeIds.size() == 1 ? "" : "s");
+    MarkProjectDirty();
     EvaluateGraph();
 }
 
@@ -12542,6 +12605,7 @@ void DrawNodeGraph()
                     PushUndoSnapshot();
                     if (g_graph.CreateLink(startPin, endPin))
                     {
+                        MarkProjectDirty();
                         EvaluateGraph();
                     }
                 }
@@ -12604,6 +12668,7 @@ void DrawNodeGraph()
                 CommitUndoSnapshot(std::move(*deleteUndoSnapshot));
             }
             g_skipNodeMoveUndoThisFrame = true;
+            MarkProjectDirty();
             EvaluateGraph();
         }
     }
@@ -12636,6 +12701,7 @@ void DrawNodeGraph()
                 g_pendingSelectedNodeIds = {nodeId};
                 g_selectedNodeId = nodeId;
                 g_projectStatus = "Added " + std::string(rock::ToString(kind));
+                MarkProjectDirty();
                 EvaluateGraph();
             }
         };
@@ -12681,6 +12747,7 @@ void DrawNodeGraph()
         g_pendingPreviewPinId = 0;
         if (g_graph.SetPreviewPin(pinId))
         {
+            MarkProjectDirty();
             if (g_graph.Evaluation().dirty)
             {
                 EvaluateGraph();
@@ -12724,6 +12791,7 @@ void DrawNodeGraph()
         {
             CommitUndoSnapshot(std::move(*g_pendingNodeMoveUndo));
             g_projectStatus = "Node moved";
+            MarkProjectDirty();
         }
         g_pendingNodeMoveUndo.reset();
     }
@@ -12858,7 +12926,7 @@ bool DrawTimeOfDayRow(const char* label, const char* id, float* value, float def
     if (ImGui::SliderFloat("##slider", value, 0.0f, 24.0f, ""))
     {
         *value = std::clamp(*value, 0.0f, 24.0f);
-        g_graph.MarkDirty(dirtyReason);
+        MarkGraphChanged(dirtyReason);
     }
     editEnded = editEnded || ImGui::IsItemDeactivatedAfterEdit();
 
@@ -12870,7 +12938,7 @@ bool DrawTimeOfDayRow(const char* label, const char* id, float* value, float def
     if (DrawResetToDefaultButton("reset", !FloatDiffersFromDefault(*value, defaultValue), defaultText.c_str()))
     {
         *value = std::clamp(defaultValue, 0.0f, 24.0f);
-        g_graph.MarkDirty(dirtyReason);
+        MarkGraphChanged(dirtyReason);
         editEnded = true;
     }
     ImGui::PopID();
@@ -13022,7 +13090,7 @@ bool DrawPropertyFloatRow(const char* label, const char* id, float* value, float
     ImGui::SetNextItemWidth(sliderWidth);
     if (ImGui::SliderFloat("##slider", value, minValue, maxValue, format, sliderFlags))
     {
-        g_graph.MarkDirty(dirtyReason);
+        MarkGraphChanged(dirtyReason);
     }
     if (recordUndo && ImGui::IsItemActivated())
     {
@@ -13035,7 +13103,7 @@ bool DrawPropertyFloatRow(const char* label, const char* id, float* value, float
     if (DrawEnterCommitFloatInput("##number", value, format))
     {
         *value = std::clamp(*value, inputMin, inputMax);
-        g_graph.MarkDirty(dirtyReason);
+        MarkGraphChanged(dirtyReason);
         editEnded = true;
     }
     if (recordUndo && ImGui::IsItemActivated())
@@ -13051,7 +13119,7 @@ bool DrawPropertyFloatRow(const char* label, const char* id, float* value, float
             PushUndoSnapshot();
         }
         *value = std::clamp(defaultValue, inputMin, inputMax);
-        g_graph.MarkDirty(dirtyReason);
+        MarkGraphChanged(dirtyReason);
         editEnded = true;
     }
     ImGui::PopID();
@@ -13079,7 +13147,7 @@ bool DrawPropertyFloatInputRow(const char* label, const char* id, float* value, 
     if (DrawEnterCommitFloatInput("##number", value, format))
     {
         *value = std::clamp(*value, minValue, maxValue);
-        g_graph.MarkDirty(dirtyReason);
+        MarkGraphChanged(dirtyReason);
         editEnded = true;
     }
     if (recordUndo && ImGui::IsItemActivated())
@@ -13097,7 +13165,7 @@ bool DrawPropertyFloatInputRow(const char* label, const char* id, float* value, 
             PushUndoSnapshot();
         }
         *value = std::clamp(defaultValue, minValue, maxValue);
-        g_graph.MarkDirty(dirtyReason);
+        MarkGraphChanged(dirtyReason);
         editEnded = true;
     }
     ImGui::PopID();
@@ -13145,7 +13213,7 @@ bool DrawPropertyIntRow(const char* label, const char* id, int* value, int minVa
     ImGui::SetNextItemWidth(sliderWidth);
     if (ImGui::SliderInt("##slider", value, minValue, maxValue))
     {
-        g_graph.MarkDirty(dirtyReason);
+        MarkGraphChanged(dirtyReason);
     }
     if (recordUndo && ImGui::IsItemActivated())
     {
@@ -13158,7 +13226,7 @@ bool DrawPropertyIntRow(const char* label, const char* id, int* value, int minVa
     if (DrawEnterCommitIntInput("##number", value))
     {
         *value = std::clamp(*value, minValue, maxValue);
-        g_graph.MarkDirty(dirtyReason);
+        MarkGraphChanged(dirtyReason);
         editEnded = true;
     }
     if (recordUndo && ImGui::IsItemActivated())
@@ -13174,7 +13242,7 @@ bool DrawPropertyIntRow(const char* label, const char* id, int* value, int minVa
             PushUndoSnapshot();
         }
         *value = std::clamp(defaultValue, minValue, maxValue);
-        g_graph.MarkDirty(dirtyReason);
+        MarkGraphChanged(dirtyReason);
         editEnded = true;
     }
     ImGui::PopID();
@@ -13227,7 +13295,7 @@ bool DrawPresetIntRow(const char* label,
                         PushUndoSnapshot();
                     }
                     *value = preset;
-                    g_graph.MarkDirty(dirtyReason);
+                    MarkGraphChanged(dirtyReason);
                     changed = true;
                 }
             }
@@ -13248,7 +13316,7 @@ bool DrawPresetIntRow(const char* label,
             PushUndoSnapshot();
         }
         *value = normalizedDefault;
-        g_graph.MarkDirty(dirtyReason);
+        MarkGraphChanged(dirtyReason);
         changed = true;
     }
     ImGui::PopID();
@@ -13300,7 +13368,7 @@ bool DrawPropertyBoolRow(const char* label, const char* id, bool* value, const c
     }
     if (changed)
     {
-        g_graph.MarkDirty(dirtyReason);
+        MarkGraphChanged(dirtyReason);
     }
     ImGui::PopID();
     return changed;
@@ -13326,7 +13394,7 @@ bool DrawPropertyPathRow(const char* label, const char* id, std::string* value, 
     if (ImGui::InputText("##path", buffer, IM_ARRAYSIZE(buffer)))
     {
         *value = buffer;
-        g_graph.MarkDirty(dirtyReason);
+        MarkGraphChanged(dirtyReason);
     }
     if (ImGui::IsItemActivated())
     {
@@ -13341,7 +13409,7 @@ bool DrawPropertyPathRow(const char* label, const char* id, std::string* value, 
         {
             PushUndoSnapshot();
             *value = MakeProjectAssetPathForJson(PathToUtf8(*path));
-            g_graph.MarkDirty(dirtyReason);
+            MarkGraphChanged(dirtyReason);
             editEnded = true;
         }
     }
@@ -13469,7 +13537,7 @@ bool DrawShapeProperties(rock::Node& editableNode)
     if (DrawPropertyComboRow("Shape Type", "ShapeType", &shapeKind, "Hemisphere\0Pyramid\0", "デバッグ用の基本ハイトフィールド形状です。", static_cast<int>(rock::ShapeSettings{}.kind)))
     {
         shape.kind = static_cast<rock::ShapeKind>(std::clamp(shapeKind, 0, 1));
-        g_graph.MarkDirty("Shape type changed");
+        MarkGraphChanged("Shape type changed");
         EvaluateGraph();
     }
     if (DrawPropertyFloatRow("Scale (m)", "ShapeScaleMeters", &shape.scaleMeters, 1.0f, 8096.0f, rock::ShapeSettings{}.scaleMeters, "Shape scale changed", true, "グローバル Terrain Size 内でシェープが占める幅と奥行きです。Terrain Size より小さい場合は中央に配置され、外側は高さ 0 になります。"))
@@ -14956,12 +15024,12 @@ void DrawDisplaySettingsPanel()
             {
                 g_viewport.orbitDistance = DefaultViewportOrbitDistance();
             }
-            g_graph.MarkDirty("Terrain size changed");
+            MarkGraphChanged("Terrain size changed");
             EvaluateGraph();
         }
         if (DrawResolutionPresetRow("Simulation Resolution", "GlobalSimulationResolution", &settings.preview.simulationResolution, rock::PreviewSettings{}.simulationResolution, "Simulation resolution changed", false, "ノードグラフ全体の地形・マスク評価解像度です。高いほど細かく計算できますが、評価時間とメモリ使用量が増えます。"))
         {
-            g_graph.MarkDirty("Simulation resolution changed");
+            MarkGraphChanged("Simulation resolution changed");
             EvaluateGraph();
         }
         if (DrawResolutionPresetRow("Viewport Mesh Resolution", "DisplayPreviewResolution", &settings.preview.resolution, rock::PreviewSettings{}.resolution, "Preview mesh resolution changed", false, "3D プレビュー用メッシュの細かさです。Simulation Resolution は変えず、表示の分割数だけを変更します。"))
@@ -15328,7 +15396,7 @@ void DrawCameraPanel()
                 "ぼけのサンプル形状です。多角形にすると絞り羽根由来の角ばったボケになります。", rock::PreviewSettings{}.dofApertureShape))
             {
                 preview.dofApertureShape = std::clamp(apertureShape, 0, 4);
-                g_graph.MarkDirty("Depth of Field aperture shape changed");
+                MarkGraphChanged("Depth of Field aperture shape changed");
             }
             if (preview.dofApertureShape == 4)
             {
@@ -15717,16 +15785,22 @@ void DrawUi()
         {
             if (ImGui::MenuItem("新規", "Ctrl+N"))
             {
-                NewProject();
+                if (ConfirmSaveUnsavedChanges())
+                {
+                    NewProject();
+                }
             }
             if (ImGui::MenuItem("開く", "Ctrl+O"))
             {
-                if (const std::optional<std::filesystem::path> path = ShowProjectFileDialog(false))
+                if (ConfirmSaveUnsavedChanges())
                 {
-                    std::string error;
-                    if (!LoadProjectFromFile(*path, &error))
+                    if (const std::optional<std::filesystem::path> path = ShowProjectFileDialog(false))
                     {
-                        g_projectStatus = "Load failed: " + error;
+                        std::string error;
+                        if (!LoadProjectFromFile(*path, &error))
+                        {
+                            g_projectStatus = "Load failed: " + error;
+                        }
                     }
                 }
             }
@@ -15743,10 +15817,13 @@ void DrawUi()
                         std::to_string(index + 1) + ". " + PathToUtf8(recentPath.filename()) + "##RecentProject" + std::to_string(index);
                     if (ImGui::MenuItem(label.c_str()))
                     {
-                        std::string error;
-                        if (!LoadProjectFromFile(recentPath, &error))
+                        if (ConfirmSaveUnsavedChanges())
                         {
-                            g_projectStatus = "Load failed: " + error;
+                            std::string error;
+                            if (!LoadProjectFromFile(recentPath, &error))
+                            {
+                                g_projectStatus = "Load failed: " + error;
+                            }
                         }
                     }
                     if (ImGui::IsItemHovered())
@@ -15785,7 +15862,10 @@ void DrawUi()
             ImGui::Separator();
             if (ImGui::MenuItem("終了"))
             {
-                PostQuitMessage(0);
+                if (ConfirmSaveUnsavedChanges())
+                {
+                    DestroyWindow(g_hwnd);
+                }
             }
             ImGui::EndMenu();
         }
@@ -16049,6 +16129,12 @@ LRESULT WINAPI WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             return 0;
         }
         break;
+    case WM_CLOSE:
+        if (ConfirmSaveUnsavedChanges())
+        {
+            DestroyWindow(hwnd);
+        }
+        return 0;
     case WM_DESTROY:
         g_running = false;
         PostQuitMessage(0);
