@@ -291,7 +291,8 @@ struct MaskBlendSettings
 struct MaskCurvatureSettings
 {
     MaskCurvatureMode mode = MaskCurvatureMode::Absolute;
-    int radius = 3;
+    float largestDetailLevelM = 8.0f; // m. Low-pass scale for curvature analysis; larger values ignore smaller terrain wrinkles.
+    int radius = 3; // Legacy saved setting. Largest Detail Level now drives the blur radius.
     float sensitivityMeters = 1.0f;
     float threshold = 0.0f;
     float gamma = 1.0f;

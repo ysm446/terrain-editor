@@ -115,7 +115,7 @@ uint64_t HashMaskCurvatureSettings(const MaskCurvatureSettings& settings, int re
 {
     uint64_t hash = 1099511628211ull;
     HashCombine(hash, static_cast<uint64_t>(settings.mode));
-    HashCombine(hash, static_cast<uint64_t>(settings.radius));
+    HashCombine(hash, HashFloat(settings.largestDetailLevelM));
     HashCombine(hash, HashFloat(settings.sensitivityMeters));
     HashCombine(hash, HashFloat(settings.threshold));
     HashCombine(hash, HashFloat(settings.gamma));
@@ -1244,7 +1244,10 @@ void ApplyMaskCurvature(HeightfieldGrid& grid, const MaskCurvatureSettings& sett
         return;
     }
 
-    const int radius = std::clamp(settings.radius, 1, 64);
+    const float terrainSize = std::max(grid.terrainSizeMeters, 1.0f);
+    const float cellSize = terrainSize / static_cast<float>(std::max(1, n - 1));
+    const float largestDetailM = std::clamp(settings.largestDetailLevelM, cellSize, terrainSize * 0.5f);
+    const int radius = std::clamp(static_cast<int>(std::round(largestDetailM / cellSize)), 1, 64);
     const float sensitivity = std::max(settings.sensitivityMeters, 0.0001f);
     const float threshold = std::clamp(settings.threshold, 0.0f, 0.99f);
     const float gamma = std::clamp(settings.gamma, 0.05f, 8.0f);

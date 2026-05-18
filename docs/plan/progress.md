@@ -100,7 +100,7 @@
 - マスクプレビューの 3D 表示で、CPU Mesh 経路も頂点 mask 値ではなく mask テクスチャーをピクセルシェーダーでサンプルするようにした。
 - `Mask Curvature` ノードを追加。
 - 入力 `Heightmap` から局所平均との差分を計算し、`Ridges`、`Valleys`、`Absolute` の曲率マスクを出力できるようにした。
-- `Radius`、`Sensitivity (m)`、`Threshold (%)`、`Gamma` で検出スケールと出力カーブを調整できるようにした。
+- `Largest Detail Level (m)`、`Sensitivity (m)`、`Threshold (%)`、`Gamma` で検出スケールと出力カーブを調整できるようにした。
 - `docs/nodes/mask/mask_curvature/` にノード説明とアルゴリズムメモを追加。
 - `Colorize` ノードに `Base Color` 入力を追加し、`Mask` でグラデーション色を既存カラーへ合成できるようにした。
 - `Mask Levels` ノードを追加し、Black Point / White Point / Gamma / Invert でマスクを整えられるようにした。

@@ -2492,6 +2492,7 @@ nlohmann::json MakeMaskSettingsJson(const rock::Node& node)
         }},
         {"maskCurvature", {
             {"mode", static_cast<int>(node.maskCurvature.mode)},
+            {"largestDetailLevelM", node.maskCurvature.largestDetailLevelM},
             {"radius", node.maskCurvature.radius},
             {"sensitivityMeters", node.maskCurvature.sensitivityMeters},
             {"threshold", node.maskCurvature.threshold},
@@ -2802,6 +2803,10 @@ void ReadMaskSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
         node.maskCurvature.mode = static_cast<rock::MaskCurvatureMode>(modeInt);
     }
     node.maskCurvature.radius = std::clamp(nodeMaskCurvatureJson.value("radius", node.maskCurvature.radius), 1, 64);
+    node.maskCurvature.largestDetailLevelM = std::clamp(
+        nodeMaskCurvatureJson.value("largestDetailLevelM", static_cast<float>(node.maskCurvature.radius)),
+        1.0f,
+        1024.0f);
     node.maskCurvature.sensitivityMeters = std::clamp(nodeMaskCurvatureJson.value("sensitivityMeters", node.maskCurvature.sensitivityMeters), 0.001f, 1000.0f);
     node.maskCurvature.threshold = std::clamp(nodeMaskCurvatureJson.value("threshold", node.maskCurvature.threshold), 0.0f, 0.99f);
     node.maskCurvature.gamma = std::clamp(nodeMaskCurvatureJson.value("gamma", node.maskCurvature.gamma), 0.05f, 8.0f);
@@ -13932,6 +13937,7 @@ bool DrawMaskCurvatureProperties(rock::Node& editableNode)
     ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 200.0f);
     ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
     rock::MaskCurvatureSettings& mc = editableNode.maskCurvature;
+    mc.largestDetailLevelM = std::clamp(mc.largestDetailLevelM, 1.0f, 1024.0f);
     mc.radius = std::clamp(mc.radius, 1, 64);
     mc.sensitivityMeters = std::clamp(mc.sensitivityMeters, 0.001f, 1000.0f);
     mc.threshold = std::clamp(mc.threshold, 0.0f, 0.99f);
@@ -13945,9 +13951,25 @@ bool DrawMaskCurvatureProperties(rock::Node& editableNode)
             static_cast<int>(rock::MaskCurvatureMode::Absolute)));
         EvaluateGraph();
     }
-    if (DrawPropertyIntRow("Radius", "MaskCurvatureRadius", &mc.radius, 1, 64, rock::MaskCurvatureSettings{}.radius, "Mask curvature radius changed", true, "周囲平均との差分を見る半径です。小さいほど細かい凹凸、大きいほど広い尾根や谷を拾います。"))
     {
-        EvaluateGraph();
+        constexpr std::array<float, 6> kCurvatureDetailLevels = {2.0f, 4.0f, 8.0f, 16.0f, 32.0f, 64.0f};
+        int detailIndex = 2;
+        float bestDistance = FLT_MAX;
+        for (int i = 0; i < static_cast<int>(kCurvatureDetailLevels.size()); ++i)
+        {
+            const float distance = std::abs(mc.largestDetailLevelM - kCurvatureDetailLevels[static_cast<size_t>(i)]);
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                detailIndex = i;
+            }
+        }
+        if (DrawPropertyComboRow("Largest Detail Level (m)", "MaskCurvatureLargestDetailLevel", &detailIndex, "2 m\0" "4 m\0" "8 m\0" "16 m\0" "32 m\0" "64 m\0" "\0", "曲率を調べる前の解析用ハイトをならす最大スケールです。2m は細かい凹凸を拾いやすく、64m は小さな揺れを無視して大きな尾根や谷を優先します。入力地形そのものは変更しません。", 2))
+        {
+            detailIndex = std::clamp(detailIndex, 0, static_cast<int>(kCurvatureDetailLevels.size()) - 1);
+            mc.largestDetailLevelM = kCurvatureDetailLevels[static_cast<size_t>(detailIndex)];
+            EvaluateGraph();
+        }
     }
     if (DrawPropertyFloatRow("Sensitivity (m)", "MaskCurvatureSensitivity", &mc.sensitivityMeters, 0.001f, 1000.0f, rock::MaskCurvatureSettings{}.sensitivityMeters, "Mask curvature sensitivity changed", true, "この高さ差で mask=1 になります。小さいほど弱い曲率も明るくなります。", "%.3f"))
     {
