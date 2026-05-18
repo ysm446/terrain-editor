@@ -2505,6 +2505,7 @@ nlohmann::json MakeMaskSettingsJson(const rock::Node& node)
             {"invert", node.maskLevels.invert},
         }},
         {"maskSlope", {
+            {"largestDetailLevelM", node.maskSlope.largestDetailLevelM},
             {"slopeMinDeg", node.maskSlope.slopeMinDeg},
             {"slopeMaxDeg", node.maskSlope.slopeMaxDeg},
             {"gamma", node.maskSlope.gamma},
@@ -2814,6 +2815,7 @@ void ReadMaskSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     node.maskLevels.whitePoint = std::clamp(nodeMaskLevelsJson.value("whitePoint", node.maskLevels.whitePoint), 0.0f, 1.0f);
     node.maskLevels.gamma = std::clamp(nodeMaskLevelsJson.value("gamma", node.maskLevels.gamma), 0.05f, 8.0f);
     node.maskLevels.invert = nodeMaskLevelsJson.value("invert", node.maskLevels.invert);
+    node.maskSlope.largestDetailLevelM = std::clamp(nodeMaskSlopeJson.value("largestDetailLevelM", node.maskSlope.largestDetailLevelM), 0.0f, 1024.0f);
     node.maskSlope.slopeMinDeg = std::clamp(nodeMaskSlopeJson.value("slopeMinDeg", node.maskSlope.slopeMinDeg), 0.0f, 89.9f);
     node.maskSlope.slopeMaxDeg = std::clamp(nodeMaskSlopeJson.value("slopeMaxDeg", node.maskSlope.slopeMaxDeg), 0.0f, 89.9f);
     if (node.maskSlope.slopeMaxDeg < node.maskSlope.slopeMinDeg)
@@ -13896,6 +13898,7 @@ bool DrawMaskSlopeProperties(rock::Node& editableNode)
     ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 200.0f);
     ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
     rock::MaskSlopeSettings& ms = editableNode.maskSlope;
+    ms.largestDetailLevelM = std::clamp(ms.largestDetailLevelM, 0.0f, 1024.0f);
     ms.slopeMinDeg = std::clamp(ms.slopeMinDeg, 0.0f, 89.9f);
     ms.slopeMaxDeg = std::clamp(ms.slopeMaxDeg, 0.0f, 89.9f);
     if (ms.slopeMaxDeg < ms.slopeMinDeg)
@@ -13903,6 +13906,27 @@ bool DrawMaskSlopeProperties(rock::Node& editableNode)
         std::swap(ms.slopeMinDeg, ms.slopeMaxDeg);
     }
     ms.gamma = std::clamp(ms.gamma, 0.05f, 8.0f);
+
+    {
+        constexpr std::array<float, 7> kSlopeDetailLevels = {0.0f, 2.0f, 4.0f, 8.0f, 16.0f, 32.0f, 64.0f};
+        int detailIndex = 0;
+        float bestDistance = FLT_MAX;
+        for (int i = 0; i < static_cast<int>(kSlopeDetailLevels.size()); ++i)
+        {
+            const float distance = std::abs(ms.largestDetailLevelM - kSlopeDetailLevels[static_cast<size_t>(i)]);
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                detailIndex = i;
+            }
+        }
+        if (DrawPropertyComboRow("Largest Detail Level (m)", "MaskSlopeLargestDetailLevel", &detailIndex, "Max\0" "2 m\0" "4 m\0" "8 m\0" "16 m\0" "32 m\0" "64 m\0" "\0", "傾斜を調べる前の解析用ハイトをならす最大スケールです。Max は入力地形そのまま、数値を上げるほど小さな凹凸を無視して大きな斜面を優先します。入力地形そのものは変更しません。", 0))
+        {
+            detailIndex = std::clamp(detailIndex, 0, static_cast<int>(kSlopeDetailLevels.size()) - 1);
+            ms.largestDetailLevelM = kSlopeDetailLevels[static_cast<size_t>(detailIndex)];
+            EvaluateGraph();
+        }
+    }
 
     if (DrawPropertyFloatRow("Slope Min (deg)", "MaskSlopeMinDeg", &ms.slopeMinDeg, 0.0f, 89.9f, rock::MaskSlopeSettings{}.slopeMinDeg, "Mask slope min changed", true, "この角度以下を黒にします。上げるほど急な斜面だけを残します。", "%.1f"))
     {

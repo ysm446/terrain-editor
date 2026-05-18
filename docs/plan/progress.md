@@ -105,6 +105,7 @@
 - `Colorize` ノードに `Base Color` 入力を追加し、`Mask` でグラデーション色を既存カラーへ合成できるようにした。
 - `Mask Levels` ノードを追加し、Black Point / White Point / Gamma / Invert でマスクを整えられるようにした。
 - `Mask Slope` ノードを追加し、Heightmap の傾斜角から急斜面/平地マスクを作れるようにした。
+- `Mask Slope` ノードに `Largest Detail Level (m)` を追加し、解析用ハイトだけをならして大きな斜面を拾えるようにした。
 - `Rock` ノードに `Rock Style` を追加し、従来互換の `Classic`、低ポリゴン状の `Polygonal`、細長い破片状の `Shard` を選べるようにした。
 - `Rock Style = Polygonal` を中央が尖る多角錐ではなく、上面が平面に切り落とされた低ポリゴン岩へ寄せた。
 - `Rock` ノードに `Orientation Rule` と `Layer Count` を追加し、斜面への沿わせ方と複数散布レイヤーを制御できるようにした。

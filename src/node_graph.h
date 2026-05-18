@@ -308,6 +308,7 @@ struct MaskLevelsSettings
 
 struct MaskSlopeSettings
 {
+    float largestDetailLevelM = 0.0f; // 0 = Max/full detail. Larger values smooth analysis heights before slope detection.
     float slopeMinDeg = 25.0f;
     float slopeMaxDeg = 60.0f;
     float gamma = 1.0f;

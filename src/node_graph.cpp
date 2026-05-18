@@ -136,6 +136,7 @@ uint64_t HashMaskLevelsSettings(const MaskLevelsSettings& settings)
 uint64_t HashMaskSlopeSettings(const MaskSlopeSettings& settings, int resolution)
 {
     uint64_t hash = 7809847782465536322ull;
+    HashCombine(hash, HashFloat(settings.largestDetailLevelM));
     HashCombine(hash, HashFloat(settings.slopeMinDeg));
     HashCombine(hash, HashFloat(settings.slopeMaxDeg));
     HashCombine(hash, HashFloat(settings.gamma));
@@ -1315,6 +1316,12 @@ void ApplyMaskSlope(HeightfieldGrid& grid, const MaskSlopeSettings& settings)
     const float cellSize = terrainSize / static_cast<float>(std::max(1, n - 1));
     const float invTwoCell = 1.0f / (2.0f * cellSize);
     const float radToDeg = 57.29577951308232f;
+    const float largestDetailM = std::clamp(settings.largestDetailLevelM, 0.0f, terrainSize * 0.5f);
+    const int blurRadius = largestDetailM > 0.0f
+        ? std::clamp(static_cast<int>(std::round(largestDetailM / cellSize)), 1, 64)
+        : 0;
+    const std::vector<float> blurred = blurRadius > 0 ? BoxBlurHeights(grid, blurRadius) : std::vector<float>{};
+    const std::vector<float>& heights = blurRadius > 0 ? blurred : grid.heights;
 
     grid.mask.assign(cellCount, 0.0f);
     ParallelForRows(n, [&](int z) {
@@ -1327,10 +1334,10 @@ void ApplyMaskSlope(HeightfieldGrid& grid, const MaskSlopeSettings& settings)
         {
             const int xm = std::max(0, x - 1);
             const int xp = std::min(n - 1, x + 1);
-            const float hXm = grid.heights[rowBase + static_cast<size_t>(xm)];
-            const float hXp = grid.heights[rowBase + static_cast<size_t>(xp)];
-            const float hZm = grid.heights[rowAbove + static_cast<size_t>(x)];
-            const float hZp = grid.heights[rowBelow + static_cast<size_t>(x)];
+            const float hXm = heights[rowBase + static_cast<size_t>(xm)];
+            const float hXp = heights[rowBase + static_cast<size_t>(xp)];
+            const float hZm = heights[rowAbove + static_cast<size_t>(x)];
+            const float hZp = heights[rowBelow + static_cast<size_t>(x)];
             const float dhdx = (hXp - hXm) * invTwoCell;
             const float dhdz = (hZp - hZm) * invTwoCell;
             const float slopeTan = std::sqrt(dhdx * dhdx + dhdz * dhdz);
