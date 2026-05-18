@@ -1,5 +1,5 @@
 {
-  "appVersion": "0.18.29",
+  "appVersion": "0.18.30",
   "format": "terrain_editor_project",
   "formatVersion": 1,
   "links": [
@@ -411,7 +411,7 @@
         "style": 2
       },
       "heightmap": {
-        "path": "D:\\GitHub\\terrain-editor\\data\\height_2km.png",
+        "path": "..\\..\\data\\height_2km.png",
         "relativeVerticalScalePercent": 29.5,
         "scaleMeters": 2048.0,
         "verticalOffsetMeters": 0.0
@@ -598,7 +598,7 @@
         "style": 2
       },
       "heightmap": {
-        "path": "D:\\GitHub\\terrain-editor\\data\\mountain-ridge-13_Height Map_2048x2048_0_0.png",
+        "path": "..\\..\\data\\mountain-ridge-13_Height Map_2048x2048_0_0.png",
         "relativeVerticalScalePercent": 29.5,
         "scaleMeters": 2048.0,
         "verticalOffsetMeters": 0.0

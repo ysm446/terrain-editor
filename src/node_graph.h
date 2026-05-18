@@ -717,6 +717,7 @@ using RockGpuEvaluator = bool (*)(HeightfieldGrid& grid, const RockSettings& set
 using MaskFluvialGpuEvaluator = bool (*)(HeightfieldGrid& grid, const MaskFluvialSettings& settings, std::string* error);
 using SnowGpuEvaluator = bool (*)(HeightfieldGrid& grid, const SnowSettings& settings, std::string* error);
 using ColorizeGpuEvaluator = bool (*)(ColorGrid& grid, const ColorizeSettings& settings, const MaskGrid& gradientMask, const MaskGrid* mask, const ColorGrid* baseColor, std::string* error);
+using AssetPathResolver = std::string (*)(std::string_view path);
 
 struct HeightfieldPipeline
 {
@@ -906,6 +907,7 @@ void SetRockGpuEvaluator(RockGpuEvaluator evaluator);
 void SetMaskFluvialGpuEvaluator(MaskFluvialGpuEvaluator evaluator);
 void SetSnowGpuEvaluator(SnowGpuEvaluator evaluator);
 void SetColorizeGpuEvaluator(ColorizeGpuEvaluator evaluator);
+void SetAssetPathResolver(AssetPathResolver resolver);
 
 // Thread-safe progress signal: holds the GraphId of the node whose
 // evaluation kernel is currently running on a worker thread, or 0 when

@@ -176,6 +176,7 @@ std::string g_projectStatus = "No project file";
 std::string g_lastEvaluationDuration = "Eval --";
 bool g_projectSettingsHadSimulationResolution = false;
 std::filesystem::path g_projectPath;
+std::optional<std::filesystem::path> g_projectSavePathForSerialization;
 std::wstring g_windowTitle;
 std::vector<std::filesystem::path> g_recentProjectPaths;
 std::vector<std::pair<rock::GraphId, ImVec2>> g_pendingNodePositions;
@@ -1520,13 +1521,31 @@ std::optional<std::filesystem::path> ShowProjectFileDialog(bool save)
     return std::filesystem::path(fileName);
 }
 
+std::string PathToUtf8(const std::filesystem::path& path)
+{
+    const std::u8string value = path.u8string();
+    return std::string(value.begin(), value.end());
+}
+
+std::filesystem::path PathFromUtf8(const std::string& value)
+{
+    const std::u8string utf8(value.begin(), value.end());
+    return std::filesystem::path(utf8);
+}
+
 std::optional<std::filesystem::path> ShowHeightmapFileDialog(const std::string& currentPath)
 {
     wchar_t fileName[MAX_PATH]{};
     if (!currentPath.empty())
     {
-        const std::wstring current = std::filesystem::path(currentPath).wstring();
-        wcsncpy_s(fileName, current.c_str(), _TRUNCATE);
+        std::filesystem::path current = PathFromUtf8(currentPath);
+        if (current.is_relative() && !g_projectPath.empty())
+        {
+            const std::filesystem::path parent = g_projectPath.parent_path();
+            current = (parent.empty() ? std::filesystem::current_path() : parent) / current;
+        }
+        const std::wstring currentWide = current.wstring();
+        wcsncpy_s(fileName, currentWide.c_str(), _TRUNCATE);
     }
 
     OPENFILENAMEW ofn{};
@@ -1542,18 +1561,6 @@ std::optional<std::filesystem::path> ShowHeightmapFileDialog(const std::string& 
     }
 
     return std::filesystem::path(fileName);
-}
-
-std::string PathToUtf8(const std::filesystem::path& path)
-{
-    const std::u8string value = path.u8string();
-    return std::string(value.begin(), value.end());
-}
-
-std::filesystem::path PathFromUtf8(const std::string& value)
-{
-    const std::u8string utf8(value.begin(), value.end());
-    return std::filesystem::path(utf8);
 }
 
 std::filesystem::path ScreenshotDirectory()
@@ -1598,6 +1605,71 @@ std::filesystem::path ProjectFolder()
     }
     const std::filesystem::path parent = g_projectPath.parent_path();
     return parent.empty() ? std::filesystem::current_path() : parent;
+}
+
+std::filesystem::path ProjectFolderForPath(const std::filesystem::path& projectPath)
+{
+    if (projectPath.empty())
+    {
+        return {};
+    }
+    const std::filesystem::path parent = projectPath.parent_path();
+    return parent.empty() ? std::filesystem::current_path() : parent;
+}
+
+std::filesystem::path ActiveProjectFolderForAssetPaths()
+{
+    if (g_projectSavePathForSerialization)
+    {
+        return ProjectFolderForPath(*g_projectSavePathForSerialization);
+    }
+    return ProjectFolder();
+}
+
+std::string ResolveProjectAssetPath(std::string_view value)
+{
+    if (value.empty())
+    {
+        return {};
+    }
+    std::filesystem::path path = PathFromUtf8(std::string(value));
+    if (path.is_absolute())
+    {
+        return PathToUtf8(path.lexically_normal());
+    }
+    const std::filesystem::path base = ProjectFolder();
+    if (base.empty())
+    {
+        return PathToUtf8(path.lexically_normal());
+    }
+    return PathToUtf8((base / path).lexically_normal());
+}
+
+std::string MakeProjectAssetPathForJson(const std::string& value)
+{
+    if (value.empty())
+    {
+        return {};
+    }
+    std::filesystem::path path = PathFromUtf8(value);
+    if (path.is_relative())
+    {
+        return PathToUtf8(path.lexically_normal());
+    }
+
+    const std::filesystem::path base = ActiveProjectFolderForAssetPaths();
+    if (base.empty())
+    {
+        return PathToUtf8(path.lexically_normal());
+    }
+
+    std::error_code error;
+    const std::filesystem::path relative = std::filesystem::relative(path, base, error);
+    if (error || relative.empty())
+    {
+        return PathToUtf8(path.lexically_normal());
+    }
+    return PathToUtf8(relative.lexically_normal());
 }
 
 std::filesystem::path NormalizedProjectPath(const std::filesystem::path& path)
@@ -2277,7 +2349,7 @@ nlohmann::json MakeBasicHeightfieldSettingsJson(const rock::Node& node)
 {
     return {
         {"heightmap", {
-            {"path", node.heightmap.path},
+            {"path", MakeProjectAssetPathForJson(node.heightmap.path)},
             {"scaleMeters", node.heightmap.scaleMeters},
             {"relativeVerticalScalePercent", node.heightmap.relativeVerticalScalePercent},
             {"verticalOffsetMeters", node.heightmap.verticalOffsetMeters},
@@ -3098,6 +3170,7 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
 {
     try
     {
+        g_projectSavePathForSerialization = path;
         nlohmann::json root;
         root["format"] = "terrain_editor_project";
         root["formatVersion"] = 1;
@@ -3120,10 +3193,12 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
         std::ofstream stream(path);
         if (!stream)
         {
+            g_projectSavePathForSerialization.reset();
             if (error) *error = "Failed to open project for writing";
             return false;
         }
         stream << root.dump(2);
+        g_projectSavePathForSerialization.reset();
         g_projectPath = path;
         UpdateWindowTitle();
         AddRecentProjectPath(path);
@@ -3133,6 +3208,7 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
     }
     catch (const std::exception& ex)
     {
+        g_projectSavePathForSerialization.reset();
         if (error) *error = ex.what();
         return false;
     }
@@ -12867,7 +12943,7 @@ bool DrawPropertyPathRow(const char* label, const char* id, std::string* value, 
         if (const std::optional<std::filesystem::path> path = ShowHeightmapFileDialog(*value))
         {
             PushUndoSnapshot();
-            *value = PathToUtf8(*path);
+            *value = MakeProjectAssetPathForJson(PathToUtf8(*path));
             g_graph.MarkDirty(dirtyReason);
             editEnded = true;
         }
@@ -15600,6 +15676,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         rock::SetMaskFluvialGpuEvaluator(RunMaskFluvialCompute);
         rock::SetSnowGpuEvaluator(RunSnowCompute);
         rock::SetColorizeGpuEvaluator(RunColorizeCompute);
+        rock::SetAssetPathResolver(ResolveProjectAssetPath);
 
         ShowWindow(g_hwnd, showCommand);
         UpdateWindow(g_hwnd);
@@ -15686,6 +15763,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         rock::SetMaskFluvialGpuEvaluator(nullptr);
         rock::SetSnowGpuEvaluator(nullptr);
         rock::SetColorizeGpuEvaluator(nullptr);
+        rock::SetAssetPathResolver(nullptr);
         CleanupD3D();
         DestroyWindow(g_hwnd);
         UnregisterClassW(wc.lpszClassName, wc.hInstance);

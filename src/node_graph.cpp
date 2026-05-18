@@ -34,6 +34,7 @@ RockGpuEvaluator g_rockGpuEvaluator = nullptr;
 MaskFluvialGpuEvaluator g_maskFluvialGpuEvaluator = nullptr;
 SnowGpuEvaluator g_snowGpuEvaluator = nullptr;
 ColorizeGpuEvaluator g_colorizeGpuEvaluator = nullptr;
+AssetPathResolver g_assetPathResolver = nullptr;
 std::atomic<GraphId> g_currentlyEvaluatingNodeId{0};
 
 struct HeightmapImage
@@ -57,7 +58,8 @@ uint64_t HashFloat(float value)
 uint64_t HashHeightmapSettings(const HeightmapLoadSettings& settings, int resolution, float terrainSizeMeters)
 {
     uint64_t hash = 1469598103934665603ull;
-    HashCombine(hash, static_cast<uint64_t>(std::hash<std::string>{}(settings.path)));
+    const std::string resolvedPath = g_assetPathResolver != nullptr ? g_assetPathResolver(settings.path) : settings.path;
+    HashCombine(hash, static_cast<uint64_t>(std::hash<std::string>{}(resolvedPath)));
     HashCombine(hash, HashFloat(settings.scaleMeters));
     HashCombine(hash, HashFloat(settings.relativeVerticalScalePercent));
     HashCombine(hash, HashFloat(settings.verticalOffsetMeters));
@@ -315,7 +317,8 @@ std::wstring Utf8ToWidePath(const std::string& value)
 
 bool LoadHeightmapImage(const std::string& path, HeightmapImage& image, std::string* error)
 {
-    if (path.empty())
+    const std::string resolvedPath = g_assetPathResolver != nullptr ? g_assetPathResolver(path) : path;
+    if (resolvedPath.empty())
     {
         if (error != nullptr)
         {
@@ -355,7 +358,7 @@ bool LoadHeightmapImage(const std::string& path, HeightmapImage& image, std::str
     }
 
     ComPtr<IWICBitmapDecoder> decoder;
-    const std::wstring widePath = Utf8ToWidePath(path);
+    const std::wstring widePath = Utf8ToWidePath(resolvedPath);
     hr = factory->CreateDecoderFromFilename(widePath.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnLoad, &decoder);
     if (FAILED(hr))
     {
@@ -5614,6 +5617,11 @@ void SetSnowGpuEvaluator(SnowGpuEvaluator evaluator)
 void SetColorizeGpuEvaluator(ColorizeGpuEvaluator evaluator)
 {
     g_colorizeGpuEvaluator = evaluator;
+}
+
+void SetAssetPathResolver(AssetPathResolver resolver)
+{
+    g_assetPathResolver = resolver;
 }
 
 std::atomic<GraphId>& CurrentlyEvaluatingNodeId()
