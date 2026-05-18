@@ -23,7 +23,7 @@ cbuffer ScatterConstants : register(b0)
 
     float maxReach;
     int   shapeType; // 0 = Hemisphere, 1 = Cone
-    int   pad0;
+    int   orientationRule; // 0 = Flat, 1 = Follow Ground, 2 = Slope Oriented
     int   pad1;
 };
 
@@ -66,6 +66,23 @@ void CSScatter(uint3 dispatchThreadID : SV_DispatchThreadID)
     float cellZ = worldZ / max(density, 0.1f);
     int baseCx = (int)floor(cellX);
     int baseCz = (int)floor(cellZ);
+    float cellSizeMeters = terrainSize / (float)max(1u, resolution - 1u);
+    float invTwoCellMeters = 1.0f / (2.0f * cellSizeMeters);
+    float gradX = 0.0f;
+    float gradZ = 0.0f;
+    float slopeLen = 0.0f;
+    float normalUp = 1.0f;
+    if (orientationRule != 0)
+    {
+        uint xm = (x > 0u) ? (x - 1u) : 0u;
+        uint xp = min(resolution - 1u, x + 1u);
+        uint zm = (z > 0u) ? (z - 1u) : 0u;
+        uint zp = min(resolution - 1u, z + 1u);
+        gradX = (InputHeights[z * resolution + xp] - InputHeights[z * resolution + xm]) * invTwoCellMeters;
+        gradZ = (InputHeights[zp * resolution + x] - InputHeights[zm * resolution + x]) * invTwoCellMeters;
+        slopeLen = sqrt(gradX * gradX + gradZ * gradZ);
+        normalUp = 1.0f / sqrt(1.0f + slopeLen * slopeLen);
+    }
 
     int sizeSeed       = seed * 1583 + 22441;
     int heightSeed     = seed * 2017 + 39019;
@@ -104,7 +121,9 @@ void CSScatter(uint3 dispatchThreadID : SV_DispatchThreadID)
             float sizeRand = HashFloat01(gx, gz, sizeSeed);
             float sizeCells = sizeMinCells + sizeRand * (sizeMaxCells - sizeMinCells);
             float radiusCells = max(sizeCells * 0.5f, 1e-4f);
-            float theta = (HashFloat01(gx, gz, rotSeed) - 0.5f) * 6.28318530718f * rotationVar;
+            float randomTheta = (HashFloat01(gx, gz, rotSeed) - 0.5f) * 6.28318530718f * rotationVar;
+            float slopeTheta = (slopeLen > 1e-4f) ? atan2(gradZ, gradX) : 0.0f;
+            float theta = (orientationRule == 2 && slopeLen > 1e-4f) ? (slopeTheta + randomTheta) : randomTheta;
             float cosT = cos(theta);
             float sinT = sin(theta);
             float aspectRand = HashFloat01(gx, gz, aspectSeed);
@@ -117,7 +136,8 @@ void CSScatter(uint3 dispatchThreadID : SV_DispatchThreadID)
             float rzUnrot = -ddx * sinT + ddz * cosT;
             float rx = rxUnrot / aspectX;
             float rz = rzUnrot / aspectZ;
-            float normalizedDistance = sqrt(rx * rx + rz * rz) / radiusCells;
+            float slopeAlong = (orientationRule != 0) ? (gradX * ddx + gradZ * ddz) : 0.0f;
+            float normalizedDistance = sqrt(rx * rx + rz * rz + slopeAlong * slopeAlong) / radiusCells;
             if (normalizedDistance >= 1.0f)
             {
                 continue;
@@ -127,7 +147,8 @@ void CSScatter(uint3 dispatchThreadID : SV_DispatchThreadID)
                 ? saturate(1.0f - normalizedDistance)
                 : sqrt(max(0.0f, 1.0f - normalizedDistance * normalizedDistance));
             float heightRand = HashFloat01(gx, gz, heightSeed);
-            float cellHeight = height * (1.0f - heightJitter + heightJitter * 2.0f * heightRand);
+            float orientationHeightScale = (orientationRule == 1) ? normalUp : 1.0f;
+            float cellHeight = height * orientationHeightScale * (1.0f - heightJitter + heightJitter * 2.0f * heightRand);
             float contribution = cellHeight * shape;
             if (shape > bestShape)
             {

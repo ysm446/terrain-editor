@@ -2586,6 +2586,7 @@ nlohmann::json MakeScatterSettingsJson(const rock::Node& node)
     return {
         {"scatter", {
             {"shapeType", static_cast<int>(node.scatter.shapeType)},
+            {"orientationRule", static_cast<int>(node.scatter.orientationRule)},
             {"seed", node.scatter.seed},
             {"density", node.scatter.density},
             {"coverage", node.scatter.coverage},
@@ -2954,6 +2955,12 @@ void ReadScatterSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
         node.scatter.shapeType = static_cast<rock::ScatterShapeType>(shapeInt);
     }
     node.scatter.seed = std::clamp(nodeScatterJson.value("seed", node.scatter.seed), 0, 999999);
+    {
+        const int orientationInt = nodeScatterJson.value("orientationRule", static_cast<int>(node.scatter.orientationRule));
+        node.scatter.orientationRule = static_cast<rock::RockOrientationRule>(std::clamp(orientationInt,
+            static_cast<int>(rock::RockOrientationRule::Flat),
+            static_cast<int>(rock::RockOrientationRule::SlopeOriented)));
+    }
     node.scatter.density = std::clamp(nodeScatterJson.value("density", node.scatter.density), 0.5f, 1000.0f);
     node.scatter.coverage = std::clamp(nodeScatterJson.value("coverage", node.scatter.coverage), 0.0f, 1.0f);
     node.scatter.sizeMinM = std::clamp(nodeScatterJson.value("sizeMinM", node.scatter.sizeMinM), 0.1f, 200.0f);
@@ -6657,7 +6664,7 @@ struct ScatterShaderConstants
 
     float maxReach;
     int   shapeType;
-    int   pad0;
+    int   orientationRule;
     int   pad1;
 };
 static_assert(sizeof(ScatterShaderConstants) == 16 * sizeof(UINT), "ScatterShaderConstants must be 16 DWORDs");
@@ -6880,6 +6887,9 @@ bool RunScatterComputeImmediate(rock::HeightfieldGrid& grid, const rock::Scatter
     k.shapeType = std::clamp(static_cast<int>(settings.shapeType),
         static_cast<int>(rock::ScatterShapeType::Hemisphere),
         static_cast<int>(rock::ScatterShapeType::Cone));
+    k.orientationRule = std::clamp(static_cast<int>(settings.orientationRule),
+        static_cast<int>(rock::RockOrientationRule::Flat),
+        static_cast<int>(rock::RockOrientationRule::SlopeOriented));
     commandList->SetComputeRoot32BitConstants(0, 16, &k, 0);
 
     commandList->SetPipelineState(g_scatterComputePso.Get());
@@ -14640,6 +14650,9 @@ bool DrawScatterProperties(rock::Node& editableNode)
     sc.shapeType = static_cast<rock::ScatterShapeType>(std::clamp(static_cast<int>(sc.shapeType),
         static_cast<int>(rock::ScatterShapeType::Hemisphere),
         static_cast<int>(rock::ScatterShapeType::Cone)));
+    sc.orientationRule = static_cast<rock::RockOrientationRule>(std::clamp(static_cast<int>(sc.orientationRule),
+        static_cast<int>(rock::RockOrientationRule::Flat),
+        static_cast<int>(rock::RockOrientationRule::SlopeOriented)));
     sc.seed = std::clamp(sc.seed, 0, 999999);
     sc.density = std::clamp(sc.density, 0.5f, 1000.0f);
     sc.coverage = std::clamp(sc.coverage, 0.0f, 1.0f);
@@ -14670,6 +14683,16 @@ bool DrawScatterProperties(rock::Node& editableNode)
             sc.shapeType = static_cast<rock::ScatterShapeType>(std::clamp(shapeInt,
                 static_cast<int>(rock::ScatterShapeType::Hemisphere),
                 static_cast<int>(rock::ScatterShapeType::Cone)));
+            EvaluateGraph();
+        }
+    }
+    {
+        int orientationInt = static_cast<int>(sc.orientationRule);
+        if (DrawPropertyComboRow("Orientation Rule", "ScatterOrientationRule", &orientationInt, "Flat\0Follow Ground\0Slope Oriented\0\0", "散布形状の向きと斜面への沿わせ方です。Flat は従来通り水平基準、Follow Ground は斜面距離と法線の上向き成分を使って地形に沿わせ、Slope Oriented は細長い個体の回転を斜面方向へ寄せます。", static_cast<int>(rock::ScatterSettings{}.orientationRule)))
+        {
+            sc.orientationRule = static_cast<rock::RockOrientationRule>(std::clamp(orientationInt,
+                static_cast<int>(rock::RockOrientationRule::Flat),
+                static_cast<int>(rock::RockOrientationRule::SlopeOriented)));
             EvaluateGraph();
         }
     }

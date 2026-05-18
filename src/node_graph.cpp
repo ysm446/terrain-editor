@@ -201,6 +201,7 @@ uint64_t HashScatterSettings(const ScatterSettings& settings, int resolution)
 {
     uint64_t hash = 1442695040888963407ull;
     HashCombine(hash, static_cast<uint64_t>(settings.shapeType));
+    HashCombine(hash, static_cast<uint64_t>(settings.orientationRule));
     HashCombine(hash, static_cast<uint64_t>(settings.seed));
     HashCombine(hash, HashFloat(settings.density));
     HashCombine(hash, HashFloat(settings.coverage));
@@ -2728,16 +2729,23 @@ void ApplyScatter(HeightfieldGrid& grid, const ScatterSettings& settings, const 
     const int shapeType = std::clamp(static_cast<int>(settings.shapeType),
         static_cast<int>(ScatterShapeType::Hemisphere),
         static_cast<int>(ScatterShapeType::Cone));
+    const int orientationRule = std::clamp(static_cast<int>(settings.orientationRule),
+        static_cast<int>(RockOrientationRule::Flat),
+        static_cast<int>(RockOrientationRule::SlopeOriented));
 
     const float terrainSize = std::max(grid.terrainSizeMeters, 1.0f);
     const float halfSize = terrainSize * 0.5f;
     const float invStep = (n > 1) ? 1.0f / static_cast<float>(n - 1) : 0.0f;
     const float cellSizeMeters = terrainSize / static_cast<float>(std::max(1, n - 1));
+    const float invTwoCellMeters = 1.0f / (2.0f * cellSizeMeters);
     const float groundDetailM = std::clamp(settings.groundDetailLevelM, 0.0f, terrainSize * 0.5f);
     const int groundRadius = groundDetailM > 0.0f
         ? std::clamp(static_cast<int>(std::round(groundDetailM / cellSizeMeters)), 1, 128)
         : 0;
     const std::vector<float> groundHeights = groundRadius > 1 ? BoxBlurHeights(grid, groundRadius) : std::vector<float>();
+    const std::vector<float> inputHeights = (orientationRule != static_cast<int>(RockOrientationRule::Flat))
+        ? grid.heights
+        : std::vector<float>();
     const int32_t seed = settings.seed;
     const int32_t sizeSeed = rock_node::DeriveSeed(seed, 1583u, 22441u);
     const int32_t heightSeed = rock_node::DeriveSeed(seed, 2017u, 39019u);
@@ -2773,6 +2781,25 @@ void ApplyScatter(HeightfieldGrid& grid, const ScatterSettings& settings, const 
             float bestShape = 0.0f;
             float bestHeight = 0.0f;
             float bestUnique = 0.0f;
+            float gradX = 0.0f;
+            float gradZ = 0.0f;
+            float slopeLen = 0.0f;
+            float normalUp = 1.0f;
+            if (!inputHeights.empty())
+            {
+                const int xm = std::max(0, x - 1);
+                const int xp = std::min(n - 1, x + 1);
+                const int zm = std::max(0, z - 1);
+                const int zp = std::min(n - 1, z + 1);
+                const size_t idxL = static_cast<size_t>(z) * static_cast<size_t>(n) + static_cast<size_t>(xm);
+                const size_t idxR = static_cast<size_t>(z) * static_cast<size_t>(n) + static_cast<size_t>(xp);
+                const size_t idxD = static_cast<size_t>(zm) * static_cast<size_t>(n) + static_cast<size_t>(x);
+                const size_t idxU = static_cast<size_t>(zp) * static_cast<size_t>(n) + static_cast<size_t>(x);
+                gradX = (inputHeights[idxR] - inputHeights[idxL]) * invTwoCellMeters;
+                gradZ = (inputHeights[idxU] - inputHeights[idxD]) * invTwoCellMeters;
+                slopeLen = std::sqrt(gradX * gradX + gradZ * gradZ);
+                normalUp = 1.0f / std::sqrt(1.0f + slopeLen * slopeLen);
+            }
 
             for (int dz = -searchRadius; dz <= searchRadius; ++dz)
             {
@@ -2808,7 +2835,11 @@ void ApplyScatter(HeightfieldGrid& grid, const ScatterSettings& settings, const 
                     const float sizeRand = rock_node::HashFloat01(gx, gz, sizeSeed);
                     const float sizeCells = sizeMinCells + sizeRand * (sizeMaxCells - sizeMinCells);
                     const float radiusCells = std::max(sizeCells * 0.5f, 1e-4f);
-                    const float theta = (rock_node::HashFloat01(gx, gz, rotSeed) - 0.5f) * 2.0f * kPi * rotationVar;
+                    const float randomTheta = (rock_node::HashFloat01(gx, gz, rotSeed) - 0.5f) * 2.0f * kPi * rotationVar;
+                    const float slopeTheta = (slopeLen > 1e-4f) ? std::atan2(gradZ, gradX) : 0.0f;
+                    const float theta = (orientationRule == static_cast<int>(RockOrientationRule::SlopeOriented) && slopeLen > 1e-4f)
+                        ? (slopeTheta + randomTheta)
+                        : randomTheta;
                     const float cosT = std::cos(theta);
                     const float sinT = std::sin(theta);
                     const float aspectRand = rock_node::HashFloat01(gx, gz, aspectSeed);
@@ -2821,7 +2852,10 @@ void ApplyScatter(HeightfieldGrid& grid, const ScatterSettings& settings, const 
                     const float rzUnrot = -ddx * sinT + ddz * cosT;
                     const float rx = rxUnrot / aspectX;
                     const float rz = rzUnrot / aspectZ;
-                    const float normalizedDistance = std::sqrt(rx * rx + rz * rz) / radiusCells;
+                    const float slopeAlong = (orientationRule != static_cast<int>(RockOrientationRule::Flat))
+                        ? (gradX * ddx + gradZ * ddz)
+                        : 0.0f;
+                    const float normalizedDistance = std::sqrt(rx * rx + rz * rz + slopeAlong * slopeAlong) / radiusCells;
                     if (normalizedDistance >= 1.0f)
                     {
                         continue;
@@ -2831,7 +2865,8 @@ void ApplyScatter(HeightfieldGrid& grid, const ScatterSettings& settings, const 
                         ? std::clamp(1.0f - normalizedDistance, 0.0f, 1.0f)
                         : std::sqrt(std::max(0.0f, 1.0f - normalizedDistance * normalizedDistance));
                     const float heightRand = rock_node::HashFloat01(gx, gz, heightSeed);
-                    const float cellHeight = height * (1.0f - heightJitter + heightJitter * 2.0f * heightRand);
+                    const float orientationHeightScale = (orientationRule == static_cast<int>(RockOrientationRule::FollowGround)) ? normalUp : 1.0f;
+                    const float cellHeight = height * orientationHeightScale * (1.0f - heightJitter + heightJitter * 2.0f * heightRand);
                     const float contribution = cellHeight * shape;
                     if (shape > bestShape)
                     {

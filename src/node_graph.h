@@ -372,6 +372,7 @@ struct RockSettings
 struct ScatterSettings
 {
     ScatterShapeType shapeType = ScatterShapeType::Hemisphere;
+    RockOrientationRule orientationRule = RockOrientationRule::Flat;
     int seed = 0;
     float density = 8.0f;
     float coverage = 1.0f;

@@ -22,6 +22,7 @@
 | パラメータ | 内容 |
 | --- | --- |
 | Shape Type | `Hemisphere` または `Cone`。 |
+| Orientation Rule | 地形勾配に対する散布形状の扱い。`Flat` は従来通り、`Follow Ground` は斜面距離と法線の上向き成分を使う、`Slope Oriented` は個体の向きを斜面方向へ寄せる。 |
 | Seed | 散布位置と個体差のシード。 |
 | Density (m) | 散布点の間隔。 |
 | Coverage (%) | 散布点が実際に配置される確率。 |

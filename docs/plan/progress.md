@@ -13,6 +13,10 @@
 - GPU backend は複数ノードで導入済み。`Scatter` は `Mask` 入力なし、`Ground Detail Level = Max` の場合に GPU 評価し、それ以外や失敗時は CPU にフォールバックする。
 - 次の大きな候補は、`Crumbling` のランダム散らばり改善、`Scatter` を使った植生分布ワークフローの確認、`Spline` / `River` / `Lake` の仕様整理。
 
+## 2026-05-19
+
+- `Scatter` ノードに `Orientation Rule` を追加した。`Rock` と同じく `Flat` / `Follow Ground` / `Slope Oriented` を選べ、斜面に沿った形状や斜面方向へ流れる細長い個体を作れるようにした。
+
 ## 2026-05-11
 
 - `docs/plan/` に共有スペースを作成。
