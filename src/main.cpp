@@ -712,6 +712,8 @@ ComPtr<ID3D12PipelineState> g_sedimentSweep1Pso;
 ComPtr<ID3D12PipelineState> g_sedimentSweep2Pso;
 ComPtr<ID3D12RootSignature> g_rockComputeRootSignature;
 ComPtr<ID3D12PipelineState> g_rockComputePso;
+ComPtr<ID3D12RootSignature> g_scatterComputeRootSignature;
+ComPtr<ID3D12PipelineState> g_scatterComputePso;
 ComPtr<ID3D12RootSignature> g_maskFluvialComputeRootSignature;
 ComPtr<ID3D12PipelineState> g_mfPitFillPso;
 ComPtr<ID3D12PipelineState> g_mfCommitHeightsPso;
@@ -802,6 +804,10 @@ std::string g_rockComputeStatus = "Rock GPU Compute not initialized";
 bool g_rockComputeReady = false;
 std::mutex g_rockComputeMutex;
 std::mutex g_rockGpuRequestMutex;
+std::string g_scatterComputeStatus = "Scatter GPU Compute not initialized";
+bool g_scatterComputeReady = false;
+std::mutex g_scatterComputeMutex;
+std::mutex g_scatterGpuRequestMutex;
 std::string g_maskFluvialComputeStatus = "Mask Fluvial GPU Compute not initialized";
 bool g_maskFluvialComputeReady = false;
 std::mutex g_maskFluvialComputeMutex;
@@ -870,6 +876,22 @@ struct RockGpuRequest
 };
 
 std::vector<std::shared_ptr<RockGpuRequest>> g_pendingRockGpuRequests;
+
+struct ScatterGpuRequestResult
+{
+    bool success = false;
+    rock::HeightfieldGrid grid;
+    std::string error;
+};
+
+struct ScatterGpuRequest
+{
+    rock::HeightfieldGrid grid;
+    rock::ScatterSettings settings;
+    std::promise<ScatterGpuRequestResult> promise;
+};
+
+std::vector<std::shared_ptr<ScatterGpuRequest>> g_pendingScatterGpuRequests;
 
 struct MaskFluvialGpuRequestResult
 {
@@ -1311,6 +1333,9 @@ void CleanupD3D()
     g_rockComputePso.Reset();
     g_rockComputeRootSignature.Reset();
     g_rockComputeReady = false;
+    g_scatterComputePso.Reset();
+    g_scatterComputeRootSignature.Reset();
+    g_scatterComputeReady = false;
     g_mfPitFillPso.Reset();
     g_mfCommitHeightsPso.Reset();
     g_mfCopyInputHeightsPso.Reset();
@@ -1424,6 +1449,11 @@ std::filesystem::path RockComputeShaderPath()
     return ShaderPath("rock_compute.hlsl");
 }
 
+std::filesystem::path ScatterComputeShaderPath()
+{
+    return ShaderPath("scatter_compute.hlsl");
+}
+
 std::filesystem::path MaskFluvialComputeShaderPath()
 {
     return ShaderPath("mask_fluvial_compute.hlsl");
@@ -1474,6 +1504,7 @@ void ProcessPendingMseGpuRequests();
 void ProcessPendingMaskNoiseGpuRequests();
 void ProcessPendingSedimentGpuRequests();
 void ProcessPendingRockGpuRequests();
+void ProcessPendingScatterGpuRequests();
 void ProcessPendingMaskFluvialGpuRequests();
 void ProcessPendingSnowGpuRequests();
 void ProcessPendingColorizeGpuRequests();
@@ -2527,6 +2558,7 @@ nlohmann::json MakeScatterSettingsJson(const rock::Node& node)
             {"rotationVariation", node.scatter.rotationVariation},
             {"aspectVariation", node.scatter.aspectVariation},
             {"groundDetailLevelM", node.scatter.groundDetailLevelM},
+            {"backend", static_cast<int>(node.scatter.backend)},
         }},
     };
 }
@@ -2888,6 +2920,12 @@ void ReadScatterSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     node.scatter.rotationVariation = std::clamp(nodeScatterJson.value("rotationVariation", node.scatter.rotationVariation), 0.0f, 1.0f);
     node.scatter.aspectVariation = std::clamp(nodeScatterJson.value("aspectVariation", node.scatter.aspectVariation), 0.0f, 1.0f);
     node.scatter.groundDetailLevelM = std::clamp(nodeScatterJson.value("groundDetailLevelM", node.scatter.groundDetailLevelM), 0.0f, 1024.0f);
+    {
+        const int backendInt = nodeScatterJson.value("backend", static_cast<int>(node.scatter.backend));
+        node.scatter.backend = static_cast<rock::ScatterBackend>(std::clamp(backendInt,
+            static_cast<int>(rock::ScatterBackend::CpuReference),
+            static_cast<int>(rock::ScatterBackend::GpuCompute)));
+    }
 }
 
 void ReadCrumblingSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
@@ -6520,6 +6558,352 @@ void ProcessPendingRockGpuRequests()
         RockGpuRequestResult result;
         result.grid = std::move(request->grid);
         result.success = RunRockComputeImmediate(result.grid, request->settings, &result.error);
+        request->promise.set_value(std::move(result));
+    }
+}
+
+// Mirrors the cbuffer in shaders/scatter_compute.hlsl.
+struct ScatterShaderConstants
+{
+    UINT  resolution;
+    int   seed;
+    float terrainSizeMeters;
+    float density;
+
+    float coverage;
+    float sizeMinCells;
+    float sizeMaxCells;
+    float height;
+
+    float heightJitter;
+    float rotationVar;
+    float aspectVar;
+    int   searchRadius;
+
+    float maxReach;
+    int   shapeType;
+    int   pad0;
+    int   pad1;
+};
+static_assert(sizeof(ScatterShaderConstants) == 16 * sizeof(UINT), "ScatterShaderConstants must be 16 DWORDs");
+
+bool EnsureScatterComputePipeline(std::string* error)
+{
+    if (g_scatterComputeReady && g_scatterComputeRootSignature && g_scatterComputePso)
+    {
+        return true;
+    }
+    if (!g_device)
+    {
+        if (error) *error = "D3D12 device is not available";
+        g_scatterComputeStatus = "Scatter GPU Compute unavailable";
+        return false;
+    }
+
+    D3D12_DESCRIPTOR_RANGE uavRange{};
+    uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    uavRange.NumDescriptors = 4;
+    uavRange.BaseShaderRegister = 0;
+    uavRange.RegisterSpace = 0;
+    uavRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_ROOT_PARAMETER rootParams[2]{};
+    rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    rootParams[0].Constants.ShaderRegister = 0;
+    rootParams[0].Constants.RegisterSpace = 0;
+    rootParams[0].Constants.Num32BitValues = 16;
+    rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[1].DescriptorTable.pDescriptorRanges = &uavRange;
+    rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    D3D12_ROOT_SIGNATURE_DESC rsDesc{};
+    rsDesc.NumParameters = 2;
+    rsDesc.pParameters = rootParams;
+    rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+    ComPtr<ID3DBlob> sigBlob, errBlob;
+    HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
+    if (FAILED(hr))
+    {
+        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Serialize Scatter root sig failed";
+        g_scatterComputeStatus = "Scatter GPU Compute root signature failed";
+        return false;
+    }
+    hr = g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_scatterComputeRootSignature));
+    if (FAILED(hr))
+    {
+        if (error) *error = "Create Scatter root sig failed";
+        g_scatterComputeStatus = "Scatter GPU Compute root signature failed";
+        return false;
+    }
+
+    const std::filesystem::path shaderPath = ScatterComputeShaderPath();
+    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
+#if defined(_DEBUG)
+    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+#endif
+
+    ComPtr<ID3DBlob> csBlob;
+    errBlob.Reset();
+    const HRESULT compileHr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE,
+                                                 "CSScatter", "cs_5_0", compileFlags, 0, &csBlob, &errBlob);
+    if (FAILED(compileHr))
+    {
+        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile Scatter shader failed";
+        g_scatterComputeStatus = "Scatter shader compile failed";
+        return false;
+    }
+
+    D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{};
+    psoDesc.pRootSignature = g_scatterComputeRootSignature.Get();
+    psoDesc.CS = {csBlob->GetBufferPointer(), csBlob->GetBufferSize()};
+    const HRESULT psoHr = g_device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&g_scatterComputePso));
+    if (FAILED(psoHr))
+    {
+        if (error) *error = "Create Scatter PSO failed";
+        g_scatterComputeStatus = "Scatter PSO failed";
+        return false;
+    }
+
+    g_scatterComputeReady = true;
+    g_scatterComputeStatus = "Scatter GPU Compute dispatch ready";
+    return true;
+}
+
+bool RunScatterComputeImmediate(rock::HeightfieldGrid& grid, const rock::ScatterSettings& settings, std::string* error)
+{
+    std::lock_guard<std::mutex> lock(g_scatterComputeMutex);
+    if (!EnsureScatterComputePipeline(error))
+    {
+        return false;
+    }
+
+    const UINT resolution = static_cast<UINT>(std::clamp(grid.resolution, 0, 4096));
+    const UINT64 cellCount = static_cast<UINT64>(resolution) * static_cast<UINT64>(resolution);
+    if (resolution < 2 || grid.heights.size() < cellCount || settings.density <= 0.0f)
+    {
+        if (error) *error = "Invalid heightfield for Scatter GPU Compute";
+        return false;
+    }
+
+    const UINT64 fieldByteSize = cellCount * sizeof(float);
+    const D3D12_HEAP_PROPERTIES defaultHeap = HeapProperties(D3D12_HEAP_TYPE_DEFAULT);
+    const D3D12_HEAP_PROPERTIES uploadHeap = HeapProperties(D3D12_HEAP_TYPE_UPLOAD);
+    const D3D12_HEAP_PROPERTIES readbackHeap = HeapProperties(D3D12_HEAP_TYPE_READBACK);
+    const D3D12_RESOURCE_DESC fieldGpuDesc = BufferResourceDesc(fieldByteSize, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    const D3D12_RESOURCE_DESC fieldCpuDesc = BufferResourceDesc(fieldByteSize);
+
+    ComPtr<ID3D12Resource> inputHeightsBuf, outputHeightsBuf, outputMaskBuf, outputUniqueMaskBuf;
+    ComPtr<ID3D12Resource> uploadHeights;
+    ComPtr<ID3D12Resource> readbackHeights, readbackMask, readbackUniqueMask;
+
+    auto createDefault = [&](ComPtr<ID3D12Resource>& out, const D3D12_RESOURCE_DESC& desc, const char* name) -> bool {
+        const HRESULT hrLocal = g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&out));
+        if (FAILED(hrLocal)) { if (error) *error = std::string("Create ") + name + " failed"; return false; }
+        return true;
+    };
+    auto createUpload = [&](ComPtr<ID3D12Resource>& out, const char* name) -> bool {
+        const HRESULT hrLocal = g_device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &fieldCpuDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&out));
+        if (FAILED(hrLocal)) { if (error) *error = std::string("Create ") + name + " failed"; return false; }
+        return true;
+    };
+    auto createReadback = [&](ComPtr<ID3D12Resource>& out, const char* name) -> bool {
+        const HRESULT hrLocal = g_device->CreateCommittedResource(&readbackHeap, D3D12_HEAP_FLAG_NONE, &fieldCpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&out));
+        if (FAILED(hrLocal)) { if (error) *error = std::string("Create ") + name + " failed"; return false; }
+        return true;
+    };
+
+    if (!createDefault(inputHeightsBuf, fieldGpuDesc, "Scatter input-heights buffer")) return false;
+    if (!createDefault(outputHeightsBuf, fieldGpuDesc, "Scatter output-heights buffer")) return false;
+    if (!createDefault(outputMaskBuf, fieldGpuDesc, "Scatter output-mask buffer")) return false;
+    if (!createDefault(outputUniqueMaskBuf, fieldGpuDesc, "Scatter output-unique-mask buffer")) return false;
+    if (!createUpload(uploadHeights, "Scatter upload heights")) return false;
+    if (!createReadback(readbackHeights, "Scatter readback heights")) return false;
+    if (!createReadback(readbackMask, "Scatter readback mask")) return false;
+    if (!createReadback(readbackUniqueMask, "Scatter readback unique mask")) return false;
+
+    void* mapped = nullptr;
+    const D3D12_RANGE emptyReadRange{0, 0};
+    ThrowIfFailed(uploadHeights->Map(0, &emptyReadRange, &mapped), "Map Scatter heights upload failed");
+    std::memcpy(mapped, grid.heights.data(), fieldByteSize);
+    uploadHeights->Unmap(0, nullptr);
+
+    constexpr UINT kDescriptorCount = 4;
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    heapDesc.NumDescriptors = kDescriptorCount;
+    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    ComPtr<ID3D12DescriptorHeap> descriptorHeap;
+    HRESULT hr = g_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&descriptorHeap));
+    if (FAILED(hr)) { if (error) *error = "Create Scatter descriptor heap failed"; return false; }
+
+    auto createUav = [&](ID3D12Resource* res, UINT numElements, UINT slot) {
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+        uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+        uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+        uavDesc.Buffer.NumElements = numElements;
+        uavDesc.Buffer.StructureByteStride = sizeof(float);
+        D3D12_CPU_DESCRIPTOR_HANDLE handle = descriptorHeap->GetCPUDescriptorHandleForHeapStart();
+        handle.ptr += static_cast<SIZE_T>(slot) * g_srvDescriptorSize;
+        g_device->CreateUnorderedAccessView(res, nullptr, &uavDesc, handle);
+    };
+    createUav(inputHeightsBuf.Get(), static_cast<UINT>(cellCount), 0);
+    createUav(outputHeightsBuf.Get(), static_cast<UINT>(cellCount), 1);
+    createUav(outputMaskBuf.Get(), static_cast<UINT>(cellCount), 2);
+    createUav(outputUniqueMaskBuf.Get(), static_cast<UINT>(cellCount), 3);
+
+    ComPtr<ID3D12CommandAllocator> allocator;
+    ComPtr<ID3D12GraphicsCommandList> commandList;
+    ThrowIfFailed(g_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)), "Create Scatter command allocator failed");
+    ThrowIfFailed(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&commandList)), "Create Scatter command list failed");
+
+    D3D12_RESOURCE_BARRIER toCopyDest{};
+    toCopyDest.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    toCopyDest.Transition.pResource = inputHeightsBuf.Get();
+    toCopyDest.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    toCopyDest.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+    toCopyDest.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    commandList->ResourceBarrier(1, &toCopyDest);
+    commandList->CopyBufferRegion(inputHeightsBuf.Get(), 0, uploadHeights.Get(), 0, fieldByteSize);
+    D3D12_RESOURCE_BARRIER toUav = toCopyDest;
+    toUav.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+    toUav.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    commandList->ResourceBarrier(1, &toUav);
+
+    ID3D12DescriptorHeap* heaps[] = {descriptorHeap.Get()};
+    commandList->SetDescriptorHeaps(1, heaps);
+    commandList->SetComputeRootSignature(g_scatterComputeRootSignature.Get());
+    commandList->SetComputeRootDescriptorTable(1, descriptorHeap->GetGPUDescriptorHandleForHeapStart());
+
+    const float density = std::max(settings.density, 0.1f);
+    const float sizeMinM = std::clamp(settings.sizeMinM, 0.1f, 200.0f);
+    const float sizeMaxM = std::clamp(std::max(settings.sizeMaxM, sizeMinM), 0.1f, 200.0f);
+    const float sizeMinCells = sizeMinM / density;
+    const float sizeMaxCells = sizeMaxM / density;
+    const float aspectVar = std::clamp(settings.aspectVariation, 0.0f, 1.0f);
+    const float maxRadiusCells = sizeMaxCells * 0.5f;
+    const float maxAspect = std::pow(2.0f, aspectVar);
+    const float maxReach = maxRadiusCells * maxAspect;
+    const int searchRadius = std::max(1, static_cast<int>(std::ceil(maxReach - 0.05f)));
+
+    ScatterShaderConstants k{};
+    k.resolution = resolution;
+    k.seed = settings.seed;
+    k.terrainSizeMeters = std::max(grid.terrainSizeMeters, 1.0f);
+    k.density = density;
+    k.coverage = std::clamp(settings.coverage, 0.0f, 1.0f);
+    k.sizeMinCells = sizeMinCells;
+    k.sizeMaxCells = sizeMaxCells;
+    k.height = std::max(settings.height, 0.0f);
+    k.heightJitter = std::clamp(settings.heightJitter, 0.0f, 1.0f);
+    k.rotationVar = std::clamp(settings.rotationVariation, 0.0f, 1.0f);
+    k.aspectVar = aspectVar;
+    k.searchRadius = searchRadius;
+    k.maxReach = maxReach;
+    k.shapeType = std::clamp(static_cast<int>(settings.shapeType),
+        static_cast<int>(rock::ScatterShapeType::Hemisphere),
+        static_cast<int>(rock::ScatterShapeType::Cone));
+    commandList->SetComputeRoot32BitConstants(0, 16, &k, 0);
+
+    commandList->SetPipelineState(g_scatterComputePso.Get());
+    const UINT groupCount = (resolution + 7u) / 8u;
+    commandList->Dispatch(groupCount, groupCount, 1);
+
+    D3D12_RESOURCE_BARRIER uavBar{};
+    uavBar.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    uavBar.UAV.pResource = nullptr;
+    commandList->ResourceBarrier(1, &uavBar);
+
+    D3D12_RESOURCE_BARRIER toCopySrc[3]{};
+    ID3D12Resource* copyResources[3] = {outputHeightsBuf.Get(), outputMaskBuf.Get(), outputUniqueMaskBuf.Get()};
+    for (int i = 0; i < 3; ++i)
+    {
+        toCopySrc[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        toCopySrc[i].Transition.pResource = copyResources[i];
+        toCopySrc[i].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        toCopySrc[i].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+        toCopySrc[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    }
+    commandList->ResourceBarrier(3, toCopySrc);
+    commandList->CopyBufferRegion(readbackHeights.Get(), 0, outputHeightsBuf.Get(), 0, fieldByteSize);
+    commandList->CopyBufferRegion(readbackMask.Get(), 0, outputMaskBuf.Get(), 0, fieldByteSize);
+    commandList->CopyBufferRegion(readbackUniqueMask.Get(), 0, outputUniqueMaskBuf.Get(), 0, fieldByteSize);
+    ThrowIfFailed(commandList->Close(), "Close Scatter command list failed");
+
+    ID3D12CommandList* lists[] = {commandList.Get()};
+    g_commandQueue->ExecuteCommandLists(1, lists);
+    const UINT64 fenceValue = ++g_fenceLastSignaledValue;
+    ThrowIfFailed(g_commandQueue->Signal(g_fence.Get(), fenceValue), "Signal Scatter fence failed");
+    WaitForFenceValue(fenceValue);
+
+    void* mappedHeights = nullptr;
+    void* mappedMask = nullptr;
+    void* mappedUniqueMask = nullptr;
+    const D3D12_RANGE readRange{0, static_cast<SIZE_T>(fieldByteSize)};
+    ThrowIfFailed(readbackHeights->Map(0, &readRange, &mappedHeights), "Map Scatter readback (heights) failed");
+    ThrowIfFailed(readbackMask->Map(0, &readRange, &mappedMask), "Map Scatter readback (mask) failed");
+    ThrowIfFailed(readbackUniqueMask->Map(0, &readRange, &mappedUniqueMask), "Map Scatter readback (unique mask) failed");
+    std::memcpy(grid.heights.data(), mappedHeights, fieldByteSize);
+    grid.mask.assign(static_cast<size_t>(cellCount), 0.0f);
+    std::memcpy(grid.mask.data(), mappedMask, fieldByteSize);
+    grid.uniqueMask.assign(static_cast<size_t>(cellCount), 0.0f);
+    std::memcpy(grid.uniqueMask.data(), mappedUniqueMask, fieldByteSize);
+    const D3D12_RANGE emptyWriteRange{0, 0};
+    readbackHeights->Unmap(0, &emptyWriteRange);
+    readbackMask->Unmap(0, &emptyWriteRange);
+    readbackUniqueMask->Unmap(0, &emptyWriteRange);
+
+    g_scatterComputeStatus = "Scatter GPU Compute evaluated";
+    return true;
+}
+
+bool RunScatterCompute(rock::HeightfieldGrid& grid, const rock::ScatterSettings& settings, std::string* error)
+{
+    if (std::this_thread::get_id() == g_mainThreadId)
+    {
+        return RunScatterComputeImmediate(grid, settings, error);
+    }
+
+    auto request = std::make_shared<ScatterGpuRequest>();
+    request->grid = grid;
+    request->settings = settings;
+    std::future<ScatterGpuRequestResult> future = request->promise.get_future();
+    {
+        std::lock_guard<std::mutex> lock(g_scatterGpuRequestMutex);
+        g_pendingScatterGpuRequests.push_back(request);
+    }
+    g_scatterComputeStatus = "Scatter GPU Compute queued on main thread";
+
+    ScatterGpuRequestResult result = future.get();
+    if (!result.success)
+    {
+        if (error) *error = result.error;
+        return false;
+    }
+    grid = std::move(result.grid);
+    return true;
+}
+
+void ProcessPendingScatterGpuRequests()
+{
+    if (std::this_thread::get_id() != g_mainThreadId)
+    {
+        return;
+    }
+
+    std::vector<std::shared_ptr<ScatterGpuRequest>> requests;
+    {
+        std::lock_guard<std::mutex> lock(g_scatterGpuRequestMutex);
+        requests.swap(g_pendingScatterGpuRequests);
+    }
+
+    for (const std::shared_ptr<ScatterGpuRequest>& request : requests)
+    {
+        ScatterGpuRequestResult result;
+        result.grid = std::move(request->grid);
+        result.success = RunScatterComputeImmediate(result.grid, request->settings, &result.error);
         request->promise.set_value(std::move(result));
     }
 }
@@ -14138,7 +14522,20 @@ bool DrawScatterProperties(rock::Node& editableNode)
     sc.heightJitter = std::clamp(sc.heightJitter, 0.0f, 1.0f);
     sc.rotationVariation = std::clamp(sc.rotationVariation, 0.0f, 1.0f);
     sc.aspectVariation = std::clamp(sc.aspectVariation, 0.0f, 1.0f);
+    sc.backend = static_cast<rock::ScatterBackend>(std::clamp(static_cast<int>(sc.backend),
+        static_cast<int>(rock::ScatterBackend::CpuReference),
+        static_cast<int>(rock::ScatterBackend::GpuCompute)));
 
+    {
+        int backendInt = static_cast<int>(sc.backend);
+        if (DrawPropertyComboRow("Backend", "ScatterBackend", &backendInt, "CPU\0GPU\0\0", "実行バックエンド。GPU (D3D12 compute) は Mask 入力なし、Ground Detail Level が Max の場合に使われます。それ以外や失敗時は CPU にフォールバックします。", static_cast<int>(rock::ScatterSettings{}.backend)))
+        {
+            sc.backend = static_cast<rock::ScatterBackend>(std::clamp(backendInt,
+                static_cast<int>(rock::ScatterBackend::CpuReference),
+                static_cast<int>(rock::ScatterBackend::GpuCompute)));
+            EvaluateGraph();
+        }
+    }
     {
         int shapeInt = static_cast<int>(sc.shapeType);
         if (DrawPropertyComboRow("Shape Type", "ScatterShapeType", &shapeInt, "Hemisphere\0Cone\0\0", "散布するプロキシ形状です。Hemisphere は丸い植物や低木の分布、Cone は尖った草や小さな樹形の確認に使えます。", static_cast<int>(rock::ScatterSettings{}.shapeType)))
@@ -15673,6 +16070,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         rock::SetMaskNoiseGpuEvaluator(RunMaskNoiseCompute);
         rock::SetSedimentGpuEvaluator(RunSedimentCompute);
         rock::SetRockGpuEvaluator(RunRockCompute);
+        rock::SetScatterGpuEvaluator(RunScatterCompute);
         rock::SetMaskFluvialGpuEvaluator(RunMaskFluvialCompute);
         rock::SetSnowGpuEvaluator(RunSnowCompute);
         rock::SetColorizeGpuEvaluator(RunColorizeCompute);
@@ -15739,6 +16137,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
             ProcessPendingMaskNoiseGpuRequests();
             ProcessPendingSedimentGpuRequests();
             ProcessPendingRockGpuRequests();
+            ProcessPendingScatterGpuRequests();
             ProcessPendingMaskFluvialGpuRequests();
             ProcessPendingSnowGpuRequests();
             ProcessPendingColorizeGpuRequests();
@@ -15760,6 +16159,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         rock::SetMaskNoiseGpuEvaluator(nullptr);
         rock::SetSedimentGpuEvaluator(nullptr);
         rock::SetRockGpuEvaluator(nullptr);
+        rock::SetScatterGpuEvaluator(nullptr);
         rock::SetMaskFluvialGpuEvaluator(nullptr);
         rock::SetSnowGpuEvaluator(nullptr);
         rock::SetColorizeGpuEvaluator(nullptr);

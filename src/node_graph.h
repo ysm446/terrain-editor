@@ -66,6 +66,12 @@ enum class RockBackend
     GpuCompute,
 };
 
+enum class ScatterBackend
+{
+    CpuReference,
+    GpuCompute,
+};
+
 enum class RockStyle
 {
     Classic,
@@ -374,6 +380,7 @@ struct ScatterSettings
     float rotationVariation = 1.0f;
     float aspectVariation = 0.3f;
     float groundDetailLevelM = 0.0f;
+    ScatterBackend backend = ScatterBackend::GpuCompute;
 };
 
 // Heightfield → heightfield + mask. GeoGen-style sediment simulation.
@@ -714,6 +721,7 @@ using MultiScaleErosionGpuEvaluator = bool (*)(HeightfieldGrid& grid, const Mult
 using MaskNoiseGpuEvaluator = bool (*)(MaskGrid& grid, const MaskNoiseSettings& settings, std::string* error);
 using SedimentGpuEvaluator = bool (*)(HeightfieldGrid& grid, const SedimentSettings& settings, std::string* error);
 using RockGpuEvaluator = bool (*)(HeightfieldGrid& grid, const RockSettings& settings, std::string* error);
+using ScatterGpuEvaluator = bool (*)(HeightfieldGrid& grid, const ScatterSettings& settings, std::string* error);
 using MaskFluvialGpuEvaluator = bool (*)(HeightfieldGrid& grid, const MaskFluvialSettings& settings, std::string* error);
 using SnowGpuEvaluator = bool (*)(HeightfieldGrid& grid, const SnowSettings& settings, std::string* error);
 using ColorizeGpuEvaluator = bool (*)(ColorGrid& grid, const ColorizeSettings& settings, const MaskGrid& gradientMask, const MaskGrid* mask, const ColorGrid* baseColor, std::string* error);
@@ -904,6 +912,7 @@ void SetMultiScaleErosionGpuEvaluator(MultiScaleErosionGpuEvaluator evaluator);
 void SetMaskNoiseGpuEvaluator(MaskNoiseGpuEvaluator evaluator);
 void SetSedimentGpuEvaluator(SedimentGpuEvaluator evaluator);
 void SetRockGpuEvaluator(RockGpuEvaluator evaluator);
+void SetScatterGpuEvaluator(ScatterGpuEvaluator evaluator);
 void SetMaskFluvialGpuEvaluator(MaskFluvialGpuEvaluator evaluator);
 void SetSnowGpuEvaluator(SnowGpuEvaluator evaluator);
 void SetColorizeGpuEvaluator(ColorizeGpuEvaluator evaluator);

@@ -31,6 +31,7 @@ MultiScaleErosionGpuEvaluator g_mseGpuEvaluator = nullptr;
 MaskNoiseGpuEvaluator g_maskNoiseGpuEvaluator = nullptr;
 SedimentGpuEvaluator g_sedimentGpuEvaluator = nullptr;
 RockGpuEvaluator g_rockGpuEvaluator = nullptr;
+ScatterGpuEvaluator g_scatterGpuEvaluator = nullptr;
 MaskFluvialGpuEvaluator g_maskFluvialGpuEvaluator = nullptr;
 SnowGpuEvaluator g_snowGpuEvaluator = nullptr;
 ColorizeGpuEvaluator g_colorizeGpuEvaluator = nullptr;
@@ -209,6 +210,7 @@ uint64_t HashScatterSettings(const ScatterSettings& settings, int resolution)
     HashCombine(hash, HashFloat(settings.rotationVariation));
     HashCombine(hash, HashFloat(settings.aspectVariation));
     HashCombine(hash, HashFloat(settings.groundDetailLevelM));
+    HashCombine(hash, static_cast<uint64_t>(settings.backend));
     HashCombine(hash, static_cast<uint64_t>(resolution));
     return hash;
 }
@@ -2691,6 +2693,18 @@ void ApplyScatter(HeightfieldGrid& grid, const ScatterSettings& settings, const 
     const bool hasPlacementMask = placementMask != nullptr &&
         placementMask->resolution > 0 &&
         !placementMask->values.empty();
+    const bool usesSmoothedGround = settings.groundDetailLevelM > 0.0f;
+    if (!hasPlacementMask && !usesSmoothedGround &&
+        settings.backend == ScatterBackend::GpuCompute && g_scatterGpuEvaluator != nullptr)
+    {
+        std::string ignoredError;
+        if (g_scatterGpuEvaluator(grid, settings, &ignoredError))
+        {
+            return;
+        }
+        // Falls through to the CPU implementation on shader / dispatch failure.
+    }
+
     const float density = std::max(settings.density, 0.1f);
     const float coverage = std::clamp(settings.coverage, 0.0f, 1.0f);
     const float sizeMinM = std::clamp(settings.sizeMinM, 0.1f, 200.0f);
@@ -5602,6 +5616,11 @@ void SetSedimentGpuEvaluator(SedimentGpuEvaluator evaluator)
 void SetRockGpuEvaluator(RockGpuEvaluator evaluator)
 {
     g_rockGpuEvaluator = evaluator;
+}
+
+void SetScatterGpuEvaluator(ScatterGpuEvaluator evaluator)
+{
+    g_scatterGpuEvaluator = evaluator;
 }
 
 void SetMaskFluvialGpuEvaluator(MaskFluvialGpuEvaluator evaluator)

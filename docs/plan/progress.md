@@ -17,6 +17,7 @@
 - `Rock` ノードに `Ground Detail Level` を追加した。`Max` では従来どおり入力地形そのまま、`1 m` から `128 m` では指定スケールでならした下地に岩を乗せる。
 - `Scatter` ノードを追加した。入力 `Heightmap` と `Mask` から `Hemisphere` / `Cone` の汎用散布形状を作り、`Heightmap` / `Mask` / `Unique Mask` を出力する。
 - `Scatter` は `Height (m)` を 0 にしても `Mask` と `Unique Mask` を出力するため、当面は植生分布用のプロキシノードとして使える。
+- `Scatter` ノードを D3D12 GPU compute に対応させた。`Backend` は既定で `GPU` になり、`Mask` 入力なし、`Ground Detail Level = Max` の場合に GPU 評価する。それ以外や失敗時は CPU にフォールバックする。
 - コピー＆ペーストしたノードが、後から追加されたノード種別も含めて各パラメータ値を引き継ぐようにした。
 - ノードをコピー＆ペーストするとき、選択範囲外の上流ノードから選択ノード入力へ入っているリンクも、複製後のノードへ接続したままにするようにした。
 - `Mask Blend` の入力ピン名を `A` / `B` から `Foreground` / `Background` に変更した。旧プロジェクトのピン名は読み込み時に自動更新する。

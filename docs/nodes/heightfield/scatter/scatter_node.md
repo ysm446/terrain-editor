@@ -31,9 +31,11 @@
 | Rotation Variation (%) | 個体の向きのばらつき。 |
 | Aspect Variation (%) | 個体の細長さのばらつき。 |
 | Ground Detail Level | 散布形状を置く底面に使う地形ディテール。`Max` は入力地形そのままです。 |
+| Backend | `CPU` / `GPU`。`GPU` は `Mask` 入力なし、`Ground Detail Level = Max` の場合に D3D12 compute で評価します。 |
 
 ## メモ
 
 - `Hemisphere` は丸い低木や樹冠の分布確認に向いています。
 - `Cone` は尖った草、針葉樹の簡易 proxy、または散布密度の確認に向いています。
 - 専用の `Vegetation` ノードを作る前段として、植生の分布マスク作成に使うことを想定しています。
+- GPU 経路はシェーダーのコンパイルや実行に失敗した場合、自動的に CPU 経路へフォールバックします。
