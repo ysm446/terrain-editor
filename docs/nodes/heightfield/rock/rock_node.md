@@ -6,7 +6,7 @@
 
 | 種類 | 内容 |
 | --- | --- |
-| 入力 | `Heightmap` |
+| 入力 | `Heightmap` / `Mask` |
 | 出力 | `Heightmap`(凹凸を加算したハイトフィールド) / `Mask`(岩らしさの 0..1 マスク) / `Unique Mask`(岩ごとのランダム 0..1 明度) |
 
 ## 主な設定
@@ -29,6 +29,7 @@
 | `Bumpiness (%)` | 60 | 表面ディテールの振幅 |
 | `Facet Sharpness (%)` | 50 | 表面形状。0=丸い凸凹、1=多面体状の平らな面 + 鋭いエッジ |
 | `Facet Scale` | 2.5 | 1 つの岩に乗る面の細かさ |
+| `Ground Detail Level` | Max | 岩を置く底面のディテール。`Max` は入力地形そのまま、`1 m` / `2 m` / `4 m` / `8 m` / `16 m` / `32 m` / `64 m` / `128 m` は指定スケールでならした下地に岩を乗せる |
 | `Backend` | GPU Compute | `CPU` / `GPU Compute` (D3D12 compute shader) を切り替え。既定は GPU。シェーダーコンパイル/ディスパッチ失敗時は CPU に自動フォールバック |
 
 ## アルゴリズム概要
@@ -91,7 +92,7 @@
 
 ## GPU Compute バックエンド
 
-`Backend` プルダウンで `GPU Compute` を選ぶと [shaders/rock_compute.hlsl](../../../../shaders/rock_compute.hlsl) の compute shader (`CSRock`、`[numthreads(8,8,1)]`) で評価します。アルゴリズムは CPU 版と完全に同等で、ハッシュ関数 (`Hash2` / `HashFloat01`) と Voronoi (`VoronoiF1F2`) を HLSL に直接移植してあるため、同一パラメータで CPU と GPU は同じ結果を返します。
+`Backend` プルダウンで `GPU Compute` を選ぶと [shaders/rock_compute.hlsl](../../../../shaders/rock_compute.hlsl) の compute shader (`CSRock`、`[numthreads(8,8,1)]`) で評価します。アルゴリズムは CPU 版と完全に同等で、ハッシュ関数 (`Hash2` / `HashFloat01`) と Voronoi (`VoronoiF1F2`) を HLSL に直接移植してあるため、同一パラメータで CPU と GPU は同じ結果を返します。`Mask` 入力を使う場合、または `Ground Detail Level` が `Max` 以外の場合は CPU 経路で評価します。
 
 ピクセルあたり embarrassingly parallel (近傍 (2*searchRadius+1)² セル走査 + per-rock 計算) で、reduction も pixel-local の max のみ。1024² 既定パラメータでおおむね **CPU 比 10-30 倍高速** の見込み (Sediment / Multi-Scale Erosion GPU 化と同オーダー)。
 

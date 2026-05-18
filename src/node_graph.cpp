@@ -187,6 +187,7 @@ uint64_t HashRockSettings(const RockSettings& settings, int resolution)
     HashCombine(hash, HashFloat(settings.bumpiness));
     HashCombine(hash, HashFloat(settings.facetSharpness));
     HashCombine(hash, HashFloat(settings.facetScale));
+    HashCombine(hash, HashFloat(settings.groundDetailLevelM));
     HashCombine(hash, static_cast<uint64_t>(settings.backend));
     HashCombine(hash, static_cast<uint64_t>(resolution));
     return hash;
@@ -2307,7 +2308,7 @@ inline float Smoothstep01(float t)
 // into a dome with sub-cell roughness and an optional crack at the cell
 // boundary. Heights are added (peaks rise above the input terrain), and a
 // 0..1 mask of "where the rock dome is significant" is written to grid.mask.
-void ApplyRock(HeightfieldGrid& grid, const RockSettings& settings)
+void ApplyRock(HeightfieldGrid& grid, const RockSettings& settings, const MaskGrid* placementMask = nullptr)
 {
     const int n = grid.resolution;
     const size_t cellCount = static_cast<size_t>(n) * static_cast<size_t>(n);
@@ -2316,7 +2317,12 @@ void ApplyRock(HeightfieldGrid& grid, const RockSettings& settings)
         return;
     }
 
-    if (settings.backend == RockBackend::GpuCompute && g_rockGpuEvaluator != nullptr)
+    const bool hasPlacementMask = placementMask != nullptr &&
+        placementMask->resolution > 0 &&
+        !placementMask->values.empty();
+    const bool usesSmoothedGround = settings.groundDetailLevelM > 0.0f;
+    if (!hasPlacementMask && !usesSmoothedGround &&
+        settings.backend == RockBackend::GpuCompute && g_rockGpuEvaluator != nullptr)
     {
         std::string ignoredError;
         if (g_rockGpuEvaluator(grid, settings, &ignoredError))
@@ -2373,9 +2379,21 @@ void ApplyRock(HeightfieldGrid& grid, const RockSettings& settings)
     const float invStep = (n > 1) ? 1.0f / static_cast<float>(n - 1) : 0.0f;
     const float cellSizeMeters = terrainSize / static_cast<float>(std::max(1, n - 1));
     const float invTwoCellMeters = 1.0f / (2.0f * cellSizeMeters);
+    const float groundDetailM = std::clamp(settings.groundDetailLevelM, 0.0f, terrainSize * 0.5f);
+    const int groundRadius = groundDetailM > 0.0f
+        ? std::clamp(static_cast<int>(std::round(groundDetailM / cellSizeMeters)), 1, 128)
+        : 0;
+    const std::vector<float> groundHeights = groundRadius > 1 ? BoxBlurHeights(grid, groundRadius) : std::vector<float>();
     const std::vector<float> inputHeights = (orientationRule != static_cast<int>(RockOrientationRule::Flat))
         ? grid.heights
         : std::vector<float>();
+    const auto samplePlacementMask = [&](float u, float v) {
+        if (!hasPlacementMask)
+        {
+            return 1.0f;
+        }
+        return std::clamp(SampleMaskBilinear(*placementMask, u, v), 0.0f, 1.0f);
+    };
 
     // Search radius covers the worst case: largest rock × max aspect stretch.
     // aspect uses pow(2, aspectVar) to give a symmetric multiplicative range
@@ -2436,6 +2454,15 @@ void ApplyRock(HeightfieldGrid& grid, const RockSettings& settings)
                     const float jz = rock_node::HashFloat01(gx, gz, layerSeed + 73) * 0.9f - 0.45f;
                     const float sx = static_cast<float>(gx) + 0.5f + jx;
                     const float sz = static_cast<float>(gz) + 0.5f + jz;
+                    const float siteWorldX = sx * density;
+                    const float siteWorldZ = sz * density;
+                    const float siteU = (siteWorldX + halfSize) / terrainSize;
+                    const float siteV = (siteWorldZ + halfSize) / terrainSize;
+                    const float siteMask = samplePlacementMask(siteU, siteV);
+                    if (siteMask <= 0.0f)
+                    {
+                        continue;
+                    }
                     const float ddx = cellX - sx;
                     const float ddz = cellZ - sz;
                     const float d_iso = std::sqrt(ddx * ddx + ddz * ddz);
@@ -2447,7 +2474,7 @@ void ApplyRock(HeightfieldGrid& grid, const RockSettings& settings)
 
                     // Per-seed coverage gate: this cell may not be a rock at all.
                     const float cellRandom = rock_node::HashFloat01(gx, gz, layerSeed + 17);
-                    if (cellRandom > coverage)
+                    if (cellRandom > coverage * siteMask)
                     {
                         continue;
                     }
@@ -2610,8 +2637,19 @@ void ApplyRock(HeightfieldGrid& grid, const RockSettings& settings)
             }
 
             const size_t idx = static_cast<size_t>(z) * static_cast<size_t>(n) + static_cast<size_t>(x);
-            grid.heights[idx] += bestRockH;
-            grid.mask[idx] = bestDome;
+            const float pixelMask = samplePlacementMask(
+                static_cast<float>(x) * invStep,
+                static_cast<float>(z) * invStep);
+            if (pixelMask <= 0.0f)
+            {
+                continue;
+            }
+
+            const float originalH = grid.heights[idx];
+            const float groundH = groundHeights.empty() ? originalH : groundHeights[idx];
+            const float rockTargetH = groundH + bestRockH * pixelMask;
+            grid.heights[idx] = std::max(originalH, rockTargetH);
+            grid.mask[idx] = bestDome * pixelMask;
             grid.uniqueMask[idx] = bestUnique;
         }
     });
@@ -3840,14 +3878,16 @@ HeightfieldGrid NodeGraph::EvaluateHeightPipelineCached(const HeightfieldPipelin
         }
 
         uint64_t parameterHash = HashHeightfieldOperation(operation, simulationResolution);
-        MaskGrid crumblingEmissionMask;
-        bool hasCrumblingEmissionMask = false;
-        if (operation.kind == HeightfieldPipeline::HeightfieldOperation::Kind::Crumbling)
+        MaskGrid inputMask;
+        bool hasInputMask = false;
+        if (operation.kind == HeightfieldPipeline::HeightfieldOperation::Kind::Crumbling ||
+            operation.kind == HeightfieldPipeline::HeightfieldOperation::Kind::Rock)
         {
+            const size_t maskInputIndex = operation.kind == HeightfieldPipeline::HeightfieldOperation::Kind::Crumbling ? 1u : 1u;
             if (const Node* operationNode = FindNode(operation.nodeId);
-                operationNode != nullptr && operationNode->inputs.size() >= 2)
+                operationNode != nullptr && operationNode->inputs.size() > maskInputIndex)
             {
-                const UpstreamConnection upstream = FindUpstreamConnectionForPin(operationNode->inputs[1].id);
+                const UpstreamConnection upstream = FindUpstreamConnectionForPin(operationNode->inputs[maskInputIndex].id);
                 const auto isMaskProducer = [](NodeKind kind) {
                     return IsMaskOnlyNodeKind(kind) ||
                         kind == NodeKind::MaskCurvature ||
@@ -3863,8 +3903,8 @@ HeightfieldGrid NodeGraph::EvaluateHeightPipelineCached(const HeightfieldPipelin
                 if (upstream.node != nullptr && isMaskProducer(upstream.node->kind))
                 {
                     uint64_t maskHash = 0;
-                    crumblingEmissionMask = EvaluateMaskGridForNodeCached(*upstream.node, 0, &maskHash, upstream.outputPin ? std::string_view(upstream.outputPin->label) : std::string_view{});
-                    hasCrumblingEmissionMask = crumblingEmissionMask.resolution > 0;
+                    inputMask = EvaluateMaskGridForNodeCached(*upstream.node, 0, &maskHash, upstream.outputPin ? std::string_view(upstream.outputPin->label) : std::string_view{});
+                    hasInputMask = inputMask.resolution > 0;
                     HashCombine(parameterHash, maskHash);
                 }
             }
@@ -3879,7 +3919,11 @@ HeightfieldGrid NodeGraph::EvaluateHeightPipelineCached(const HeightfieldPipelin
             HeightfieldGrid operationGrid = grid;
             if (operation.kind == HeightfieldPipeline::HeightfieldOperation::Kind::Crumbling)
             {
-                ApplyCrumbling(operationGrid, operation.crumbling, hasCrumblingEmissionMask ? &crumblingEmissionMask : nullptr);
+                ApplyCrumbling(operationGrid, operation.crumbling, hasInputMask ? &inputMask : nullptr);
+            }
+            else if (operation.kind == HeightfieldPipeline::HeightfieldOperation::Kind::Rock)
+            {
+                ApplyRock(operationGrid, operation.rock, hasInputMask ? &inputMask : nullptr);
             }
             else
             {
@@ -4153,6 +4197,7 @@ GraphId NodeGraph::CreateNode(NodeKind kind)
         break;
     case NodeKind::Rock:
         AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
+        AddPin(nodeId, PinKind::Input, ValueType::Mask, "Mask");
         AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
         AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
         AddPin(nodeId, PinKind::Output, ValueType::Mask, "Unique Mask");
@@ -4229,6 +4274,27 @@ void NodeGraph::ReplaceNodes(std::vector<Node> nodes)
             if (node.inputs.size() >= 2 && node.inputs[1].label == "B")
             {
                 node.inputs[1].label = "Background";
+            }
+        }
+        else if (node.kind == NodeKind::Rock)
+        {
+            const bool hasMaskInput = std::ranges::any_of(node.inputs, [](const Pin& pin) {
+                return pin.kind == PinKind::Input && pin.valueType == ValueType::Mask && pin.label == "Mask";
+            });
+            if (!hasMaskInput)
+            {
+                Pin maskPin{AllocateGraphId(), node.id, PinKind::Input, ValueType::Mask, "Mask"};
+                const auto heightInputIt = std::ranges::find_if(node.inputs, [](const Pin& pin) {
+                    return pin.valueType == ValueType::HeightField && pin.label == "Heightmap";
+                });
+                if (heightInputIt != node.inputs.end())
+                {
+                    node.inputs.insert(std::next(heightInputIt), std::move(maskPin));
+                }
+                else
+                {
+                    node.inputs.push_back(std::move(maskPin));
+                }
             }
         }
     }

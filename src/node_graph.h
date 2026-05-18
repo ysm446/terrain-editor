@@ -346,6 +346,7 @@ struct RockSettings
     float bumpiness = 0.6f;          // 0..1, surface detail amplitude (smooth or faceted, see facetSharpness).
     float facetSharpness = 0.5f;     // 0 = smooth dome with rounded bumps, 1 = polyhedral flat facets with sharp creases.
     float facetScale = 2.5f;         // Sub-cell Voronoi frequency in the rock-local frame (higher = more, smaller facets per rock).
+    float groundDetailLevelM = 0.0f; // 0 = Max/full detail. Larger values smooth the placement ground and ignore smaller wrinkles.
     RockBackend backend = RockBackend::GpuCompute; // CPU reference vs GPU compute (D3D12). Defaults to GPU; falls back to CPU on shader/device failure.
 };
 

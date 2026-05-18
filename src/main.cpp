@@ -2434,6 +2434,7 @@ nlohmann::json MakeRockSettingsJson(const rock::Node& node)
             {"bumpiness", node.rock.bumpiness},
             {"facetSharpness", node.rock.facetSharpness},
             {"facetScale", node.rock.facetScale},
+            {"groundDetailLevelM", node.rock.groundDetailLevelM},
             {"backend", static_cast<int>(node.rock.backend)},
         }},
     };
@@ -2766,6 +2767,7 @@ void ReadRockSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     node.rock.bumpiness = std::clamp(nodeRockJson.value("bumpiness", node.rock.bumpiness), 0.0f, 1.0f);
     node.rock.facetSharpness = std::clamp(nodeRockJson.value("facetSharpness", node.rock.facetSharpness), 0.0f, 1.0f);
     node.rock.facetScale = std::clamp(nodeRockJson.value("facetScale", node.rock.facetScale), 0.5f, 8.0f);
+    node.rock.groundDetailLevelM = std::clamp(nodeRockJson.value("groundDetailLevelM", node.rock.groundDetailLevelM), 0.0f, 1024.0f);
     {
         const int backendInt = nodeRockJson.value("backend", static_cast<int>(node.rock.backend));
         node.rock.backend = static_cast<rock::RockBackend>(std::clamp(backendInt,
@@ -13990,6 +13992,26 @@ bool DrawRockProperties(rock::Node& editableNode)
     if (DrawPropertyFloatRow("Facet Scale", "RockFacetScale", &rk.facetScale, 0.5f, 8.0f, rock::RockSettings{}.facetScale, "Rock facet scale changed", true, "1 つの岩に乗る面の細かさです。大きいほど面が小さく細かくなり、小さいほど大きな面が少数現れます。", "%.2f"))
     {
         EvaluateGraph();
+    }
+
+    {
+        constexpr std::array<float, 9> kGroundDetailLevels = {0.0f, 1.0f, 2.0f, 4.0f, 8.0f, 16.0f, 32.0f, 64.0f, 128.0f};
+        int detailIndex = 0;
+        float bestDistance = std::numeric_limits<float>::max();
+        for (int i = 0; i < static_cast<int>(kGroundDetailLevels.size()); ++i)
+        {
+            const float distance = std::abs(rk.groundDetailLevelM - kGroundDetailLevels[static_cast<size_t>(i)]);
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                detailIndex = i;
+            }
+        }
+        if (DrawPropertyComboRow("Ground Detail Level", "RockGroundDetailLevel", &detailIndex, "Max\0" "1 m\0" "2 m\0" "4 m\0" "8 m\0" "16 m\0" "32 m\0" "64 m\0" "128 m\0" "\0", "岩を置く底面に使う地形ディテールです。Max は入力地形そのまま、数値を上げるほど小さな凹凸をならした下地に岩を乗せます。", 0))
+        {
+            rk.groundDetailLevelM = kGroundDetailLevels[static_cast<size_t>(detailIndex)];
+            EvaluateGraph();
+        }
     }
 
     ImGui::EndTable();
