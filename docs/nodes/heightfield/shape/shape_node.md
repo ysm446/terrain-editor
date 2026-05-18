@@ -14,10 +14,12 @@
 | 設定 | 役割 |
 | --- | --- |
 | `Shape Type` | `Hemisphere` または `Pyramid` |
-| `Scale (m)` | 地形の横幅と奥行き |
+| `Scale (m)` | グローバル `Terrain Size (m)` 内でシェープが占める横幅と奥行き |
 | `Relative Height (%)` | 最大高さ。実高さは `Scale × Relative Height / 100` |
 | `Simulation Resolution` | 生成するハイトフィールドの内部解像度 |
 
 ## メモ
 
 `Hemisphere` は山体や孤立峰のテストに、`Pyramid` は斜面方向や侵食の基本挙動確認に向いています。
+
+地形全体の縦横サイズは設定タブの `Terrain Size (m)` で決まり、`Scale (m)` がそれより小さい場合はシェープが中央に配置され、外側は高さ 0 になります。

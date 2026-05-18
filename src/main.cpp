@@ -59,6 +59,7 @@ constexpr float kDefaultViewportFovDegrees = 45.0f;
 constexpr float kDefaultViewportOrbitDistance = 1800.0f;
 constexpr float kMaxViewportOrbitDistance = 100000.0f;
 constexpr float kViewportFarPlane = 200000.0f;
+constexpr std::array<int, 4> kTerrainSizePresets = {512, 1024, 2048, 4096};
 constexpr std::array<int, 5> kResolutionPresets = {128, 256, 512, 1024, 2048};
 constexpr std::array<int, 4> kShadowResolutionPresets = {512, 1024, 2048, 4096};
 
@@ -74,6 +75,11 @@ int NearestPreset(int value, const std::array<int, N>& presets, int fallback)
 int NearestResolutionPreset(int value)
 {
     return NearestPreset(value, kResolutionPresets, 512);
+}
+
+int NearestTerrainSizePreset(float value)
+{
+    return NearestPreset(static_cast<int>(std::round(value)), kTerrainSizePresets, 1024);
 }
 
 int NearestShadowResolutionPreset(int value)
@@ -1616,6 +1622,7 @@ bool SaveAppSettings(std::string* error = nullptr)
             {"drawStats", g_ui.showDrawStats},
             {"meshSurface", settings.preview.showSurface},
             {"meshWireframe", settings.preview.showWireframe},
+            {"terrainSizeMeters", settings.preview.terrainSizeMeters},
             {"simulationResolution", settings.preview.simulationResolution},
             {"previewResolution", settings.preview.resolution},
             {"previewLod", settings.preview.lod},
@@ -1762,6 +1769,7 @@ bool LoadAppSettings(std::string* error = nullptr)
         g_ui.showDrawStats = visibilityJson.value("drawStats", g_ui.showDrawStats);
         settings.preview.showSurface = visibilityJson.value("meshSurface", settings.preview.showSurface);
         settings.preview.showWireframe = visibilityJson.value("meshWireframe", settings.preview.showWireframe);
+        settings.preview.terrainSizeMeters = static_cast<float>(NearestTerrainSizePreset(visibilityJson.value("terrainSizeMeters", settings.preview.terrainSizeMeters)));
         settings.preview.simulationResolution = NearestResolutionPreset(visibilityJson.value("simulationResolution", settings.preview.simulationResolution));
         settings.preview.resolution = NearestResolutionPreset(visibilityJson.value("previewResolution", settings.preview.resolution));
         settings.preview.lod = std::clamp(visibilityJson.value("previewLod", settings.preview.lod), 0, 4);
@@ -2757,6 +2765,7 @@ nlohmann::json MakeProjectSettingsJson()
             {"cloudsEnabled", clouds.enabled},
         }},
         {"preview", {
+            {"terrainSizeMeters", preview.terrainSizeMeters},
             {"simulationResolution", preview.simulationResolution},
             {"lightingMode", preview.lightingMode},
             {"meshBackend", static_cast<int>(preview.meshBackend)},
@@ -3034,6 +3043,7 @@ void ReadPreviewSettingsJson(const nlohmann::json& settingsJson, rock::PreviewSe
         return;
     }
 
+    preview.terrainSizeMeters = static_cast<float>(NearestTerrainSizePreset(previewJson.value("terrainSizeMeters", preview.terrainSizeMeters)));
     preview.simulationResolution = NearestResolutionPreset(previewJson.value("simulationResolution", preview.simulationResolution));
     g_projectSettingsHadSimulationResolution = previewJson.contains("simulationResolution");
     preview.lightingMode = std::clamp(previewJson.value("lightingMode", preview.lightingMode), 0, 1);
@@ -12515,6 +12525,22 @@ bool DrawResolutionPresetRow(const char* label, const char* id, int* value, int 
     return DrawPresetIntRow(label, id, value, defaultValue, kResolutionPresets, 512, dirtyReason, recordUndo, tooltip);
 }
 
+bool DrawTerrainSizePresetRow(const char* label, const char* id, float* value, float defaultValue, const char* dirtyReason, bool recordUndo = true, const char* tooltip = nullptr)
+{
+    int intValue = NearestTerrainSizePreset(*value);
+    const int intDefault = NearestTerrainSizePreset(defaultValue);
+    const bool changed = DrawPresetIntRow(label, id, &intValue, intDefault, kTerrainSizePresets, 1024, dirtyReason, recordUndo, tooltip);
+    if (changed)
+    {
+        *value = static_cast<float>(intValue);
+    }
+    else
+    {
+        *value = static_cast<float>(intValue);
+    }
+    return changed;
+}
+
 bool DrawPropertyBoolRow(const char* label, const char* id, bool* value, const char* dirtyReason, const char* tooltip = nullptr, bool defaultValue = false, bool compact = false)
 {
     ImGui::TableNextRow();
@@ -12670,7 +12696,7 @@ bool DrawHeightmapLoadProperties(rock::Node& editableNode)
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Scale (m)", "HeightmapScaleMeters", &editableNode.heightmap.scaleMeters, 1.0f, 8096.0f, rock::HeightmapLoadSettings{}.scaleMeters, "Heightmap scale changed", true, "地形の横幅と奥行きです。1 unit = 1 m として描画します。"))
+    if (DrawPropertyFloatRow("Scale (m)", "HeightmapScaleMeters", &editableNode.heightmap.scaleMeters, 1.0f, 8096.0f, rock::HeightmapLoadSettings{}.scaleMeters, "Heightmap scale changed", true, "読み込むハイトマップ画像がグローバル Terrain Size 内で占める幅と奥行きです。Terrain Size より大きい場合は中央でクロップし、小さい場合は外側を高さ 0 にします。", "%.2f"))
     {
         EvaluateGraph();
     }
@@ -12706,7 +12732,7 @@ bool DrawShapeProperties(rock::Node& editableNode)
         g_graph.MarkDirty("Shape type changed");
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Scale (m)", "ShapeScaleMeters", &shape.scaleMeters, 1.0f, 8096.0f, rock::ShapeSettings{}.scaleMeters, "Shape scale changed", true, "シェープの横幅と奥行きです。1 unit = 1 m として描画します。"))
+    if (DrawPropertyFloatRow("Scale (m)", "ShapeScaleMeters", &shape.scaleMeters, 1.0f, 8096.0f, rock::ShapeSettings{}.scaleMeters, "Shape scale changed", true, "グローバル Terrain Size 内でシェープが占める幅と奥行きです。Terrain Size より小さい場合は中央に配置され、外側は高さ 0 になります。"))
     {
         EvaluateGraph();
     }
@@ -14049,6 +14075,11 @@ void DrawDisplaySettingsPanel()
         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
 
         ImGui::SeparatorText("解像度");
+        if (DrawTerrainSizePresetRow("Terrain Size (m)", "GlobalTerrainSizeMeters", &settings.preview.terrainSizeMeters, rock::PreviewSettings{}.terrainSizeMeters, "Terrain size changed", false, "ノードグラフ全体の地形キャンバスの縦横サイズです。Import Heightmap の Scale はこの中で画像が占める実サイズとして扱い、大きければクロップ、小さければ外側を高さ 0 にします。"))
+        {
+            g_graph.MarkDirty("Terrain size changed");
+            EvaluateGraph();
+        }
         if (DrawResolutionPresetRow("Simulation Resolution", "GlobalSimulationResolution", &settings.preview.simulationResolution, rock::PreviewSettings{}.simulationResolution, "Simulation resolution changed", false, "ノードグラフ全体の地形・マスク評価解像度です。高いほど細かく計算できますが、評価時間とメモリ使用量が増えます。"))
         {
             g_graph.MarkDirty("Simulation resolution changed");

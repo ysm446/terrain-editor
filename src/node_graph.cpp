@@ -54,7 +54,7 @@ uint64_t HashFloat(float value)
     return static_cast<uint64_t>(std::hash<float>{}(value));
 }
 
-uint64_t HashHeightmapSettings(const HeightmapLoadSettings& settings, int resolution)
+uint64_t HashHeightmapSettings(const HeightmapLoadSettings& settings, int resolution, float terrainSizeMeters)
 {
     uint64_t hash = 1469598103934665603ull;
     HashCombine(hash, static_cast<uint64_t>(std::hash<std::string>{}(settings.path)));
@@ -62,16 +62,18 @@ uint64_t HashHeightmapSettings(const HeightmapLoadSettings& settings, int resolu
     HashCombine(hash, HashFloat(settings.relativeVerticalScalePercent));
     HashCombine(hash, HashFloat(settings.verticalOffsetMeters));
     HashCombine(hash, static_cast<uint64_t>(resolution));
+    HashCombine(hash, HashFloat(terrainSizeMeters));
     return hash;
 }
 
-uint64_t HashShapeSettings(const ShapeSettings& settings, int resolution)
+uint64_t HashShapeSettings(const ShapeSettings& settings, int resolution, float terrainSizeMeters)
 {
     uint64_t hash = 1469598103934665603ull;
     HashCombine(hash, static_cast<uint64_t>(settings.kind));
     HashCombine(hash, HashFloat(settings.scaleMeters));
     HashCombine(hash, HashFloat(settings.relativeHeightPercent));
     HashCombine(hash, static_cast<uint64_t>(resolution));
+    HashCombine(hash, HashFloat(terrainSizeMeters));
     return hash;
 }
 
@@ -564,7 +566,7 @@ float Hash01(int x, int y, int seed)
     return static_cast<float>(h & 0x00FFFFFFu) / static_cast<float>(0x01000000u);
 }
 
-HeightfieldGrid BuildHeightfieldFromHeightmap(const HeightmapLoadSettings& settings, int resolution, std::string* message)
+HeightfieldGrid BuildHeightfieldFromHeightmap(const HeightmapLoadSettings& settings, int resolution, float terrainSizeMeters, std::string* message)
 {
     HeightfieldGrid grid;
     HeightmapImage image;
@@ -579,8 +581,11 @@ HeightfieldGrid BuildHeightfieldFromHeightmap(const HeightmapLoadSettings& setti
     }
 
     grid.resolution = std::clamp(resolution, 2, 2048);
-    grid.terrainSizeMeters = std::max(1.0f, settings.scaleMeters);
-    const float verticalRange = grid.terrainSizeMeters * std::max(0.0f, settings.relativeVerticalScalePercent) / 100.0f;
+    grid.terrainSizeMeters = std::max(1.0f, terrainSizeMeters);
+    const float importSizeMeters = std::max(1.0f, settings.scaleMeters);
+    const float verticalRange = importSizeMeters * std::max(0.0f, settings.relativeVerticalScalePercent) / 100.0f;
+    const float halfTerrain = grid.terrainSizeMeters * 0.5f;
+    const float halfImport = importSizeMeters * 0.5f;
     grid.heights.reserve(static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution));
     grid.mask.assign(static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution), 0.0f);
     grid.deposits.assign(static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution), 0.0f);
@@ -588,34 +593,47 @@ HeightfieldGrid BuildHeightfieldFromHeightmap(const HeightmapLoadSettings& setti
     grid.age.assign(static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution), 0.0f);
     for (int z = 0; z < grid.resolution; ++z)
     {
-        const float v = grid.resolution > 1 ? 1.0f - (static_cast<float>(z) / static_cast<float>(grid.resolution - 1)) : 0.0f;
+        const float tz = grid.resolution > 1 ? static_cast<float>(z) / static_cast<float>(grid.resolution - 1) : 0.0f;
+        const float worldZ = std::lerp(-halfTerrain, halfTerrain, tz);
         for (int x = 0; x < grid.resolution; ++x)
         {
-            const float u = grid.resolution > 1 ? static_cast<float>(x) / static_cast<float>(grid.resolution - 1) : 0.0f;
-            grid.heights.push_back(settings.verticalOffsetMeters + SampleHeightmap(image, u, v) * verticalRange);
+            const float tx = grid.resolution > 1 ? static_cast<float>(x) / static_cast<float>(grid.resolution - 1) : 0.0f;
+            const float worldX = std::lerp(-halfTerrain, halfTerrain, tx);
+            float height = 0.0f;
+            if (std::abs(worldX) <= halfImport && std::abs(worldZ) <= halfImport)
+            {
+                const float u = (worldX + halfImport) / importSizeMeters;
+                const float v = 1.0f - ((worldZ + halfImport) / importSizeMeters);
+                height = settings.verticalOffsetMeters + SampleHeightmap(image, u, v) * verticalRange;
+            }
+            grid.heights.push_back(height);
         }
     }
 
     if (message != nullptr)
     {
         *message = std::format(
-            "heightmap {}x{} {} -> terrain {}x{} ({:.1f} m)",
+            "heightmap {}x{} {} -> terrain {}x{} ({:.1f} m canvas, {:.1f} m import)",
             image.width,
             image.height,
             image.precision,
             grid.resolution,
             grid.resolution,
+            grid.terrainSizeMeters,
             settings.scaleMeters);
     }
     return grid;
 }
 
-HeightfieldGrid BuildHeightfieldFromShape(const ShapeSettings& settings, int resolution, std::string* message)
+HeightfieldGrid BuildHeightfieldFromShape(const ShapeSettings& settings, int resolution, float terrainSizeMeters, std::string* message)
 {
     HeightfieldGrid grid;
     grid.resolution = std::clamp(resolution, 2, 2048);
-    grid.terrainSizeMeters = std::max(1.0f, settings.scaleMeters);
-    const float heightMeters = grid.terrainSizeMeters * std::max(0.0f, settings.relativeHeightPercent) / 100.0f;
+    grid.terrainSizeMeters = std::max(1.0f, terrainSizeMeters);
+    const float shapeSizeMeters = std::max(1.0f, settings.scaleMeters);
+    const float heightMeters = shapeSizeMeters * std::max(0.0f, settings.relativeHeightPercent) / 100.0f;
+    const float halfTerrain = grid.terrainSizeMeters * 0.5f;
+    const float halfShape = shapeSizeMeters * 0.5f;
     const size_t cellCount = static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution);
     grid.heights.reserve(cellCount);
     grid.mask.assign(cellCount, 0.0f);
@@ -626,20 +644,25 @@ HeightfieldGrid BuildHeightfieldFromShape(const ShapeSettings& settings, int res
     for (int z = 0; z < grid.resolution; ++z)
     {
         const float v = grid.resolution > 1 ? static_cast<float>(z) / static_cast<float>(grid.resolution - 1) : 0.0f;
-        const float nz = v * 2.0f - 1.0f;
+        const float worldZ = std::lerp(-halfTerrain, halfTerrain, v);
         for (int x = 0; x < grid.resolution; ++x)
         {
             const float u = grid.resolution > 1 ? static_cast<float>(x) / static_cast<float>(grid.resolution - 1) : 0.0f;
-            const float nx = u * 2.0f - 1.0f;
+            const float worldX = std::lerp(-halfTerrain, halfTerrain, u);
             float normalizedHeight = 0.0f;
-            if (settings.kind == ShapeKind::Hemisphere)
+            if (std::abs(worldX) <= halfShape && std::abs(worldZ) <= halfShape)
             {
-                const float radiusSq = nx * nx + nz * nz;
-                normalizedHeight = radiusSq < 1.0f ? std::sqrt(1.0f - radiusSq) : 0.0f;
-            }
-            else
-            {
-                normalizedHeight = std::max(0.0f, 1.0f - std::max(std::abs(nx), std::abs(nz)));
+                const float nx = worldX / halfShape;
+                const float nz = worldZ / halfShape;
+                if (settings.kind == ShapeKind::Hemisphere)
+                {
+                    const float radiusSq = nx * nx + nz * nz;
+                    normalizedHeight = radiusSq < 1.0f ? std::sqrt(1.0f - radiusSq) : 0.0f;
+                }
+                else
+                {
+                    normalizedHeight = std::max(0.0f, 1.0f - std::max(std::abs(nx), std::abs(nz)));
+                }
             }
             grid.heights.push_back(normalizedHeight * heightMeters);
         }
@@ -648,11 +671,12 @@ HeightfieldGrid BuildHeightfieldFromShape(const ShapeSettings& settings, int res
     if (message != nullptr)
     {
         *message = std::format(
-            "{} shape {} x {}, scale {:.0f}m, height {:.0f}m",
+            "{} shape {} x {}, canvas {:.0f}m, scale {:.0f}m, height {:.0f}m",
             ToString(settings.kind),
             grid.resolution,
             grid.resolution,
             grid.terrainSizeMeters,
+            shapeSizeMeters,
             heightMeters);
     }
     return grid;
@@ -3736,9 +3760,10 @@ bool IsHeightfieldOperationNode(NodeKind kind)
 MeshData BuildMeshFromHeightPipeline(const HeightfieldPipeline& pipeline, int resolution, std::string* message, HeightfieldPreviewField previewField = HeightfieldPreviewField::Heightmap, HeightfieldGrid* previewGrid = nullptr)
 {
     const int simulationResolution = std::clamp(pipeline.simulationResolution, 2, 2048);
+    const float terrainSizeMeters = std::max(1.0f, pipeline.terrainSizeMeters);
     HeightfieldGrid grid = pipeline.useShape
-        ? BuildHeightfieldFromShape(pipeline.shape, simulationResolution, message)
-        : BuildHeightfieldFromHeightmap(pipeline.heightmap, simulationResolution, message);
+        ? BuildHeightfieldFromShape(pipeline.shape, simulationResolution, terrainSizeMeters, message)
+        : BuildHeightfieldFromHeightmap(pipeline.heightmap, simulationResolution, terrainSizeMeters, message);
     if (grid.resolution <= 0)
     {
         return {};
@@ -3771,10 +3796,11 @@ HeightfieldGrid NodeGraph::EvaluateHeightPipelineCached(const HeightfieldPipelin
     }
 
     const int simulationResolution = std::clamp(pipeline.simulationResolution, 2, 2048);
+    const float terrainSizeMeters = std::max(1.0f, pipeline.terrainSizeMeters);
     uint64_t inputHash = 0;
     const uint64_t sourceHash = pipeline.useShape
-        ? HashShapeSettings(pipeline.shape, simulationResolution)
-        : HashHeightmapSettings(pipeline.heightmap, simulationResolution);
+        ? HashShapeSettings(pipeline.shape, simulationResolution, terrainSizeMeters)
+        : HashHeightmapSettings(pipeline.heightmap, simulationResolution, terrainSizeMeters);
     HeightfieldNodeCache& sourceCache = heightfieldCache_[sourceNodeId];
     if (!sourceCache.valid ||
         sourceCache.resolution != simulationResolution ||
@@ -3784,8 +3810,8 @@ HeightfieldGrid NodeGraph::EvaluateHeightPipelineCached(const HeightfieldPipelin
         g_currentlyEvaluatingNodeId.store(sourceNodeId, std::memory_order_relaxed);
         std::string sourceMessage;
         sourceCache.grid = pipeline.useShape
-            ? BuildHeightfieldFromShape(pipeline.shape, simulationResolution, &sourceMessage)
-            : BuildHeightfieldFromHeightmap(pipeline.heightmap, simulationResolution, &sourceMessage);
+            ? BuildHeightfieldFromShape(pipeline.shape, simulationResolution, terrainSizeMeters, &sourceMessage)
+            : BuildHeightfieldFromHeightmap(pipeline.heightmap, simulationResolution, terrainSizeMeters, &sourceMessage);
         sourceCache.message = sourceMessage;
         sourceCache.valid = true;
         sourceCache.resolution = simulationResolution;
@@ -4740,14 +4766,14 @@ HeightfieldGrid NodeGraph::EvaluateMaskAsHeightfield(const Node& node, std::stri
         }
         // Provide a default flat grid so the viewport still has something to draw.
         grid.resolution = 64;
-        grid.terrainSizeMeters = 1024.0f;
+        grid.terrainSizeMeters = std::max(1.0f, settings_.preview.terrainSizeMeters);
         const size_t cellCount = static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution);
         grid.heights.assign(cellCount, 0.0f);
         grid.mask.assign(cellCount, 0.0f);
         return grid;
     }
     grid.resolution = mask.resolution;
-    grid.terrainSizeMeters = 1024.0f;
+    grid.terrainSizeMeters = std::max(1.0f, settings_.preview.terrainSizeMeters);
     const size_t cellCount = static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution);
     grid.heights.assign(cellCount, 0.0f);
     grid.mask = mask.values;
@@ -4768,6 +4794,7 @@ HeightfieldPipeline NodeGraph::PipelineToNode(const Node& targetNode) const
 {
     HeightfieldPipeline pipeline;
     pipeline.simulationResolution = std::clamp(settings_.preview.simulationResolution, 2, 2048);
+    pipeline.terrainSizeMeters = std::max(1.0f, settings_.preview.terrainSizeMeters);
     const Node* node = &targetNode;
     int guard = 0;
     while (node != nullptr && guard++ < 16)
@@ -4842,7 +4869,7 @@ void NodeGraph::Evaluate(int previewMeshResolution)
         else
         {
             heightGrid.resolution = 64;
-            heightGrid.terrainSizeMeters = 1024.0f;
+            heightGrid.terrainSizeMeters = std::max(1.0f, settings_.preview.terrainSizeMeters);
             const size_t cellCount = 64 * 64;
             heightGrid.heights.assign(cellCount, 0.0f);
             heightGrid.mask.assign(cellCount, 0.0f);

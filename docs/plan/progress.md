@@ -13,6 +13,9 @@
 
 ## 2026-05-18
 
+- 設定タブに `Terrain Size (m)` を追加し、512 / 1024 / 2048 / 4096m からノードグラフ全体の地形キャンバスサイズを選べるようにした。
+- `Import Heightmap` の `Scale (m)` を、グローバル `Terrain Size` 内で読み込んだハイトマップが占める実サイズとして扱うようにした。グローバルサイズより大きい場合は中央でクロップし、小さい場合は外側を高さ 0 にする。
+- `Shape` とハイトマップ入力を持たないマスクプレビューも、グローバル `Terrain Size` に合わせるようにした。
 - `Crumbling` ノードを追加した。入力 `Heightmap` と `Emission Mask` から崩落粒子を発生させ、低い方向へ流して岩屑を堆積し、`Heightmap` / `Mask` / `Unique Mask` を出力する。
 - `Crumbling` に `Physics Count` / `Debris Amount` / `Debris Min Size (m)` / `Debris Max Size (m)` / `Rock Style` / `Gravity` / `Seed` を追加し、プロジェクト保存と読み込みに対応した。
 - `Crumbling` の初期結果は方向性として良好。次の調整では、現在の低い方向へ流れるまとまりを残しつつ、岩屑がもう少しランダムに散らばるようにする。

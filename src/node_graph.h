@@ -519,6 +519,7 @@ struct Link
 
 struct PreviewSettings
 {
+    float terrainSizeMeters = 1024.0f;
     int simulationResolution = 512;
     int resolution = 512;
     int lod = 0;
@@ -709,6 +710,7 @@ struct HeightfieldPipeline
 
     bool hasSource = false;
     int simulationResolution = 512;
+    float terrainSizeMeters = 1024.0f;
     GraphId heightmapNodeId = 0;
     HeightmapLoadSettings heightmap;
     bool useShape = false;
