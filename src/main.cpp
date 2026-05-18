@@ -14852,9 +14852,25 @@ bool DrawSedimentProperties(rock::Node& editableNode)
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Largest Detail Level (m)", "SedimentLargestDetailLevel", &sd.largestDetailLevelM, 1.0f, 256.0f, rock::SedimentSettings{}.largestDetailLevelM, "Sediment largest detail level changed", true, "マルチグリッド緩和の最も粗いスケール (m)。この間隔の近傍へのスライドから始め、1 セルまで段階的に半分にしていきます。大きいほど大規模盆地が早く埋まり、小さいほど細部優先。", "%.1f"))
     {
-        EvaluateGraph();
+        constexpr std::array<float, 9> kSedimentDetailLevels = {1.0f, 2.0f, 4.0f, 8.0f, 16.0f, 32.0f, 64.0f, 128.0f, 256.0f};
+        int detailIndex = 3;
+        float bestDistance = FLT_MAX;
+        for (int i = 0; i < static_cast<int>(kSedimentDetailLevels.size()); ++i)
+        {
+            const float distance = std::abs(sd.largestDetailLevelM - kSedimentDetailLevels[static_cast<size_t>(i)]);
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                detailIndex = i;
+            }
+        }
+        if (DrawPropertyComboRow("Largest Detail Level (m)", "SedimentLargestDetailLevel", &detailIndex, "1 m\0" "2 m\0" "4 m\0" "8 m\0" "16 m\0" "32 m\0" "64 m\0" "128 m\0" "256 m\0" "\0", "1 iteration あたりの沈降距離スケールです。大きいほど広い盆地まで早く落ち着きますが、スライドパス数が増えて重くなります。小さいほど細部優先です。", 3))
+        {
+            detailIndex = std::clamp(detailIndex, 0, static_cast<int>(kSedimentDetailLevels.size()) - 1);
+            sd.largestDetailLevelM = kSedimentDetailLevels[static_cast<size_t>(detailIndex)];
+            EvaluateGraph();
+        }
     }
     if (DrawPropertyIntRow("Iterations Count", "SedimentIterations", &sd.iterations, 1, 500, rock::SedimentSettings{}.iterations, "Sediment iterations changed", true, "外側の緩和反復回数。各反復で全スケールを粗→細で 1 周します。多いほど安定状態に近づきます。"))
     {

@@ -14,7 +14,7 @@
 GeoGen 風の **マルチグリッド・サーマル (talus) スライディング**:
 
 1. **初期化** — `Convert Terrain to Sediment` ON: 基盤 = 0, 堆積物 = 入力高さ。OFF: 基盤 = 入力高さ, 堆積物 = 0。
-2. **スケール階層生成** — `Largest Detail Level (m)` をセル単位に変換した stride を最大値とし、1 セルまで毎回半分にします (例: 8m / 4m / 2m / 1m)。
+2. **移動距離スケール** — `Largest Detail Level (m)` をセル単位に変換し、1 iteration あたりの unit-stride スライドパス数 (`macroPasses`) として使います。
 3. **外側反復ループ** (`Iterations Count` 回):
    - **エミッション** — `Emission Amount (m)` を `emissionEnd = ceil(iterations × Emission Time)` 反復で均等加算 (Emission Time = 0% なら最初の 1 反復で全量)。
    - **粗→細スケール走査** — 各 stride で `Stabilization Iterations` 回スライドパスを実行。各パスは:
@@ -28,7 +28,7 @@ GeoGen 風の **マルチグリッド・サーマル (talus) スライディン�
 | 設定 | 既定値 | 役割 |
 | --- | --- | --- |
 | `Emission Time (%)` | 0 | `Emission Amount` を最初の何割の反復にかけて徐々に積むか。0% = 最初に全量を一度に積む (緩い層が自由に流れて落ち着く)、100% = 毎反復に均等 (前反復が彫った河道に新層が流れ込み、河道がよりシャープに刻まれる) |
-| `Largest Detail Level (m)` | 8.0 | マルチグリッドの最も粗いスケール。大きいほど大規模盆地が早く埋まり、小さいほど細部優先。最大は 1/4 グリッドまでクランプ |
+| `Largest Detail Level (m)` | 8.0 | 1 iteration あたりの沈降距離スケール。`1 m` / `2 m` / `4 m` / `8 m` / `16 m` / `32 m` / `64 m` / `128 m` / `256 m` から選ぶ。大きいほど広い盆地が早く落ち着くが、スライドパス数が増えて重くなる。小さいほど細部優先 |
 | `Iterations Count` | 40 | 外側の緩和反復回数。各反復で全スケールを粗→細で 1 周します |
 | `Stabilization Iterations` | 2 | 1 反復・1 スケール内で何回連続でスライドパスを走らせるか。多いほど各スケールがそのスケール内で完全に静定します |
 | `Sediment Viscosity (%)` | 20 | 流動性 / 安息角を制御 (二乗カーブ)。0% = 0° (完全流体、谷底で水平面に均される)、20% (既定) ≈ 3° (ほぼ平らな堆積、GeoGen 相当)、50% = 20°、100% = 80° (粘り強く中腹に厚く積もる) |
