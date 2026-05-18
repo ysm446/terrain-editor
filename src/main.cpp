@@ -11862,7 +11862,7 @@ void CopySelectedNodesToClipboard()
     {
         const rock::Pin* startPin = g_graph.FindPin(link.startPin);
         const rock::Pin* endPin = g_graph.FindPin(link.endPin);
-        if (startPin != nullptr && endPin != nullptr && containsCopiedNode(startPin->nodeId) && containsCopiedNode(endPin->nodeId))
+        if (startPin != nullptr && endPin != nullptr && containsCopiedNode(endPin->nodeId))
         {
             g_nodeClipboard.links.push_back(link);
         }
@@ -11904,6 +11904,16 @@ void PasteNodesFromClipboard(const ImVec2& pasteCenter)
             newMutableNode->multiScaleErosion = clipboardNode.node.multiScaleErosion;
             newMutableNode->maskNoise = clipboardNode.node.maskNoise;
             newMutableNode->maskBlend = clipboardNode.node.maskBlend;
+            newMutableNode->maskCurvature = clipboardNode.node.maskCurvature;
+            newMutableNode->maskLevels = clipboardNode.node.maskLevels;
+            newMutableNode->maskSlope = clipboardNode.node.maskSlope;
+            newMutableNode->maskHeight = clipboardNode.node.maskHeight;
+            newMutableNode->crumbling = clipboardNode.node.crumbling;
+            newMutableNode->maskFluvial = clipboardNode.node.maskFluvial;
+            newMutableNode->rock = clipboardNode.node.rock;
+            newMutableNode->sediment = clipboardNode.node.sediment;
+            newMutableNode->snow = clipboardNode.node.snow;
+            newMutableNode->colorize = clipboardNode.node.colorize;
         }
         const rock::Node* newNode = g_graph.FindNode(newNodeId);
         if (newNode == nullptr)
@@ -11934,7 +11944,8 @@ void PasteNodesFromClipboard(const ImVec2& pasteCenter)
     };
     for (const rock::Link& clipboardLink : g_nodeClipboard.links)
     {
-        const rock::GraphId newStartPin = mappedPin(clipboardLink.startPin);
+        const rock::GraphId mappedStartPin = mappedPin(clipboardLink.startPin);
+        const rock::GraphId newStartPin = mappedStartPin != 0 ? mappedStartPin : clipboardLink.startPin;
         const rock::GraphId newEndPin = mappedPin(clipboardLink.endPin);
         if (newStartPin != 0 && newEndPin != 0)
         {
