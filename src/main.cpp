@@ -53,10 +53,12 @@ namespace
 {
 constexpr int kFrameCount = 2;
 constexpr int kSrvDescriptorCount = 128;
+constexpr float kDegreesToRadians = 3.1415926535f / 180.0f;
 constexpr float kFullFrameSensorHeightMm = 24.0f;
-constexpr float kDefaultViewportPitch = 0.72f;
+constexpr float kDefaultViewportYaw = 30.0f * kDegreesToRadians;
+constexpr float kDefaultViewportPitch = 30.0f * kDegreesToRadians;
 constexpr float kDefaultViewportFovDegrees = 45.0f;
-constexpr float kDefaultViewportOrbitDistance = 1800.0f;
+constexpr float kDefaultViewportOrbitDistance = 2044.0f;
 constexpr float kMaxViewportOrbitDistance = 100000.0f;
 constexpr float kViewportFarPlane = 200000.0f;
 constexpr std::array<int, 4> kTerrainSizePresets = {512, 1024, 2048, 4096};
@@ -315,7 +317,7 @@ enum class ViewportDisplayMode
 
 struct ViewportState
 {
-    float yaw = 0.0f;
+    float yaw = kDefaultViewportYaw;
     float pitch = kDefaultViewportPitch;
     float fovDegrees = kDefaultViewportFovDegrees;
     float orbitDistance = kDefaultViewportOrbitDistance;
@@ -8883,13 +8885,22 @@ void EnsurePreviewMesh()
     }
 }
 
+float DefaultViewportOrbitDistance()
+{
+    const float terrainSize = std::max(1.0f, g_graph.Settings().preview.terrainSizeMeters);
+    const float fovRadians = std::clamp(kDefaultViewportFovDegrees, 15.0f, 90.0f) * kDegreesToRadians;
+    const float horizontalBoundingRadius = terrainSize * 0.70710678f;
+    const float distance = horizontalBoundingRadius / std::sin(fovRadians * 0.5f);
+    return std::clamp(distance * 1.08f, 1.0f, kMaxViewportOrbitDistance);
+}
+
 void ResetViewport()
 {
     g_viewport = {};
-    g_viewport.yaw = 0.0f;
+    g_viewport.yaw = kDefaultViewportYaw;
     g_viewport.pitch = kDefaultViewportPitch;
     g_viewport.fovDegrees = kDefaultViewportFovDegrees;
-    g_viewport.orbitDistance = kDefaultViewportOrbitDistance;
+    g_viewport.orbitDistance = DefaultViewportOrbitDistance();
 }
 
 float CameraFocalLengthMmFromFovYDegrees(float fovYDegrees)
@@ -14079,8 +14090,13 @@ void DrawDisplaySettingsPanel()
         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
 
         ImGui::SeparatorText("解像度");
+        const float defaultDistanceBeforeTerrainSizeEdit = DefaultViewportOrbitDistance();
         if (DrawTerrainSizePresetRow("Terrain Size (m)", "GlobalTerrainSizeMeters", &settings.preview.terrainSizeMeters, rock::PreviewSettings{}.terrainSizeMeters, "Terrain size changed", false, "ノードグラフ全体の地形キャンバスの縦横サイズです。Import Heightmap の Scale はこの中で画像が占める実サイズとして扱い、大きければクロップ、小さければ外側を高さ 0 にします。"))
         {
+            if (!FloatDiffersFromDefault(g_viewport.orbitDistance, defaultDistanceBeforeTerrainSizeEdit))
+            {
+                g_viewport.orbitDistance = DefaultViewportOrbitDistance();
+            }
             g_graph.MarkDirty("Terrain size changed");
             EvaluateGraph();
         }
@@ -14348,7 +14364,7 @@ void DrawCameraPanel()
     }
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
     {
-        ImGui::SetTooltip("カメラの向き、距離、パンを既定値に戻します。");
+        ImGui::SetTooltip("カメラの向き、距離、パンを既定値に戻します。ショートカット: F");
     }
 
     ImGui::Spacing();
@@ -14365,9 +14381,9 @@ void DrawCameraPanel()
         {
             g_viewport.fovDegrees = CameraFovYDegreesFromFocalLengthMm(focalLengthMm);
         }
-        DrawCameraFloatRow("Distance", "OrbitDistance", &g_viewport.orbitDistance, 1.0f, kMaxViewportOrbitDistance, kDefaultViewportOrbitDistance, "%.1f",
+        DrawCameraFloatRow("Distance", "OrbitDistance", &g_viewport.orbitDistance, 1.0f, kMaxViewportOrbitDistance, DefaultViewportOrbitDistance(), "%.1f",
             "注視点からカメラまでの距離です。マウスホイールのオービット距離と同じ値です。");
-        DrawCameraFloatRow("Yaw", "ViewportYaw", &g_viewport.yaw, -3.14159f, 3.14159f, 0.0f, "%.3f",
+        DrawCameraFloatRow("Yaw", "ViewportYaw", &g_viewport.yaw, -3.14159f, 3.14159f, kDefaultViewportYaw, "%.3f",
             "カメラの水平回転です。地形を左右から見る向きを調整します。単位はラジアンです。");
         DrawCameraFloatRow("Pitch", "ViewportPitch", &g_viewport.pitch, -1.25f, 1.25f, kDefaultViewportPitch, "%.3f",
             "カメラの上下角です。高い視点や低い視点から地形を見る角度を調整します。単位はラジアンです。");
@@ -14758,6 +14774,10 @@ void DrawUi()
     if (io.KeyCtrl && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Y, false))
     {
         RedoGraphEdit();
+    }
+    if (!io.WantTextInput && !io.KeyCtrl && !io.KeyShift && !io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_F, false))
+    {
+        ResetViewport();
     }
     if (!io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F12, false))
     {

@@ -38,7 +38,7 @@ float LinearizeDepth(float z)
     return z * (farPlane - nearPlane) + nearPlane;
 }
 
-float CircleOfConfusionPixels(float viewDistance, float imageHeightPixels)
+float SignedCircleOfConfusionPixels(float viewDistance, float imageHeightPixels)
 {
     float focalLengthMeters = max(focalLengthMm, 1.0) * 0.001;
     float apertureMeters = focalLengthMeters / max(fStop, 0.7);
@@ -46,9 +46,9 @@ float CircleOfConfusionPixels(float viewDistance, float imageHeightPixels)
     float lensDistance = max(viewDistance * sceneDistanceScale, focalLengthMeters + 0.01);
     float focusMeters = max(focusDistance * sceneDistanceScale, focalLengthMeters + 0.01);
     float sensorHeightMeters = max(sensorHeightMm, 1.0) * 0.001;
-    float cocMeters = abs(apertureMeters * focalLengthMeters * (lensDistance - focusMeters) /
-                          max(lensDistance * (focusMeters - focalLengthMeters), 1e-4));
-    return min(cocMeters / sensorHeightMeters * imageHeightPixels, maxBlurPixels);
+    float cocMeters = apertureMeters * focalLengthMeters * (lensDistance - focusMeters) /
+                      max(lensDistance * (focusMeters - focalLengthMeters), 1e-4);
+    return clamp(cocMeters / sensorHeightMeters * imageHeightPixels, -maxBlurPixels, maxBlurPixels);
 }
 
 float ApertureBladeCount()
@@ -98,6 +98,21 @@ float2 ApertureSample(int index, int sampleCount, float blades)
     return float2(cos(angle), sin(angle)) * ring;
 }
 
+float DepthToViewDistance(float depth)
+{
+    return depth >= 0.9999 ? farPlane : LinearizeDepth(depth);
+}
+
+float LoadDepthNearest(float2 uv)
+{
+    uint width = 1;
+    uint height = 1;
+    DepthBuffer.GetDimensions(width, height);
+    int2 pixel = int2(clamp(uv, 0.0, 1.0) * float2(width, height));
+    pixel = clamp(pixel, int2(0, 0), int2(int(width) - 1, int(height) - 1));
+    return DepthBuffer.Load(int3(pixel, 0));
+}
+
 float4 DofPS(VsOut input) : SV_Target
 {
     uint width = 1;
@@ -106,38 +121,69 @@ float4 DofPS(VsOut input) : SV_Target
     float2 texel = 1.0 / max(float2(width, height), 1.0);
     float imageHeightPixels = max(float(height), 1.0);
 
-    float depth = DepthBuffer.SampleLevel(LinearSampler, input.uv, 0);
-    float viewDistance = depth >= 0.9999 ? farPlane : LinearizeDepth(depth);
-    float radius = CircleOfConfusionPixels(viewDistance, imageHeightPixels);
+    float depth = LoadDepthNearest(input.uv);
+    float viewDistance = DepthToViewDistance(depth);
+    float signedRadius = SignedCircleOfConfusionPixels(viewDistance, imageHeightPixels);
+    float radius = abs(signedRadius);
     float3 sharp = ColorBuffer.SampleLevel(LinearSampler, input.uv, 0).rgb;
 
-    if (radius < 0.35)
+    if (maxBlurPixels < 0.35)
     {
         return float4(sharp, 1.0);
     }
 
     float3 sum = 0.0;
     float weightSum = 0.0;
+    float foregroundWeightSum = 0.0;
     float blades = ApertureBladeCount();
     const int sampleCount = 48;
     [unroll]
     for (int i = 0; i < sampleCount; ++i)
     {
         float2 apertureOffset = ApertureSample(i, sampleCount, blades);
-        float2 uv = input.uv + apertureOffset * texel * radius;
-        float sampleDepth = DepthBuffer.SampleLevel(LinearSampler, uv, 0);
-        float sampleDistance = sampleDepth >= 0.9999 ? farPlane : LinearizeDepth(sampleDepth);
-        float sampleRadius = CircleOfConfusionPixels(sampleDistance, imageHeightPixels);
-        float w = saturate(sampleRadius / max(radius, 1e-3));
-        w = max(w, 0.25);
-        float3 sampleColor = ColorBuffer.SampleLevel(LinearSampler, uv, 0).rgb;
-        float luminance = dot(sampleColor, float3(0.2126, 0.7152, 0.0722));
-        w *= 1.0 + smoothstep(0.55, 1.0, luminance) * highlightBoost;
-        sum += sampleColor * w;
-        weightSum += w;
+        if (radius >= 0.35)
+        {
+            float2 uv = input.uv + apertureOffset * texel * radius;
+            float sampleDepth = LoadDepthNearest(uv);
+            float sampleDistance = DepthToViewDistance(sampleDepth);
+            float sampleRadius = abs(SignedCircleOfConfusionPixels(sampleDistance, imageHeightPixels));
+            float w = max(saturate(sampleRadius / max(radius, 1e-3)), 0.25);
+            float3 sampleColor = ColorBuffer.SampleLevel(LinearSampler, uv, 0).rgb;
+            float luminance = dot(sampleColor, float3(0.2126, 0.7152, 0.0722));
+            w *= 1.0 + smoothstep(0.55, 1.0, luminance) * highlightBoost;
+            sum += sampleColor * w;
+            weightSum += w;
+        }
+
+        float2 foregroundOffsetPixels = apertureOffset * maxBlurPixels;
+        float foregroundDistancePixels = length(foregroundOffsetPixels);
+        float2 foregroundUv = input.uv + foregroundOffsetPixels * texel;
+        float foregroundDepth = LoadDepthNearest(foregroundUv);
+        float foregroundDistance = DepthToViewDistance(foregroundDepth);
+        float foregroundSignedRadius = SignedCircleOfConfusionPixels(foregroundDistance, imageHeightPixels);
+        float foregroundRadius = abs(foregroundSignedRadius);
+        float foregroundCover = saturate((foregroundRadius - foregroundDistancePixels + 1.0) * 0.5);
+        float foregroundMask = foregroundSignedRadius < -0.35 && foregroundDistance < viewDistance - 0.05 ? 1.0 : 0.0;
+        foregroundCover *= foregroundMask;
+        if (foregroundCover > 0.0)
+        {
+            float3 foregroundColor = ColorBuffer.SampleLevel(LinearSampler, foregroundUv, 0).rgb;
+            float foregroundLuminance = dot(foregroundColor, float3(0.2126, 0.7152, 0.0722));
+            float foregroundWeight = foregroundCover * (1.0 + smoothstep(0.55, 1.0, foregroundLuminance) * highlightBoost);
+            sum += foregroundColor * foregroundWeight;
+            weightSum += foregroundWeight;
+            foregroundWeightSum += foregroundCover;
+        }
+    }
+
+    if (weightSum < 1e-4)
+    {
+        return float4(sharp, 1.0);
     }
 
     float3 blurred = sum / max(weightSum, 1e-4);
-    float blend = smoothstep(0.25, max(maxBlurPixels, 0.5), radius);
+    float centerBlend = smoothstep(0.25, max(maxBlurPixels, 0.5), radius);
+    float foregroundBlend = saturate(foregroundWeightSum / 8.0);
+    float blend = max(centerBlend, foregroundBlend);
     return float4(lerp(sharp, blurred, blend), 1.0);
 }
