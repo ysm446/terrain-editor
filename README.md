@@ -2,7 +2,7 @@
 
 ハイトフィールドを中心にした、ノードベースの地形エディタの Windows デスクトッププロトタイプです。
 
-このプロジェクトはもともと岩生成ツールとして始まりましたが、現在はハイトマップの読み込み、地形向けのプロシージャル処理、地形確認用の表示機能を中心に作り替えています。
+もともとは岩生成ツールとして始まりましたが、現在は `Terrain Size (m)` を基準にした地形キャンバス、プロシージャルな地形生成ノード、マスク/カラー編集、3D プレビュー、プロジェクト保存を組み合わせて、地形制作の基本フローを作れるツールへ育てています。
 
 ## 現在のプロトタイプ
 
@@ -10,62 +10,101 @@
 - Win32 + DirectX 12 レンダラ
 - Dear ImGui ベースの UI
 - imgui-node-editor を使ったノードグラフ
-- ノード、ピン、リンク、パラメータ、評価キャッシュ、プレビュー状態を持つ内部 `NodeGraph` モデル
-- `ファイル > 保存` / `ファイル > 開く` による `.terrainproj` の JSON プロジェクト保存・読み込み
-- 古いサンプルデータ用に `.rockproj` の読み込みも維持
-- `data/ui_themes` の JSON UI テーマを `設定 > UIテーマ` から切り替え可能
-- `data/app_settings.json` に UI テーマ、3D カメラ、2D マップ表示、プレビュー表示、ライティング設定、最近使ったプロジェクトを保存
+- 1 unit = 1 m の地形プレビュー
+- `Simulation Resolution` と `Viewport Mesh Resolution` を分けた評価/表示設定
+- `Terrain Size (m)` による 512 / 1024 / 2048 / 4096m の地形キャンバス
+- `.terrainproj` の JSON プロジェクト保存・読み込み
+- 古いサンプルデータ用の `.rockproj` 読み込み
+- 未保存変更の `*` 表示と、新規作成・読み込み・終了時の保存確認
+- `data/ui_themes` の JSON UI テーマ切り替え
+- `data/app_settings.json` への UI テーマ、カメラ、2D マップ、表示設定、ライティング、最近使ったプロジェクトの保存
+
+## 地形制作の流れ
+
+基本的には、起点になる `Import Heightmap` や `Shape` から地形を作り、浸食、岩、土砂、雪、散布、マスク、カラーをノードグラフ上で組み合わせます。
+
+`Terrain Size (m)` はノードグラフ全体の制作スケールです。`Import Heightmap` の `Scale (m)` や、各ノードのメートル単位パラメータは、この地形キャンバスに対して解釈されます。地形制作の考え方は [docs/plan/terrain_workflow.md](docs/plan/terrain_workflow.md) に整理しています。
 
 ## ノード
 
-ノードは `ハイトフィールド系` と `マスク系` の 2 カテゴリに分かれており、ノードグラフ上の右クリックメニューもこの分類で整理されています。詳細は [docs/nodes/README.md](docs/nodes/README.md) の索引を参照してください。
+ノードの詳細は [docs/nodes/README.md](docs/nodes/README.md) の索引を参照してください。
 
 ### ハイトフィールド系
 
-- **`Import Heightmap`** — 画像ハイトマップを読み込みます。地形スケール (m)、Relative Vertical Scale、縦方向オフセット、シミュレーション解像度を指定可能。
-- **`Shape`** — 半球やピラミッドなどのプロシージャル形状をハイトフィールドとして生成。
-- **`Heightmap Blur`** — 分離可能ガウシアンによる滑化。半径・強度・反復回数を調整可能。
-- **`Multi-Scale Erosion`** — Schott et al. SIGGRAPH 2024 の Stream Power + Thermal + Deposition の CPU 実装。マルチグリッドピラミッドで解像度依存性を抑え、`Heightmap` / `Flows` / `Deposits` を出力。
+- **`Import Heightmap`**: 画像ハイトマップを読み込みます。`Scale (m)` はグローバルな `Terrain Size` 内で画像が占める実サイズとして扱います。プロジェクト保存時はパスを相対化します。
+- **`Shape`**: 半球やピラミッドなどのプロシージャル形状を生成します。
+- **`Heightmap Blur`**: 分離可能ガウシアンでハイトマップを滑らかにします。
+- **`Multi-Scale Erosion`**: Stream Power + Thermal + Deposition 系の浸食ノードです。
+- **`Rock`**: 岩を散布します。`Mask` 入力、`Unique Mask` 出力、`Rock Style`、`Orientation Rule`、`Ground Detail Level` に対応しています。
+- **`Scatter`**: `Hemisphere` / `Cone` の汎用散布ノードです。`Mask` と `Unique Mask` を出力できるため、植生分布用のプロキシとしても使えます。
+- **`Crumbling`**: `Emission Mask` から崩落粒子を発生させ、低い方向へ流して岩屑を堆積します。
+- **`Sediment`**: GeoGen 互換寄りの土砂スライド/堆積ノードです。
+- **`Snow`**: 地形の形状に沿って積雪面を生成します。
 
 ### マスク系
 
-- **`Mask Noise`** — Perlin / fBM ベースのマスク発生源。GPU compute 経路と CPU 並列フォールバックを持ちます。
-- **`Mask Blend`** — 2 つのマスクを `Add` / `Multiply` / `Min` / `Max` で合成。`Mask Fluvial` も上流に置けます。
-- **`Mask Fluvial`** — ハイトフィールドから D8 / MFD フロー累積を計算して川筋マスクを抽出。`Log` / `Threshold` / `Linear` の 3 つの出力カーブから選べ、既定の Log カーブは GIS 標準の連続的な樹枝状ドレナージマップを出します。
+- **`Mask Noise`**: Perlin / fBM ベースのマスク発生源です。
+- **`Mask Blend`**: `Foreground` / `Background` の 2 つのマスクを合成します。
+- **`Mask Levels`**: Black Point / White Point / Gamma / Invert でマスクを整えます。
+- **`Mask Height`**: 標高範囲または入力地形の全高レンジからマスクを作ります。
+- **`Mask Slope`**: 傾斜角から急斜面/平地マスクを作ります。
+- **`Mask Curvature`**: 尾根、谷、絶対曲率のマスクを作ります。
+- **`Mask Fluvial`**: 流量累積または粒子通過密度から川筋向けのマスクを作ります。
 
-まずは汎用的な浸食ワークフローを作ることを優先しています。アルプスの山と日本の山の違いのような地質・地域性のプリセットは、コアの浸食モデルの上に重ねる後工程として扱う想定です。
+### カラー系
+
+- **`Colorize`**: `Gradient Mask`、`Mask`、任意の `Base Color` から `Color Texture` を生成します。岩ごとの `Unique Mask` や標高/斜面/曲率マスクと組み合わせて、地形の色分けに使えます。
+
+## GPU backend
+
+重いノードの一部は D3D12 GPU compute に対応しています。GPU 経路が使えない条件やシェーダー実行失敗時は CPU にフォールバックします。
+
+GPU backend 対応済みの主なノード:
+
+- `Mask Noise`
+- `Mask Fluvial`
+- `Multi-Scale Erosion`
+- `Rock`
+- `Scatter`
+- `Sediment`
+- `Snow`
+- `Colorize`
+
+`Scatter` の GPU 経路は、現在 `Mask` 入力なし、`Ground Detail Level = Max` の場合に使われます。
 
 ## ビューとプレビュー
 
-- 1 unit = 1 m の 3D 地形ビューポート
-- 選択中のハイトマップまたはマスク出力を確認する 2D マップビュー
-- 2D ビューはズーム、パン、リセットに対応
-- ノードや出力ピンを選択すると、その段階の結果をプレビュー表示
-- 出力ピンは型ごとに色分け
-  - ハイトフィールド出力は緑
-  - マスクテクスチャ出力はオレンジ
-- アクティブな出力ラベルをノード上で強調表示
-- プレビュー評価は非同期で実行し、ノード選択やパラメータ変更時に UI が固まりにくいようにしています。
+- 選択中のノードまたは出力ピンを 3D ビューポートと 2D マップでプレビュー
+- ノード評価は非同期で実行
 - ステータスバーに評価状態と計算時間を表示
-- 評価中のノードには `計算中` / `計算待ち` バッジを表示
+- 評価中ノードに `計算中` / `計算待ち` バッジを表示
+- `F` キーまたは `Reset View` で現在の `Terrain Size (m)` に合う初期視点へリセット
+- マスク出力を近い上流地形に載せて確認する `近い地形でマスク表示`
+- 地形境界を `なし` / `断面ポリゴン` / `ライン` から切り替え
+- Depth of Field と `Miniature` 表現
+- GPU Displacement / Tessellation 表示
+- `Debug` タブでドローコール、三角形数、表示メッシュ、テセレーション状態を確認
 
 ## 表示モード
 
 ビューポート左上の `表示` メニューから切り替えできます。
 
-- **`シンプル`** — 軽量な地形・マスク確認用のフラットシェーディング表示。
-- **`PBR`** — 太陽方向、光量、環境光、影の強さ、シャドウマップ解像度、バイアス、Albedo を調整できる地形プレビュー用ライティング(完全な PBR マテリアルではなく、凹凸と影を読みやすくする想定)。
-- **`天球`** — Nishita 単散乱 + Hillaire 多重散乱 LUT による物理ベース大気と、レイマーチ式ボリューム雲を有効化。太陽の高度を変えるだけで青空 → 黄昏 → 夕焼け → 夜が連動し、雲は太陽方向ライトマーチによる自己遮蔽と Henyey-Greenstein 位相関数でボリューム感のある陰影を出します。詳細は [docs/sky_and_clouds/sky_and_clouds.md](docs/sky_and_clouds/sky_and_clouds.md) を参照。
+- **`シンプル`**: 軽量な地形・マスク確認用の表示。
+- **`PBR`**: 太陽方向、光量、環境光、影、Albedo を調整できる地形プレビュー用ライティング。
+- **`天球`**: Nishita 単散乱 + Hillaire 多重散乱 LUT による物理ベース大気と、レイマーチ式ボリューム雲を使う表示。詳細は [docs/sky_and_clouds/sky_and_clouds.md](docs/sky_and_clouds/sky_and_clouds.md) を参照してください。
 
 ## エクスポートと補助機能
 
 - 評価済み地形メッシュの OBJ エクスポート
-- 最終メッシュ評価では、共有頂点、三角形インデックス、ユニークエッジ、頂点法線を持つインデックス付きトポロジを生成
+- OBJ エクスポートでは表示用の断面壁と底面を除外し、上面ポリゴンだけを書き出し
 - F12 キーでアプリケーションウィンドウ全体を PNG スクリーンショットとして保存
 
 ## ドキュメント
 
 - 変更履歴: [docs/changelog.md](docs/changelog.md)
+- 計画: [docs/plan/plan.md](docs/plan/plan.md)
+- 進捗: [docs/plan/progress.md](docs/plan/progress.md)
+- 地形制作フロー: [docs/plan/terrain_workflow.md](docs/plan/terrain_workflow.md)
 - ノードドキュメント索引: [docs/nodes/README.md](docs/nodes/README.md)
 - Multi-Scale Erosion アルゴリズム解説: [docs/nodes/heightfield/multi_scale_erosion/multi_scale_erosion_algorithm_guide.md](docs/nodes/heightfield/multi_scale_erosion/multi_scale_erosion_algorithm_guide.md)
 - 大気・雲システム解説: [docs/sky_and_clouds/sky_and_clouds.md](docs/sky_and_clouds/sky_and_clouds.md)
