@@ -18,6 +18,7 @@ configure_file(
 
 add_executable(terrain_editor WIN32
     src/terrain_editor.rc
+    src/evaluation/MaskOps.cpp
     src/main.cpp
     src/node_graph.cpp
     src/obj_exporter.cpp
