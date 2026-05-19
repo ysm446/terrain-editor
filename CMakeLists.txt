@@ -26,6 +26,7 @@ add_executable(terrain_editor WIN32
     src/evaluation/MultiScaleErosion.cpp
     src/evaluation/Sediment.cpp
     src/evaluation/ShapeSource.cpp
+    src/evaluation/Snow.cpp
     src/main.cpp
     src/node_graph.cpp
     src/obj_exporter.cpp
