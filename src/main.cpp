@@ -37,9 +37,9 @@
 #include <nlohmann/json.hpp>
 
 #include "node_graph.h"
-#include "obj_exporter.h"
 #include "resource.h"
 #include "screenshot_capture.h"
+#include "ui/AssetExportPanel.h"
 #include "ui/CameraPanel.h"
 #include "ui/DebugPanel.h"
 #include "ui/DisplayPanel.h"
@@ -12719,33 +12719,11 @@ void DrawDebugPanel()
 
 void DrawAssetExportPanel()
 {
-    ImGui::Columns(3, nullptr, false);
-    ImGui::TextUnformatted("Preview mesh");
-    ImGui::Text("%s", g_graph.Evaluation().dirty ? "needs evaluation" : "ready");
-    ImGui::NextColumn();
-    ImGui::TextUnformatted("Topology");
-    ImGui::Text("%zu verts / %zu tris",
-                g_graph.Evaluation().previewMesh.vertices.size(),
-                g_graph.Evaluation().previewMesh.triangles.size());
-    ImGui::NextColumn();
-    ImGui::TextUnformatted("Export");
-    if (ImGui::Button("Export OBJ"))
-    {
-        EnsurePreviewMesh();
-
-        std::string error;
-        const std::filesystem::path exportPath = std::filesystem::path("exports") / "terrain_mesh.obj";
-        if (rock::ExportMeshObj(g_graph.Evaluation().previewMesh, exportPath, &error))
-        {
-            g_exportStatus = "Exported " + exportPath.string();
-        }
-        else
-        {
-            g_exportStatus = "Export failed: " + error;
-        }
-    }
-    ImGui::TextWrapped("%s", g_exportStatus.c_str());
-    ImGui::Columns(1);
+    terrain::ui::DrawAssetExportPanel({
+        g_graph.Evaluation(),
+        g_exportStatus,
+        []() { EnsurePreviewMesh(); },
+    });
 }
 
 void BeginInspectorTabContent()
