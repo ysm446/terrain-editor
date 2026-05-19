@@ -211,6 +211,82 @@ bool DrawResetToDefaultButton(const char* id, bool isDefaultValue, const char* d
     return pressed;
 }
 
+bool DrawPresetIntRow(const char* label,
+                      const char* id,
+                      int* value,
+                      int defaultValue,
+                      std::span<const int> presets,
+                      int fallback,
+                      const char* dirtyReason,
+                      bool recordUndo,
+                      const char* tooltip)
+{
+    auto nearestPreset = [presets, fallback](int rawValue) {
+        const auto nearest = std::ranges::min_element(presets, [rawValue](int lhs, int rhs) {
+            return std::abs(lhs - rawValue) < std::abs(rhs - rawValue);
+        });
+        return nearest != presets.end() ? *nearest : fallback;
+    };
+
+    bool changed = false;
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    const int normalizedValue = nearestPreset(*value);
+    if (*value != normalizedValue)
+    {
+        *value = normalizedValue;
+    }
+    const int normalizedDefault = nearestPreset(defaultValue);
+    DrawPropertyLabel(label, tooltip, *value != normalizedDefault);
+    ImGui::TableSetColumnIndex(1);
+
+    ImGui::PushID(id);
+    constexpr float comboWidth = 110.0f;
+    const std::string previewValue = std::to_string(*value);
+    ImGui::SetNextItemWidth(comboWidth);
+    if (ImGui::BeginCombo("##preset", previewValue.c_str()))
+    {
+        for (int preset : presets)
+        {
+            const bool selected = *value == preset;
+            const std::string presetText = std::to_string(preset);
+            if (ImGui::Selectable(presetText.c_str(), selected))
+            {
+                if (*value != preset)
+                {
+                    if (recordUndo)
+                    {
+                        PushUndoSnapshot();
+                    }
+                    *value = preset;
+                    MarkGraphChanged(dirtyReason);
+                    changed = true;
+                }
+            }
+            if (selected)
+            {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+
+    ImGui::SameLine();
+    const std::string defaultValueText = std::to_string(normalizedDefault);
+    if (DrawResetToDefaultButton("reset", *value == normalizedDefault, defaultValueText.c_str()))
+    {
+        if (recordUndo)
+        {
+            PushUndoSnapshot();
+        }
+        *value = normalizedDefault;
+        MarkGraphChanged(dirtyReason);
+        changed = true;
+    }
+    ImGui::PopID();
+    return changed;
+}
+
 std::string FormatTimeHours(float hours)
 {
     int totalMinutes = static_cast<int>(std::round(std::clamp(hours, 0.0f, 24.0f) * 60.0f));

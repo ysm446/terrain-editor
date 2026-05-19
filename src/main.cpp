@@ -9342,122 +9342,6 @@ void EvaluateGraph()
     StartAsyncEvaluation();
 }
 
-// ドラッグサンプル列を間引き、グラデーションストップとして Colorize ノードに投影する。
-// 隣接サンプル間の色差が colorThreshold 以下の点を除去し、
-// 色変化の大きい点を優先して最大ストップ数に収め、元サンプル位置を保って配置する。
-static void ProcessDragSamples(rock::GraphId nodeId, const std::vector<std::array<float, 3>>& samples)
-{
-    if (samples.empty()) return;
-
-    rock::Node* node = g_graph.FindMutableNode(nodeId);
-    if (node == nullptr || node->kind != rock::NodeKind::Colorize) return;
-
-    struct DragSamplePoint
-    {
-        std::array<float, 3> color{};
-        float position = 0.0f;
-    };
-
-    auto samplePosition = [&](size_t index) {
-        return samples.size() <= 1 ? 0.0f : static_cast<float>(index) / static_cast<float>(samples.size() - 1);
-    };
-
-    // --- 間引き (Douglas-Peucker 的な閾値フィルタ) ---
-    // 隣接するサンプル間の色差が閾値未満なら省略。最初と最後は必ず保持。
-    const float colorThreshold = 0.04f; // ~10/255 相当
-    std::vector<DragSamplePoint> thinned;
-    thinned.push_back({samples.front(), 0.0f});
-    for (size_t i = 1; i + 1 < samples.size(); ++i)
-    {
-        const auto& prev = thinned.back().color;
-        const auto& cur  = samples[i];
-        float dr = cur[0] - prev[0];
-        float dg = cur[1] - prev[1];
-        float db = cur[2] - prev[2];
-        if (std::sqrt(dr*dr + dg*dg + db*db) >= colorThreshold)
-        {
-            thinned.push_back({cur, samplePosition(i)});
-        }
-    }
-    thinned.push_back({samples.back(), 1.0f});
-
-    // 最低 2 ストップを保証
-    if (thinned.size() < 2)
-    {
-        thinned = {{samples.front(), 0.0f}, {samples.back(), 1.0f}};
-    }
-
-    constexpr size_t maxGradientStops = 32;
-    if (thinned.size() > maxGradientStops)
-    {
-        std::vector<size_t> kept = {0, thinned.size() - 1};
-        kept.reserve(maxGradientStops);
-        auto colorError = [&](size_t left, size_t mid, size_t right) {
-            const float span = static_cast<float>(right - left);
-            const float t = span > 0.0f ? static_cast<float>(mid - left) / span : 0.0f;
-            const auto& a = thinned[left].color;
-            const auto& b = thinned[right].color;
-            const auto& c = thinned[mid].color;
-            const float er = c[0] - (a[0] + (b[0] - a[0]) * t);
-            const float eg = c[1] - (a[1] + (b[1] - a[1]) * t);
-            const float eb = c[2] - (a[2] + (b[2] - a[2]) * t);
-            return er * er + eg * eg + eb * eb;
-        };
-
-        while (kept.size() < maxGradientStops)
-        {
-            std::sort(kept.begin(), kept.end());
-            size_t bestIndex = 0;
-            float bestError = 0.0f;
-            for (size_t segment = 0; segment + 1 < kept.size(); ++segment)
-            {
-                const size_t left = kept[segment];
-                const size_t right = kept[segment + 1];
-                for (size_t i = left + 1; i < right; ++i)
-                {
-                    const float error = colorError(left, i, right);
-                    if (error > bestError)
-                    {
-                        bestError = error;
-                        bestIndex = i;
-                    }
-                }
-            }
-            if (bestIndex == 0)
-            {
-                break;
-            }
-            kept.push_back(bestIndex);
-        }
-
-        std::sort(kept.begin(), kept.end());
-        std::vector<DragSamplePoint> capped;
-        capped.reserve(kept.size());
-        for (const size_t index : kept)
-        {
-            capped.push_back(thinned[index]);
-        }
-        thinned = std::move(capped);
-    }
-
-    // --- グラデーションストップとして投影 ---
-    node->colorize.stops.clear();
-    const int n = static_cast<int>(thinned.size());
-    for (int i = 0; i < n; ++i)
-    {
-        rock::ColorStop stop;
-        stop.position = std::clamp(thinned[i].position, 0.0f, 1.0f);
-        stop.r = thinned[i].color[0];
-        stop.g = thinned[i].color[1];
-        stop.b = thinned[i].color[2];
-        node->colorize.stops.push_back(stop);
-    }
-
-    MarkGraphChanged("Drag color sampled");
-    EvaluateGraph();
-    SetForegroundWindow(g_hwnd);
-}
-
 // カーソル位置のスクリーンピクセル色を取得する。
 // アプリ全体は DPI-unaware のまま Windows の自動拡大に任せる。
 // ピッカーだけ Per-Monitor aware に切り替え、GetPhysicalCursorPos の物理座標を
@@ -9482,74 +9366,6 @@ static void SampleScreenPixel(float& r, float& g, float& b)
     r = GetRValue(cr) / 255.0f;
     g = GetGValue(cr) / 255.0f;
     b = GetBValue(cr) / 255.0f;
-}
-
-// スクリーンカラーピッカーのフレーム更新。毎フレーム ImGui::NewFrame 直後に呼ぶ。
-// Ctrl を押しながらマウスを移動すると色を収集し、Ctrl を離した瞬間にグラデーションへ投影。
-void UpdateScreenColorPick()
-{
-    if (g_screenPick.mode == ScreenPickMode::Idle) return;
-
-    SampleScreenPixel(g_screenPick.previewR, g_screenPick.previewG, g_screenPick.previewB);
-
-    const bool ctrlDown    = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
-    const bool ctrlRising  = ctrlDown  && !g_screenPick.prevCtrl;
-    const bool ctrlFalling = !ctrlDown &&  g_screenPick.prevCtrl;
-    g_screenPick.prevCtrl = ctrlDown;
-
-    // Escape でどのモードからもキャンセル
-    if (GetAsyncKeyState(VK_ESCAPE) & 0x8000)
-    {
-        g_screenPick.mode = ScreenPickMode::Idle;
-        g_screenPick.dragSamples.clear();
-        return;
-    }
-
-    switch (g_screenPick.mode)
-    {
-    case ScreenPickMode::DragArmed:
-        // Ctrl 押下でサンプリング開始。初期位置は自アプリのグレー UI 上であることが多いため
-        // 最初のサンプルは追加せず、移動後の色変化から収集を始める。
-        if (ctrlRising)
-        {
-            g_screenPick.mode = ScreenPickMode::DragCollecting;
-            g_screenPick.dragSamples.clear();
-        }
-        break;
-
-    case ScreenPickMode::DragCollecting:
-        if (ctrlDown)
-        {
-            // Ctrl 押し中: サンプルが空なら無条件追加、以降は色変化が一定以上のときだけ追加
-            if (g_screenPick.dragSamples.empty())
-            {
-                g_screenPick.dragSamples.push_back({g_screenPick.previewR, g_screenPick.previewG, g_screenPick.previewB});
-            }
-            else
-            {
-                const auto& last = g_screenPick.dragSamples.back();
-                float dr = g_screenPick.previewR - last[0];
-                float dg = g_screenPick.previewG - last[1];
-                float db = g_screenPick.previewB - last[2];
-                if (std::sqrt(dr*dr + dg*dg + db*db) >= 0.008f)
-                {
-                    g_screenPick.dragSamples.push_back({g_screenPick.previewR, g_screenPick.previewG, g_screenPick.previewB});
-                }
-            }
-        }
-        else if (ctrlFalling)
-        {
-            // Ctrl 離し: 最終色を追加してサンプル列を間引きグラデーションへ投影
-            g_screenPick.dragSamples.push_back({g_screenPick.previewR, g_screenPick.previewG, g_screenPick.previewB});
-            ProcessDragSamples(g_screenPick.nodeId, g_screenPick.dragSamples);
-            g_screenPick.dragSamples.clear();
-            g_screenPick.mode = ScreenPickMode::Idle;
-        }
-        break;
-
-    default:
-        break;
-    }
 }
 
 void PollAsyncEvaluation()
@@ -12800,76 +12616,6 @@ void DrawNodeGraph()
     g_nodeEditorFrameActive = false;
 }
 
-template <size_t N>
-bool DrawPresetIntRow(const char* label,
-                      const char* id,
-                      int* value,
-                      int defaultValue,
-                      const std::array<int, N>& presets,
-                      int fallback,
-                      const char* dirtyReason,
-                      bool recordUndo = true,
-                      const char* tooltip = nullptr)
-{
-    bool changed = false;
-    ImGui::TableNextRow();
-    ImGui::TableSetColumnIndex(0);
-    const int normalizedValue = NearestPreset(*value, presets, fallback);
-    if (*value != normalizedValue)
-    {
-        *value = normalizedValue;
-    }
-    const int normalizedDefault = NearestPreset(defaultValue, presets, fallback);
-    DrawPropertyLabel(label, tooltip, *value != normalizedDefault);
-    ImGui::TableSetColumnIndex(1);
-
-    ImGui::PushID(id);
-    constexpr float comboWidth = 110.0f;
-    const std::string previewValue = std::to_string(*value);
-    ImGui::SetNextItemWidth(comboWidth);
-    if (ImGui::BeginCombo("##preset", previewValue.c_str()))
-    {
-        for (int preset : presets)
-        {
-            const bool selected = *value == preset;
-            const std::string presetText = std::to_string(preset);
-            if (ImGui::Selectable(presetText.c_str(), selected))
-            {
-                if (*value != preset)
-                {
-                    if (recordUndo)
-                    {
-                        PushUndoSnapshot();
-                    }
-                    *value = preset;
-                    MarkGraphChanged(dirtyReason);
-                    changed = true;
-                }
-            }
-            if (selected)
-            {
-                ImGui::SetItemDefaultFocus();
-            }
-        }
-        ImGui::EndCombo();
-    }
-
-    ImGui::SameLine();
-    const std::string defaultValueText = std::to_string(normalizedDefault);
-    if (DrawResetToDefaultButton("reset", *value == normalizedDefault, defaultValueText.c_str()))
-    {
-        if (recordUndo)
-        {
-            PushUndoSnapshot();
-        }
-        *value = normalizedDefault;
-        MarkGraphChanged(dirtyReason);
-        changed = true;
-    }
-    ImGui::PopID();
-    return changed;
-}
-
 bool DrawShadowResolutionPresetRow(const char* label, const char* id, int* value, int defaultValue, const char* dirtyReason, bool recordUndo = true, const char* tooltip = nullptr)
 {
     return DrawPresetIntRow(label, id, value, defaultValue, kShadowResolutionPresets, 1024, dirtyReason, recordUndo, tooltip);
@@ -12891,109 +12637,7 @@ bool DrawTerrainSizePresetRow(const char* label, const char* id, float* value, f
 
 void DrawPropertiesPanel()
 {
-    const rock::Node* selectedNode = g_graph.FindNode(g_selectedNodeId);
-    if (selectedNode == nullptr)
-    {
-        ImGui::TextDisabled("ノードを選択してください");
-        ImGui::Spacing();
-        ImGui::TextWrapped("選択したノードの設定だけをここに表示します。");
-        return;
-    }
-
-    ImGui::TextUnformatted(selectedNode->title.c_str());
-    ImGui::TextDisabled("%s", rock::ToString(selectedNode->kind).data());
-    ImGui::Separator();
-
-    rock::Node* editableNode = g_graph.FindMutableNode(selectedNode->id);
-    if (editableNode == nullptr)
-    {
-        return;
-    }
-    if (selectedNode->kind == rock::NodeKind::HeightmapLoad && DrawHeightmapLoadProperties(*editableNode))
-    {
-        return;
-    }
-
-    if (selectedNode->kind == rock::NodeKind::Shape && DrawShapeProperties(*editableNode))
-    {
-        return;
-    }
-
-    if (selectedNode->kind == rock::NodeKind::HeightmapBlur && DrawHeightmapBlurProperties(*editableNode))
-    {
-        return;
-    }
-
-    if (selectedNode->kind == rock::NodeKind::MultiScaleErosion && DrawMultiScaleErosionProperties(*editableNode))
-    {
-        return;
-    }
-
-    if (selectedNode->kind == rock::NodeKind::MaskNoise && DrawMaskNoiseProperties(*editableNode))
-    {
-        return;
-    }
-
-    if (selectedNode->kind == rock::NodeKind::MaskBlend && DrawMaskBlendProperties(*editableNode))
-    {
-        return;
-    }
-
-    if (selectedNode->kind == rock::NodeKind::MaskLevels && DrawMaskLevelsProperties(*editableNode))
-    {
-        return;
-    }
-
-    if (selectedNode->kind == rock::NodeKind::MaskHeight && DrawMaskHeightProperties(*editableNode))
-    {
-        return;
-    }
-
-    if (selectedNode->kind == rock::NodeKind::MaskSlope && DrawMaskSlopeProperties(*editableNode))
-    {
-        return;
-    }
-
-    if (selectedNode->kind == rock::NodeKind::MaskCurvature && DrawMaskCurvatureProperties(*editableNode))
-    {
-        return;
-    }
-
-    if (selectedNode->kind == rock::NodeKind::MaskFluvial && DrawMaskFluvialProperties(*editableNode))
-    {
-        return;
-    }
-
-    if (selectedNode->kind == rock::NodeKind::Crumbling && DrawCrumblingProperties(*editableNode))
-    {
-        return;
-    }
-
-    if (selectedNode->kind == rock::NodeKind::Rock && DrawRockProperties(*editableNode))
-    {
-        return;
-    }
-
-    if (selectedNode->kind == rock::NodeKind::Scatter && DrawScatterProperties(*editableNode))
-    {
-        return;
-    }
-
-    if (selectedNode->kind == rock::NodeKind::Sediment && DrawSedimentProperties(*editableNode))
-    {
-        return;
-    }
-
-    if (selectedNode->kind == rock::NodeKind::Snow && DrawSnowProperties(*editableNode))
-    {
-        return;
-    }
-
-    if (selectedNode->kind == rock::NodeKind::Colorize && DrawColorizeProperties(*editableNode))
-    {
-        return;
-    }
-
+    DrawNodePropertiesPanel(g_graph, g_selectedNodeId);
 }
 
 void DrawDisplaySettingsPanel()
@@ -14192,6 +13836,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
             []() { EvaluateGraph(); },
             [](const char* reason) { MarkGraphChanged(reason); },
             []() { return (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0; },
+            []() { return (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0; },
+            [](float& r, float& g, float& b) { SampleScreenPixel(r, g, b); },
+            []() { SetForegroundWindow(g_hwnd); },
         });
 
         ShowWindow(g_hwnd, showCommand);
@@ -14250,7 +13897,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
             ImGui_ImplDX12_NewFrame();
             ImGui_ImplWin32_NewFrame();
             ImGui::NewFrame();
-            UpdateScreenColorPick();
+            UpdateColorizeScreenPick(g_graph);
             ProcessPendingMseGpuRequests();
             ProcessPendingMaskNoiseGpuRequests();
             ProcessPendingSedimentGpuRequests();

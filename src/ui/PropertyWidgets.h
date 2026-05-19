@@ -5,6 +5,7 @@
 #include <functional>
 #include <limits>
 #include <optional>
+#include <span>
 #include <string>
 
 #include <imgui.h>
@@ -31,6 +32,7 @@ void DrawPropertyLabel(const char* label, const char* tooltip = nullptr, bool di
 bool DrawPropertyComboRow(const char* label, const char* id, int* value, const char* items, const char* tooltip = nullptr, int defaultValue = 0);
 void DrawReadOnlyFloatRow(const char* label, float value, const char* format = "%.2f", const char* tooltip = nullptr);
 bool DrawResetToDefaultButton(const char* id, bool isDefaultValue, const char* defaultValueText = nullptr);
+bool DrawPresetIntRow(const char* label, const char* id, int* value, int defaultValue, std::span<const int> presets, int fallback, const char* dirtyReason, bool recordUndo = true, const char* tooltip = nullptr);
 std::string FormatTimeHours(float hours);
 bool DrawTimeOfDayRow(const char* label, const char* id, float* value, float defaultValue, const char* dirtyReason, const char* tooltip = nullptr);
 bool DrawEnterCommitFloatInput(const char* id, float* value, const char* format);

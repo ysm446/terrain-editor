@@ -31,10 +31,16 @@ struct NodePropertyCallbacks
     std::function<void()> evaluateGraph;
     std::function<void(const char*)> markGraphChanged;
     std::function<bool()> isCtrlDown;
+    std::function<bool()> isEscapeDown;
+    std::function<void(float&, float&, float&)> sampleScreenPixel;
+    std::function<void()> requestForeground;
 };
 
 void SetNodePropertyCallbacks(NodePropertyCallbacks callbacks);
 ScreenColorPick& ColorizeScreenPick();
+void UpdateColorizeScreenPick(rock::NodeGraph& graph);
+
+void DrawNodePropertiesPanel(rock::NodeGraph& graph, rock::GraphId selectedNodeId);
 
 bool DrawHeightmapLoadProperties(rock::Node& editableNode);
 bool DrawShapeProperties(rock::Node& editableNode);
