@@ -19,6 +19,7 @@ configure_file(
 add_executable(terrain_editor WIN32
     src/terrain_editor.rc
     src/evaluation/Colorize.cpp
+    src/evaluation/HeightfieldOps.cpp
     src/evaluation/HeightmapSource.cpp
     src/evaluation/MaskNoise.cpp
     src/evaluation/MaskOps.cpp
