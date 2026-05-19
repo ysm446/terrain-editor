@@ -42,6 +42,7 @@
 #include "screenshot_capture.h"
 #include "ui/CameraPanel.h"
 #include "ui/DebugPanel.h"
+#include "ui/DisplayPanel.h"
 #include "ui/NodeProperties.h"
 #include "ui/PropertyWidgets.h"
 #include "ui/SkyPanel.h"
@@ -12619,25 +12620,6 @@ void DrawNodeGraph()
     g_nodeEditorFrameActive = false;
 }
 
-bool DrawShadowResolutionPresetRow(const char* label, const char* id, int* value, int defaultValue, const char* dirtyReason, bool recordUndo = true, const char* tooltip = nullptr)
-{
-    return DrawPresetIntRow(label, id, value, defaultValue, kShadowResolutionPresets, 1024, dirtyReason, recordUndo, tooltip);
-}
-
-bool DrawResolutionPresetRow(const char* label, const char* id, int* value, int defaultValue, const char* dirtyReason, bool recordUndo = true, const char* tooltip = nullptr)
-{
-    return DrawPresetIntRow(label, id, value, defaultValue, kResolutionPresets, 512, dirtyReason, recordUndo, tooltip);
-}
-
-bool DrawTerrainSizePresetRow(const char* label, const char* id, float* value, float defaultValue, const char* dirtyReason, bool recordUndo = true, const char* tooltip = nullptr)
-{
-    int intValue = NearestTerrainSizePreset(*value);
-    const int intDefault = NearestTerrainSizePreset(defaultValue);
-    const bool changed = DrawPresetIntRow(label, id, &intValue, intDefault, kTerrainSizePresets, 1024, dirtyReason, recordUndo, tooltip);
-    *value = static_cast<float>(intValue);
-    return changed;
-}
-
 void DrawPropertiesPanel()
 {
     DrawNodePropertiesPanel(g_graph, g_selectedNodeId);
@@ -12645,182 +12627,17 @@ void DrawPropertiesPanel()
 
 void DrawDisplaySettingsPanel()
 {
-    rock::GraphSettings& settings = g_graph.Settings();
-    const float headerRightPadding = 10.0f;
-    const float sectionWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x - headerRightPadding);
-    ImGui::BeginChild("PreviewDisplaySection", ImVec2(sectionWidth, 0.0f), false);
-    if (!ImGui::CollapsingHeader("設定", ImGuiTreeNodeFlags_DefaultOpen))
-    {
-        ImGui::EndChild();
-        return;
-    }
-
-    if (ImGui::BeginTable("PreviewDisplaySettingsRows", 2, ImGuiTableFlags_SizingStretchProp))
-    {
-        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 112.0f);
-        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-
-        ImGui::SeparatorText("解像度");
-        const float defaultDistanceBeforeTerrainSizeEdit = DefaultViewportOrbitDistance();
-        if (DrawTerrainSizePresetRow("Terrain Size (m)", "GlobalTerrainSizeMeters", &settings.preview.terrainSizeMeters, rock::PreviewSettings{}.terrainSizeMeters, "Terrain size changed", false, "ノードグラフ全体の地形キャンバスの縦横サイズです。Import Heightmap の Scale はこの中で画像が占める実サイズとして扱い、大きければクロップ、小さければ外側を高さ 0 にします。"))
-        {
-            if (!FloatDiffersFromDefault(g_viewport.orbitDistance, defaultDistanceBeforeTerrainSizeEdit))
-            {
-                g_viewport.orbitDistance = DefaultViewportOrbitDistance();
-            }
-            MarkGraphChanged("Terrain size changed");
-            EvaluateGraph();
-        }
-        if (DrawResolutionPresetRow("Simulation Resolution", "GlobalSimulationResolution", &settings.preview.simulationResolution, rock::PreviewSettings{}.simulationResolution, "Simulation resolution changed", false, "ノードグラフ全体の地形・マスク評価解像度です。高いほど細かく計算できますが、評価時間とメモリ使用量が増えます。"))
-        {
-            MarkGraphChanged("Simulation resolution changed");
-            EvaluateGraph();
-        }
-        if (DrawResolutionPresetRow("Viewport Mesh Resolution", "DisplayPreviewResolution", &settings.preview.resolution, rock::PreviewSettings{}.resolution, "Preview mesh resolution changed", false, "3D プレビュー用メッシュの細かさです。Simulation Resolution は変えず、表示の分割数だけを変更します。"))
-        {
-            EvaluateGraph();
-            SaveAppSettingsSilently();
-        }
-        if (DrawPropertyIntRow("LOD", "DisplayPreviewLod", &settings.preview.lod, 0, 4, rock::PreviewSettings{}.lod, "Preview LOD changed", false))
-        {
-            EvaluateGraph();
-            SaveAppSettingsSilently();
-        }
-
-        ImGui::SeparatorText("プレビュー画面");
-        if (DrawPropertyBoolRow("Mesh Preview", "DisplayMeshPreview", &g_ui.meshPreview, "Mesh preview visibility changed", nullptr, UiState{}.meshPreview, true))
-        {
-            SaveAppSettingsSilently();
-        }
-        if (DrawPropertyBoolRow("FPS", "DisplayFps", &g_ui.showFps, "FPS visibility changed", nullptr, UiState{}.showFps, true))
-        {
-            SaveAppSettingsSilently();
-        }
-        {
-            int backendInt = static_cast<int>(settings.preview.meshBackend);
-            if (DrawPropertyComboRow("Mesh Backend", "DisplayMeshBackend", &backendInt, "CPU Mesh\0GPU Displacement\0\0", "プレビュー 3D ビューポートのレンダリング経路。CPU Mesh は CPU 側でメッシュを生成・アップロード(従来動作)、GPU Displacement は静的 UV グリッド + ハイトテクスチャを頂点シェーダーで displace します。GPU 側はテクスチャアップロード(~数 ms)だけで済むため、パラメータ変更時の応答性が上がります(現状はサーフェス描画のみ。シャドウ・ワイヤフレームは CPU パスを併走させます)。", static_cast<int>(rock::PreviewSettings{}.meshBackend)))
-            {
-                settings.preview.meshBackend = static_cast<rock::MeshPreviewBackend>(std::clamp(backendInt,
-                    static_cast<int>(rock::MeshPreviewBackend::CpuMesh),
-                    static_cast<int>(rock::MeshPreviewBackend::GpuDisplacement)));
-                SaveAppSettingsSilently();
-            }
-        }
-        if (settings.preview.meshBackend == rock::MeshPreviewBackend::GpuDisplacement)
-        {
-            if (DrawPropertyBoolRow("Tessellation", "DisplayViewportTessellation", &settings.preview.viewportTessellation, "Viewport tessellation changed", "GPU Displacement のビューポート描画だけをハードウェアテセレーションで細分化します。ノード評価やエクスポート用メッシュには影響しません。", rock::PreviewSettings{}.viewportTessellation, true))
-            {
-                SaveAppSettingsSilently();
-            }
-            if (settings.preview.viewportTessellation)
-            {
-                if (DrawPropertyFloatRow("Tess Min", "DisplayTessMin", &settings.preview.tessellationMinFactor, 1.0f, 16.0f, rock::PreviewSettings{}.tessellationMinFactor, "Tessellation min changed", false, "遠景で使う最小テセレーション係数です。"))
-                {
-                    settings.preview.tessellationMinFactor = std::clamp(settings.preview.tessellationMinFactor, 1.0f, 64.0f);
-                    settings.preview.tessellationMaxFactor = std::max(settings.preview.tessellationMaxFactor, settings.preview.tessellationMinFactor);
-                    SaveAppSettingsSilently();
-                }
-                if (DrawPropertyFloatRow("Tess Max", "DisplayTessMax", &settings.preview.tessellationMaxFactor, 1.0f, 32.0f, rock::PreviewSettings{}.tessellationMaxFactor, "Tessellation max changed", false, "近景で使う最大テセレーション係数です。高いほど滑らかになりますが描画負荷が増えます。"))
-                {
-                    settings.preview.tessellationMaxFactor = std::clamp(settings.preview.tessellationMaxFactor, settings.preview.tessellationMinFactor, 64.0f);
-                    SaveAppSettingsSilently();
-                }
-                if (DrawPropertyFloatRow("Tess Near (m)", "DisplayTessNear", &settings.preview.tessellationNearDistance, 1.0f, 20000.0f, rock::PreviewSettings{}.tessellationNearDistance, "Tessellation near changed", false, "この距離までは最大テセレーション係数を使います。", "%.0f"))
-                {
-                    settings.preview.tessellationNearDistance = std::clamp(settings.preview.tessellationNearDistance, 1.0f, 100000.0f);
-                    settings.preview.tessellationFarDistance = std::max(settings.preview.tessellationFarDistance, settings.preview.tessellationNearDistance + 1.0f);
-                    SaveAppSettingsSilently();
-                }
-                if (DrawPropertyFloatRow("Tess Far (m)", "DisplayTessFar", &settings.preview.tessellationFarDistance, 1.0f, 50000.0f, rock::PreviewSettings{}.tessellationFarDistance, "Tessellation far changed", false, "この距離以遠では最小テセレーション係数へ落とします。", "%.0f"))
-                {
-                    settings.preview.tessellationFarDistance = std::clamp(settings.preview.tessellationFarDistance, settings.preview.tessellationNearDistance + 1.0f, 200000.0f);
-                    SaveAppSettingsSilently();
-                }
-            }
-        }
-
-        if (DrawPropertyBoolRow("Surface", "DisplaySurface", &settings.preview.showSurface, "Surface visibility changed", nullptr, rock::PreviewSettings{}.showSurface, true))
-        {
-            SaveAppSettingsSilently();
-        }
-        {
-            int boundaryModeInt = static_cast<int>(settings.preview.terrainBoundaryMode);
-            if (DrawPropertyComboRow("地形境界", "DisplayTerrainBoundaryMode", &boundaryModeInt, "なし\0断面ポリゴン\0ライン\0\0",
-                "地形外周の表示です。断面ポリゴンは側面と底面を描画し、ラインは四隅から高さ 0 への縦線と下端の正方形だけを表示します。",
-                static_cast<int>(rock::PreviewSettings{}.terrainBoundaryMode)))
-            {
-                settings.preview.terrainBoundaryMode = static_cast<rock::TerrainBoundaryMode>(std::clamp(boundaryModeInt,
-                    static_cast<int>(rock::TerrainBoundaryMode::None),
-                    static_cast<int>(rock::TerrainBoundaryMode::Lines)));
-                SaveAppSettingsSilently();
-            }
-        }
-        if (DrawPropertyBoolRow("Grid", "DisplayGrid", &settings.preview.showGrid, "Grid visibility changed", nullptr, rock::PreviewSettings{}.showGrid, true))
-        {
-            SaveAppSettingsSilently();
-        }
-        if (settings.preview.showGrid)
-        {
-            if (DrawPropertyIntRow("Grid Cells", "DisplayGridCells", &settings.preview.gridCellCount, 1, 200, rock::PreviewSettings{}.gridCellCount, "Grid cell count changed", false, "グリッド全体の1辺あたりのマス数です。10なら10 x 10です。"))
-            {
-                settings.preview.gridCellCount = std::clamp(settings.preview.gridCellCount, 1, 200);
-                SaveAppSettingsSilently();
-            }
-            if (DrawPropertyFloatRow("Grid Cell Size (m)", "DisplayGridCellSize", &settings.preview.gridCellSizeMeters, 1.0f, 10000.0f, rock::PreviewSettings{}.gridCellSizeMeters, "Grid cell size changed", false, "グリッド1マスの長さです。"))
-            {
-                settings.preview.gridCellSizeMeters = std::clamp(settings.preview.gridCellSizeMeters, 1.0f, 10000.0f);
-                SaveAppSettingsSilently();
-            }
-            if (DrawColorRgbRow("Grid Color", "DisplayGridColor", settings.preview.gridColor, rock::PreviewSettings{}.gridColor))
-            {
-                SaveAppSettingsSilently();
-            }
-        }
-        int displayModeInt = ToDisplayModeIndex(CurrentViewportDisplayMode(settings));
-        if (DrawPropertyComboRow("表示モード", "ViewportDisplayMode", &displayModeInt, "シンプル\0PBR\0天球\0\0", "シンプル: フラットで軽い表示。PBR: 単色背景でリアル寄りのライティング。天球: 天球背景とリアル寄りのライティングです。", ToDisplayModeIndex(ViewportDisplayMode::Simple)))
-        {
-            ApplyViewportDisplayMode(settings, DisplayModeFromIndex(std::clamp(displayModeInt, 0, 2)));
-            SaveAppSettingsSilently();
-        }
-        const ViewportDisplayMode displayMode = CurrentViewportDisplayMode(settings);
-        ImGui::SeparatorText("地表");
-        if (displayMode != ViewportDisplayMode::Sky)
-        {
-            if (DrawColorRgbRow("ビューポート背景色", "ViewportBackgroundColor", settings.preview.viewportBackground, rock::PreviewSettings{}.viewportBackground))
-            {
-                SaveAppSettingsSilently();
-            }
-        }
-        if (displayMode != ViewportDisplayMode::Simple)
-        {
-            if (DrawColorRgbRow("Albedo", "DisplayPbrAlbedo", settings.preview.pbrAlbedo, rock::PreviewSettings{}.pbrAlbedo))
-            {
-                SaveAppSettingsSilently();
-            }
-        }
-
-        ImGui::SeparatorText("マスクテクスチャー");
-        {
-            int maskShadingInt = static_cast<int>(settings.preview.maskShading);
-            if (DrawPropertyComboRow("マスクシェーディング", "DisplayMaskShading", &maskShadingInt, "グレースケール\0グレー×オレンジ\0グレースケール + 斜線\0\0", "マスクプレビューの表示方式です。グレースケール: mask=0→黒, mask=1→白の純粋な白黒ランプ (既定)。グレー×オレンジ: ライティング付きのグレー×オレンジ調シェーディング。グレースケール + 斜線: GeoGen 風の対角ハッチング — mask が 1.0 付近では密な白斜線、0.0 付近では疎な白斜線、中間は素直なランプ。3D ビューと 2D マップ両方に反映されます。", static_cast<int>(rock::PreviewSettings{}.maskShading)))
-            {
-                settings.preview.maskShading = static_cast<rock::MaskShadingMode>(std::clamp(maskShadingInt,
-                    static_cast<int>(rock::MaskShadingMode::Grayscale),
-                    static_cast<int>(rock::MaskShadingMode::GrayscaleHatched)));
-                SaveAppSettingsSilently();
-            }
-            if (DrawPropertyBoolRow("近い地形でマスク表示", "DisplayMaskUseNearestHeightmap", &settings.preview.maskPreviewUseNearestHeightmap, "Mask preview nearest heightmap toggled", "Mask Noise / Mask Blend / Mask Levels など、ハイトマップ参照を直接持たないマスクノードをプレビューするとき、入力側をたどって見つかった一番近い Heightmap を表示用の地形に使います。見つからない場合は従来どおり平面表示します。", rock::PreviewSettings{}.maskPreviewUseNearestHeightmap, true))
-            {
-                EvaluateGraph();
-                SaveAppSettingsSilently();
-            }
-        }
-
-        ImGui::EndTable();
-    }
-    ImGui::EndChild();
+    terrain::ui::DrawDisplaySettingsPanel({
+        g_graph.Settings(),
+        g_ui.meshPreview,
+        g_ui.showFps,
+        g_viewport.orbitDistance,
+        []() { return DefaultViewportOrbitDistance(); },
+        []() { EvaluateGraph(); },
+        [](const char* reason) { MarkGraphChanged(reason); },
+        []() { SaveAppSettingsSilently(); },
+    });
 }
-
 void DrawSkySettingsPanel()
 {
     terrain::ui::DrawSkySettingsPanel({

@@ -24,6 +24,7 @@ add_executable(terrain_editor WIN32
     src/screenshot_capture.cpp
     src/ui/CameraPanel.cpp
     src/ui/DebugPanel.cpp
+    src/ui/DisplayPanel.cpp
     src/ui/NodeProperties.cpp
     src/ui/PropertyWidgets.cpp
     src/ui/SkyPanel.cpp
