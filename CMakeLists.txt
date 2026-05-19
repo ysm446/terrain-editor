@@ -26,6 +26,7 @@ add_executable(terrain_editor WIN32
     src/ui/DebugPanel.cpp
     src/ui/NodeProperties.cpp
     src/ui/PropertyWidgets.cpp
+    src/ui/SkyPanel.cpp
     src/ui/UiTheme.cpp
 )
 
