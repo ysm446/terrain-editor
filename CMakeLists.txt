@@ -24,6 +24,7 @@ add_executable(terrain_editor WIN32
     src/evaluation/MaskNoise.cpp
     src/evaluation/MaskOps.cpp
     src/evaluation/MultiScaleErosion.cpp
+    src/evaluation/Rock.cpp
     src/evaluation/Sediment.cpp
     src/evaluation/ShapeSource.cpp
     src/evaluation/Snow.cpp
