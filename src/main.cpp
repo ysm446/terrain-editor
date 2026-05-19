@@ -40,6 +40,7 @@
 #include "obj_exporter.h"
 #include "resource.h"
 #include "screenshot_capture.h"
+#include "ui/DebugPanel.h"
 #include "ui/NodeProperties.h"
 #include "ui/PropertyWidgets.h"
 #include "ui/UiTheme.h"
@@ -13062,35 +13063,7 @@ void DrawCameraPanel()
 
 void DrawDebugPanel()
 {
-    rock::GraphSettings& settings = g_graph.Settings();
-    const rock::EvaluationSummary& evaluation = g_graph.Evaluation();
     const PreviewRenderStats& renderStats = g_gpuMeshPreview.renderStats;
-    ImGui::SeparatorText("Viewport Debug");
-    if (ImGui::BeginTable("DebugViewportRows", 2, ImGuiTableFlags_SizingStretchProp))
-    {
-        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 112.0f);
-        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-        if (DrawPropertyBoolRow("Draw Calls", "DebugDrawCalls", &g_ui.showDrawStats, "Draw stats visibility changed",
-                "Shows the latest preview draw-call count in the viewport overlay.",
-                UiState{}.showDrawStats, true))
-        {
-            SaveAppSettingsSilently();
-        }
-        if (DrawPropertyBoolRow("Wireframe", "DebugWireframe", &settings.preview.showWireframe, "Wireframe visibility changed",
-                "Shows mesh edges for topology debugging. High viewport resolutions can make this expensive.",
-                rock::PreviewSettings{}.showWireframe, true))
-        {
-            SaveAppSettingsSilently();
-        }
-        ImGui::EndTable();
-    }
-
-    ImGui::Spacing();
-    ImGui::Text("Graph Version: %llu", static_cast<unsigned long long>(evaluation.version));
-    ImGui::Text("%s", g_lastEvaluationDuration.c_str());
-    ImGui::TextColored(evaluation.dirty ? ImVec4(0.90f, 0.64f, 0.30f, 1.0f) : ImVec4(0.54f, 0.78f, 0.58f, 1.0f), "%s", evaluation.dirty ? "Dirty" : "Evaluated");
-    ImGui::TextWrapped("%s", evaluation.status.c_str());
-
     const uint64_t displayedVertices = renderStats.gpuDisplacement && renderStats.displayMeshResolution > 0
         ? static_cast<uint64_t>(renderStats.displayMeshResolution) * static_cast<uint64_t>(renderStats.displayMeshResolution) * 2u +
             static_cast<uint64_t>(renderStats.displayMeshResolution) * 8u
@@ -13104,34 +13077,35 @@ void DrawDebugPanel()
             : static_cast<uint64_t>((g_gpuMeshPreview.displacementTriIndexCount + g_gpuMeshPreview.displacementSectionIndexCount) / 3u))
         : static_cast<uint64_t>(g_gpuMeshPreview.triIndexCount / 3u);
 
-    ImGui::SeparatorText("Preview");
-    ImGui::Text("Stage: %s", rock::ToString(evaluation.previewStage).data());
-    ImGui::Text("Backend: %s", renderStats.gpuDisplacement ? (renderStats.tessellation ? "GPU Displacement + Tessellation" : "GPU Displacement") : "CPU Mesh");
-    ImGui::Text("Render Target: %d x %d", renderStats.renderTargetWidth, renderStats.renderTargetHeight);
-    ImGui::Text("Draw Calls: %u (%u indexed)", renderStats.drawCalls, renderStats.indexedDrawCalls);
-    ImGui::Text("Submitted: %llu verts / %llu tris / %llu lines",
-        static_cast<unsigned long long>(renderStats.submittedVertices),
-        static_cast<unsigned long long>(renderStats.submittedTriangles),
-        static_cast<unsigned long long>(renderStats.submittedLines));
-    if (renderStats.tessellation)
-    {
-        ImGui::Text("Patches: %u, Tess Max: %.1f", renderStats.submittedPatches, renderStats.tessellationMaxFactor);
-    }
-    ImGui::Text("Passes: %s%s%s%s%s%s",
-        renderStats.shadowPass ? "Shadow " : "",
-        renderStats.skyPass ? "Sky " : "",
-        renderStats.surfacePass ? "Surface " : "",
-        renderStats.gridPass ? "Grid " : "",
-        renderStats.wireframePass ? "Wireframe " : "",
-        renderStats.cloudsPass ? "Clouds " : "");
-    ImGui::SeparatorText("Displayed Mesh");
-    ImGui::Text("Mesh Resolution: %d", renderStats.displayMeshResolution);
-    ImGui::Text("Vertices: %llu", static_cast<unsigned long long>(displayedVertices));
-    ImGui::Text("Triangles: %llu", static_cast<unsigned long long>(displayedTriangles));
-    ImGui::SeparatorText("Evaluated Mesh");
-    ImGui::Text("Vertices: %zu", evaluation.previewMesh.vertices.size());
-    ImGui::Text("Edges: %zu", evaluation.previewMesh.edges.size());
-    ImGui::Text("Triangles: %zu", evaluation.previewMesh.triangles.size());
+    terrain::ui::DrawDebugPanel({
+        g_graph.Settings(),
+        g_graph.Evaluation(),
+        g_lastEvaluationDuration,
+        g_ui.showDrawStats,
+        {
+            renderStats.drawCalls,
+            renderStats.indexedDrawCalls,
+            renderStats.submittedVertices,
+            renderStats.submittedTriangles,
+            renderStats.submittedLines,
+            renderStats.submittedPatches,
+            renderStats.renderTargetWidth,
+            renderStats.renderTargetHeight,
+            renderStats.displayMeshResolution,
+            renderStats.gpuDisplacement,
+            renderStats.tessellation,
+            renderStats.tessellationMaxFactor,
+            renderStats.surfacePass,
+            renderStats.wireframePass,
+            renderStats.gridPass,
+            renderStats.shadowPass,
+            renderStats.skyPass,
+            renderStats.cloudsPass,
+            displayedVertices,
+            displayedTriangles,
+        },
+        []() { SaveAppSettingsSilently(); },
+    });
 }
 
 void DrawAssetExportPanel()

@@ -22,6 +22,7 @@ add_executable(terrain_editor WIN32
     src/node_graph.cpp
     src/obj_exporter.cpp
     src/screenshot_capture.cpp
+    src/ui/DebugPanel.cpp
     src/ui/NodeProperties.cpp
     src/ui/PropertyWidgets.cpp
     src/ui/UiTheme.cpp
