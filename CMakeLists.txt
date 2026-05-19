@@ -22,6 +22,7 @@ add_executable(terrain_editor WIN32
     src/evaluation/HeightmapSource.cpp
     src/evaluation/MaskNoise.cpp
     src/evaluation/MaskOps.cpp
+    src/evaluation/ShapeSource.cpp
     src/main.cpp
     src/node_graph.cpp
     src/obj_exporter.cpp
