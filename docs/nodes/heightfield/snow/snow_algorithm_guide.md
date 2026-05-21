@@ -1,199 +1,107 @@
-# Snow アルゴリズム入門
+# Snow アルゴリズムメモ
 
-このメモは、`Snow` ノードが内部で何をしているかを段階的に理解するための読み物です。
-パラメータの詳細一覧は `snow_node.md` にまとめています。
+`Snow` ノードは、雪を単なる slope mask として作るのではなく、雪厚を持つ素材として地形上に注入し、斜面に沿って再配分する簡易モデルです。
 
-## まず何をするノードか
+## 基本方針
 
-`Snow` は、ハイトフィールドの各セルの**傾斜角に応じて雪の積もり方を決める**ノードです。
+- `Emission Amount (m)` は地形へ注入される雪の総量です。
+- `Iterations Count` は simulation step 数です。GeoGen の観察に合わせ、新規ノードでは `40` を既定値にしています。
+- `Emission Time (%)` は、総量をいつ注入するかを決めます。`0%` は最初に全量、`100%` は全 step に均等配分です。
+- `Snow Motion Slope Limit (deg)` は、雪が流れずに止まれる最大傾斜です。
+- `Snow Surface Smoothing (%)` は、再配分後に積もった雪面をならす強さです。半径は `Largest Detail Level (m)` を流用します。
+- mask は雪厚をそのまま正規化せず、`Mask Threshold (m)` と `Mask Feather (m)` で coverage に変換します。
 
-`Emission Amount = 0` の場合は雪なしとして早期終了し、入力ハイトフィールドを変更せず、Snow mask も全ゼロにします。
-急な斜面には雪が積もらず、なだらかな部分ほど厚く積もるという自然な挙動を、
-粒子シミュレーションなしに再現します。
+## 処理手順
 
-雪は**加算で積まれます** (`height += thickness`)。
-
-## 全体の流れ
-
-処理は 3 つのフェーズで構成されます。
-
-1. **Phase 1 — 動的な厚み計算**: `Iterations Count` と `Emission Time` に従って雪を少しずつ足し、セルごとの積雪厚みを決める。
-2. **Phase 2 — Envelope Smoothing**: 各ステップの雪面をならして、溝や窪みを自然に埋める。
-3. **Phase 3 — 書き込み**: ならし後の厚みを高さに加算し、マスクに出力する。
-
-`Smoothing Iterations = 0` にすると Phase 2 はスキップされ、旧来のシングルパス挙動になります。
-
-## Phase 1 — 傾斜の計算と動的な厚み
-
-中心差分 (4 近傍) で水平・奥行き方向の傾きを求め、勾配の大きさを計算します。
+### 1. 注入量
 
 ```text
-dh/dx = (h[x+1, z] - h[x-1, z]) / (2 × cellSize)
-dh/dz = (h[x, z+1] - h[x, z-1]) / (2 × cellSize)
-slopeTan = sqrt((dh/dx)² + (dh/dz)²)
-```
+emissionIterations =
+    emissionTime <= 0 ? 1 : ceil(iterationCount * emissionTime)
 
-`slopeTan` は傾斜角の正接 (tangent) です。
-`slopeTan = 1.0` は傾斜 45° に相当します。
-
-傾斜角に基づいて snowFraction (雪の積もる割合) を smoothstep で計算します。
-
-```text
-minTan = tan(slopeLimitMinDeg × π/180)
-maxTan = tan(slopeLimitMaxDeg × π/180)
-
-t = clamp((slopeTan - minTan) / (maxTan - minTan), 0, 1)
-smoothT = t² × (3 - 2t)          ← smoothstep
-snowFraction = 1 - smoothT
 stepEmission = emissionAmount / emissionIterations
-thickness[i] = min(emittedSoFar, thickness[i] + stepEmission × snowFraction)
 ```
 
-`Iterations Count` は積雪と安定化を何ステップ行うか、`Emission Time (%)` はそのうち何割のステップで雪を降らせ続けるかを決めます。`Emission Time = 0%` では最初に全量を置いてから安定化し、`100%` では最後まで少しずつ降らせます。
+`iter < emissionIterations` の間だけ、全セルへ `stepEmission` を加えます。
 
-| 勾配の状態 | t | snowFraction | 意味 |
-| --- | --- | --- | --- |
-| ≤ minTan | 0 | 1.0 | 全量積もる |
-| minTan〜maxTan の中間 | 0.5 | 0.5 | 半量積もる |
-| ≥ maxTan | 1 | 0.0 | 積もらない |
+### 2. 雪面の安定判定
 
-smoothstep の二次曲線により、積雪の境界が自然なグラデーションになります。
-傾斜計算は**元の高さのスナップショット**から行うため、厚みが近傍のセル間で干渉しません。
-
-## Phase 2 — Snow Envelope Smoothing
-
-Phase 1 の厚みは各セルの傾斜だけから独立に計算されるため、スロープ遷移域では
-セルごとに厚みが細かくばらつくことがあります。
-
-Envelope Smoothing はこのばらつきを物理的に意味のある方向へ補正します。
-「雪は周囲より低い窪みに流れ込んで埋まる」という性質を模倣します。
+各セルの雪面は次の高さです。
 
 ```text
-surface[i] = baseHeights[i] + thickness[i]   ← 雪面の高さ
-
-各反復:
-    radius = Largest Detail Level (m) / cellSize
-    blurred[i] = separable gaussian blur of surface ← 横方向→縦方向のガウス平均
-    surface[i] = min(baseHeights[i] + emittedSoFar, max(surface[i], blurred[i]))
+surface = baseHeight + snowThickness
 ```
 
-`max` を使うことで、**周囲より高いセル (出っ張り) は変わらず、周囲より低いセル (溝の底) だけが雪で持ち上がります**。
-
-反復後に厚みを再計算します。
+8 近傍のうち、現在セルより低く、かつ `Snow Motion Slope Limit` を超える最も急な方向を探します。
 
 ```text
-thickness[i] = max(0, surface[i] - baseHeights[i])
+slope = (surface[current] - surface[neighbor]) / distance
+flow if slope > tan(motionSlopeLimitDeg)
 ```
 
-Jacobi 二重バッファで並列実行されるため、反復内のセル間に依存はありません。
+### 3. 雪の移動
 
-### Smoothing Iterations の効果
-
-| 反復数 | 効果 |
-| --- | --- |
-| 0 | ならしなし。スロープ遷移域に細かいムラが残ることがある |
-| 1〜2 | 遷移域のムラが薄くなる |
-| 4〜8 | 窪みや谷が深く埋まる。積雪が多い表現に (推奨) |
-| 16 | ほぼ全体が均された厚い雪の平原になる |
-
-## Phase 3 — 高さとマスクへの書き込み
+不安定なセルでは、安定角を超えた分の一部だけを低い近傍へ移します。
 
 ```text
-heights[i] = baseHeights[i] + thickness[i]
-mask[i] = clamp(thickness[i] / maskMaxSnow, 0, 1)
+stableDrop = tan(limit) * distance
+excess = max(0, surface[current] - surface[neighbor] - stableDrop)
+slopeFactor = clamp((slope - tan(limit)) / slope, 0, 1)
+amount = min(snow[current], excess * 0.5, snow[current] * transportRate * slopeFactor)
 ```
 
-`maskMaxSnow` は「この厚さで白 (1.0)」を決める正規化基準です。
-マスクは可視化チャンネルなので、後続のマスクノードへ流すことはできません。
+`Settling Passes` 回だけこの移動を繰り返します。移動先探索の stride は `Largest Detail Level (m)` から始まり、pass ごとに小さくなるため、大きな谷へ寄せたあと細部で落ち着く挙動になります。
 
-## パラメータを直感で見る
+移動先探索は行単位で並列化し、各セルの移動先と移動量を一度バッファに書き出してからまとめて適用します。これにより scatter 書き込みの競合を避けつつ、高解像度でも Snow ノードで長く止まって見えにくくしています。
 
-| パラメータ | 直感的な役割 |
-| --- | --- |
-| `Backend` | CpuReference = CPU 参照実装、GpuCompute = GPU Compute (高速) |
-| `Emission Amount (m)` | 最大積雪量。なだらかな平地にこの厚さで積もる |
-| `Iterations Count` | 雪を何ステップで積もらせて安定化するか |
-| `Emission Time (%)` | Iterations Count のうち、どの割合まで雪を降らせ続けるか |
-| `Slope Limit Min (deg)` | この傾斜以下では全量積もる |
-| `Slope Limit Max (deg)` | この傾斜以上では積もらない |
-| `Smoothing Iterations` | Envelope smoothing の反復数。0 = なし、8 = デフォルト |
-| `Largest Detail Level (m)` | GeoGen Snow 相当の最大ディテール幅。4m から 512m までのプリセットから選び、隙間埋めの最大スケールを決める |
-| `Mask Max Snow (m)` | マスクが 1.0 (白) になる積雪厚さ |
+### 4. 雪面平滑化
 
-## よくある使い方と設定例
+`Snow Surface Smoothing (%)` が 0 より大きい場合、最終的な雪厚に separable blur をかけます。平滑化半径は追加パラメータを増やさず、`Largest Detail Level (m)` から決めます。
 
-### 山頂の雪線をシンプルに表現する
+露出地面へ雪が広がりすぎないよう、blur の重みには coverage を使います。
 
-```
-Emission Amount: 2.0 m
-Slope Limit Min: 50°
-Slope Limit Max: 60°
-Smoothing Iterations: 6
-Largest Detail Level: 8 m
+```text
+coverage = smoothstep(maskThreshold - maskFeather,
+                      maskThreshold + maskFeather,
+                      snowThickness)
+
+smoothed = weightedBlur(snowThickness, coverage)
+snowThickness = lerp(snowThickness, smoothed,
+                     surfaceSmoothing * coverage)
 ```
 
-急崖 (60° 以上) には雪が付かず、なだらかな稜線や高原に積雪します。
-Smoothing によって稜線と雪面の境界のムラが消えます。
+### 5. 出力
 
-### 谷が埋まった深雪の表現
-
-```
-Emission Amount: 3.0 m
-Slope Limit Min: 40°
-Slope Limit Max: 55°
-Smoothing Iterations: 6〜8
-Largest Detail Level: 16 m
+```text
+heightOut = baseHeight + snowThickness
 ```
 
-Smoothing を多くかけると谷や窪みが積雪で埋まり、深雪らしい丸みが出ます。
+mask は coverage として出します。
 
-### 低傾斜な台地全体を覆う雪原
-
+```text
+if maskFeather == 0:
+    mask = snowThickness >= maskThreshold ? 1 : 0
+else:
+    mask = smoothstep(maskThreshold - maskFeather,
+                      maskThreshold + maskFeather,
+                      snowThickness)
 ```
-Emission Amount: 1.0 m
-Slope Limit Min: 30°
-Slope Limit Max: 45°
-Smoothing Iterations: 6
-Largest Detail Level: 4〜8 m
-```
 
-谷の側壁には積もらず、平坦な頂部のみ白くなります。
+このため、薄い雪が広い中間グレーとして出るのではなく、積雪域は白、露出地面は黒、境界だけがグレーになります。
 
-## 見た目が崩れるときの考え方
+## 旧実装との差
 
-### 雪の境界線がカクカクしている
+旧実装は `Slope Limit Min/Max` で各セルの初期雪量を直接決め、envelope smoothing で谷を埋めていました。新実装では、雪量はまず注入され、その後 `Snow Motion Slope Limit` に従って移動します。
 
-`Slope Limit Min` と `Slope Limit Max` の差が狭すぎます。
-最低でも 10° 程度の幅を持たせてください。
-`Smoothing Iterations` を 2〜4 にするとさらに滑らかになります。
+そのため、以下の挙動が期待できます。
 
-### 積雪後にスロープ遷移域がざらついて見える
+- `Emission Amount = 0` では雪がまったくない。
+- `0` から小さな値へ上げたとき、いきなり広範囲がグレーになるのではなく、しきい値を超えた場所から積雪域として出る。
+- `Iterations Count` を増やすと、点在していた雪が谷や棚へまとまりやすくなる。
+- `Emission Time` を変えると、最初に置いた雪を長く流すか、最後まで少しずつ追加するかが変わる。
 
-Phase 1 の per-cell なばらつきが残っています。
-`Smoothing Iterations` を 2 以上にすれば解消します。
+## 今後の候補
 
-### Emission Amount を上げると emboss 感が強くなる
-
-現在の初期厚みは `thickness = emissionAmount × snowFraction(slope)` で決まります。
-`snowFraction` は slope に強く依存するため、`Emission Amount` を上げると、緩いセルは大きく持ち上がり、急なセルはあまり持ち上がりません。
-その差分が元地形の細かい傾斜差を増幅し、結果として「雪が覆った」というより、地形の凹凸が embossed されたように見えることがあります。
-
-Phase 2 の envelope smoothing は `surface = max(surface, blurred)` なので、低い窪みは埋めますが、高く出た凸部や ridge は削りません。
-そのため emission が大きいほど、残った凸部と周囲の厚み差が目立ちやすくなります。
-
-今後の改善候補:
-
-- slope 判定に使う高さを事前に軽く blur し、細かいノイズ状の傾斜に反応しすぎないようにする。
-- `thickness` 自体を smoothing してから `baseHeights` に足し、雪の層の高周波成分を減らす。
-- `max(surface, blurred)` だけでなく、雪面を一定量 blurred 側へ寄せる `Surface Smooth Strength` のような制御を追加する。
-- `Slope Limit Min/Max` の幅を広げ、積もる/積もらない境界が硬く出ないようにする。
-
-### 谷や窪みが埋まりすぎて地形の起伏が失われる
-
-`Smoothing Iterations` が多すぎます。
-1〜2 に下げてください。深い谷を保ちたい場合は 1 が目安です。
-
-### 急崖にも雪が積もってしまう
-
-`Slope Limit Max` が高すぎます。
-典型的な岩盤の安息角は 60〜70° なので、`Slope Limit Max` をその付近に設定します。
+- 風向き/風速を追加して、斜面上部や風下への偏りを作る。
+- GPU と CPU の見た目差を実地確認し、必要なら gather 方式の近傍判定をさらに CPU 版へ寄せる。
+- `Slope Limit Min/Max` と `Mask Max Snow` の保存互換フィールドを、将来のプロジェクト形式更新時に整理する。

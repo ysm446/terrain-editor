@@ -6,6 +6,26 @@
 - 予定タスクに、スプラインパスのネットワークから山脈や尾根の土台になる `Heightmap` と `Mask` を作る `Spline` ノードを追加しました。
 - `docs/plan/terrain_workflow.md` を追加し、岩、土、植生、砂礫を分けて考える地形制作の基礎フローを整理しました。
 
+## 0.18.50 - 2026-05-22 07:22
+
+- `Snow` ノードに `Snow Surface Smoothing (%)` を追加しました。パラメータを増やしすぎないよう、平滑化の半径は既存の `Largest Detail Level (m)` を流用します。
+- `Snow Surface Smoothing (%)` は積もった雪面側を中心にならし、露出地面へ雪が広がりすぎないよう `Mask Threshold (m)` / `Mask Feather (m)` に基づく coverage を重みに使います。
+- GPU 版 Snow にも雪面平滑化パスを追加しました。
+
+## 0.18.49 - 2026-05-22 07:05
+
+- `Snow` ノードの新規作成時の `Emission Time (%)` 既定値を `0%` に変更しました。最初に全量を置いてからシミュレーションする GeoGen 寄りの初期挙動になります。
+- 再設計後の `Snow` 再配分モデルを D3D12 GPU compute に対応しました。GPU では各セルが近傍から流入量を gather する方式にし、複数セルが同じ場所へ雪を送る場合も書き込み競合を避けます。
+- 新規 `Snow` ノードの `Backend` 既定値を `GPU` に戻しました。GPU 初期化や dispatch に失敗した場合は CPU 実装へフォールバックします。
+
+## 0.18.48 - 2026-05-22 06:42
+
+- `Snow` ノードを、傾斜で雪量を直接マスクする方式から、注入した雪を斜面上で低い場所へ再配分する簡易シミュレーションへ変更しました。`Snow Motion Slope Limit (deg)` より急な雪面では雪が流れ、谷底や棚へ集まりやすくなります。
+- `Snow` に `Snow Motion Slope Limit (deg)`、`Transport Rate (%)`、`Mask Threshold (m)`、`Mask Feather (m)` を追加しました。Snow mask は雪厚の連続値ではなく、積雪域と露出地面がはっきり分かれる coverage 風の出力になります。
+- 新規 `Snow` ノードの `Iterations Count` 既定値を GeoGen に合わせて `40` に変更しました。
+- 再設計後の `Snow` は現在 CPU 参照実装で評価します。`Backend` の `GPU` は保存互換用に残していますが、挙動差を避けるため現時点では CPU 経路を使います。
+- `Snow` の安定化処理で、各セルの移動先探索を並列化し、移動がなくなった時点で pass を打ち切るようにしました。高解像度で計算が止まって見える問題を軽減します。
+
 ## 0.18.47 - 2026-05-22 05:58
 
 - `Snow` ノードに `Iterations Count` と `Emission Time (%)` を追加しました。雪を複数ステップに分けて積もらせられるため、`Emission Amount (m)` が小さいときに急に積雪面が出る挙動を抑えやすくなります。

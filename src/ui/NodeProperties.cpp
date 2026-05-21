@@ -1075,13 +1075,18 @@ bool DrawSnowProperties(rock::Node& editableNode)
     sn.maskMaxSnow = std::clamp(sn.maskMaxSnow, 0.001f, 1000.0f);
     sn.iterationCount = std::clamp(sn.iterationCount, 1, 256);
     sn.emissionTime = std::clamp(sn.emissionTime, 0.0f, 1.0f);
-    sn.smoothingIterations = std::clamp(sn.smoothingIterations, 0, 16);
+    sn.smoothingIterations = std::clamp(sn.smoothingIterations, 1, 16);
+    sn.motionSlopeLimitDeg = std::clamp(sn.motionSlopeLimitDeg, 0.0f, 89.9f);
+    sn.transportRate = std::clamp(sn.transportRate, 0.0f, 1.0f);
+    sn.surfaceSmoothing = std::clamp(sn.surfaceSmoothing, 0.0f, 1.0f);
+    sn.maskThresholdM = std::clamp(sn.maskThresholdM, 0.0f, 1000.0f);
+    sn.maskFeatherM = std::clamp(sn.maskFeatherM, 0.0f, 1000.0f);
     sn.largestDetailLevelM = std::clamp(sn.largestDetailLevelM, 1.0f, 1024.0f);
     sn.fillRadius = std::clamp(sn.fillRadius, 1, 8);
 
     {
         int backendInt = static_cast<int>(sn.backend);
-        if (DrawPropertyComboRow("Backend", "SnowBackend", &backendInt, "CPU\0GPU\0\0", "実行バックエンド。GPU (D3D12 compute) は CPU 比で 5-15 倍程度高速。シェーダーコンパイル/ディスパッチ失敗時は CPU に自動フォールバック。CPU は決定論的でデバッグ向き。", static_cast<int>(rock::SnowSettings{}.backend)))
+        if (DrawPropertyComboRow("Backend", "SnowBackend", &backendInt, "CPU\0GPU\0\0", "Snow の再配分モデルは現在 CPU 参照実装で評価します。GPU は今後の移植用に保存されますが、現時点では同じ CPU 経路にフォールバックします。", static_cast<int>(rock::SnowSettings{}.backend)))
         {
             sn.backend = static_cast<rock::SnowBackend>(std::clamp(backendInt,
                 static_cast<int>(rock::SnowBackend::CpuReference),
@@ -1101,25 +1106,30 @@ bool DrawSnowProperties(rock::Node& editableNode)
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Slope Limit Min (deg)", "SnowSlopeLimitMin", &sn.slopeLimitMinDeg, 0.0f, 89.9f, rock::SnowSettings{}.slopeLimitMinDeg, "Snow slope limit min changed", true, "この角度以下では雪が満杯まで積もります (Emission Amount まるごと)。例: 50° なら緩やかな尾根や谷底にしっかり雪が乗る。下げるほど雪が積もる範囲が狭くなります (=平地でも雪が薄い)。", "%.1f"))
-    {
-        if (sn.slopeLimitMaxDeg < sn.slopeLimitMinDeg) sn.slopeLimitMaxDeg = sn.slopeLimitMinDeg;
-        EvaluateGraph();
-    }
-    if (DrawPropertyFloatRow("Slope Limit Max (deg)", "SnowSlopeLimitMax", &sn.slopeLimitMaxDeg, 0.0f, 89.9f, rock::SnowSettings{}.slopeLimitMaxDeg, "Snow slope limit max changed", true, "この角度以上では雪はまったく積もらない (剥き出しの岩肌)。Min と Max の間は smoothstep で滑らかに遷移します。Min と Max の差を広げるほど積雪境界がぼやけます。", "%.1f"))
-    {
-        if (sn.slopeLimitMaxDeg < sn.slopeLimitMinDeg) sn.slopeLimitMinDeg = sn.slopeLimitMaxDeg;
-        EvaluateGraph();
-    }
-    if (DrawPropertyIntRow("Smoothing Iterations", "SnowSmoothingIterations", &sn.smoothingIterations, 0, 16, rock::SnowSettings{}.smoothingIterations, "Snow smoothing iterations changed", true, "雪の表面を反復的に「平滑化 + 溝埋め」する回数。各反復で snowSurface = heights + thickness の近傍 blur を取り、max(snowSurface, blurred) でセルを更新します。これによりスロープ遷移域の per-cell な厚み揺らぎが消え、また周囲より低いセル (= 溝の底) は雪が増えて埋まります。0 で平滑化なし、6-8 で積雪面が出やすくなります。"))
+    if (DrawPropertyFloatRow("Snow Motion Slope Limit (deg)", "SnowMotionSlopeLimit", &sn.motionSlopeLimitDeg, 0.0f, 89.9f, rock::SnowSettings{}.motionSlopeLimitDeg, "Snow motion slope limit changed", true, "この角度以下の雪面では雪が流れず、これより急な雪面では低い隣接セルへ雪が移動します。GeoGen の snow motion slope limit 相当です。", "%.1f"))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Mask Max Snow (m)", "SnowMaskMaxSnow", &sn.maskMaxSnow, 0.001f, 50.0f, rock::SnowSettings{}.maskMaxSnow, "Snow mask max snow changed", true, "Snow mask 出力の正規化基準 (m)。`雪厚 / Mask Max Snow` を [0, 1] にクランプして mask に書きます。Emission Amount と同じ値にすれば満雪域が真っ白に出ます。下げるとうっすらした雪も明るく見えるようになります。", "%.2f"))
+    if (DrawPropertyPercentRow("Transport Rate (%)", "SnowTransportRate", &sn.transportRate, 0.0f, 1.0f, rock::SnowSettings{}.transportRate, "Snow transport rate changed", "不安定な雪のうち、1 回の安定化パスで下へ動かす割合です。高いほど急斜面から雪が早く逃げ、谷や棚に集まりやすくなります。"))
     {
         EvaluateGraph();
     }
-
+    if (DrawPropertyPercentRow("Snow Surface Smoothing (%)", "SnowSurfaceSmoothing", &sn.surfaceSmoothing, 0.0f, 1.0f, rock::SnowSettings{}.surfaceSmoothing, "Snow surface smoothing changed", "積もった雪面だけをならす強さです。半径は Largest Detail Level (m) を使うため、追加のスケール設定はありません。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Mask Threshold (m)", "SnowMaskThreshold", &sn.maskThresholdM, 0.0f, 1.0f, rock::SnowSettings{}.maskThresholdM, "Snow mask threshold changed", true, "この雪厚以上を積雪域として白に近づけます。中間グレーを減らし、積もっている場所と地面が出ている場所を分けるためのしきい値です。", "%.3f", 0, 0.0f, 1000.0f))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Mask Feather (m)", "SnowMaskFeather", &sn.maskFeatherM, 0.0f, 0.5f, rock::SnowSettings{}.maskFeatherM, "Snow mask feather changed", true, "積雪境界だけを少しグレーにする幅です。0 にするとほぼ二値のマスクになります。", "%.3f", 0, 0.0f, 1000.0f))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyIntRow("Settling Passes", "SnowSmoothingIterations", &sn.smoothingIterations, 1, 16, rock::SnowSettings{}.smoothingIterations, "Snow settling passes changed", true, "各 simulation step の中で雪を低い場所へ再配分する回数です。大きいほど急斜面から雪が逃げ、谷底や棚へまとまりやすくなります。"))
+    {
+        EvaluateGraph();
+    }
     {
         constexpr std::array<float, 8> kSnowDetailLevels = {4.0f, 8.0f, 16.0f, 32.0f, 64.0f, 128.0f, 256.0f, 512.0f};
         int detailIndex = 1;

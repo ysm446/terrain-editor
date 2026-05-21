@@ -19,6 +19,10 @@
 - `Mask Slope`、`Mask Curvature`、`Mask Fluvial`、`Sediment`、`Snow` の `Largest Detail Level (m)` で `512 m` まで選べるようにした。
 - `Snow` ノードで `Emission Amount (m)` が `0` のときは、入力地形を変更せず `Snow` マスクも全ゼロにするようにした。
 - `Snow` ノードに `Iterations Count` と `Emission Time (%)` を追加し、雪を複数ステップに分けて積もらせられるようにした。平滑化は累積発生量を超える雪厚を作らないようにし、少量の `Emission Amount` で急に谷が埋まる挙動を抑えた。
+- `Snow` ノードを、傾斜で雪量を直接マスクする方式から、雪厚を注入して斜面上で低い場所へ再配分する方式へ再設計した。`Snow Motion Slope Limit (deg)`、`Transport Rate (%)`、`Mask Threshold (m)`、`Mask Feather (m)` を追加し、mask は積雪域と露出地面がはっきり分かれる coverage 風にした。
+- `Snow` の再配分処理で、各セルの移動先探索を並列化し、移動がなくなった pass で打ち切るようにした。高解像度で Snow ノードの計算が止まって見える問題を軽減した。
+- `Snow` の `Emission Time (%)` 既定値を `0%` に変更し、再配分モデルを D3D12 GPU compute に対応した。GPU 版は流入量を gather する方式で書き込み競合を避ける。
+- `Snow` に `Snow Surface Smoothing (%)` を追加した。追加パラメータを増やしすぎないよう半径は `Largest Detail Level (m)` を流用し、積もった雪面側を中心にならす。
 
 ## 2026-05-19
 

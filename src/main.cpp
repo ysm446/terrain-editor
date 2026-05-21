@@ -738,6 +738,7 @@ ComPtr<ID3D12RootSignature> g_snowComputeRootSignature;
 ComPtr<ID3D12PipelineState> g_snowCopyInputHeightsPso;
 ComPtr<ID3D12PipelineState> g_snowComputeThicknessPso;
 ComPtr<ID3D12PipelineState> g_snowEnvelopeSmoothingPso;
+ComPtr<ID3D12PipelineState> g_snowSurfaceSmoothingPso;
 ComPtr<ID3D12PipelineState> g_snowApplyPso;
 ComPtr<ID3D12RootSignature> g_colorizeComputeRootSignature;
 ComPtr<ID3D12PipelineState> g_colorizeComputePso;
@@ -1390,6 +1391,7 @@ void CleanupD3D()
     g_snowCopyInputHeightsPso.Reset();
     g_snowComputeThicknessPso.Reset();
     g_snowEnvelopeSmoothingPso.Reset();
+    g_snowSurfaceSmoothingPso.Reset();
     g_snowApplyPso.Reset();
     g_snowComputeRootSignature.Reset();
     g_snowComputeReady = false;
@@ -2543,6 +2545,11 @@ nlohmann::json MakeSnowSettingsJson(const rock::Node& node)
             {"iterationCount", node.snow.iterationCount},
             {"emissionTime", node.snow.emissionTime},
             {"smoothingIterations", node.snow.smoothingIterations},
+            {"motionSlopeLimitDeg", node.snow.motionSlopeLimitDeg},
+            {"transportRate", node.snow.transportRate},
+            {"surfaceSmoothing", node.snow.surfaceSmoothing},
+            {"maskThresholdM", node.snow.maskThresholdM},
+            {"maskFeatherM", node.snow.maskFeatherM},
             {"largestDetailLevelM", node.snow.largestDetailLevelM},
             {"fillRadius", node.snow.fillRadius},
             {"backend", static_cast<int>(node.snow.backend)},
@@ -3037,7 +3044,12 @@ void ReadSnowSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     node.snow.maskMaxSnow = std::clamp(nodeSnowJson.value("maskMaxSnow", node.snow.maskMaxSnow), 0.001f, 1000.0f);
     node.snow.iterationCount = std::clamp(nodeSnowJson.value("iterationCount", node.snow.iterationCount), 1, 256);
     node.snow.emissionTime = std::clamp(nodeSnowJson.value("emissionTime", node.snow.emissionTime), 0.0f, 1.0f);
-    node.snow.smoothingIterations = std::clamp(nodeSnowJson.value("smoothingIterations", node.snow.smoothingIterations), 0, 16);
+    node.snow.smoothingIterations = std::clamp(nodeSnowJson.value("smoothingIterations", node.snow.smoothingIterations), 1, 16);
+    node.snow.motionSlopeLimitDeg = std::clamp(nodeSnowJson.value("motionSlopeLimitDeg", node.snow.motionSlopeLimitDeg), 0.0f, 89.9f);
+    node.snow.transportRate = std::clamp(nodeSnowJson.value("transportRate", node.snow.transportRate), 0.0f, 1.0f);
+    node.snow.surfaceSmoothing = std::clamp(nodeSnowJson.value("surfaceSmoothing", node.snow.surfaceSmoothing), 0.0f, 1.0f);
+    node.snow.maskThresholdM = std::clamp(nodeSnowJson.value("maskThresholdM", node.snow.maskThresholdM), 0.0f, 1000.0f);
+    node.snow.maskFeatherM = std::clamp(nodeSnowJson.value("maskFeatherM", node.snow.maskFeatherM), 0.0f, 1000.0f);
     node.snow.largestDetailLevelM = std::clamp(nodeSnowJson.value("largestDetailLevelM", node.snow.largestDetailLevelM), 1.0f, 1024.0f);
     node.snow.fillRadius = std::clamp(nodeSnowJson.value("fillRadius", node.snow.fillRadius), 1, 8);
     {
@@ -7468,16 +7480,16 @@ struct SnowShaderConstants
     UINT  resolution;
     float terrainSizeMeters;
     float emissionAmount;
-    float minTan;
+    float motionLimitTan;
 
-    float invRange;
-    float maskMaxSnow;
+    float transportRate;
+    float maskThresholdM;
+    UINT  settleStride;
     UINT  smoothDirection;
-    UINT  fillRadius;
 
-    float maxThickness;
-    UINT  pad1;
-    UINT  pad2;
+    float maskFeatherM;
+    float surfaceSmoothing;
+    UINT  smoothRadius;
     UINT  pad3;
 };
 static_assert(sizeof(SnowShaderConstants) == 12 * sizeof(UINT), "SnowShaderConstants must be 12 DWORDs");
@@ -7486,7 +7498,7 @@ bool EnsureSnowComputePipeline(std::string* error)
 {
     if (g_snowComputeReady && g_snowComputeRootSignature
         && g_snowCopyInputHeightsPso && g_snowComputeThicknessPso
-        && g_snowEnvelopeSmoothingPso && g_snowApplyPso)
+        && g_snowEnvelopeSmoothingPso && g_snowSurfaceSmoothingPso && g_snowApplyPso)
     {
         return true;
     }
@@ -7573,6 +7585,7 @@ bool EnsureSnowComputePipeline(std::string* error)
         {"CSCopyInputHeights",   &g_snowCopyInputHeightsPso},
         {"CSComputeThickness",   &g_snowComputeThicknessPso},
         {"CSEnvelopeSmoothing",  &g_snowEnvelopeSmoothingPso},
+        {"CSSmoothSnowSurface",  &g_snowSurfaceSmoothingPso},
         {"CSApply",              &g_snowApplyPso},
     };
     for (const Entry& e : entries)
@@ -7713,27 +7726,23 @@ bool RunSnowComputeImmediate(rock::HeightfieldGrid& grid, const rock::SnowSettin
     commandList->SetComputeRootSignature(g_snowComputeRootSignature.Get());
     commandList->SetComputeRootDescriptorTable(1, descriptorHeap->GetGPUDescriptorHandleForHeapStart());
 
-    const float kPi = 3.14159265358979323846f;
-    const float minDeg = std::clamp(settings.slopeLimitMinDeg, 0.0f, 89.9f);
-    const float maxDeg = std::clamp(std::max(settings.slopeLimitMaxDeg, settings.slopeLimitMinDeg), 0.0f, 89.9f);
-    const float minTan = std::tan(minDeg * (kPi / 180.0f));
-    const float maxTan = std::tan(maxDeg * (kPi / 180.0f));
-
     SnowShaderConstants k{};
     k.resolution        = resolution;
     k.terrainSizeMeters = std::max(grid.terrainSizeMeters, 1.0f);
     const float totalEmission = std::max(0.0f, settings.emissionAmount);
     k.emissionAmount    = totalEmission;
-    k.minTan            = minTan;
-    k.invRange          = 1.0f / std::max(maxTan - minTan, 1e-6f);
-    k.maskMaxSnow       = std::max(1e-4f, settings.maskMaxSnow);
+    const float kPi = 3.14159265358979323846f;
+    k.motionLimitTan    = std::tan(std::clamp(settings.motionSlopeLimitDeg, 0.0f, 89.9f) * (kPi / 180.0f));
+    k.transportRate     = std::clamp(settings.transportRate, 0.0f, 1.0f);
+    k.maskThresholdM    = std::max(0.0f, settings.maskThresholdM);
+    k.settleStride      = 1u;
     k.smoothDirection   = 0u;
+    k.maskFeatherM      = std::max(0.0f, settings.maskFeatherM);
+    k.surfaceSmoothing  = std::clamp(settings.surfaceSmoothing, 0.0f, 1.0f);
     const float cellSizeMeters = k.terrainSizeMeters / static_cast<float>(std::max(1u, resolution - 1u));
     const float largestDetailM = std::clamp(settings.largestDetailLevelM, cellSizeMeters, k.terrainSizeMeters * 0.5f);
-    k.fillRadius        = static_cast<UINT>(std::clamp(static_cast<int>(std::round(largestDetailM / cellSizeMeters)), 1, 64));
-    k.maxThickness      = totalEmission;
-    k.pad1              = 0u;
-    k.pad2              = 0u;
+    const int maxStride = std::clamp(static_cast<int>(std::round(largestDetailM / cellSizeMeters)), 1, 64);
+    k.smoothRadius      = static_cast<UINT>(std::clamp(maxStride, 1, 32));
     k.pad3              = 0u;
     auto setConstants = [&]() {
         commandList->SetComputeRoot32BitConstants(0, 12, &k, 0);
@@ -7753,43 +7762,69 @@ bool RunSnowComputeImmediate(rock::HeightfieldGrid& grid, const rock::SnowSettin
         ? 1
         : std::clamp(static_cast<int>(std::ceil(static_cast<float>(iterationCount) * emissionTime)), 1, iterationCount);
     const float emissionPerIteration = totalEmission / static_cast<float>(emissionIterations);
-    int rawIters = std::clamp(settings.smoothingIterations, 0, 16);
-    int smoothIters = rawIters;
-    float emittedSoFar = 0.0f;
+    const int settlingPasses = std::clamp(settings.smoothingIterations, 1, 16);
+    int strideLevels = 0;
+    for (int stride = maxStride; stride > 1; stride = std::max(1, stride / 2))
+    {
+        ++strideLevels;
+    }
     for (int iter = 0; iter < iterationCount; ++iter)
     {
         const float stepEmission = (iter < emissionIterations) ? emissionPerIteration : 0.0f;
-        emittedSoFar = std::min(totalEmission, emittedSoFar + stepEmission);
         k.emissionAmount = stepEmission;
-        k.maxThickness = emittedSoFar;
+        k.settleStride = 1u;
         setConstants();
 
-        // 2. Add this iteration's snowfall to the current snow surface.
+        // 2. Add this iteration's snowfall to the current snow thickness.
         commandList->SetPipelineState(g_snowComputeThicknessPso.Get());
         commandList->Dispatch(groupCount, groupCount, 1);
         uavBarrier();
 
-        // 3. Envelope smoothing iterations. Each iteration builds a separable
-        //    gaussian blur, then applies max(original surface, blurred) once.
+        // 3. Settling passes. CSEnvelopeSmoothing gathers outflow from source
+        //    neighbours into SurfA, then CSComputeThickness copies SurfA back
+        //    to Thickness for the next pass.
         commandList->SetPipelineState(g_snowEnvelopeSmoothingPso.Get());
-        for (int i = 0; i < smoothIters; ++i)
+        for (int pass = 0; pass < settlingPasses && k.transportRate > 0.0f; ++pass)
         {
-            k.smoothDirection = 0u;
+            const int level = settlingPasses <= 1 ? strideLevels : (pass * strideLevels) / std::max(1, settlingPasses - 1);
+            int stride = maxStride;
+            for (int s = 0; s < level; ++s)
+            {
+                stride = std::max(1, stride / 2);
+            }
+            k.settleStride = static_cast<UINT>(std::max(1, stride));
             setConstants();
             commandList->Dispatch(groupCount, groupCount, 1);
             uavBarrier();
-            k.smoothDirection = 1u;
+
+            k.settleStride = 0u;
             setConstants();
+            commandList->SetPipelineState(g_snowComputeThicknessPso.Get());
             commandList->Dispatch(groupCount, groupCount, 1);
             uavBarrier();
+            commandList->SetPipelineState(g_snowEnvelopeSmoothingPso.Get());
         }
     }
-    k.smoothDirection = 0u;
     k.emissionAmount = totalEmission;
-    k.maxThickness = totalEmission;
+    k.settleStride = 1u;
     setConstants();
 
-    // 4. Apply: thickness = SurfA - BaseHeights, write OutHeights + OutMask
+    // 4. Smooth the settled snow surface, reusing Largest Detail Level as the radius.
+    if (k.surfaceSmoothing > 0.0f)
+    {
+        commandList->SetPipelineState(g_snowSurfaceSmoothingPso.Get());
+        k.smoothDirection = 0u;
+        setConstants();
+        commandList->Dispatch(groupCount, groupCount, 1);
+        uavBarrier();
+
+        k.smoothDirection = 1u;
+        setConstants();
+        commandList->Dispatch(groupCount, groupCount, 1);
+        uavBarrier();
+    }
+
+    // 5. Apply: write OutHeights + coverage OutMask from Thickness.
     commandList->SetPipelineState(g_snowApplyPso.Get());
     commandList->Dispatch(groupCount, groupCount, 1);
     uavBarrier();

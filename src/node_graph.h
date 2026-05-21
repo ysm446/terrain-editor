@@ -409,35 +409,30 @@ struct SedimentSettings
     SedimentBackend backend = SedimentBackend::GpuCompute; // CPU reference vs GPU compute (D3D12). Defaults to GPU; falls back to CPU on shader/device failure.
 };
 
-// Heightfield -> heightfield + mask. Drops a uniform "snowfall" thickness
-// across the terrain and lets the local slope angle decide how much actually
-// stays. Cells flatter than `slopeLimitMinDeg` keep all of `emissionAmount`,
-// cells steeper than `slopeLimitMaxDeg` keep none, the band in between is a
-// smoothstep blend. Heightmap output = input + snow thickness; mask output =
-// snow thickness normalised against `maskMaxSnow`. GeoGen Snow ノードと同じ
-// 「斜面に雪は積もらない」見た目を、シングルパスで作る簡易モデル。
+// Heightfield -> heightfield + mask. Injects snow as a movable material and
+// redistributes it downhill until the snow surface falls below the motion
+// slope limit. Heightmap output = input + settled snow thickness. Mask output
+// is coverage-like: mostly black or white, with grey only in a narrow feather
+// band around the snow edge.
 struct SnowSettings
 {
-    float emissionAmount = 1.0f;       // m. 平地 (slope <= min) に降り積もる雪厚。
-    float slopeLimitMinDeg = 50.0f;    // この角度以下では雪が満杯まで積もる。
-    float slopeLimitMaxDeg = 60.0f;    // この角度以上では雪はまったく積もらない。間は smoothstep。
-    float maskMaxSnow = 1.0f;          // m. mask 出力の正規化基準 (snow >= この値 → mask = 1.0)。
-    // 雪の表面を反復的に「平滑化 + 溝埋め」する反復数。各反復で
-    // snowSurface = heights + thickness の近傍 box blur を取り、
-    // max(snowSurface, blurred) でセルを更新する。これにより:
-    //   - 周囲より低いセル (= 溝の底) は雪が増えて埋まる
-    //   - 周囲より高いセル (= 出っ張り) は変わらない
-    //   - スロープ遷移域の per-cell な thickness 揺らぎが消える
-    // 結果として「雪の envelope」が次第に滑らかになる。0 = 平滑化なし。
-    int iterationCount = 1;             // GeoGen "Iterations count" 相当。雪を何ステップで積もらせるか。
-    float emissionTime = 1.0f;          // GeoGen "Emission time" 相当。全 iteration のうち雪を降らせる割合。
-    int smoothingIterations = 8;
-    float largestDetailLevelM = 8.0f; // m. GeoGen "Largest detail level". Controls the widest snow envelope smoothing scale.
-    int fillRadius = 3; // Legacy saved setting. Largest Detail Level now drives envelope radius.
+    float emissionAmount = 1.0f;       // m. Total snow depth injected onto the terrain.
+    float slopeLimitMinDeg = 50.0f;    // Legacy saved setting. Kept for project compatibility.
+    float slopeLimitMaxDeg = 60.0f;    // Legacy saved setting. Kept for project compatibility.
+    float maskMaxSnow = 1.0f;          // Legacy saved setting. Kept for project compatibility.
+    int iterationCount = 40;           // GeoGen "Iterations count". Number of simulation steps.
+    float emissionTime = 0.0f;         // GeoGen "Emission time". 0 = all snow up front, 1 = snow during the whole run.
+    int smoothingIterations = 4;       // Settling passes per simulation step.
+    float motionSlopeLimitDeg = 35.0f; // GeoGen "Snow Motion Slope Limit". Snow does not flow below this angle.
+    float transportRate = 0.45f;       // Fraction of unstable snow moved per settling pass.
+    float surfaceSmoothing = 0.25f;    // 0..1. Smooths settled snow surfaces without adding another radius control.
+    float maskThresholdM = 0.02f;      // Snow thickness where the coverage mask turns white.
+    float maskFeatherM = 0.015f;       // Width of the grey transition band around the snow edge.
+    float largestDetailLevelM = 8.0f;  // m. GeoGen "Largest detail level". Controls the widest transport stride.
+    int fillRadius = 3;                // Legacy saved setting. Largest Detail Level now drives transport stride.
     SnowBackend backend = SnowBackend::GpuCompute;
 };
 
-// カラーグラデーションの色ストップ。position は 0..1 の範囲でグラデーション上の位置を指定する。
 struct ColorStop
 {
     float position = 0.0f;

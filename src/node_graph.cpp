@@ -233,6 +233,11 @@ uint64_t HashSnowSettings(const SnowSettings& settings, int resolution)
     HashCombine(hash, static_cast<uint64_t>(settings.iterationCount));
     HashCombine(hash, HashFloat(settings.emissionTime));
     HashCombine(hash, static_cast<uint64_t>(settings.smoothingIterations));
+    HashCombine(hash, HashFloat(settings.motionSlopeLimitDeg));
+    HashCombine(hash, HashFloat(settings.transportRate));
+    HashCombine(hash, HashFloat(settings.surfaceSmoothing));
+    HashCombine(hash, HashFloat(settings.maskThresholdM));
+    HashCombine(hash, HashFloat(settings.maskFeatherM));
     HashCombine(hash, HashFloat(settings.largestDetailLevelM));
     HashCombine(hash, static_cast<uint64_t>(settings.backend));
     HashCombine(hash, static_cast<uint64_t>(resolution));
