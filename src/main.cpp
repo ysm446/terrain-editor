@@ -96,6 +96,18 @@ int NearestShadowResolutionPreset(int value)
     return NearestPreset(value, kShadowResolutionPresets, 1024);
 }
 
+int ClampFrameRateLimitFps(int value)
+{
+    switch (value)
+    {
+    case 30:
+    case 60:
+        return value;
+    default:
+        return 0;
+    }
+}
+
 struct FrameContext
 {
     ComPtr<ID3D12CommandAllocator> commandAllocator;
@@ -132,6 +144,8 @@ HWND g_hwnd = nullptr;
 UINT g_width = 1600;
 UINT g_height = 900;
 bool g_running = true;
+bool g_windowActive = true;
+bool g_windowMinimized = false;
 
 ScreenColorPick& g_screenPick = ColorizeScreenPick();
 
@@ -1851,6 +1865,7 @@ bool SaveAppSettings(std::string* error = nullptr)
             {"drawStats", g_ui.showDrawStats},
             {"meshSurface", settings.preview.showSurface},
             {"meshWireframe", settings.preview.showWireframe},
+            {"frameRateLimitFps", settings.preview.frameRateLimitFps},
             {"terrainSizeMeters", settings.preview.terrainSizeMeters},
             {"simulationResolution", settings.preview.simulationResolution},
             {"previewResolution", settings.preview.resolution},
@@ -2006,6 +2021,7 @@ bool LoadAppSettings(std::string* error = nullptr)
         g_ui.showDrawStats = visibilityJson.value("drawStats", g_ui.showDrawStats);
         settings.preview.showSurface = visibilityJson.value("meshSurface", settings.preview.showSurface);
         settings.preview.showWireframe = visibilityJson.value("meshWireframe", settings.preview.showWireframe);
+        settings.preview.frameRateLimitFps = ClampFrameRateLimitFps(visibilityJson.value("frameRateLimitFps", settings.preview.frameRateLimitFps));
         settings.preview.terrainSizeMeters = static_cast<float>(NearestTerrainSizePreset(visibilityJson.value("terrainSizeMeters", settings.preview.terrainSizeMeters)));
         settings.preview.simulationResolution = NearestResolutionPreset(visibilityJson.value("simulationResolution", settings.preview.simulationResolution));
         settings.preview.resolution = NearestResolutionPreset(visibilityJson.value("previewResolution", settings.preview.resolution));
@@ -3089,6 +3105,7 @@ nlohmann::json MakeProjectSettingsJson()
             {"lightingMode", preview.lightingMode},
             {"meshBackend", static_cast<int>(preview.meshBackend)},
             {"terrainBoundaryMode", static_cast<int>(preview.terrainBoundaryMode)},
+            {"frameRateLimitFps", preview.frameRateLimitFps},
             {"viewportTessellation", preview.viewportTessellation},
             {"tessellationMinFactor", preview.tessellationMinFactor},
             {"tessellationMaxFactor", preview.tessellationMaxFactor},
@@ -3422,6 +3439,7 @@ void ReadPreviewSettingsJson(const nlohmann::json& settingsJson, rock::PreviewSe
                                       static_cast<int>(rock::TerrainBoundaryMode::None),
                                       static_cast<int>(rock::TerrainBoundaryMode::Lines));
     preview.terrainBoundaryMode = static_cast<rock::TerrainBoundaryMode>(boundaryInt);
+    preview.frameRateLimitFps = ClampFrameRateLimitFps(previewJson.value("frameRateLimitFps", preview.frameRateLimitFps));
     preview.viewportTessellation = previewJson.value("viewportTessellation", preview.viewportTessellation);
     preview.tessellationMinFactor = std::clamp(previewJson.value("tessellationMinFactor", preview.tessellationMinFactor), 1.0f, 64.0f);
     preview.tessellationMaxFactor = std::clamp(previewJson.value("tessellationMaxFactor", preview.tessellationMaxFactor), preview.tessellationMinFactor, 64.0f);
@@ -13297,11 +13315,58 @@ void RenderFrame()
 
     ID3D12CommandList* commandLists[] = {g_commandList.Get()};
     g_commandQueue->ExecuteCommandLists(1, commandLists);
-    ThrowIfFailed(g_swapChain->Present(1, 0), "Present failed");
+    ThrowIfFailed(g_swapChain->Present(0, 0), "Present failed");
 
     const UINT64 fenceValue = ++g_fenceLastSignaledValue;
     ThrowIfFailed(g_commandQueue->Signal(g_fence.Get(), fenceValue), "Signal failed");
     frameContext.fenceValue = fenceValue;
+}
+
+void ApplyFrameRateLimit()
+{
+    using Clock = std::chrono::steady_clock;
+    static int previousLimitFps = -1;
+    static Clock::time_point nextFrameTime = Clock::now();
+
+    const int limitFps = ClampFrameRateLimitFps(g_graph.Settings().preview.frameRateLimitFps);
+    const Clock::time_point now = Clock::now();
+    if (limitFps <= 0)
+    {
+        previousLimitFps = limitFps;
+        nextFrameTime = now;
+        return;
+    }
+
+    const auto frameDuration = std::chrono::duration_cast<Clock::duration>(
+        std::chrono::duration<double>(1.0 / static_cast<double>(limitFps)));
+    if (previousLimitFps != limitFps || nextFrameTime < now - frameDuration)
+    {
+        nextFrameTime = now + frameDuration;
+    }
+
+    if (now < nextFrameTime)
+    {
+        std::this_thread::sleep_until(nextFrameTime);
+        nextFrameTime += frameDuration;
+    }
+    else
+    {
+        nextFrameTime = now + frameDuration;
+    }
+    previousLimitFps = limitFps;
+}
+
+void ProcessMainThreadEvaluationWork()
+{
+    ProcessPendingMseGpuRequests();
+    ProcessPendingMaskNoiseGpuRequests();
+    ProcessPendingSedimentGpuRequests();
+    ProcessPendingRockGpuRequests();
+    ProcessPendingScatterGpuRequests();
+    ProcessPendingMaskFluvialGpuRequests();
+    ProcessPendingSnowGpuRequests();
+    ProcessPendingColorizeGpuRequests();
+    PollAsyncEvaluation();
 }
 
 LRESULT WINAPI WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -13313,6 +13378,9 @@ LRESULT WINAPI WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
     switch (msg)
     {
+    case WM_ACTIVATEAPP:
+        g_windowActive = (wParam != FALSE);
+        return 0;
     case WM_SETTEXT:
         if (!g_windowTitle.empty())
         {
@@ -13320,7 +13388,8 @@ LRESULT WINAPI WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
         break;
     case WM_SIZE:
-        if (wParam != SIZE_MINIMIZED)
+        g_windowMinimized = (wParam == SIZE_MINIMIZED);
+        if (!g_windowMinimized)
         {
             ResizeSwapChain(static_cast<UINT>(LOWORD(lParam)), static_cast<UINT>(HIWORD(lParam)));
         }
@@ -13455,22 +13524,22 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
                 break;
             }
 
+            if (!g_windowActive || g_windowMinimized)
+            {
+                ProcessMainThreadEvaluationWork();
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                continue;
+            }
+
             ImGui_ImplDX12_NewFrame();
             ImGui_ImplWin32_NewFrame();
             ImGui::NewFrame();
             UpdateColorizeScreenPick(g_graph);
-            ProcessPendingMseGpuRequests();
-            ProcessPendingMaskNoiseGpuRequests();
-            ProcessPendingSedimentGpuRequests();
-            ProcessPendingRockGpuRequests();
-            ProcessPendingScatterGpuRequests();
-            ProcessPendingMaskFluvialGpuRequests();
-            ProcessPendingSnowGpuRequests();
-            ProcessPendingColorizeGpuRequests();
-            PollAsyncEvaluation();
+            ProcessMainThreadEvaluationWork();
             DrawUi();
             ImGui::Render();
             RenderFrame();
+            ApplyFrameRateLimit();
         }
 
         WaitForAsyncEvaluationForShutdown();

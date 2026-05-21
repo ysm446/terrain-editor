@@ -570,6 +570,7 @@ struct PreviewSettings
     bool showSurface = true;
     bool showWireframe = false;
     bool showGrid = true;
+    int frameRateLimitFps = 0; // 0 = unlimited, otherwise target FPS cap.
     int lightingMode = 0;
     MeshPreviewBackend meshBackend = MeshPreviewBackend::CpuMesh;
     TerrainBoundaryMode terrainBoundaryMode = TerrainBoundaryMode::SectionPolygon;

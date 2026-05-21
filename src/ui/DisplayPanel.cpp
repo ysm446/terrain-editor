@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cfloat>
 #include <cmath>
 
 #include <imgui.h>
@@ -14,6 +15,7 @@ namespace
 {
 constexpr std::array<int, 4> kTerrainSizePresets = {512, 1024, 2048, 4096};
 constexpr std::array<int, 5> kResolutionPresets = {128, 256, 512, 1024, 2048};
+constexpr std::array<int, 3> kFrameRateLimitPresets = {0, 60, 30};
 
 enum class ViewportDisplayMode
 {
@@ -47,6 +49,66 @@ bool DrawTerrainSizePresetRow(const char* label, const char* id, float* value, f
     const int intDefault = NearestTerrainSizePreset(defaultValue);
     const bool changed = DrawPresetIntRow(label, id, &intValue, intDefault, kTerrainSizePresets, 1024, dirtyReason, recordUndo, tooltip);
     *value = static_cast<float>(intValue);
+    return changed;
+}
+
+const char* FrameRateLimitLabel(int limitFps)
+{
+    switch (limitFps)
+    {
+    case 60:
+        return "60 FPS";
+    case 30:
+        return "30 FPS";
+    default:
+        return "上限なし";
+    }
+}
+
+bool DrawFrameRateLimitRow(const char* label, const char* id, int* value, const char* tooltip)
+{
+    int currentIndex = 0;
+    for (int i = 0; i < static_cast<int>(kFrameRateLimitPresets.size()); ++i)
+    {
+        if (*value == kFrameRateLimitPresets[static_cast<size_t>(i)])
+        {
+            currentIndex = i;
+            break;
+        }
+    }
+
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(label);
+    if (tooltip && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+    {
+        ImGui::SetTooltip("%s", tooltip);
+    }
+
+    ImGui::TableSetColumnIndex(1);
+    ImGui::SetNextItemWidth(120.0f);
+    ImGui::PushID(id);
+    bool changed = false;
+    if (ImGui::BeginCombo("##FrameRateLimit", FrameRateLimitLabel(kFrameRateLimitPresets[static_cast<size_t>(currentIndex)])))
+    {
+        for (int i = 0; i < static_cast<int>(kFrameRateLimitPresets.size()); ++i)
+        {
+            const int preset = kFrameRateLimitPresets[static_cast<size_t>(i)];
+            const bool selected = (i == currentIndex);
+            if (ImGui::Selectable(FrameRateLimitLabel(preset), selected))
+            {
+                *value = preset;
+                changed = true;
+            }
+            if (selected)
+            {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::PopID();
     return changed;
 }
 
@@ -188,6 +250,10 @@ void DrawDisplaySettingsPanel(DisplayPanelState state)
             SaveAppSettings(state);
         }
         if (DrawPropertyBoolRow("FPS", "DisplayFps", &state.showFps, "FPS visibility changed", nullptr, true, true))
+        {
+            SaveAppSettings(state);
+        }
+        if (DrawFrameRateLimitRow("FPS Limit", "DisplayFrameRateLimit", &settings.preview.frameRateLimitFps, "3D ビューポートを含むアプリ全体の描画更新上限です。上限なしではアプリ側の待ちを入れません。"))
         {
             SaveAppSettings(state);
         }
