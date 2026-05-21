@@ -31,6 +31,8 @@ struct CameraPanelState
     float gridCellSizeMeters = 0.0f;
     CameraPanelDefaults defaults;
     std::function<void()> resetViewport;
+    bool focusPickActive = false;
+    std::function<void()> requestFocusPick;
     std::function<void(const char*)> markGraphChanged;
 };
 

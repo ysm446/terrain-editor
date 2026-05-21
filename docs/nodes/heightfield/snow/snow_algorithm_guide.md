@@ -6,6 +6,8 @@
 ## まず何をするノードか
 
 `Snow` は、ハイトフィールドの各セルの**傾斜角に応じて雪の積もり方を決める**ノードです。
+
+`Emission Amount = 0` の場合は雪なしとして早期終了し、入力ハイトフィールドを変更せず、Snow mask も全ゼロにします。
 急な斜面には雪が積もらず、なだらかな部分ほど厚く積もるという自然な挙動を、
 粒子シミュレーションなしに再現します。
 
@@ -15,13 +17,13 @@
 
 処理は 3 つのフェーズで構成されます。
 
-1. **Phase 1 — 初期厚み計算**: 元の高さから傾斜を計算し、セルごとの初期積雪厚みを決める。
-2. **Phase 2 — Envelope Smoothing**: 雪面を繰り返しならして、溝や窪みを自然に埋める。
+1. **Phase 1 — 動的な厚み計算**: `Iterations Count` と `Emission Time` に従って雪を少しずつ足し、セルごとの積雪厚みを決める。
+2. **Phase 2 — Envelope Smoothing**: 各ステップの雪面をならして、溝や窪みを自然に埋める。
 3. **Phase 3 — 書き込み**: ならし後の厚みを高さに加算し、マスクに出力する。
 
 `Smoothing Iterations = 0` にすると Phase 2 はスキップされ、旧来のシングルパス挙動になります。
 
-## Phase 1 — 傾斜の計算と初期厚み
+## Phase 1 — 傾斜の計算と動的な厚み
 
 中心差分 (4 近傍) で水平・奥行き方向の傾きを求め、勾配の大きさを計算します。
 
@@ -43,8 +45,11 @@ maxTan = tan(slopeLimitMaxDeg × π/180)
 t = clamp((slopeTan - minTan) / (maxTan - minTan), 0, 1)
 smoothT = t² × (3 - 2t)          ← smoothstep
 snowFraction = 1 - smoothT
-thickness[i] = emissionAmount × snowFraction
+stepEmission = emissionAmount / emissionIterations
+thickness[i] = min(emittedSoFar, thickness[i] + stepEmission × snowFraction)
 ```
+
+`Iterations Count` は積雪と安定化を何ステップ行うか、`Emission Time (%)` はそのうち何割のステップで雪を降らせ続けるかを決めます。`Emission Time = 0%` では最初に全量を置いてから安定化し、`100%` では最後まで少しずつ降らせます。
 
 | 勾配の状態 | t | snowFraction | 意味 |
 | --- | --- | --- | --- |
@@ -69,7 +74,7 @@ surface[i] = baseHeights[i] + thickness[i]   ← 雪面の高さ
 各反復:
     radius = Largest Detail Level (m) / cellSize
     blurred[i] = separable gaussian blur of surface ← 横方向→縦方向のガウス平均
-    surface[i] = max(surface[i], blurred[i])  ← 出っ張りは保ち、窪みを埋める
+    surface[i] = min(baseHeights[i] + emittedSoFar, max(surface[i], blurred[i]))
 ```
 
 `max` を使うことで、**周囲より高いセル (出っ張り) は変わらず、周囲より低いセル (溝の底) だけが雪で持ち上がります**。
@@ -107,10 +112,12 @@ mask[i] = clamp(thickness[i] / maskMaxSnow, 0, 1)
 | --- | --- |
 | `Backend` | CpuReference = CPU 参照実装、GpuCompute = GPU Compute (高速) |
 | `Emission Amount (m)` | 最大積雪量。なだらかな平地にこの厚さで積もる |
+| `Iterations Count` | 雪を何ステップで積もらせて安定化するか |
+| `Emission Time (%)` | Iterations Count のうち、どの割合まで雪を降らせ続けるか |
 | `Slope Limit Min (deg)` | この傾斜以下では全量積もる |
 | `Slope Limit Max (deg)` | この傾斜以上では積もらない |
 | `Smoothing Iterations` | Envelope smoothing の反復数。0 = なし、8 = デフォルト |
-| `Largest Detail Level (m)` | GeoGen Snow 相当の最大ディテール幅。4/8/16/32/64m から選び、隙間埋めの最大スケールを決める |
+| `Largest Detail Level (m)` | GeoGen Snow 相当の最大ディテール幅。4m から 512m までのプリセットから選び、隙間埋めの最大スケールを決める |
 | `Mask Max Snow (m)` | マスクが 1.0 (白) になる積雪厚さ |
 
 ## よくある使い方と設定例

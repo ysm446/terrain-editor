@@ -187,6 +187,8 @@ std::optional<std::vector<rock::GraphId>> g_pendingPreviewSelectionRestore;
 rock::UiThemeManager g_themeManager;
 rock::GraphId g_selectedNodeId = 0;
 rock::GraphId g_pendingPreviewPinId = 0;
+bool g_focusPickMode = false;
+bool g_focusPickCursorActive = false;
 
 struct AsyncEvaluationResult
 {
@@ -459,6 +461,8 @@ struct Vec3
     float y = 0.0f;
     float z = 0.0f;
 };
+
+std::optional<Vec3> g_focusPickHoverPoint;
 
 struct CameraBasis
 {
@@ -2536,6 +2540,8 @@ nlohmann::json MakeSnowSettingsJson(const rock::Node& node)
             {"slopeLimitMinDeg", node.snow.slopeLimitMinDeg},
             {"slopeLimitMaxDeg", node.snow.slopeLimitMaxDeg},
             {"maskMaxSnow", node.snow.maskMaxSnow},
+            {"iterationCount", node.snow.iterationCount},
+            {"emissionTime", node.snow.emissionTime},
             {"smoothingIterations", node.snow.smoothingIterations},
             {"largestDetailLevelM", node.snow.largestDetailLevelM},
             {"fillRadius", node.snow.fillRadius},
@@ -3029,6 +3035,8 @@ void ReadSnowSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     node.snow.slopeLimitMinDeg = std::clamp(nodeSnowJson.value("slopeLimitMinDeg", node.snow.slopeLimitMinDeg), 0.0f, 89.9f);
     node.snow.slopeLimitMaxDeg = std::clamp(std::max(nodeSnowJson.value("slopeLimitMaxDeg", node.snow.slopeLimitMaxDeg), node.snow.slopeLimitMinDeg), 0.0f, 89.9f);
     node.snow.maskMaxSnow = std::clamp(nodeSnowJson.value("maskMaxSnow", node.snow.maskMaxSnow), 0.001f, 1000.0f);
+    node.snow.iterationCount = std::clamp(nodeSnowJson.value("iterationCount", node.snow.iterationCount), 1, 256);
+    node.snow.emissionTime = std::clamp(nodeSnowJson.value("emissionTime", node.snow.emissionTime), 0.0f, 1.0f);
     node.snow.smoothingIterations = std::clamp(nodeSnowJson.value("smoothingIterations", node.snow.smoothingIterations), 0, 16);
     node.snow.largestDetailLevelM = std::clamp(nodeSnowJson.value("largestDetailLevelM", node.snow.largestDetailLevelM), 1.0f, 1024.0f);
     node.snow.fillRadius = std::clamp(nodeSnowJson.value("fillRadius", node.snow.fillRadius), 1, 8);
@@ -7467,7 +7475,7 @@ struct SnowShaderConstants
     UINT  smoothDirection;
     UINT  fillRadius;
 
-    UINT  pad0;
+    float maxThickness;
     UINT  pad1;
     UINT  pad2;
     UINT  pad3;
@@ -7714,7 +7722,8 @@ bool RunSnowComputeImmediate(rock::HeightfieldGrid& grid, const rock::SnowSettin
     SnowShaderConstants k{};
     k.resolution        = resolution;
     k.terrainSizeMeters = std::max(grid.terrainSizeMeters, 1.0f);
-    k.emissionAmount    = std::max(0.0f, settings.emissionAmount);
+    const float totalEmission = std::max(0.0f, settings.emissionAmount);
+    k.emissionAmount    = totalEmission;
     k.minTan            = minTan;
     k.invRange          = 1.0f / std::max(maxTan - minTan, 1e-6f);
     k.maskMaxSnow       = std::max(1e-4f, settings.maskMaxSnow);
@@ -7722,7 +7731,7 @@ bool RunSnowComputeImmediate(rock::HeightfieldGrid& grid, const rock::SnowSettin
     const float cellSizeMeters = k.terrainSizeMeters / static_cast<float>(std::max(1u, resolution - 1u));
     const float largestDetailM = std::clamp(settings.largestDetailLevelM, cellSizeMeters, k.terrainSizeMeters * 0.5f);
     k.fillRadius        = static_cast<UINT>(std::clamp(static_cast<int>(std::round(largestDetailM / cellSizeMeters)), 1, 64));
-    k.pad0              = 0u;
+    k.maxThickness      = totalEmission;
     k.pad1              = 0u;
     k.pad2              = 0u;
     k.pad3              = 0u;
@@ -7738,28 +7747,46 @@ bool RunSnowComputeImmediate(rock::HeightfieldGrid& grid, const rock::SnowSettin
     commandList->Dispatch(groupCount, groupCount, 1);
     uavBarrier();
 
-    // 2. Compute initial thickness + initial SurfA = base + thickness
-    commandList->SetPipelineState(g_snowComputeThicknessPso.Get());
-    commandList->Dispatch(groupCount, groupCount, 1);
-    uavBarrier();
-
-    // 3. Envelope smoothing iterations. Each iteration builds a separable
-    //    gaussian blur, then applies max(original surface, blurred) once.
+    const int iterationCount = std::clamp(settings.iterationCount, 1, 256);
+    const float emissionTime = std::clamp(settings.emissionTime, 0.0f, 1.0f);
+    const int emissionIterations = emissionTime <= 0.0f
+        ? 1
+        : std::clamp(static_cast<int>(std::ceil(static_cast<float>(iterationCount) * emissionTime)), 1, iterationCount);
+    const float emissionPerIteration = totalEmission / static_cast<float>(emissionIterations);
     int rawIters = std::clamp(settings.smoothingIterations, 0, 16);
     int smoothIters = rawIters;
-    commandList->SetPipelineState(g_snowEnvelopeSmoothingPso.Get());
-    for (int i = 0; i < smoothIters; ++i)
+    float emittedSoFar = 0.0f;
+    for (int iter = 0; iter < iterationCount; ++iter)
     {
-        k.smoothDirection = 0u;
+        const float stepEmission = (iter < emissionIterations) ? emissionPerIteration : 0.0f;
+        emittedSoFar = std::min(totalEmission, emittedSoFar + stepEmission);
+        k.emissionAmount = stepEmission;
+        k.maxThickness = emittedSoFar;
         setConstants();
+
+        // 2. Add this iteration's snowfall to the current snow surface.
+        commandList->SetPipelineState(g_snowComputeThicknessPso.Get());
         commandList->Dispatch(groupCount, groupCount, 1);
         uavBarrier();
-        k.smoothDirection = 1u;
-        setConstants();
-        commandList->Dispatch(groupCount, groupCount, 1);
-        uavBarrier();
+
+        // 3. Envelope smoothing iterations. Each iteration builds a separable
+        //    gaussian blur, then applies max(original surface, blurred) once.
+        commandList->SetPipelineState(g_snowEnvelopeSmoothingPso.Get());
+        for (int i = 0; i < smoothIters; ++i)
+        {
+            k.smoothDirection = 0u;
+            setConstants();
+            commandList->Dispatch(groupCount, groupCount, 1);
+            uavBarrier();
+            k.smoothDirection = 1u;
+            setConstants();
+            commandList->Dispatch(groupCount, groupCount, 1);
+            uavBarrier();
+        }
     }
     k.smoothDirection = 0u;
+    k.emissionAmount = totalEmission;
+    k.maxThickness = totalEmission;
     setConstants();
 
     // 4. Apply: thickness = SurfA - BaseHeights, write OutHeights + OutMask
@@ -9486,6 +9513,8 @@ float CameraFovYDegreesFromFocalLengthMm(float focalLengthMm)
     return std::clamp(fovRadians * 180.0f / 3.1415926535f, 15.0f, 90.0f);
 }
 
+bool TryPickViewportFocusPoint(const ImVec2& min, const ImVec2& max, const ImVec2& mouse, Vec3* outPoint, float* outFocusDistance, ImVec2* outScreenPoint);
+
 void UpdateViewportInteraction(const ImVec2& min, const ImVec2& max)
 {
     ImGuiIO& io = ImGui::GetIO();
@@ -9493,11 +9522,63 @@ void UpdateViewportInteraction(const ImVec2& min, const ImVec2& max)
     {
         return;
     }
+    const bool dofFocusPickEnabled = g_graph.Settings().preview.depthOfFieldEnabled;
+    if (!dofFocusPickEnabled)
+    {
+        g_focusPickMode = false;
+        g_focusPickCursorActive = false;
+        g_focusPickHoverPoint.reset();
+    }
+    if (g_focusPickMode && (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsMouseClicked(ImGuiMouseButton_Right)))
+    {
+        g_focusPickMode = false;
+        g_focusPickCursorActive = false;
+        g_focusPickHoverPoint.reset();
+    }
 
     const bool hovered = ImGui::IsMouseHoveringRect(min, max);
     if (!hovered && !ImGui::IsMouseDragging(ImGuiMouseButton_Left) && !ImGui::IsMouseDragging(ImGuiMouseButton_Right) && !ImGui::IsMouseDragging(ImGuiMouseButton_Middle))
     {
+        g_focusPickHoverPoint.reset();
+        g_focusPickCursorActive = false;
         return;
+    }
+
+    const bool ctrlFocusPick = dofFocusPickEnabled && hovered && io.KeyCtrl && !io.WantTextInput;
+    const bool focusPickActive = hovered && (ctrlFocusPick || g_focusPickMode);
+    g_focusPickCursorActive = focusPickActive;
+    if (focusPickActive)
+    {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_None);
+        Vec3 hitPoint{};
+        float focusDistance = 0.0f;
+        if (TryPickViewportFocusPoint(min, max, io.MousePos, &hitPoint, &focusDistance, nullptr))
+        {
+            g_focusPickHoverPoint = hitPoint;
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            {
+                rock::PreviewSettings& preview = g_graph.Settings().preview;
+                preview.dofFocusDistanceMeters = std::clamp(focusDistance, 0.1f, 20000.0f);
+                g_focusPickMode = false;
+                MarkGraphChanged("Depth of Field focus distance picked");
+            }
+        }
+        else
+        {
+            g_focusPickHoverPoint.reset();
+        }
+
+        if ((g_focusPickMode && (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsMouseClicked(ImGuiMouseButton_Right))) ||
+            (!io.KeyCtrl && !g_focusPickMode))
+        {
+            g_focusPickMode = false;
+        }
+        return;
+    }
+    if (!g_focusPickMode)
+    {
+        g_focusPickHoverPoint.reset();
+        g_focusPickCursorActive = false;
     }
 
     if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
@@ -9612,6 +9693,222 @@ ProjectedPoint ProjectWorldToScreen(float x, float y, float z, const ImVec2& cen
     const float focalLength = 1.0f / std::tan(fovRadians * 0.5f);
     const float perspective = focalLength / depth;
     return ProjectedPoint(ImVec2(center.x + cameraX * perspective * scale, center.y - cameraY * perspective * scale), depth);
+}
+
+float SamplePreviewHeightAtWorld(const rock::HeightfieldGrid& grid, float worldX, float worldZ)
+{
+    const int n = grid.resolution;
+    if (n < 2 || grid.heights.size() < static_cast<size_t>(n) * static_cast<size_t>(n))
+    {
+        return 0.0f;
+    }
+
+    const float terrainSize = std::max(1.0f, grid.terrainSizeMeters);
+    const float halfSize = terrainSize * 0.5f;
+    const float u = std::clamp((worldX + halfSize) / terrainSize, 0.0f, 1.0f);
+    const float v = std::clamp((halfSize - worldZ) / terrainSize, 0.0f, 1.0f);
+    const float gx = u * static_cast<float>(n - 1);
+    const float gz = v * static_cast<float>(n - 1);
+    const int x0 = std::clamp(static_cast<int>(std::floor(gx)), 0, n - 1);
+    const int z0 = std::clamp(static_cast<int>(std::floor(gz)), 0, n - 1);
+    const int x1 = std::min(x0 + 1, n - 1);
+    const int z1 = std::min(z0 + 1, n - 1);
+    const float tx = gx - static_cast<float>(x0);
+    const float tz = gz - static_cast<float>(z0);
+    const auto h = [&](int x, int z) {
+        return grid.heights[static_cast<size_t>(z) * static_cast<size_t>(n) + static_cast<size_t>(x)];
+    };
+    const float h0 = std::lerp(h(x0, z0), h(x1, z0), tx);
+    const float h1 = std::lerp(h(x0, z1), h(x1, z1), tx);
+    return std::lerp(h0, h1, tz);
+}
+
+bool RayTerrainSquareRange(Vec3 origin, Vec3 dir, float halfSize, float* outEnter, float* outExit)
+{
+    float tEnter = 0.0f;
+    float tExit = kViewportFarPlane;
+    const auto clipAxis = [&](float originAxis, float dirAxis) {
+        if (std::abs(dirAxis) < 1e-6f)
+        {
+            return originAxis >= -halfSize && originAxis <= halfSize;
+        }
+        float t0 = (-halfSize - originAxis) / dirAxis;
+        float t1 = ( halfSize - originAxis) / dirAxis;
+        if (t0 > t1)
+        {
+            std::swap(t0, t1);
+        }
+        tEnter = std::max(tEnter, t0);
+        tExit = std::min(tExit, t1);
+        return tEnter <= tExit;
+    };
+    if (!clipAxis(origin.x, dir.x) || !clipAxis(origin.z, dir.z))
+    {
+        return false;
+    }
+    *outEnter = std::max(0.0f, tEnter);
+    *outExit = std::max(*outEnter, tExit);
+    return *outEnter <= *outExit;
+}
+
+bool TryPickViewportFocusPoint(const ImVec2& min, const ImVec2& max, const ImVec2& mouse, Vec3* outPoint, float* outFocusDistance, ImVec2* outScreenPoint)
+{
+    const rock::HeightfieldGrid& grid = g_graph.Evaluation().previewHeightfield;
+    const int n = grid.resolution;
+    if (n < 2 || grid.heights.size() < static_cast<size_t>(n) * static_cast<size_t>(n))
+    {
+        return false;
+    }
+
+    const float viewportWidth = std::max(1.0f, max.x - min.x);
+    const float viewportHeight = std::max(1.0f, max.y - min.y);
+    const float viewportSize = std::min(viewportWidth, viewportHeight);
+    const float scale = viewportSize * 1.20f;
+    const ImVec2 center((min.x + max.x) * 0.5f + g_viewport.pan.x, (min.y + max.y) * 0.5f + g_viewport.pan.y);
+    const float fovRadians = std::clamp(g_viewport.fovDegrees, 15.0f, 90.0f) * kDegreesToRadians;
+    const float focalLength = 1.0f / std::tan(fovRadians * 0.5f);
+    const float cameraX = (mouse.x - center.x) / (focalLength * scale);
+    const float cameraY = -(mouse.y - center.y) / (focalLength * scale);
+
+    const CameraBasis basis = BuildCameraBasis();
+    const Vec3 rayDir = Normalize(
+        Add(Add(basis.forward, Scale(basis.right, cameraX)), Scale(basis.up, cameraY)),
+        basis.forward);
+
+    const float terrainSize = std::max(1.0f, grid.terrainSizeMeters);
+    const float halfSize = terrainSize * 0.5f;
+    float tStart = 0.0f;
+    float tEnd = 0.0f;
+    if (!RayTerrainSquareRange(basis.position, rayDir, halfSize, &tStart, &tEnd))
+    {
+        return false;
+    }
+    tEnd = std::min(tEnd, kViewportFarPlane);
+    if (tEnd <= tStart)
+    {
+        return false;
+    }
+
+    const auto pointAt = [&](float t) {
+        return Add(basis.position, Scale(rayDir, t));
+    };
+    const auto heightDelta = [&](float t) {
+        const Vec3 p = pointAt(t);
+        return p.y - SamplePreviewHeightAtWorld(grid, p.x, p.z);
+    };
+
+    float prevT = tStart;
+    float prevDelta = heightDelta(prevT);
+    if (prevDelta <= 0.0f)
+    {
+        Vec3 p = pointAt(prevT);
+        p.y = SamplePreviewHeightAtWorld(grid, p.x, p.z);
+        if (outPoint) *outPoint = p;
+        if (outFocusDistance) *outFocusDistance = std::max(0.1f, Dot(Subtract(p, basis.position), basis.forward));
+        if (outScreenPoint) *outScreenPoint = ProjectWorldToScreen(p.x, p.y, p.z, center, scale).screen;
+        return true;
+    }
+
+    constexpr int kRaySteps = 256;
+    for (int i = 1; i <= kRaySteps; ++i)
+    {
+        const float t = std::lerp(tStart, tEnd, static_cast<float>(i) / static_cast<float>(kRaySteps));
+        const float delta = heightDelta(t);
+        if (delta <= 0.0f || (prevDelta < 0.0f && delta >= 0.0f))
+        {
+            float lo = prevT;
+            float hi = t;
+            for (int refine = 0; refine < 16; ++refine)
+            {
+                const float mid = (lo + hi) * 0.5f;
+                if (heightDelta(mid) > 0.0f)
+                {
+                    lo = mid;
+                }
+                else
+                {
+                    hi = mid;
+                }
+            }
+            Vec3 p = pointAt(hi);
+            p.y = SamplePreviewHeightAtWorld(grid, p.x, p.z);
+            if (outPoint) *outPoint = p;
+            if (outFocusDistance) *outFocusDistance = std::max(0.1f, Dot(Subtract(p, basis.position), basis.forward));
+            if (outScreenPoint) *outScreenPoint = ProjectWorldToScreen(p.x, p.y, p.z, center, scale).screen;
+            return true;
+        }
+        prevT = t;
+        prevDelta = delta;
+    }
+    return false;
+}
+
+void DrawFocusPickOverlay(ImDrawList* drawList, const ImVec2& min, const ImVec2& max)
+{
+    const bool showHover = g_focusPickHoverPoint.has_value();
+    if (!showHover && !g_focusPickMode && !g_focusPickCursorActive)
+    {
+        return;
+    }
+
+    const float viewportSize = std::min(max.x - min.x, max.y - min.y);
+    const float scale = viewportSize * 1.20f;
+    const ImVec2 center((min.x + max.x) * 0.5f + g_viewport.pan.x, (min.y + max.y) * 0.5f + g_viewport.pan.y);
+    drawList->PushClipRect(min, max, true);
+    if (g_focusPickCursorActive)
+    {
+        const ImVec2 m = ImGui::GetIO().MousePos;
+        drawList->AddLine(ImVec2(m.x - 11.0f, m.y), ImVec2(m.x + 11.0f, m.y), IM_COL32(235, 238, 236, 245), 1.5f);
+        drawList->AddLine(ImVec2(m.x, m.y - 11.0f), ImVec2(m.x, m.y + 11.0f), IM_COL32(235, 238, 236, 245), 1.5f);
+        drawList->AddCircle(m, 3.0f, IM_COL32(176, 182, 179, 220), 12, 1.4f);
+    }
+
+    const auto drawTarget = [&](const Vec3& point, ImU32 color, float radius, float thickness) {
+        const ProjectedPoint projected = ProjectWorldToScreen(point.x, point.y, point.z, center, scale);
+        if (projected.depth <= 0.05f)
+        {
+            return;
+        }
+        const ImVec2 p = projected.screen;
+        drawList->AddCircle(p, radius, color, 36, thickness);
+        drawList->AddLine(ImVec2(p.x - radius - 5.0f, p.y), ImVec2(p.x - radius + 2.0f, p.y), color, thickness);
+        drawList->AddLine(ImVec2(p.x + radius - 2.0f, p.y), ImVec2(p.x + radius + 5.0f, p.y), color, thickness);
+        drawList->AddLine(ImVec2(p.x, p.y - radius - 5.0f), ImVec2(p.x, p.y - radius + 2.0f), color, thickness);
+        drawList->AddLine(ImVec2(p.x, p.y + radius - 2.0f), ImVec2(p.x, p.y + radius + 5.0f), color, thickness);
+    };
+
+    if (showHover)
+    {
+        drawTarget(*g_focusPickHoverPoint, IM_COL32(232, 235, 233, 235), 11.0f, 2.0f);
+        float focusDistance = 0.0f;
+        ImVec2 screenPoint{};
+        if (TryPickViewportFocusPoint(min, max, ImGui::GetIO().MousePos, nullptr, &focusDistance, &screenPoint))
+        {
+            char text[64]{};
+            std::snprintf(text, sizeof(text), "Focus %.1f m", focusDistance);
+            const ImVec2 textSize = ImGui::CalcTextSize(text);
+            const ImVec2 padding(8.0f, 5.0f);
+            ImVec2 textMin(screenPoint.x + 14.0f, screenPoint.y - textSize.y - 12.0f);
+            textMin.x = std::clamp(textMin.x, min.x + 8.0f, max.x - textSize.x - padding.x * 2.0f - 8.0f);
+            textMin.y = std::clamp(textMin.y, min.y + 8.0f, max.y - textSize.y - padding.y * 2.0f - 8.0f);
+            const ImVec2 textMax(textMin.x + textSize.x + padding.x * 2.0f, textMin.y + textSize.y + padding.y * 2.0f);
+            drawList->AddRectFilled(textMin, textMax, IM_COL32(8, 10, 10, 190), 4.0f);
+            drawList->AddRect(textMin, textMax, IM_COL32(172, 178, 175, 210), 4.0f);
+            drawList->AddText(ImVec2(textMin.x + padding.x, textMin.y + padding.y), IM_COL32(232, 235, 233, 255), text);
+        }
+    }
+    else if (g_focusPickMode)
+    {
+        const char* text = "地形をクリックしてフォーカス距離を設定";
+        const ImVec2 textSize = ImGui::CalcTextSize(text);
+        const ImVec2 padding(9.0f, 6.0f);
+        const ImVec2 textMin(min.x + 14.0f, max.y - textSize.y - padding.y * 2.0f - 14.0f);
+        const ImVec2 textMax(textMin.x + textSize.x + padding.x * 2.0f, textMin.y + textSize.y + padding.y * 2.0f);
+        drawList->AddRectFilled(textMin, textMax, IM_COL32(8, 10, 10, 190), 4.0f);
+        drawList->AddText(ImVec2(textMin.x + padding.x, textMin.y + padding.y), IM_COL32(232, 235, 233, 255), text);
+    }
+
+    drawList->PopClipRect();
 }
 
 ImVec2 RotatePoint(float x, float y, float z, float, float)
@@ -11515,6 +11812,7 @@ void DrawViewportCube(const ImVec2& min, const ImVec2& max, float timeSeconds)
                            drawMeshSurface && preview.showSurface,
                            drawMeshSurface && preview.showWireframe);
     }
+    DrawFocusPickOverlay(drawList, min, max);
     DrawViewportDisplayMenu(min);
     float overlayTop = min.y + 14.0f;
     if (g_ui.showFps)
@@ -12684,6 +12982,8 @@ void DrawCameraPanel()
             kMaxViewportOrbitDistance,
         },
         []() { ResetViewport(); },
+        g_focusPickMode,
+        []() { g_focusPickMode = true; },
         [](const char* reason) { MarkGraphChanged(reason); },
     });
 }

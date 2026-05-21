@@ -86,6 +86,21 @@ void DrawCameraPanel(CameraPanelState state)
                 "絞り値です。小さいほどぼけが強く、大きいほど深くピントが合います。", "%.1f");
             DrawPropertyFloatRow("フォーカス距離 (m)", "DofFocusDistance", &preview.dofFocusDistanceMeters, 0.1f, 20000.0f, rock::PreviewSettings{}.dofFocusDistanceMeters, "Depth of Field focus distance changed", false,
                 "カメラからピント面までの距離です。Orbit Distance と近い値にすると注視点付近にピントが合います。", "%.1f", ImGuiSliderFlags_Logarithmic);
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted("フォーカス指定");
+            ImGui::TableSetColumnIndex(1);
+            if (ImGui::Button(state.focusPickActive ? "選択中..." : "フォーカスを選択", ImVec2(132.0f, 0.0f)))
+            {
+                if (state.requestFocusPick)
+                {
+                    state.requestFocusPick();
+                }
+            }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+            {
+                ImGui::SetTooltip("ビューポートの地形をクリックしてフォーカス距離を設定します。\nショートカット: Ctrl+クリック");
+            }
             DrawPropertyFloatRow("センサー高さ (mm)", "DofSensorHeight", &preview.dofSensorHeightMm, 4.0f, 80.0f, rock::PreviewSettings{}.dofSensorHeightMm, "Depth of Field sensor height changed", false,
                 "Circle of Confusion の描画計算に使うセンサー高さです。フルサイズ横位置なら 24mm が標準です。", "%.1f");
             DrawPropertyFloatRow("最大ぼけ (px)", "DofMaxBlur", &preview.dofMaxBlurPixels, 0.0f, 64.0f, rock::PreviewSettings{}.dofMaxBlurPixels, "Depth of Field max blur changed", false,

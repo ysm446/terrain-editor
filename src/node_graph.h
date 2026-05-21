@@ -429,6 +429,8 @@ struct SnowSettings
     //   - 周囲より高いセル (= 出っ張り) は変わらない
     //   - スロープ遷移域の per-cell な thickness 揺らぎが消える
     // 結果として「雪の envelope」が次第に滑らかになる。0 = 平滑化なし。
+    int iterationCount = 1;             // GeoGen "Iterations count" 相当。雪を何ステップで積もらせるか。
+    float emissionTime = 1.0f;          // GeoGen "Emission time" 相当。全 iteration のうち雪を降らせる割合。
     int smoothingIterations = 8;
     float largestDetailLevelM = 8.0f; // m. GeoGen "Largest detail level". Controls the widest snow envelope smoothing scale.
     int fillRadius = 3; // Legacy saved setting. Largest Detail Level now drives envelope radius.

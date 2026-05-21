@@ -18,7 +18,7 @@
 | `Gamma` | (Log/Linear) `pow(mask, gamma)`。下げると細い支流が明るくなり、上げると主流のみが残る |
 | `Softness` | (Threshold) 閾値前後の smoothstep 幅。小さいほどシャープな川筋 |
 | `Edge Power` | (Threshold) `pow(mask, power)` で川縁をテーパー。1 を超えると細く、1 未満で太く |
-| `Largest Detail Level (m)` | 流向計算前の解析用ハイトをならす最大スケール。4m は細かい支流や小さな窪みを拾いやすく、64m は小さな凹凸を無視して大きな谷筋を優先する |
+| `Largest Detail Level (m)` | 流向計算前の解析用ハイトをならす最大スケール。4m は細かい支流や小さな窪みを拾いやすく、512m は小さな凹凸を無視して大きな谷筋を優先する |
 | `Flow Concentration` | 下流分配の集中度。大きいほど主流へ集まり、小さいほど面的に広がる |
 | `Backend` | `CPU`(sort + 降順トポロジカル走査の厳密実装) / `GPU`(Jacobi 反復ゲザーの近似実装、視覚的同等)。既定 `GPU`。詳細は下の「GPU Compute バックエンド」節 |
 

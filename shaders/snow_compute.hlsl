@@ -5,9 +5,8 @@
 //
 // Pipeline:
 //   1. CSCopyInputHeights: InputHeights → BaseHeights (UAV).
-//   2. CSComputeThickness: per-cell slope from BaseHeights, smoothstep
-//      between min/max, write thickness into Thickness. Also write
-//      initial SurfA = BaseHeights + Thickness for the smoothing pass.
+//   2. CSComputeThickness: per-cell slope from current SurfA, smoothstep
+//      between min/max, add the current iteration's emission to SurfA.
 //   3. CSEnvelopeSmoothing x smoothingIterations: radius-controlled separable
 //      gaussian blur of the surface, then max(self, blurred) - preserves
 //      peaks, lifts grooves, and avoids directional streaks.
@@ -34,7 +33,7 @@ cbuffer SnowConstants : register(b0)
     float maskMaxSnow;
     uint  smoothDirection; // 0: horizontal gaussian A->B, 1: vertical gaussian B->A + max(A, blurred)
     uint  fillRadius;
-    uint  pad0;
+    float maxThickness;
     uint  pad1;
     uint  pad2;
     uint  pad3;
@@ -56,6 +55,8 @@ void CSCopyInputHeights(uint3 dt : SV_DispatchThreadID)
     if (x >= resolution || z >= resolution) return;
     uint i = z * resolution + x;
     BaseHeights[i] = InputHeights[i];
+    Thickness[i] = 0.0f;
+    SurfA[i] = InputHeights[i];
 }
 
 [numthreads(8, 8, 1)]
@@ -70,10 +71,10 @@ void CSComputeThickness(uint3 dt : SV_DispatchThreadID)
     int zm = max(0, (int)z - 1);
     int zp = min((int)resolution - 1, (int)z + 1);
 
-    float h_xm = BaseHeights[(uint)z * resolution + (uint)xm];
-    float h_xp = BaseHeights[(uint)z * resolution + (uint)xp];
-    float h_zm = BaseHeights[(uint)zm * resolution + (uint)x];
-    float h_zp = BaseHeights[(uint)zp * resolution + (uint)x];
+    float h_xm = SurfA[(uint)z * resolution + (uint)xm];
+    float h_xp = SurfA[(uint)z * resolution + (uint)xp];
+    float h_zm = SurfA[(uint)zm * resolution + (uint)x];
+    float h_zp = SurfA[(uint)zp * resolution + (uint)x];
 
     float cellSize = max(terrainSizeMeters, 1.0f) / max(1.0f, (float)resolution - 1.0f);
     float invTwoCell = 1.0f / (2.0f * cellSize);
@@ -84,9 +85,9 @@ void CSComputeThickness(uint3 dt : SV_DispatchThreadID)
     float t = saturate((slopeTan - minTan) * invRange);
     float smoothT = t * t * (3.0f - 2.0f * t);
     float snowFraction = 1.0f - smoothT;
-    float thickness = max(0.0f, emissionAmount * snowFraction);
-
     uint i = z * resolution + x;
+    float currentThickness = max(0.0f, SurfA[i] - BaseHeights[i]);
+    float thickness = min(maxThickness, currentThickness + max(0.0f, emissionAmount * snowFraction));
     Thickness[i] = thickness;
     SurfA[i] = BaseHeights[i] + thickness;
 }
@@ -136,7 +137,8 @@ void CSEnvelopeSmoothing(uint3 dt : SV_DispatchThreadID)
     }
     else
     {
-        SurfA[i] = max(SurfA[i], blurred);
+        float lifted = max(SurfA[i], blurred);
+        SurfA[i] = min(lifted, BaseHeights[i] + maxThickness);
     }
 }
 

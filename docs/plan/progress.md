@@ -13,6 +13,13 @@
 - GPU backend は複数ノードで導入済み。`Scatter` は `Mask` 入力なし、`Ground Detail Level = Max` の場合に GPU 評価し、それ以外や失敗時は CPU にフォールバックする。
 - 次の大きな候補は、`Crumbling` のランダム散らばり改善、`Scatter` を使った植生分布ワークフローの確認、`Spline` / `River` / `Lake` の仕様整理。
 
+## 2026-05-22
+
+- `Camera` の `Depth of Field` で、3D ビューポート上の地形を `Ctrl+クリック` してフォーカス距離を設定できるようにした。`Ctrl` 押下中は十字カーソルと地形上のターゲットを表示し、Camera タブの `フォーカスを選択` ボタンからも同じピック操作を開始できる。
+- `Mask Slope`、`Mask Curvature`、`Mask Fluvial`、`Sediment`、`Snow` の `Largest Detail Level (m)` で `512 m` まで選べるようにした。
+- `Snow` ノードで `Emission Amount (m)` が `0` のときは、入力地形を変更せず `Snow` マスクも全ゼロにするようにした。
+- `Snow` ノードに `Iterations Count` と `Emission Time (%)` を追加し、雪を複数ステップに分けて積もらせられるようにした。平滑化は累積発生量を超える雪厚を作らないようにし、少量の `Emission Amount` で急に谷が埋まる挙動を抑えた。
+
 ## 2026-05-19
 
 - `Scatter` ノードに `Orientation Rule` を追加した。`Rock` と同じく `Flat` / `Follow Ground` / `Slope Oriented` を選べ、斜面に沿った形状や斜面方向へ流れる細長い個体を作れるようにした。

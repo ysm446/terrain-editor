@@ -412,7 +412,7 @@ bool DrawMaskSlopeProperties(rock::Node& editableNode)
     ms.gamma = std::clamp(ms.gamma, 0.05f, 8.0f);
 
     {
-        constexpr std::array<float, 7> kSlopeDetailLevels = {0.0f, 2.0f, 4.0f, 8.0f, 16.0f, 32.0f, 64.0f};
+        constexpr std::array<float, 10> kSlopeDetailLevels = {0.0f, 2.0f, 4.0f, 8.0f, 16.0f, 32.0f, 64.0f, 128.0f, 256.0f, 512.0f};
         int detailIndex = 0;
         float bestDistance = FLT_MAX;
         for (int i = 0; i < static_cast<int>(kSlopeDetailLevels.size()); ++i)
@@ -424,7 +424,7 @@ bool DrawMaskSlopeProperties(rock::Node& editableNode)
                 detailIndex = i;
             }
         }
-        if (DrawPropertyComboRow("Largest Detail Level (m)", "MaskSlopeLargestDetailLevel", &detailIndex, "Max\0" "2 m\0" "4 m\0" "8 m\0" "16 m\0" "32 m\0" "64 m\0" "\0", "傾斜を調べる前の解析用ハイトをならす最大スケールです。Max は入力地形そのまま、数値を上げるほど小さな凹凸を無視して大きな斜面を優先します。入力地形そのものは変更しません。", 0))
+        if (DrawPropertyComboRow("Largest Detail Level (m)", "MaskSlopeLargestDetailLevel", &detailIndex, "Max\0" "2 m\0" "4 m\0" "8 m\0" "16 m\0" "32 m\0" "64 m\0" "128 m\0" "256 m\0" "512 m\0" "\0", "傾斜を調べる前の解析用ハイトをならす最大スケールです。Max は入力地形そのまま、数値を上げるほど小さな凹凸を無視して大きな斜面を優先します。入力地形そのものは変更しません。", 0))
         {
             detailIndex = std::clamp(detailIndex, 0, static_cast<int>(kSlopeDetailLevels.size()) - 1);
             ms.largestDetailLevelM = kSlopeDetailLevels[static_cast<size_t>(detailIndex)];
@@ -480,7 +480,7 @@ bool DrawMaskCurvatureProperties(rock::Node& editableNode)
         EvaluateGraph();
     }
     {
-        constexpr std::array<float, 6> kCurvatureDetailLevels = {2.0f, 4.0f, 8.0f, 16.0f, 32.0f, 64.0f};
+        constexpr std::array<float, 9> kCurvatureDetailLevels = {2.0f, 4.0f, 8.0f, 16.0f, 32.0f, 64.0f, 128.0f, 256.0f, 512.0f};
         int detailIndex = 2;
         float bestDistance = FLT_MAX;
         for (int i = 0; i < static_cast<int>(kCurvatureDetailLevels.size()); ++i)
@@ -492,7 +492,7 @@ bool DrawMaskCurvatureProperties(rock::Node& editableNode)
                 detailIndex = i;
             }
         }
-        if (DrawPropertyComboRow("Largest Detail Level (m)", "MaskCurvatureLargestDetailLevel", &detailIndex, "2 m\0" "4 m\0" "8 m\0" "16 m\0" "32 m\0" "64 m\0" "\0", "曲率を調べる前の解析用ハイトをならす最大スケールです。2m は細かい凹凸を拾いやすく、64m は小さな揺れを無視して大きな尾根や谷を優先します。入力地形そのものは変更しません。", 2))
+        if (DrawPropertyComboRow("Largest Detail Level (m)", "MaskCurvatureLargestDetailLevel", &detailIndex, "2 m\0" "4 m\0" "8 m\0" "16 m\0" "32 m\0" "64 m\0" "128 m\0" "256 m\0" "512 m\0" "\0", "曲率を調べる前の解析用ハイトをならす最大スケールです。2m は細かい凹凸を拾いやすく、512m は小さな揺れを無視して大きな尾根や谷を優先します。入力地形そのものは変更しません。", 2))
         {
             detailIndex = std::clamp(detailIndex, 0, static_cast<int>(kCurvatureDetailLevels.size()) - 1);
             mc.largestDetailLevelM = kCurvatureDetailLevels[static_cast<size_t>(detailIndex)];
@@ -598,7 +598,7 @@ bool DrawMaskFluvialProperties(rock::Node& editableNode)
         }
     }
     {
-        constexpr std::array<float, 5> kFluvialDetailLevels = {4.0f, 8.0f, 16.0f, 32.0f, 64.0f};
+        constexpr std::array<float, 8> kFluvialDetailLevels = {4.0f, 8.0f, 16.0f, 32.0f, 64.0f, 128.0f, 256.0f, 512.0f};
         int detailIndex = 1;
         float bestDistance = FLT_MAX;
         for (int i = 0; i < static_cast<int>(kFluvialDetailLevels.size()); ++i)
@@ -610,7 +610,7 @@ bool DrawMaskFluvialProperties(rock::Node& editableNode)
                 detailIndex = i;
             }
         }
-        if (DrawPropertyComboRow("Largest Detail Level (m)", "MaskFluvialLargestDetailLevel", &detailIndex, "4 m\0" "8 m\0" "16 m\0" "32 m\0" "64 m\0" "\0", "流向を計算する前の解析用ハイトをならす最大スケールです。4m は細かい支流や小さな窪みを拾いやすく、64m は小さな凹凸を無視して大きな谷筋を優先します。入力地形そのものは変更しません。", 1))
+        if (DrawPropertyComboRow("Largest Detail Level (m)", "MaskFluvialLargestDetailLevel", &detailIndex, "4 m\0" "8 m\0" "16 m\0" "32 m\0" "64 m\0" "128 m\0" "256 m\0" "512 m\0" "\0", "流向を計算する前の解析用ハイトをならす最大スケールです。4m は細かい支流や小さな窪みを拾いやすく、512m は小さな凹凸を無視して大きな谷筋を優先します。入力地形そのものは変更しません。", 1))
         {
             detailIndex = std::clamp(detailIndex, 0, static_cast<int>(kFluvialDetailLevels.size()) - 1);
             mf.largestDetailLevelM = kFluvialDetailLevels[static_cast<size_t>(detailIndex)];
@@ -1011,7 +1011,7 @@ bool DrawSedimentProperties(rock::Node& editableNode)
         EvaluateGraph();
     }
     {
-        constexpr std::array<float, 9> kSedimentDetailLevels = {1.0f, 2.0f, 4.0f, 8.0f, 16.0f, 32.0f, 64.0f, 128.0f, 256.0f};
+        constexpr std::array<float, 10> kSedimentDetailLevels = {1.0f, 2.0f, 4.0f, 8.0f, 16.0f, 32.0f, 64.0f, 128.0f, 256.0f, 512.0f};
         int detailIndex = 3;
         float bestDistance = FLT_MAX;
         for (int i = 0; i < static_cast<int>(kSedimentDetailLevels.size()); ++i)
@@ -1023,7 +1023,7 @@ bool DrawSedimentProperties(rock::Node& editableNode)
                 detailIndex = i;
             }
         }
-        if (DrawPropertyComboRow("Largest Detail Level (m)", "SedimentLargestDetailLevel", &detailIndex, "1 m\0" "2 m\0" "4 m\0" "8 m\0" "16 m\0" "32 m\0" "64 m\0" "128 m\0" "256 m\0" "\0", "1 iteration あたりの沈降距離スケールです。大きいほど広い盆地まで早く落ち着きますが、スライドパス数が増えて重くなります。小さいほど細部優先です。", 3))
+        if (DrawPropertyComboRow("Largest Detail Level (m)", "SedimentLargestDetailLevel", &detailIndex, "1 m\0" "2 m\0" "4 m\0" "8 m\0" "16 m\0" "32 m\0" "64 m\0" "128 m\0" "256 m\0" "512 m\0" "\0", "1 iteration あたりの沈降距離スケールです。大きいほど広い盆地まで早く落ち着きますが、スライドパス数が増えて重くなります。小さいほど細部優先です。", 3))
         {
             detailIndex = std::clamp(detailIndex, 0, static_cast<int>(kSedimentDetailLevels.size()) - 1);
             sd.largestDetailLevelM = kSedimentDetailLevels[static_cast<size_t>(detailIndex)];
@@ -1073,6 +1073,8 @@ bool DrawSnowProperties(rock::Node& editableNode)
     sn.slopeLimitMinDeg = std::clamp(sn.slopeLimitMinDeg, 0.0f, 89.9f);
     sn.slopeLimitMaxDeg = std::clamp(std::max(sn.slopeLimitMaxDeg, sn.slopeLimitMinDeg), 0.0f, 89.9f);
     sn.maskMaxSnow = std::clamp(sn.maskMaxSnow, 0.001f, 1000.0f);
+    sn.iterationCount = std::clamp(sn.iterationCount, 1, 256);
+    sn.emissionTime = std::clamp(sn.emissionTime, 0.0f, 1.0f);
     sn.smoothingIterations = std::clamp(sn.smoothingIterations, 0, 16);
     sn.largestDetailLevelM = std::clamp(sn.largestDetailLevelM, 1.0f, 1024.0f);
     sn.fillRadius = std::clamp(sn.fillRadius, 1, 8);
@@ -1088,6 +1090,14 @@ bool DrawSnowProperties(rock::Node& editableNode)
         }
     }
     if (DrawPropertyFloatRow("Emission Amount (m)", "SnowEmissionAmount", &sn.emissionAmount, 0.0f, 50.0f, rock::SnowSettings{}.emissionAmount, "Snow emission amount changed", true, "平地 (slope <= Slope Limit Min) に積もる雪の最大厚み (m)。地形の高さが全体的にこの値だけ持ち上がる感覚です。", "%.2f"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyIntRow("Iterations Count", "SnowIterations", &sn.iterationCount, 1, 256, rock::SnowSettings{}.iterationCount, "Snow iterations changed", true, "雪を何ステップで積もらせて安定化するかです。大きいほど少しずつ積もり、Emission Amount が小さいときの急な谷埋めを抑えやすくなります。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyPercentRow("Emission Time (%)", "SnowEmissionTime", &sn.emissionTime, 0.0f, 1.0f, rock::SnowSettings{}.emissionTime, "Snow emission time changed", "Iterations Count のうち、どの割合まで雪を降らせ続けるかです。0% は最初に全量を置いてから安定化し、100% は最後まで少しずつ降らせます。"))
     {
         EvaluateGraph();
     }
@@ -1111,7 +1121,7 @@ bool DrawSnowProperties(rock::Node& editableNode)
     }
 
     {
-        constexpr std::array<float, 5> kSnowDetailLevels = {4.0f, 8.0f, 16.0f, 32.0f, 64.0f};
+        constexpr std::array<float, 8> kSnowDetailLevels = {4.0f, 8.0f, 16.0f, 32.0f, 64.0f, 128.0f, 256.0f, 512.0f};
         int detailIndex = 1;
         float bestDistance = FLT_MAX;
         for (int i = 0; i < static_cast<int>(kSnowDetailLevels.size()); ++i)
@@ -1123,7 +1133,7 @@ bool DrawSnowProperties(rock::Node& editableNode)
                 detailIndex = i;
             }
         }
-        if (DrawPropertyComboRow("Largest Detail Level (m)", "SnowLargestDetailLevel", &detailIndex, "4 m\0" "8 m\0" "16 m\0" "32 m\0" "64 m\0" "\0", "GeoGen Snow の Largest detail level 相当です。雪面をならして隙間を埋める最大スケールをメートル単位で選びます。4m は細い隙間まで追いやすく、64m は大きなスケールの積雪面を作ります。", 1))
+        if (DrawPropertyComboRow("Largest Detail Level (m)", "SnowLargestDetailLevel", &detailIndex, "4 m\0" "8 m\0" "16 m\0" "32 m\0" "64 m\0" "128 m\0" "256 m\0" "512 m\0" "\0", "GeoGen Snow の Largest detail level 相当です。雪面をならして隙間を埋める最大スケールをメートル単位で選びます。4m は細い隙間まで追いやすく、512m は大きなスケールの積雪面を作ります。", 1))
         {
             detailIndex = std::clamp(detailIndex, 0, static_cast<int>(kSnowDetailLevels.size()) - 1);
             sn.largestDetailLevelM = kSnowDetailLevels[static_cast<size_t>(detailIndex)];
