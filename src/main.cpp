@@ -622,6 +622,7 @@ struct GpuMeshPreview
     float cloudAbsorption = 0.0f;
     std::array<float, 3> cloudColor = {};
     int cloudAnimate = -1;
+    float cloudLoopPhase = 0.0f;
     float cloudWindDirectionDegrees = 0.0f;
     float cloudWindSpeed = 0.0f;
     int cloudQualitySamples = 0;
@@ -3186,6 +3187,7 @@ nlohmann::json MakeProjectSettingsJson()
             {"absorption", clouds.absorption},
             {"color", {clouds.color[0], clouds.color[1], clouds.color[2]}},
             {"animate", clouds.animate},
+            {"loopPhase", clouds.loopPhase},
             {"windDirectionDegrees", clouds.windDirectionDegrees},
             {"windSpeedMetersPerSec", clouds.windSpeedMetersPerSec},
             {"qualitySamples", clouds.qualitySamples},
@@ -3422,6 +3424,7 @@ void ReadCloudSettingsJson(const nlohmann::json& settingsJson, rock::CloudSettin
     const bool legacyAnimatedClouds = !cloudsJson.contains("animate") &&
         cloudsJson.value("windSpeedMetersPerSec", clouds.windSpeedMetersPerSec) > 0.0f;
     clouds.animate = cloudsJson.value("animate", legacyAnimatedClouds ? true : clouds.animate);
+    clouds.loopPhase = std::clamp(cloudsJson.value("loopPhase", clouds.loopPhase), 0.0f, 1.0f);
     clouds.windDirectionDegrees = std::clamp(cloudsJson.value("windDirectionDegrees", clouds.windDirectionDegrees), 0.0f, 360.0f);
     clouds.windSpeedMetersPerSec = std::clamp(cloudsJson.value("windSpeedMetersPerSec", clouds.windSpeedMetersPerSec), 0.0f, 500.0f);
     clouds.qualitySamples = std::clamp(cloudsJson.value("qualitySamples", clouds.qualitySamples), 8, 128);
@@ -10416,6 +10419,53 @@ void DrawMeshEdgePreview(ImDrawList* drawList, const ImVec2& min, const ImVec2& 
     }
 }
 
+struct CloudLoopVector
+{
+    float xMeters = 0.0f;
+    float zMeters = 0.0f;
+    float distanceMeters = 1.0f;
+};
+
+CloudLoopVector ComputeCloudLoopVector(const rock::CloudSettings& clouds)
+{
+    constexpr int kMaxTileStep = 4;
+    const float windRad = clouds.windDirectionDegrees * 3.14159265358979323846f / 180.0f;
+    const float windX = std::cos(windRad);
+    const float windZ = std::sin(windRad);
+
+    int bestX = 1;
+    int bestZ = 0;
+    float bestScore = -2.0f;
+    float bestLengthTiles = 1.0f;
+    for (int z = -kMaxTileStep; z <= kMaxTileStep; ++z)
+    {
+        for (int x = -kMaxTileStep; x <= kMaxTileStep; ++x)
+        {
+            if (x == 0 && z == 0)
+            {
+                continue;
+            }
+            const float lengthTiles = std::sqrt(static_cast<float>(x * x + z * z));
+            const float score = (static_cast<float>(x) * windX + static_cast<float>(z) * windZ) / lengthTiles;
+            if (score > bestScore + 1.0e-4f ||
+                (std::abs(score - bestScore) <= 1.0e-4f && lengthTiles < bestLengthTiles))
+            {
+                bestScore = score;
+                bestLengthTiles = lengthTiles;
+                bestX = x;
+                bestZ = z;
+            }
+        }
+    }
+
+    const float scale = std::max(clouds.horizontalScale, 1.0f);
+    return {
+        static_cast<float>(bestX) * scale,
+        static_cast<float>(bestZ) * scale,
+        std::max(bestLengthTiles * scale, 1.0f),
+    };
+}
+
 bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface, bool showWireframe, std::string* error)
 {
     const bool showGrid = g_graph.Settings().preview.showGrid;
@@ -10489,6 +10539,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.cloudAbsorption != g_graph.Settings().clouds.absorption ||
         g_gpuMeshPreview.cloudColor != g_graph.Settings().clouds.color ||
         g_gpuMeshPreview.cloudAnimate != (g_graph.Settings().clouds.animate ? 1 : 0) ||
+        g_gpuMeshPreview.cloudLoopPhase != g_graph.Settings().clouds.loopPhase ||
         g_gpuMeshPreview.cloudWindDirectionDegrees != g_graph.Settings().clouds.windDirectionDegrees ||
         g_gpuMeshPreview.cloudWindSpeed != g_graph.Settings().clouds.windSpeedMetersPerSec ||
         g_gpuMeshPreview.cloudQualitySamples != g_graph.Settings().clouds.qualitySamples ||
@@ -11017,11 +11068,10 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         // surface PS can sample it. CloudShadowMeshConstants in the upload
         // CB tells the shader where the texture lives in world XZ.
         const rock::CloudSettings& cloudSettingsForShadow = g_graph.Settings().clouds;
-        const float windRad = cloudSettingsForShadow.windDirectionDegrees * 3.14159265358979323846f / 180.0f;
-        const float seconds = static_cast<float>(std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count());
-        const float cloudWindSpeed = cloudSettingsForShadow.animate ? cloudSettingsForShadow.windSpeedMetersPerSec : 0.0f;
-        const float windOffsetX = std::cos(windRad) * cloudWindSpeed * seconds;
-        const float windOffsetZ = std::sin(windRad) * cloudWindSpeed * seconds;
+        const CloudLoopVector cloudLoop = ComputeCloudLoopVector(cloudSettingsForShadow);
+        const float cloudLoopPhase = std::clamp(cloudSettingsForShadow.loopPhase, 0.0f, 1.0f);
+        const float windOffsetX = cloudLoop.xMeters * cloudLoopPhase;
+        const float windOffsetZ = cloudLoop.zMeters * cloudLoopPhase;
 
         // Expand the shadow footprint a bit beyond the mesh so projected
         // shadows don't get clamped to the mesh edges.
@@ -11463,8 +11513,8 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             cloudBase.atmosphereSkyColor[2] = atmSkyColor[2];
             cloudBase.atmosphereSkyColor[3] = 1.0f;
 
-            // windRad / seconds / windOffsetX / windOffsetZ are already
-            // computed earlier for the cloud-shadow generation pass.
+            // windOffsetX / windOffsetZ are already computed earlier for the
+            // cloud-shadow generation pass.
             std::string cloudVolumeError;
             if (EnsureCloudVolume(cloudSettings.seed, &cloudVolumeError))
             {
@@ -11604,6 +11654,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.cloudAbsorption = g_graph.Settings().clouds.absorption;
         g_gpuMeshPreview.cloudColor = g_graph.Settings().clouds.color;
         g_gpuMeshPreview.cloudAnimate = g_graph.Settings().clouds.animate ? 1 : 0;
+        g_gpuMeshPreview.cloudLoopPhase = g_graph.Settings().clouds.loopPhase;
         g_gpuMeshPreview.cloudWindDirectionDegrees = g_graph.Settings().clouds.windDirectionDegrees;
         g_gpuMeshPreview.cloudWindSpeed = g_graph.Settings().clouds.windSpeedMetersPerSec;
         g_gpuMeshPreview.cloudQualitySamples = g_graph.Settings().clouds.qualitySamples;
@@ -13704,6 +13755,29 @@ void ProcessMainThreadEvaluationWork()
     PollAsyncEvaluation();
 }
 
+float WrapUnitPhase(float value)
+{
+    value = std::fmod(value, 1.0f);
+    if (value < 0.0f)
+    {
+        value += 1.0f;
+    }
+    return value;
+}
+
+void UpdateCloudLoopPhase(float deltaSeconds)
+{
+    rock::CloudSettings& clouds = g_graph.Settings().clouds;
+    if (!clouds.enabled || !clouds.animate || clouds.windSpeedMetersPerSec <= 0.0f)
+    {
+        clouds.loopPhase = std::clamp(clouds.loopPhase, 0.0f, 1.0f);
+        return;
+    }
+
+    const CloudLoopVector cloudLoop = ComputeCloudLoopVector(clouds);
+    clouds.loopPhase = WrapUnitPhase(clouds.loopPhase + deltaSeconds * clouds.windSpeedMetersPerSec / cloudLoop.distanceMeters);
+}
+
 LRESULT WINAPI WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wParam, lParam))
@@ -13869,6 +13943,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
             ImGui_ImplDX12_NewFrame();
             ImGui_ImplWin32_NewFrame();
             ImGui::NewFrame();
+            UpdateCloudLoopPhase(ImGui::GetIO().DeltaTime);
             UpdateColorizeScreenPick(g_graph);
             ProcessMainThreadEvaluationWork();
             DrawUi();

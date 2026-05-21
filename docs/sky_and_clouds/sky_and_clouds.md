@@ -268,6 +268,7 @@ mesh shader 側の `ComputeCloudShadowVisibility` が地形頂点 (x, z, y) を�
 | `horizontalScale` | 雲塊の水平スケール (m) | 4000 |
 | `absorption` | Beer-Lambert 吸収係数 | 0.06 |
 | `color` | 雲のベース色 (アルベド) | (1, 1, 1) |
+| `loopPhase` | 雲タイル一周の位相。0 と 1 は同じ位置 | 0 |
 | `windDirectionDegrees` / `windSpeedMetersPerSec` | 風 (アニメーション) | 45° / 0 m/s |
 | `qualitySamples` | レイマーチサンプル数 | 32 |
 | `shadowStrength` | 雲影の強さ | 0.7 |

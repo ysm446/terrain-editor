@@ -257,6 +257,7 @@ void DrawSkySettingsPanel(SkyPanelState state)
                 DrawPropertyFloatRow("Absorption", "CloudAbsorption", &clouds.absorption, 0.0f, 0.5f, rock::CloudSettings{}.absorption, "Cloud absorption changed", false, "Beer-Lambert の吸収係数。大きいほど雲がはっきり不透明になります。", "%.4f");
                 DrawColorRgbRow("Cloud Color", "CloudColor", clouds.color, rock::CloudSettings{}.color);
                 DrawPropertyBoolRow("雲を動かす", "CloudAnimate", &clouds.animate, "Cloud animation toggled", "ON のときだけ風向きと速度を使って雲を流します。OFF では速度の設定値を保持したまま静止表示します。", rock::CloudSettings{}.animate, true);
+                DrawPropertyPercentRow("Loop Phase (%)", "CloudLoopPhase", &clouds.loopPhase, 0.0f, 1.0f, rock::CloudSettings{}.loopPhase, "Cloud loop phase changed", "雲タイル一周の中でどの位置を表示するかです。0% と 100% は同じ位置で、雲を動かすと Wind Direction に近いループ方向を Wind Speed と Horizontal Scale から計算した速度で進みます。");
                 if (clouds.animate)
                 {
                     DrawPropertyFloatRow("Wind Speed (m/s)", "CloudWindSpeed", &clouds.windSpeedMetersPerSec, 0.0f, 200.0f, rock::CloudSettings{}.windSpeedMetersPerSec, "Cloud wind speed changed", false, "雲が流れる速度 (m/s)。動かすとフレーム毎にビューポートが再描画され負荷が増えます。");

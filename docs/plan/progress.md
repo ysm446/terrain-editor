@@ -24,6 +24,8 @@
 - `Snow` の `Emission Time (%)` 既定値を `0%` に変更し、再配分モデルを D3D12 GPU compute に対応した。GPU 版は流入量を gather する方式で書き込み競合を避ける。
 - `Snow` に `Snow Surface Smoothing (%)` を追加した。追加パラメータを増やしすぎないよう半径は `Largest Detail Level (m)` を流用し、積もった雪面側を中心にならす。
 
+- ボリューム雲に `Loop Phase (%)` を追加し、雲タイル一周を 0-1 の位相として直接指定できるようにした。`雲を動かす` が有効なときは風向きに近いタイルループ方向を選び、風速と `Horizontal Scale (m)` から位相を進め、雲本体と雲影を同期させる。
+
 ## 2026-05-19
 
 - `Scatter` ノードに `Orientation Rule` を追加した。`Rock` と同じく `Flat` / `Follow Ground` / `Slope Oriented` を選べ、斜面に沿った形状や斜面方向へ流れる細長い個体を作れるようにした。

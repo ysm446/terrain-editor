@@ -643,6 +643,7 @@ struct CloudSettings
     float absorption = 0.06f;
     std::array<float, 3> color = {1.0f, 1.0f, 1.0f};
     bool animate = false;
+    float loopPhase = 0.0f;
     float windDirectionDegrees = 45.0f;
     float windSpeedMetersPerSec = 0.0f;
     int qualitySamples = 32;
