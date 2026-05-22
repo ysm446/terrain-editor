@@ -777,12 +777,19 @@ float WaterDepthOpacity(float depthMeters, float pathScale)
     return 1.0 - exp(-depth / scale);
 }
 
+float WaterVisibleAlpha(float depthOpacity, float opacity, float minVisibleAlpha)
+{
+    float coverage = saturate(depthOpacity);
+    float alphaFloor = minVisibleAlpha * step(0.0001, coverage);
+    return opacity * lerp(alphaFloor, 1.0, coverage);
+}
+
 float4 PSWater(VSOut i) : SV_TARGET
 {
     float terrainSize = max(albedoColor.a, 1.0);
     float2 terrainUV = float2(i.worldPos.x / terrainSize + 0.5, 0.5 - i.worldPos.z / terrainSize);
     float opacity = saturate(i.mask);
-    float depthFadeScale = max(terrainSize * 0.035, 8.0);
+    float depthFadeScale = max(terrainSize * 0.085, 24.0);
 
     // === 断面 側壁 (normal.y ≈ 0) ===
     if (i.worldNor.y < 0.5)
@@ -795,15 +802,16 @@ float4 PSWater(VSOut i) : SV_TARGET
         float waterColumnDepth = max(waterLevelParam - terrainH, 0.0);
         float distanceFromTerrain = max(i.worldPos.y - terrainH, 0.0);
         float thicknessNorm = WaterDepthOpacity(waterColumnDepth, depthFadeScale);
-        float terrainContactFade = smoothstep(0.0, max(depthFadeScale * 0.16, 1.0), distanceFromTerrain);
-        float depthNorm = thicknessNorm * terrainContactFade;
+        float terrainContactFade = smoothstep(0.0, max(depthFadeScale * 0.18, 1.0), distanceFromTerrain);
+        float depthNorm = thicknessNorm * lerp(0.45, 1.0, terrainContactFade);
+        float sectionDepthAlpha = saturate(distanceFromTerrain / 100.0);
 
         float3 shallowCol = albedoColor.rgb * 1.5 + float3(0.01, 0.03, 0.0);
         float3 deepCol    = albedoColor.rgb * 0.35 + float3(0.0, 0.01, 0.09);
         float3 wallColor  = lerp(shallowCol, deepCol, thicknessNorm) * ndl;
         wallColor = pow(saturate(wallColor), 1.0 / 1.18);
 
-        float alpha = depthNorm * opacity;
+        float alpha = max(WaterVisibleAlpha(depthNorm, opacity, 0.24), sectionDepthAlpha);
         return float4(wallColor, alpha);
     }
 
@@ -836,7 +844,7 @@ float4 PSWater(VSOut i) : SV_TARGET
     float pathLength   = vertDepth / cosViewAngle;
 
     // 水深で色を変化: 浅瀬=明るく緑がかった水色, 深部=暗く濃い青
-    float depthColorFactor = 1.0 - exp(-vertDepth * 2.5 / max(waterLevelParam, 1.0));
+    float depthColorFactor = WaterDepthOpacity(vertDepth, depthFadeScale * 0.70);
     float ripple = (waveA + waveB + waveC * 0.5) * 0.3;
     float3 shallowCol = albedoColor.rgb * 1.55 + float3(0.01, 0.04, -0.02);
     float3 deepCol    = albedoColor.rgb * 0.55 + float3(0.0, 0.02, 0.10);
@@ -861,8 +869,12 @@ float4 PSWater(VSOut i) : SV_TARGET
     water = lerp(water, reflection, saturate(fresnel + terrainReflWeight * 0.5) * edgeReflFade);
     water += spec * skySunColor.rgb * edgeReflFade;
 
-    float depthAlpha = WaterDepthOpacity(pathLength, depthFadeScale);
-    float alpha = depthAlpha * opacity;
+    float verticalDepthAlpha = WaterDepthOpacity(vertDepth, depthFadeScale);
+    float viewPathAlpha = WaterDepthOpacity(pathLength, depthFadeScale * 2.5);
+    float depthAlpha = saturate(max(verticalDepthAlpha, viewPathAlpha * 0.45));
+    float surfaceDepthAlpha = saturate(vertDepth / 100.0);
+    float shoreAlpha = 1.0 - smoothstep(0.0, max(depthFadeScale * 0.28, 2.0), vertDepth);
+    float alpha = max(max(WaterVisibleAlpha(depthAlpha, opacity, 0.16), opacity * shoreAlpha * 0.18), surfaceDepthAlpha);
 
     water = pow(saturate(water), 1.0 / 1.18);
     return float4(water, alpha);
