@@ -582,7 +582,7 @@ struct CloudShadowMeshConstants
     float aoStrength;  // AO の暗化強度 (0–1)
     float pad1;
     float waterLevelParam;       // PSWater: 水面高さ (m)
-    float waterWavesScale;       // PSWater: 波スケール
+    float waterWavesScale;       // PSWater: 主波長 (m)
     float waterRefractiveIndex;  // PSWater: 屈折率 → Schlick F0
     float waterCbPad;
 };
@@ -657,7 +657,7 @@ struct GpuMeshPreview
     float waterOpacity = 0.0f;
     std::array<float, 3> waterColor = {};
     float waterTerrainSizeMeters = 0.0f;
-    float waterWavesScale = 1.0f;
+    float waterWavesScale = 24.0f;
     float waterRefractiveIndex = 1.33f;
     int skyMode = -1;
     float skyAtmosphereDensity = 0.0f;
@@ -2160,7 +2160,7 @@ bool LoadAppSettings(std::string* error = nullptr)
             settings.preview.waterColor[1] = std::clamp(visibilityJson["waterColor"][1].get<float>(), 0.0f, 1.0f);
             settings.preview.waterColor[2] = std::clamp(visibilityJson["waterColor"][2].get<float>(), 0.0f, 1.0f);
         }
-        settings.preview.waterWavesScale = std::clamp(visibilityJson.value("waterWavesScale", settings.preview.waterWavesScale), 0.1f, 500.0f);
+        settings.preview.waterWavesScale = std::clamp(visibilityJson.value("waterWavesScale", settings.preview.waterWavesScale), 1.0f, 500.0f);
         settings.preview.waterRefractiveIndex = std::clamp(visibilityJson.value("waterRefractiveIndex", settings.preview.waterRefractiveIndex), 1.0f, 4.0f);
         settings.preview.sunAzimuthDegrees = std::clamp(visibilityJson.value("sunAzimuthDegrees", settings.preview.sunAzimuthDegrees), 0.0f, 360.0f);
         settings.preview.sunElevationDegrees = std::clamp(visibilityJson.value("sunElevationDegrees", settings.preview.sunElevationDegrees), -10.0f, 89.0f);
@@ -3596,7 +3596,7 @@ void ReadPreviewSettingsJson(const nlohmann::json& settingsJson, rock::PreviewSe
     preview.waterLevelMeters = std::clamp(previewJson.value("waterLevelMeters", preview.waterLevelMeters), -10000.0f, 10000.0f);
     preview.waterOpacity = std::clamp(previewJson.value("waterOpacity", preview.waterOpacity), 0.0f, 1.0f);
     ReadColor3Json(previewJson, "waterColor", preview.waterColor, 1.0f);
-    preview.waterWavesScale = std::clamp(previewJson.value("waterWavesScale", preview.waterWavesScale), 0.1f, 500.0f);
+    preview.waterWavesScale = std::clamp(previewJson.value("waterWavesScale", preview.waterWavesScale), 1.0f, 500.0f);
     preview.waterRefractiveIndex = std::clamp(previewJson.value("waterRefractiveIndex", preview.waterRefractiveIndex), 1.0f, 4.0f);
     preview.depthOfFieldEnabled = previewJson.value("depthOfFieldEnabled", preview.depthOfFieldEnabled);
     preview.dofFStop = std::clamp(previewJson.value("dofFStop", preview.dofFStop), 0.7f, 32.0f);
@@ -10686,7 +10686,7 @@ void EnsureWaterPreviewBuffer(float terrainSizeMeters, const rock::HeightfieldGr
     g_gpuMeshPreview.waterColor = preview.waterColor;
     g_gpuMeshPreview.waterTerrainSizeMeters = terrainSize;
     g_gpuMeshPreview.waterHeightfieldVersion = gridVersion;
-    if (!enabled || waterOpacity <= 0.001f)
+    if (!enabled)
     {
         return;
     }
@@ -11141,7 +11141,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
 {
     const rock::PreviewSettings& previewSettings = g_graph.Settings().preview;
     const bool showGrid = previewSettings.showGrid;
-    const bool showWater = previewSettings.waterEnabled && previewSettings.waterOpacity > 0.001f && showSurface;
+    const bool showWater = previewSettings.waterEnabled && showSurface;
     if (!showSurface && !showWireframe && !showGrid && !showWater)
     {
         g_gpuMeshPreview.renderStats = {};

@@ -44,8 +44,8 @@ void DrawWaterSettingsPanel(WaterPanelState state)
                 preview.waterLevelMeters = std::clamp(preview.waterLevelMeters, -10000.0f, 10000.0f);
                 SaveAppSettings(state);
             }
-            if (DrawPropertyFloatRow("Opacity", "DisplayWaterOpacity", &preview.waterOpacity, 0.05f, 0.95f, rock::PreviewSettings{}.waterOpacity, "Water opacity changed", false,
-                "水面の透明度です。", "%.2f"))
+            if (DrawPropertyFloatRow("Opacity", "DisplayWaterOpacity", &preview.waterOpacity, 0.0f, 1.0f, rock::PreviewSettings{}.waterOpacity, "Water opacity changed", false,
+                "水の濁りや吸収の強さです。0 では遠くまで透き通り、1 では短い距離で不透明になります。反射とスペキュラーは別に残ります。", "%.2f"))
             {
                 preview.waterOpacity = std::clamp(preview.waterOpacity, 0.0f, 1.0f);
                 SaveAppSettings(state);
@@ -54,10 +54,10 @@ void DrawWaterSettingsPanel(WaterPanelState state)
             {
                 SaveAppSettings(state);
             }
-            if (DrawPropertyFloatRow("Waves Scale (m)", "DisplayWaterWavesScale", &preview.waterWavesScale, 0.1f, 500.0f, rock::PreviewSettings{}.waterWavesScale, "Water waves scale changed", false,
-                "波の周期スケールです。大きいほど波が長く穏やかになります。", "%.1f"))
+            if (DrawPropertyFloatRow("Waves Scale (m)", "DisplayWaterWavesScale", &preview.waterWavesScale, 1.0f, 500.0f, rock::PreviewSettings{}.waterWavesScale, "Water waves scale changed", false,
+                "水面法線の主波長です。20〜80m 程度では地形スケールに馴染みやすく、小さいほど細かいさざ波、大きいほど緩い波になります。", "%.1f"))
             {
-                preview.waterWavesScale = std::clamp(preview.waterWavesScale, 0.1f, 500.0f);
+                preview.waterWavesScale = std::clamp(preview.waterWavesScale, 1.0f, 500.0f);
                 SaveAppSettings(state);
             }
             if (DrawPropertyFloatRow("Refractive Index", "DisplayWaterRefractiveIndex", &preview.waterRefractiveIndex, 1.0f, 2.0f, rock::PreviewSettings{}.waterRefractiveIndex, "Water refractive index changed", false,
