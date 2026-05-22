@@ -12834,7 +12834,14 @@ void DrawRoundPin(const rock::Pin& pin)
     ImGui::GetWindowDrawList()->AddCircle(center, 4.3f, ColorToU32(color), 16, 1.6f);
 }
 
-void DrawNodeEvaluationBadge(const rock::Node& node, float nodeWidth, const ImVec2& headerCursor)
+enum class NodeEvaluationVisualState
+{
+    None,
+    Processing,
+    Pending,
+};
+
+NodeEvaluationVisualState GetNodeEvaluationVisualState(const rock::Node& node)
 {
     const rock::EvaluationSummary& evaluation = g_graph.Evaluation();
     const rock::GraphId currentlyEvaluating =
@@ -12852,9 +12859,21 @@ void DrawNodeEvaluationBadge(const rock::Node& node, float nodeWidth, const ImVe
     const bool isQueued = g_evaluationPending && evaluation.previewNodeId == node.id;
     if (!isCurrent && !isPreviewFallback && !isQueued)
     {
+        return NodeEvaluationVisualState::None;
+    }
+
+    return isQueued ? NodeEvaluationVisualState::Pending : NodeEvaluationVisualState::Processing;
+}
+
+void DrawNodeEvaluationBadge(const rock::Node& node, float nodeWidth, const ImVec2& headerCursor)
+{
+    const NodeEvaluationVisualState state = GetNodeEvaluationVisualState(node);
+    if (state == NodeEvaluationVisualState::None)
+    {
         return;
     }
 
+    const bool isQueued = state == NodeEvaluationVisualState::Pending;
     const char* label = isQueued ? "Pending" : "Processing";
     const int dotCount = isQueued ? 0 : (static_cast<int>(ImGui::GetTime() * 3.0) % 4);
     char text[32]{};
@@ -12865,9 +12884,72 @@ void DrawNodeEvaluationBadge(const rock::Node& node, float nodeWidth, const ImVe
     const ImVec2 padding(8.0f, 3.0f);
     const ImVec2 badgeMax(headerCursor.x + nodeWidth - 4.0f, headerCursor.y + 20.0f);
     const ImVec2 badgeMin(badgeMax.x - textSize.x - padding.x * 2.0f, headerCursor.y - 1.0f);
-    drawList->AddRectFilled(badgeMin, badgeMax, ColorToU32(ImVec4(0.18f, 0.14f, 0.07f, 0.96f)), 5.0f);
-    drawList->AddRect(badgeMin, badgeMax, ColorToU32(ImVec4(0.90f, 0.70f, 0.28f, 0.78f)), 5.0f, 0, 1.0f);
-    drawList->AddText(ImVec2(badgeMin.x + padding.x, badgeMin.y + padding.y - 1.0f), ColorToU32(ImVec4(0.96f, 0.80f, 0.38f, 1.0f)), text);
+    const ImVec4 badgeFill = isQueued
+        ? ImVec4(0.08f, 0.12f, 0.10f, 0.96f)
+        : ImVec4(0.06f, 0.15f, 0.10f, 0.96f);
+    const ImVec4 badgeBorder = isQueued
+        ? ImVec4(0.42f, 0.70f, 0.52f, 0.72f)
+        : ImVec4(0.34f, 0.88f, 0.52f, 0.78f);
+    const ImVec4 badgeText = isQueued
+        ? ImVec4(0.64f, 0.84f, 0.68f, 1.0f)
+        : ImVec4(0.62f, 0.96f, 0.68f, 1.0f);
+    drawList->AddRectFilled(badgeMin, badgeMax, ColorToU32(badgeFill), 5.0f);
+    drawList->AddRect(badgeMin, badgeMax, ColorToU32(badgeBorder), 5.0f, 0, 1.0f);
+    drawList->AddText(ImVec2(badgeMin.x + padding.x, badgeMin.y + padding.y - 1.0f), ColorToU32(badgeText), text);
+}
+
+void DrawNodeEvaluationPulse(const rock::Node& node, const ImVec2& clipMin, const ImVec2& clipMax)
+{
+    const NodeEvaluationVisualState state = GetNodeEvaluationVisualState(node);
+    if (state == NodeEvaluationVisualState::None)
+    {
+        return;
+    }
+
+    const ImVec2 nodeSize = ed::GetNodeSize(ed::NodeId(node.id));
+    if (nodeSize.x <= 1.0f || nodeSize.y <= 1.0f)
+    {
+        return;
+    }
+
+    const float t = static_cast<float>(ImGui::GetTime());
+    const float pulse = state == NodeEvaluationVisualState::Processing
+        ? 0.5f + 0.5f * std::sin(t * 5.2f)
+        : 0.45f + 0.25f * std::sin(t * 2.7f);
+    const ImVec4 color = state == NodeEvaluationVisualState::Processing
+        ? ImVec4(0.34f, 0.96f, 0.52f, 0.38f + 0.34f * pulse)
+        : ImVec4(0.50f, 0.76f, 0.58f, 0.24f + 0.20f * pulse);
+    const ImVec4 glowColor(color.x, color.y, color.z, color.w * 0.32f);
+
+    const ImVec2 nodePos = ed::GetNodePosition(ed::NodeId(node.id));
+    const ImVec2 screenMin = ed::CanvasToScreen(nodePos);
+    const ImVec2 screenMax = ed::CanvasToScreen(ImVec2(nodePos.x + nodeSize.x, nodePos.y + nodeSize.y));
+    const ImVec2 screen0 = ed::CanvasToScreen(ImVec2(0.0f, 0.0f));
+    const ImVec2 screen1 = ed::CanvasToScreen(ImVec2(1.0f, 0.0f));
+    const float screenScale = std::clamp(std::abs(screen1.x - screen0.x), 0.25f, 2.0f);
+    const float rounding = 8.0f * screenScale;
+    const float outerOffset = 3.0f * screenScale;
+    const float innerOffset = 1.0f * screenScale;
+    const float glowThickness = 4.0f * screenScale;
+    const float borderThickness = (state == NodeEvaluationVisualState::Processing ? 2.2f : 1.6f) * screenScale;
+
+    ImDrawList* drawList = ImGui::GetForegroundDrawList();
+    drawList->PushClipRect(clipMin, clipMax, true);
+    drawList->AddRect(
+        ImVec2(screenMin.x - outerOffset, screenMin.y - outerOffset),
+        ImVec2(screenMax.x + outerOffset, screenMax.y + outerOffset),
+        ColorToU32(glowColor),
+        rounding + outerOffset,
+        0,
+        glowThickness);
+    drawList->AddRect(
+        ImVec2(screenMin.x - innerOffset, screenMin.y - innerOffset),
+        ImVec2(screenMax.x + innerOffset, screenMax.y + innerOffset),
+        ColorToU32(color),
+        rounding + innerOffset,
+        0,
+        borderThickness);
+    drawList->PopClipRect();
 }
 
 void DrawRockNodeShadows()
@@ -12904,7 +12986,7 @@ void DrawRockNodeShadows()
     ed::Resume();
 }
 
-void DrawRockNode(const rock::Node& node)
+void DrawRockNode(const rock::Node& node, const ImVec2& editorScreenMin, const ImVec2& editorScreenMax)
 {
     constexpr float nodeWidth = 250.0f;
     const ImVec4 accent = NodeAccentColor(node.kind);
@@ -13008,6 +13090,7 @@ void DrawRockNode(const rock::Node& node)
         ed::PushStyleColor(ed::StyleColor_HovNodeBorder, nodeBorderColor);
     }
     ed::EndNode();
+    DrawNodeEvaluationPulse(node, editorScreenMin, editorScreenMax);
     ed::PopStyleColor(suppressNodeHoverBorder ? 5 : 4);
     ed::PopStyleVar(4);
 }
@@ -13213,7 +13296,7 @@ void DrawNodeGraph()
     const auto nodesStart = std::chrono::steady_clock::now();
     for (const rock::Node& node : g_graph.Nodes())
     {
-        DrawRockNode(node);
+        DrawRockNode(node, canvasMin, canvasMax);
         if (hasPendingNodePositions)
         {
             const auto pending = std::ranges::find_if(g_pendingNodePositions, [&](const auto& entry) {
