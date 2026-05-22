@@ -51,6 +51,10 @@ cbuffer CloudShadowMeshConstants : register(b1)
     float atmosphereMieStrength;
     float aoStrength;     // AO の暗化強度 (0–1)
     float atmospherePad1;
+    float waterLevelParam;       // PSWater: 水面高さ (m)
+    float waterWavesScale;       // PSWater: 波スケール
+    float waterRefractiveIndex;  // PSWater: 屈折率 → Schlick F0
+    float waterCbPad;
 };
 
 Texture2D shadowMap : register(t0);
@@ -766,23 +770,100 @@ float4 PSEdge(VSOut i) : SV_TARGET
     return float4(albedoColor.rgb, saturate(albedoColor.a));
 }
 
+float WaterDepthOpacity(float depthMeters, float pathScale)
+{
+    float depth = max(depthMeters, 0.0);
+    float scale = max(pathScale, 1.0);
+    return 1.0 - exp(-depth / scale);
+}
+
 float4 PSWater(VSOut i) : SV_TARGET
 {
-    float waveA = sin(i.worldPos.x * 0.055 + i.worldPos.z * 0.031);
-    float waveB = sin(i.worldPos.x * -0.018 + i.worldPos.z * 0.074);
-    float waveC = sin(i.worldPos.x * 0.11 + i.worldPos.z * -0.087);
-    float3 n = normalize(i.worldNor + float3(waveA * 0.035 + waveC * 0.018, 0.0, waveB * 0.035 - waveC * 0.014));
+    float terrainSize = max(albedoColor.a, 1.0);
+    float2 terrainUV = float2(i.worldPos.x / terrainSize + 0.5, 0.5 - i.worldPos.z / terrainSize);
+    float opacity = saturate(i.mask);
+    float depthFadeScale = max(terrainSize * 0.035, 8.0);
+
+    // === 断面 側壁 (normal.y ≈ 0) ===
+    if (i.worldNor.y < 0.5)
+    {
+        float3 n = normalize(i.worldNor);
+        float3 L = normalize(sunDirection.xyz);
+        float ndl = dot(n, L) * 0.35 + 0.65;
+
+        float terrainH = displacementHeights.SampleLevel(linearSampler, saturate(terrainUV), 0).r;
+        float waterColumnDepth = max(waterLevelParam - terrainH, 0.0);
+        float distanceFromTerrain = max(i.worldPos.y - terrainH, 0.0);
+        float thicknessNorm = WaterDepthOpacity(waterColumnDepth, depthFadeScale);
+        float terrainContactFade = smoothstep(0.0, max(depthFadeScale * 0.16, 1.0), distanceFromTerrain);
+        float depthNorm = thicknessNorm * terrainContactFade;
+
+        float3 shallowCol = albedoColor.rgb * 1.5 + float3(0.01, 0.03, 0.0);
+        float3 deepCol    = albedoColor.rgb * 0.35 + float3(0.0, 0.01, 0.09);
+        float3 wallColor  = lerp(shallowCol, deepCol, thicknessNorm) * ndl;
+        wallColor = pow(saturate(wallColor), 1.0 / 1.18);
+
+        float alpha = depthNorm * opacity;
+        return float4(wallColor, alpha);
+    }
+
+    // === 水面 上面 ===
+    float invScale = 1.0 / max(waterWavesScale, 0.1);
+    float waveA = sin(i.worldPos.x * 0.055 * invScale + i.worldPos.z * 0.031 * invScale);
+    float waveB = sin(i.worldPos.x * -0.018 * invScale + i.worldPos.z * 0.074 * invScale);
+    float waveC = sin(i.worldPos.x * 0.11 * invScale + i.worldPos.z * -0.087 * invScale);
+    float3 n = normalize(float3(0, 1, 0) + float3(waveA * 0.035 + waveC * 0.018, 0.0, waveB * 0.035 - waveC * 0.014));
+
     float3 V = normalize(cameraPosition.xyz - i.worldPos);
     float3 L = normalize(sunDirection.xyz);
-    float fresnel = pow(1.0 - saturate(abs(dot(n, V))), 4.0);
-    float ripple = (waveA + waveB + waveC * 0.5) * 0.4;
+
+    // IOR ベースの Schlick フレネル
+    float r   = (1.0 - waterRefractiveIndex) / (1.0 + waterRefractiveIndex);
+    float F0  = r * r;
+    float cosTheta = saturate(abs(dot(n, V)));
+    float fresnel  = F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
+
+    // スペキュラー
     float sunMirror = saturate(dot(reflect(-L, n), V));
     float spec = (pow(sunMirror, 18.0) * 0.18 + pow(sunMirror, 96.0) * 1.35) * sunIntensity;
-    float3 shallow = albedoColor.rgb * 1.35;
-    float3 deep = albedoColor.rgb * 0.72 + float3(0.0, 0.05, 0.10);
-    float3 water = lerp(deep, shallow, saturate(0.5 + ripple * 0.18));
-    water = lerp(water, skyHorizonColor.rgb, fresnel * 0.50);
-    water += spec * skySunColor.rgb;
+
+    // 地形高さから鉛直水深を算出
+    float terrainH  = displacementHeights.SampleLevel(linearSampler, terrainUV, 0).r;
+    float vertDepth = max(waterLevelParam - terrainH, 0.0);
+
+    // カメラ方向の光路長補正: 斜め視点ほど水中を長く通る
+    float cosViewAngle = max(V.y, 0.04);
+    float pathLength   = vertDepth / cosViewAngle;
+
+    // 水深で色を変化: 浅瀬=明るく緑がかった水色, 深部=暗く濃い青
+    float depthColorFactor = 1.0 - exp(-vertDepth * 2.5 / max(waterLevelParam, 1.0));
+    float ripple = (waveA + waveB + waveC * 0.5) * 0.3;
+    float3 shallowCol = albedoColor.rgb * 1.55 + float3(0.01, 0.04, -0.02);
+    float3 deepCol    = albedoColor.rgb * 0.55 + float3(0.0, 0.02, 0.10);
+    float3 water = lerp(shallowCol, deepCol, depthColorFactor) * (1.0 + ripple * 0.10);
+
+    // 空反射 (反射方向 = V の Y 反転)
+    float3 reflRay = float3(-V.x, V.y, -V.z);
+    float3 skyRefl = lerp(skyHorizonColor.rgb, skyZenithColor.rgb, saturate(reflRay.y * 1.8));
+
+    // 地形色反射 (高さベース近似 + 視差オフセット)
+    float2 parallaxUV  = terrainUV + reflRay.xz * (vertDepth * 0.06 / terrainSize);
+    float  reflTerrH   = displacementHeights.SampleLevel(linearSampler, saturate(parallaxUV), 0).r;
+    float  reflHeight  = saturate(reflTerrH / 1800.0 + 0.45);
+    float3 terrainRefl = lerp(float3(0.32, 0.38, 0.32), float3(0.54, 0.52, 0.46), reflHeight);
+
+    // 辺縁部でフレネル反射のみ抑制 (輝線防止、opacity には影響させない)
+    float2 edgeMask   = abs(terrainUV - 0.5) * 2.0;
+    float edgeReflFade = 1.0 - smoothstep(0.92, 1.0, max(edgeMask.x, edgeMask.y));
+
+    float terrainReflWeight = saturate(1.0 - vertDepth * 0.008) * fresnel;
+    float3 reflection = lerp(skyRefl * fresnel, terrainRefl, terrainReflWeight) * edgeReflFade;
+    water = lerp(water, reflection, saturate(fresnel + terrainReflWeight * 0.5) * edgeReflFade);
+    water += spec * skySunColor.rgb * edgeReflFade;
+
+    float depthAlpha = WaterDepthOpacity(pathLength, depthFadeScale);
+    float alpha = depthAlpha * opacity;
+
     water = pow(saturate(water), 1.0 / 1.18);
-    return float4(water, saturate(i.mask));
+    return float4(water, alpha);
 }

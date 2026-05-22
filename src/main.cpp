@@ -581,8 +581,12 @@ struct CloudShadowMeshConstants
     float atmosphereMieStrength;
     float aoStrength;  // AO の暗化強度 (0–1)
     float pad1;
+    float waterLevelParam;       // PSWater: 水面高さ (m)
+    float waterWavesScale;       // PSWater: 波スケール
+    float waterRefractiveIndex;  // PSWater: 屈折率 → Schlick F0
+    float waterCbPad;
 };
-static_assert(sizeof(CloudShadowMeshConstants) == 128);
+static_assert(sizeof(CloudShadowMeshConstants) == 144);
 
 struct GpuMeshPreview
 {
@@ -643,6 +647,8 @@ struct GpuMeshPreview
     UINT gridVertexCount = 0;
     UINT terrainBoundaryLineVertexCount = 0;
     UINT waterIndexCount = 0;
+    UINT waterVertexCount = 0;
+    uint64_t waterHeightfieldVersion = UINT64_MAX;
     uint64_t terrainBoundaryLineUploadKey = UINT64_MAX;
     int gridCellCount = 0;
     float gridCellSizeMeters = 0.0f;
@@ -651,6 +657,8 @@ struct GpuMeshPreview
     float waterOpacity = 0.0f;
     std::array<float, 3> waterColor = {};
     float waterTerrainSizeMeters = 0.0f;
+    float waterWavesScale = 1.0f;
+    float waterRefractiveIndex = 1.33f;
     int skyMode = -1;
     float skyAtmosphereDensity = 0.0f;
     float skyMieStrength = 0.0f;
@@ -1975,6 +1983,8 @@ bool SaveAppSettings(std::string* error = nullptr)
                 settings.preview.waterColor[1],
                 settings.preview.waterColor[2],
             }},
+            {"waterWavesScale", settings.preview.waterWavesScale},
+            {"waterRefractiveIndex", settings.preview.waterRefractiveIndex},
             {"sunAzimuthDegrees", settings.preview.sunAzimuthDegrees},
             {"sunElevationDegrees", settings.preview.sunElevationDegrees},
             {"sunIntensity", settings.preview.sunIntensity},
@@ -2150,6 +2160,8 @@ bool LoadAppSettings(std::string* error = nullptr)
             settings.preview.waterColor[1] = std::clamp(visibilityJson["waterColor"][1].get<float>(), 0.0f, 1.0f);
             settings.preview.waterColor[2] = std::clamp(visibilityJson["waterColor"][2].get<float>(), 0.0f, 1.0f);
         }
+        settings.preview.waterWavesScale = std::clamp(visibilityJson.value("waterWavesScale", settings.preview.waterWavesScale), 0.1f, 500.0f);
+        settings.preview.waterRefractiveIndex = std::clamp(visibilityJson.value("waterRefractiveIndex", settings.preview.waterRefractiveIndex), 1.0f, 4.0f);
         settings.preview.sunAzimuthDegrees = std::clamp(visibilityJson.value("sunAzimuthDegrees", settings.preview.sunAzimuthDegrees), 0.0f, 360.0f);
         settings.preview.sunElevationDegrees = std::clamp(visibilityJson.value("sunElevationDegrees", settings.preview.sunElevationDegrees), -10.0f, 89.0f);
         settings.preview.sunIntensity = std::clamp(visibilityJson.value("sunIntensity", settings.preview.sunIntensity), 0.0f, 5.0f);
@@ -3239,6 +3251,8 @@ nlohmann::json MakeProjectSettingsJson()
                 preview.waterColor[1],
                 preview.waterColor[2],
             }},
+            {"waterWavesScale", preview.waterWavesScale},
+            {"waterRefractiveIndex", preview.waterRefractiveIndex},
             {"depthOfFieldEnabled", preview.depthOfFieldEnabled},
             {"dofFStop", preview.dofFStop},
             {"dofFocusDistanceMeters", preview.dofFocusDistanceMeters},
@@ -3582,6 +3596,8 @@ void ReadPreviewSettingsJson(const nlohmann::json& settingsJson, rock::PreviewSe
     preview.waterLevelMeters = std::clamp(previewJson.value("waterLevelMeters", preview.waterLevelMeters), -10000.0f, 10000.0f);
     preview.waterOpacity = std::clamp(previewJson.value("waterOpacity", preview.waterOpacity), 0.0f, 1.0f);
     ReadColor3Json(previewJson, "waterColor", preview.waterColor, 1.0f);
+    preview.waterWavesScale = std::clamp(previewJson.value("waterWavesScale", preview.waterWavesScale), 0.1f, 500.0f);
+    preview.waterRefractiveIndex = std::clamp(previewJson.value("waterRefractiveIndex", preview.waterRefractiveIndex), 1.0f, 4.0f);
     preview.depthOfFieldEnabled = previewJson.value("depthOfFieldEnabled", preview.depthOfFieldEnabled);
     preview.dofFStop = std::clamp(previewJson.value("dofFStop", preview.dofFStop), 0.7f, 32.0f);
     preview.dofFocusDistanceMeters = std::clamp(previewJson.value("dofFocusDistanceMeters", preview.dofFocusDistanceMeters), 0.1f, 20000.0f);
@@ -10640,7 +10656,7 @@ void EnsureGridPreviewBuffer()
     g_gpuMeshPreview.gridCellSizeMeters = cellSizeMeters;
 }
 
-void EnsureWaterPreviewBuffer(float terrainSizeMeters)
+void EnsureWaterPreviewBuffer(float terrainSizeMeters, const rock::HeightfieldGrid& grid, uint64_t gridVersion)
 {
     const rock::PreviewSettings& preview = g_graph.Settings().preview;
     const bool enabled = preview.waterEnabled;
@@ -10654,7 +10670,8 @@ void EnsureWaterPreviewBuffer(float terrainSizeMeters)
         g_gpuMeshPreview.waterLevelMeters == waterLevel &&
         g_gpuMeshPreview.waterOpacity == waterOpacity &&
         g_gpuMeshPreview.waterColor == preview.waterColor &&
-        g_gpuMeshPreview.waterTerrainSizeMeters == terrainSize)
+        g_gpuMeshPreview.waterTerrainSizeMeters == terrainSize &&
+        g_gpuMeshPreview.waterHeightfieldVersion == gridVersion)
     {
         return;
     }
@@ -10662,11 +10679,13 @@ void EnsureWaterPreviewBuffer(float terrainSizeMeters)
     g_gpuMeshPreview.waterVertexBuffer.Reset();
     g_gpuMeshPreview.waterIndexBuffer.Reset();
     g_gpuMeshPreview.waterIndexCount = 0;
+    g_gpuMeshPreview.waterVertexCount = 0;
     g_gpuMeshPreview.waterEnabled = enabled;
     g_gpuMeshPreview.waterLevelMeters = waterLevel;
     g_gpuMeshPreview.waterOpacity = waterOpacity;
     g_gpuMeshPreview.waterColor = preview.waterColor;
     g_gpuMeshPreview.waterTerrainSizeMeters = terrainSize;
+    g_gpuMeshPreview.waterHeightfieldVersion = gridVersion;
     if (!enabled || waterOpacity <= 0.001f)
     {
         return;
@@ -10681,16 +10700,99 @@ void EnsureWaterPreviewBuffer(float terrainSizeMeters)
             preview.waterColor[0], preview.waterColor[1], preview.waterColor[2]};
     };
 
+    // 水面上面 (4 頂点)
     std::vector<rock::MeshVertex> vertices;
-    vertices.reserve(4);
-    vertices.push_back(makeVertex(-half, waterLevel, half, 0.0f, 1.0f, 0.0f));
-    vertices.push_back(makeVertex(half, waterLevel, half, 0.0f, 1.0f, 0.0f));
-    vertices.push_back(makeVertex(half, waterLevel, -half, 0.0f, 1.0f, 0.0f));
+    vertices.push_back(makeVertex(-half, waterLevel,  half, 0.0f, 1.0f, 0.0f));
+    vertices.push_back(makeVertex( half, waterLevel,  half, 0.0f, 1.0f, 0.0f));
+    vertices.push_back(makeVertex( half, waterLevel, -half, 0.0f, 1.0f, 0.0f));
     vertices.push_back(makeVertex(-half, waterLevel, -half, 0.0f, 1.0f, 0.0f));
 
-    const std::array<UINT, 6> indices = {
-        0, 1, 2, 0, 2, 3,
-    };
+    std::vector<UINT> indices = {0, 1, 2, 0, 2, 3};
+
+    // 断面側壁 (水位 > 0 の場合のみ): 地形高さに沿った輪郭
+    if (waterLevel > 0.01f)
+    {
+        // ハイトフィールドを UV(0–1) でバイリニアサンプリング
+        // u: worldX = lerp(-half, half, u)
+        // v: worldZ = lerp( half,-half, v)
+        auto sampleH = [&](float u, float v) -> float {
+            if (grid.heights.empty() || grid.resolution < 2) return 0.0f;
+            u = std::clamp(u, 0.0f, 1.0f);
+            v = std::clamp(v, 0.0f, 1.0f);
+            float fx = u * (grid.resolution - 1);
+            float fz = v * (grid.resolution - 1);
+            int x0 = std::clamp(static_cast<int>(fx), 0, grid.resolution - 2);
+            int z0 = std::clamp(static_cast<int>(fz), 0, grid.resolution - 2);
+            float tx = fx - x0, tz = fz - z0;
+            float h00 = grid.heights[ z0      * grid.resolution + x0];
+            float h10 = grid.heights[ z0      * grid.resolution + x0 + 1];
+            float h01 = grid.heights[(z0 + 1) * grid.resolution + x0];
+            float h11 = grid.heights[(z0 + 1) * grid.resolution + x0 + 1];
+            return h00*(1-tx)*(1-tz) + h10*tx*(1-tz) + h01*(1-tx)*tz + h11*tx*tz;
+        };
+
+        const int wallRes = grid.resolution >= 2 ? std::min(grid.resolution - 1, 256) : 1;
+
+        // 各辺の定義: 法線 nx/nz, パラメータ t ∈ [0,1] での worldX/Z と UV を返す lambda
+        struct WallConfig {
+            float nx, nz;
+            std::function<float(float)> worldX, worldZ, uFn, vFn;
+        };
+        const WallConfig walls[4] = {
+            // 前面 (z=+half), x: -half → +half
+            { 0,  1,
+              [&](float t){ return -half + t * terrainSize; },
+              [&](float  ){ return  half; },
+              [&](float t){ return t; },
+              [&](float  ){ return 0.0f; } },
+            // 右面 (x=+half), z: +half → -half
+            { 1,  0,
+              [&](float  ){ return  half; },
+              [&](float t){ return  half - t * terrainSize; },
+              [&](float  ){ return 1.0f; },
+              [&](float t){ return t; } },
+            // 後面 (z=-half), x: +half → -half
+            { 0, -1,
+              [&](float t){ return  half - t * terrainSize; },
+              [&](float  ){ return -half; },
+              [&](float t){ return 1.0f - t; },
+              [&](float  ){ return 1.0f; } },
+            // 左面 (x=-half), z: -half → +half
+            {-1,  0,
+              [&](float  ){ return -half; },
+              [&](float t){ return -half + t * terrainSize; },
+              [&](float  ){ return 0.0f; },
+              [&](float t){ return 1.0f - t; } },
+        };
+
+        for (const auto& wl : walls)
+        {
+            const UINT base = static_cast<UINT>(vertices.size());
+            // 各列: 頂点 2 つ (上辺 waterLevel, 下辺 min(terrainH, waterLevel))
+            for (int i = 0; i <= wallRes; ++i)
+            {
+                float t = static_cast<float>(i) / wallRes;
+                float wx = wl.worldX(t);
+                float wz = wl.worldZ(t);
+                float u  = wl.uFn(t);
+                float v  = wl.vFn(t);
+                float terrainH = sampleH(u, v);
+                float botY = std::min(terrainH, waterLevel);
+                vertices.push_back(makeVertex(wx, waterLevel, wz, wl.nx, 0.0f, wl.nz));
+                vertices.push_back(makeVertex(wx, botY,       wz, wl.nx, 0.0f, wl.nz));
+            }
+            // 三角形リスト
+            for (int i = 0; i < wallRes; ++i)
+            {
+                UINT tl = base + static_cast<UINT>(i) * 2u;
+                UINT tr = tl + 2u;
+                UINT bl = tl + 1u;
+                UINT br = tr + 1u;
+                indices.push_back(tl); indices.push_back(tr); indices.push_back(br);
+                indices.push_back(tl); indices.push_back(br); indices.push_back(bl);
+            }
+        }
+    }
 
     const D3D12_HEAP_PROPERTIES uploadHeap = HeapProperties(D3D12_HEAP_TYPE_UPLOAD);
     const UINT64 vbSize = vertices.size() * sizeof(rock::MeshVertex);
@@ -10712,7 +10814,8 @@ void EnsureWaterPreviewBuffer(float terrainSizeMeters)
     g_gpuMeshPreview.waterIndexBuffer->Map(0, &readRange, &mapped);
     std::memcpy(mapped, indices.data(), static_cast<size_t>(ibSize));
     g_gpuMeshPreview.waterIndexBuffer->Unmap(0, nullptr);
-    g_gpuMeshPreview.waterIndexCount = static_cast<UINT>(indices.size());
+    g_gpuMeshPreview.waterIndexCount  = static_cast<UINT>(indices.size());
+    g_gpuMeshPreview.waterVertexCount = static_cast<UINT>(vertices.size());
 }
 
 void EnsureTerrainBoundaryLineBuffer(const rock::HeightfieldGrid& grid, uint64_t uploadKey)
@@ -11147,7 +11250,10 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.waterLevelMeters != previewSettings.waterLevelMeters ||
         g_gpuMeshPreview.waterOpacity != previewSettings.waterOpacity ||
         g_gpuMeshPreview.waterColor != previewSettings.waterColor ||
-        g_gpuMeshPreview.waterTerrainSizeMeters != g_graph.Evaluation().previewHeightfield.terrainSizeMeters)
+        g_gpuMeshPreview.waterTerrainSizeMeters != g_graph.Evaluation().previewHeightfield.terrainSizeMeters ||
+        g_gpuMeshPreview.waterWavesScale != previewSettings.waterWavesScale ||
+        g_gpuMeshPreview.waterRefractiveIndex != previewSettings.waterRefractiveIndex ||
+        g_gpuMeshPreview.waterHeightfieldVersion != currentVersion)
     {
         addDirtyReason(dirtyReason, "water");
     }
@@ -11251,7 +11357,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         const rock::HeightfieldGrid& previewGrid = g_graph.Evaluation().previewHeightfield;
         if (showWater)
         {
-            EnsureWaterPreviewBuffer(previewGrid.terrainSizeMeters);
+            EnsureWaterPreviewBuffer(previewGrid.terrainSizeMeters, previewGrid, currentVersion);
         }
         if (showTerrainBoundaryLines)
         {
@@ -11769,6 +11875,10 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             (sky.mode == rock::SkyMode::Atmospheric) ? std::clamp(sky.mieStrength, 0.0f, 8.0f) : 0.0f;
         cloudShadowCb.aoStrength = std::clamp(g_graph.Settings().preview.aoStrength, 0.0f, 1.0f);
         cloudShadowCb.pad1 = 0.0f;
+        cloudShadowCb.waterLevelParam = previewSettings.waterLevelMeters;
+        cloudShadowCb.waterWavesScale = std::max(previewSettings.waterWavesScale, 0.01f);
+        cloudShadowCb.waterRefractiveIndex = std::clamp(previewSettings.waterRefractiveIndex, 1.0f, 4.0f);
+        cloudShadowCb.waterCbPad = 0.0f;
 
         if (g_gpuClouds.meshCbMapped)
         {
@@ -11918,7 +12028,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
 
             D3D12_VERTEX_BUFFER_VIEW waterVbv{};
             waterVbv.BufferLocation = g_gpuMeshPreview.waterVertexBuffer->GetGPUVirtualAddress();
-            waterVbv.SizeInBytes = 4u * static_cast<UINT>(sizeof(rock::MeshVertex));
+            waterVbv.SizeInBytes = g_gpuMeshPreview.waterVertexCount * static_cast<UINT>(sizeof(rock::MeshVertex));
             waterVbv.StrideInBytes = static_cast<UINT>(sizeof(rock::MeshVertex));
             D3D12_INDEX_BUFFER_VIEW waterIbv{
                 g_gpuMeshPreview.waterIndexBuffer->GetGPUVirtualAddress(),
@@ -12334,6 +12444,9 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.waterOpacity = previewSettings.waterOpacity;
         g_gpuMeshPreview.waterColor = previewSettings.waterColor;
         g_gpuMeshPreview.waterTerrainSizeMeters = g_graph.Evaluation().previewHeightfield.terrainSizeMeters;
+        g_gpuMeshPreview.waterWavesScale = previewSettings.waterWavesScale;
+        g_gpuMeshPreview.waterRefractiveIndex = previewSettings.waterRefractiveIndex;
+        g_gpuMeshPreview.waterHeightfieldVersion = currentVersion;
         g_gpuMeshPreview.colorState    = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         return true;
     }

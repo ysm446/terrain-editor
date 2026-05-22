@@ -54,6 +54,18 @@ void DrawWaterSettingsPanel(WaterPanelState state)
             {
                 SaveAppSettings(state);
             }
+            if (DrawPropertyFloatRow("Waves Scale (m)", "DisplayWaterWavesScale", &preview.waterWavesScale, 0.1f, 500.0f, rock::PreviewSettings{}.waterWavesScale, "Water waves scale changed", false,
+                "波の周期スケールです。大きいほど波が長く穏やかになります。", "%.1f"))
+            {
+                preview.waterWavesScale = std::clamp(preview.waterWavesScale, 0.1f, 500.0f);
+                SaveAppSettings(state);
+            }
+            if (DrawPropertyFloatRow("Refractive Index", "DisplayWaterRefractiveIndex", &preview.waterRefractiveIndex, 1.0f, 2.0f, rock::PreviewSettings{}.waterRefractiveIndex, "Water refractive index changed", false,
+                "水の屈折率です。フレネル反射の強さを決定します。1.0 = 反射なし、1.33 = 水相当、2.0 = ガラス相当。", "%.2f"))
+            {
+                preview.waterRefractiveIndex = std::clamp(preview.waterRefractiveIndex, 1.0f, 4.0f);
+                SaveAppSettings(state);
+            }
         }
         ImGui::EndTable();
     }
