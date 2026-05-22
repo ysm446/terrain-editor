@@ -860,14 +860,14 @@ float4 PSWater(VSOut i) : SV_TARGET
     float  reflHeight  = saturate(reflTerrH / 1800.0 + 0.45);
     float3 terrainRefl = lerp(float3(0.32, 0.38, 0.32), float3(0.54, 0.52, 0.46), reflHeight);
 
-    // 辺縁部でフレネル反射のみ抑制 (輝線防止、opacity には影響させない)
+    // 辺縁部で地形近似反射だけ抑制 (輝線防止、opacity と太陽スペキュラーには影響させない)
     float2 edgeMask   = abs(terrainUV - 0.5) * 2.0;
     float edgeReflFade = 1.0 - smoothstep(0.92, 1.0, max(edgeMask.x, edgeMask.y));
 
     float terrainReflWeight = saturate(1.0 - vertDepth * 0.008) * fresnel;
     float3 reflection = lerp(skyRefl * fresnel, terrainRefl, terrainReflWeight) * edgeReflFade;
     water = lerp(water, reflection, saturate(fresnel + terrainReflWeight * 0.5) * edgeReflFade);
-    water += spec * skySunColor.rgb * edgeReflFade;
+    water += spec * skySunColor.rgb;
 
     float verticalDepthAlpha = WaterDepthOpacity(vertDepth, depthFadeScale);
     float viewPathAlpha = WaterDepthOpacity(pathLength, depthFadeScale * 2.5);

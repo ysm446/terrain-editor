@@ -10800,6 +10800,7 @@ void EnsureWaterPreviewBuffer(float terrainSizeMeters, const rock::HeightfieldGr
             }
         }
     }
+    const size_t surfaceIndexCount = indices.size();
 
     // 断面側壁 (水位 > 0 の場合のみ): 地形高さに沿った輪郭
     if (waterLevel > 0.01f)
@@ -10865,6 +10866,11 @@ void EnsureWaterPreviewBuffer(float terrainSizeMeters, const rock::HeightfieldGr
                 indices.push_back(tl); indices.push_back(br); indices.push_back(bl);
             }
         }
+    }
+
+    if (surfaceIndexCount > 0 && indices.size() > surfaceIndexCount)
+    {
+        std::rotate(indices.begin(), indices.begin() + static_cast<std::ptrdiff_t>(surfaceIndexCount), indices.end());
     }
 
     if (indices.empty())
