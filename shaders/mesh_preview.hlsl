@@ -54,7 +54,11 @@ cbuffer CloudShadowMeshConstants : register(b1)
     float waterLevelParam;       // PSWater: 水面高さ (m)
     float waterWavesScale;       // PSWater: 主波長 (m)
     float waterRefractiveIndex;  // PSWater: 屈折率 → Schlick F0
-    float waterCbPad;
+    float waterRefractionStrength;
+    float waterRefractionBlur;
+    float waterCbPad0;
+    float waterCbPad1;
+    float waterCbPad2;
 };
 
 Texture2D shadowMap : register(t0);
@@ -66,6 +70,7 @@ Texture2D<float> displacementHeights : register(t2);
 Texture2D<float> displacementMask : register(t3);
 Texture2D<float4> colorTexture : register(t4);
 Texture2D<float>  aoTexture    : register(t5);
+Texture2D<float4> sceneColorTexture : register(t6);
 SamplerState shadowSampler : register(s0);
 SamplerState linearSampler : register(s1);
 
@@ -799,6 +804,18 @@ float SampleWaterTerrainHeight(float2 uv)
     return displacementHeights.SampleLevel(linearSampler, saturate(uv), 0).r;
 }
 
+float2 ProjectWorldToSceneUv(float3 worldPos)
+{
+    float3 view = worldPos - cameraPosition.xyz;
+    float cx = dot(view, cameraRight.xyz);
+    float cy = dot(view, cameraUp.xyz);
+    float d = max(dot(view, cameraForward.xyz), nearPlane);
+    float2 ndc = float2(
+        (cx * projScaleX + panNdcX * d) / d,
+        (cy * projScaleY + panNdcY * d) / d);
+    return float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+}
+
 float EstimateWaterViewPathLength(float3 waterPos, float3 rayDir, float terrainSize)
 {
     float3 dir = normalize(rayDir);
@@ -902,6 +919,28 @@ float4 PSWater(VSOut i) : SV_TARGET
         float3 shallowCol = albedoColor.rgb * 1.5 + float3(0.01, 0.03, 0.0);
         float3 deepCol    = albedoColor.rgb * 0.35 + float3(0.0, 0.01, 0.09);
         float3 wallColor  = lerp(shallowCol, deepCol, thicknessNorm) * ndl;
+
+        float2 sceneUv = ProjectWorldToSceneUv(i.worldPos);
+        float2 sideDir = float2(dot(n, cameraRight.xyz), -dot(n, cameraUp.xyz));
+        float wobbleA = sin(dot(i.worldPos.xz, float2(0.037, 0.021)) + i.worldPos.y * 0.018);
+        float wobbleB = sin(dot(i.worldPos.xz, float2(-0.019, 0.044)) + i.worldPos.y * 0.031 + 1.7);
+        float2 wobble = float2(wobbleA, wobbleB) * 0.5 + sideDir;
+        float sideRefractionWeight = saturate((1.0 - thicknessNorm) * (1.0 - opacity * 0.25) * waterRefractionStrength);
+        float blurAmount = saturate(waterRefractionBlur);
+        float distortionRadius = (0.0015 + saturate(distanceFromTerrain / 220.0) * 0.0045) * sideRefractionWeight;
+        float blurRadius = (0.0030 + saturate(distanceFromTerrain / 220.0) * 0.0180) * sideRefractionWeight * blurAmount;
+        float2 refractUv = saturate(sceneUv + wobble * distortionRadius * 1.8);
+        float3 sideScene =
+            sceneColorTexture.Sample(linearSampler, refractUv).rgb * 0.24 +
+            sceneColorTexture.Sample(linearSampler, saturate(refractUv + float2( blurRadius, 0.0))).rgb * 0.12 +
+            sceneColorTexture.Sample(linearSampler, saturate(refractUv + float2(-blurRadius, 0.0))).rgb * 0.12 +
+            sceneColorTexture.Sample(linearSampler, saturate(refractUv + float2(0.0,  blurRadius))).rgb * 0.12 +
+            sceneColorTexture.Sample(linearSampler, saturate(refractUv + float2(0.0, -blurRadius))).rgb * 0.12 +
+            sceneColorTexture.Sample(linearSampler, saturate(refractUv + float2( blurRadius,  blurRadius))).rgb * 0.07 +
+            sceneColorTexture.Sample(linearSampler, saturate(refractUv + float2(-blurRadius,  blurRadius))).rgb * 0.07 +
+            sceneColorTexture.Sample(linearSampler, saturate(refractUv + float2( blurRadius, -blurRadius))).rgb * 0.07 +
+            sceneColorTexture.Sample(linearSampler, saturate(refractUv + float2(-blurRadius, -blurRadius))).rgb * 0.07;
+        wallColor = lerp(wallColor, lerp(sideScene, wallColor, saturate(thicknessNorm * 0.70 + opacity * 0.30)), sideRefractionWeight * 0.42);
         wallColor = pow(saturate(wallColor), 1.0 / 1.18);
 
         float alpha = WaterVisibleAlpha(WaterAbsorptionAlpha(distanceFromTerrain, opacity), opacity, 0.24);
@@ -943,6 +982,16 @@ float4 PSWater(VSOut i) : SV_TARGET
     float3 shallowCol = albedoColor.rgb * 1.55 + float3(0.01, 0.04, -0.02);
     float3 deepCol    = albedoColor.rgb * 0.55 + float3(0.0, 0.02, 0.10);
     float3 water = lerp(shallowCol, deepCol, depthColorFactor) * (1.0 + wave.ripple * 0.035);
+
+    float2 sceneUv = ProjectWorldToSceneUv(i.worldPos);
+    float2 refractDir = float2(dot(n, cameraRight.xyz), -dot(n, cameraUp.xyz));
+    float clarity = 1.0 - WaterAbsorptionAlpha(viewPathLength, opacity);
+    float refractionWeight = saturate((1.0 - fresnel) * clarity * (1.0 - opacity * 0.35) * waterRefractionStrength);
+    float refractionOffset = (0.0025 + saturate(viewPathLength / 600.0) * 0.010) * refractionWeight;
+    float2 refractUv = saturate(sceneUv + refractDir * refractionOffset);
+    float3 refractedScene = sceneColorTexture.Sample(linearSampler, refractUv).rgb;
+    float3 refractedWater = lerp(refractedScene, water, saturate(depthColorFactor * 0.72 + opacity * 0.25));
+    water = lerp(water, refractedWater, refractionWeight * 0.72);
 
     // 空反射 (反射方向 = V の Y 反転)
     float3 reflRay = float3(-V.x, V.y, -V.z);

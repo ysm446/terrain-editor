@@ -584,9 +584,13 @@ struct CloudShadowMeshConstants
     float waterLevelParam;       // PSWater: 水面高さ (m)
     float waterWavesScale;       // PSWater: 主波長 (m)
     float waterRefractiveIndex;  // PSWater: 屈折率 → Schlick F0
-    float waterCbPad;
+    float waterRefractionStrength;
+    float waterRefractionBlur;
+    float waterCbPad0;
+    float waterCbPad1;
+    float waterCbPad2;
 };
-static_assert(sizeof(CloudShadowMeshConstants) == 144);
+static_assert(sizeof(CloudShadowMeshConstants) == 160);
 
 struct GpuMeshPreview
 {
@@ -659,6 +663,8 @@ struct GpuMeshPreview
     float waterTerrainSizeMeters = 0.0f;
     float waterWavesScale = 24.0f;
     float waterRefractiveIndex = 1.33f;
+    float waterRefractionStrength = 1.0f;
+    float waterRefractionBlur = 0.45f;
     int skyMode = -1;
     float skyAtmosphereDensity = 0.0f;
     float skyMieStrength = 0.0f;
@@ -1985,6 +1991,8 @@ bool SaveAppSettings(std::string* error = nullptr)
             }},
             {"waterWavesScale", settings.preview.waterWavesScale},
             {"waterRefractiveIndex", settings.preview.waterRefractiveIndex},
+            {"waterRefractionStrength", settings.preview.waterRefractionStrength},
+            {"waterRefractionBlur", settings.preview.waterRefractionBlur},
             {"sunAzimuthDegrees", settings.preview.sunAzimuthDegrees},
             {"sunElevationDegrees", settings.preview.sunElevationDegrees},
             {"sunIntensity", settings.preview.sunIntensity},
@@ -2152,7 +2160,7 @@ bool LoadAppSettings(std::string* error = nullptr)
         settings.preview.tessellationNearDistance = std::clamp(visibilityJson.value("tessellationNearDistance", settings.preview.tessellationNearDistance), 1.0f, 100000.0f);
         settings.preview.tessellationFarDistance = std::clamp(visibilityJson.value("tessellationFarDistance", settings.preview.tessellationFarDistance), settings.preview.tessellationNearDistance + 1.0f, 200000.0f);
         settings.preview.waterEnabled = visibilityJson.value("waterEnabled", settings.preview.waterEnabled);
-        settings.preview.waterLevelMeters = std::clamp(visibilityJson.value("waterLevelMeters", settings.preview.waterLevelMeters), -10000.0f, 10000.0f);
+        settings.preview.waterLevelMeters = std::clamp(visibilityJson.value("waterLevelMeters", settings.preview.waterLevelMeters), 0.0f, 10000.0f);
         settings.preview.waterOpacity = std::clamp(visibilityJson.value("waterOpacity", settings.preview.waterOpacity), 0.0f, 1.0f);
         if (visibilityJson.contains("waterColor") && visibilityJson["waterColor"].is_array() && visibilityJson["waterColor"].size() == 3)
         {
@@ -2162,6 +2170,8 @@ bool LoadAppSettings(std::string* error = nullptr)
         }
         settings.preview.waterWavesScale = std::clamp(visibilityJson.value("waterWavesScale", settings.preview.waterWavesScale), 1.0f, 500.0f);
         settings.preview.waterRefractiveIndex = std::clamp(visibilityJson.value("waterRefractiveIndex", settings.preview.waterRefractiveIndex), 1.0f, 4.0f);
+        settings.preview.waterRefractionStrength = std::clamp(visibilityJson.value("waterRefractionStrength", settings.preview.waterRefractionStrength), 0.0f, 2.0f);
+        settings.preview.waterRefractionBlur = std::clamp(visibilityJson.value("waterRefractionBlur", settings.preview.waterRefractionBlur), 0.0f, 1.0f);
         settings.preview.sunAzimuthDegrees = std::clamp(visibilityJson.value("sunAzimuthDegrees", settings.preview.sunAzimuthDegrees), 0.0f, 360.0f);
         settings.preview.sunElevationDegrees = std::clamp(visibilityJson.value("sunElevationDegrees", settings.preview.sunElevationDegrees), -10.0f, 89.0f);
         settings.preview.sunIntensity = std::clamp(visibilityJson.value("sunIntensity", settings.preview.sunIntensity), 0.0f, 5.0f);
@@ -3253,6 +3263,8 @@ nlohmann::json MakeProjectSettingsJson()
             }},
             {"waterWavesScale", preview.waterWavesScale},
             {"waterRefractiveIndex", preview.waterRefractiveIndex},
+            {"waterRefractionStrength", preview.waterRefractionStrength},
+            {"waterRefractionBlur", preview.waterRefractionBlur},
             {"depthOfFieldEnabled", preview.depthOfFieldEnabled},
             {"dofFStop", preview.dofFStop},
             {"dofFocusDistanceMeters", preview.dofFocusDistanceMeters},
@@ -3593,11 +3605,13 @@ void ReadPreviewSettingsJson(const nlohmann::json& settingsJson, rock::PreviewSe
     preview.tessellationNearDistance = std::clamp(previewJson.value("tessellationNearDistance", preview.tessellationNearDistance), 1.0f, 100000.0f);
     preview.tessellationFarDistance = std::clamp(previewJson.value("tessellationFarDistance", preview.tessellationFarDistance), preview.tessellationNearDistance + 1.0f, 200000.0f);
     preview.waterEnabled = previewJson.value("waterEnabled", preview.waterEnabled);
-    preview.waterLevelMeters = std::clamp(previewJson.value("waterLevelMeters", preview.waterLevelMeters), -10000.0f, 10000.0f);
+    preview.waterLevelMeters = std::clamp(previewJson.value("waterLevelMeters", preview.waterLevelMeters), 0.0f, 10000.0f);
     preview.waterOpacity = std::clamp(previewJson.value("waterOpacity", preview.waterOpacity), 0.0f, 1.0f);
     ReadColor3Json(previewJson, "waterColor", preview.waterColor, 1.0f);
     preview.waterWavesScale = std::clamp(previewJson.value("waterWavesScale", preview.waterWavesScale), 1.0f, 500.0f);
     preview.waterRefractiveIndex = std::clamp(previewJson.value("waterRefractiveIndex", preview.waterRefractiveIndex), 1.0f, 4.0f);
+    preview.waterRefractionStrength = std::clamp(previewJson.value("waterRefractionStrength", preview.waterRefractionStrength), 0.0f, 2.0f);
+    preview.waterRefractionBlur = std::clamp(previewJson.value("waterRefractionBlur", preview.waterRefractionBlur), 0.0f, 1.0f);
     preview.depthOfFieldEnabled = previewJson.value("depthOfFieldEnabled", preview.depthOfFieldEnabled);
     preview.dofFStop = std::clamp(previewJson.value("dofFStop", preview.dofFStop), 0.7f, 32.0f);
     preview.dofFocusDistanceMeters = std::clamp(previewJson.value("dofFocusDistanceMeters", preview.dofFocusDistanceMeters), 0.1f, 20000.0f);
@@ -3984,7 +3998,7 @@ bool EnsureMeshPreviewPipeline(std::string* error)
 
     D3D12_DESCRIPTOR_RANGE meshResourceRange{};
     meshResourceRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    meshResourceRange.NumDescriptors = 6; // t0 shadow, t1 cloud shadow, t2/t3 displacement, t4 Colorize, t5 AO
+    meshResourceRange.NumDescriptors = 7; // t0 shadow, t1 cloud shadow, t2/t3 displacement, t4 Colorize, t5 AO, t6 scene color
     meshResourceRange.BaseShaderRegister = 0;
     meshResourceRange.RegisterSpace = 0;
     meshResourceRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
@@ -4835,7 +4849,7 @@ bool EnsureMeshResourceTable(std::string* error)
     }
     try
     {
-        AllocateSrvDescriptorRange(6, &g_gpuMeshPreview.meshResourceTableCpu, &g_gpuMeshPreview.meshResourceTableGpu);
+        AllocateSrvDescriptorRange(7, &g_gpuMeshPreview.meshResourceTableCpu, &g_gpuMeshPreview.meshResourceTableGpu);
         g_gpuMeshPreview.meshResourceTableAllocated = true;
         return true;
     }
@@ -4984,6 +4998,9 @@ void UpdateMeshResourceTable(D3D12_GPU_DESCRIPTOR_HANDLE cloudShadowGpu)
         g_gpuMeshPreview.aoSrvAllocated && g_gpuMeshPreview.aoTexture
             ? g_gpuMeshPreview.aoSrvCpu
             : g_gpuClouds.dummyShadowSrvCpu,  // slot 5: AO
+        g_gpuMeshPreview.postSrvAllocated && g_gpuMeshPreview.postTarget
+            ? g_gpuMeshPreview.postSrvCpu
+            : g_gpuClouds.dummyShadowSrvCpu,  // slot 6: scene color before water
     };
     for (int i = 0; i < 4; ++i)
     {
@@ -4994,6 +5011,7 @@ void UpdateMeshResourceTable(D3D12_GPU_DESCRIPTOR_HANDLE cloudShadowGpu)
         g_device->CopyDescriptorsSimple(1, OffsetCpuSrv(g_gpuMeshPreview.meshResourceTableCpu, 4), src[4], D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     }
     g_device->CopyDescriptorsSimple(1, OffsetCpuSrv(g_gpuMeshPreview.meshResourceTableCpu, 5), src[5], D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    g_device->CopyDescriptorsSimple(1, OffsetCpuSrv(g_gpuMeshPreview.meshResourceTableCpu, 6), src[6], D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 }
 
 
@@ -11246,6 +11264,10 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.waterOpacity != previewSettings.waterOpacity ||
         g_gpuMeshPreview.waterColor != previewSettings.waterColor ||
         g_gpuMeshPreview.waterTerrainSizeMeters != g_graph.Evaluation().previewHeightfield.terrainSizeMeters ||
+        g_gpuMeshPreview.waterWavesScale != previewSettings.waterWavesScale ||
+        g_gpuMeshPreview.waterRefractiveIndex != previewSettings.waterRefractiveIndex ||
+        g_gpuMeshPreview.waterRefractionStrength != previewSettings.waterRefractionStrength ||
+        g_gpuMeshPreview.waterRefractionBlur != previewSettings.waterRefractionBlur ||
         (g_graph.Settings().sky.mode == rock::SkyMode::Atmospheric && g_graph.Settings().clouds.enabled && g_graph.Settings().clouds.animate && g_graph.Settings().clouds.windSpeedMetersPerSec > 0.0f) ||
         (showGrid && !g_gpuMeshPreview.gridVertexBuffer) ||
         (showWater && (!g_gpuMeshPreview.waterVertexBuffer || !g_gpuMeshPreview.waterIndexBuffer)) ||
@@ -11337,6 +11359,8 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.waterTerrainSizeMeters != g_graph.Evaluation().previewHeightfield.terrainSizeMeters ||
         g_gpuMeshPreview.waterWavesScale != previewSettings.waterWavesScale ||
         g_gpuMeshPreview.waterRefractiveIndex != previewSettings.waterRefractiveIndex ||
+        g_gpuMeshPreview.waterRefractionStrength != previewSettings.waterRefractionStrength ||
+        g_gpuMeshPreview.waterRefractionBlur != previewSettings.waterRefractionBlur ||
         g_gpuMeshPreview.waterHeightfieldVersion != currentVersion)
     {
         addDirtyReason(dirtyReason, "water");
@@ -11542,6 +11566,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             b.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
             b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
             commandList->ResourceBarrier(1, &b);
+            g_gpuMeshPreview.colorState = D3D12_RESOURCE_STATE_RENDER_TARGET;
         }
         if (g_gpuMeshPreview.depthState != D3D12_RESOURCE_STATE_DEPTH_WRITE)
         {
@@ -11962,7 +11987,11 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         cloudShadowCb.waterLevelParam = previewSettings.waterLevelMeters;
         cloudShadowCb.waterWavesScale = std::max(previewSettings.waterWavesScale, 0.01f);
         cloudShadowCb.waterRefractiveIndex = std::clamp(previewSettings.waterRefractiveIndex, 1.0f, 4.0f);
-        cloudShadowCb.waterCbPad = 0.0f;
+        cloudShadowCb.waterRefractionStrength = std::clamp(previewSettings.waterRefractionStrength, 0.0f, 2.0f);
+        cloudShadowCb.waterRefractionBlur = std::clamp(previewSettings.waterRefractionBlur, 0.0f, 1.0f);
+        cloudShadowCb.waterCbPad0 = 0.0f;
+        cloudShadowCb.waterCbPad1 = 0.0f;
+        cloudShadowCb.waterCbPad2 = 0.0f;
 
         if (g_gpuClouds.meshCbMapped)
         {
@@ -12099,6 +12128,45 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             recordIndexedDraw(surfaceIndexCount, true);
             renderStats.surfacePass = true;
         }
+        if (showWater && g_gpuMeshPreview.postTarget)
+        {
+            commandList->OMSetRenderTargets(0, nullptr, FALSE, nullptr);
+
+            D3D12_RESOURCE_BARRIER toCopy[2]{};
+            toCopy[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            toCopy[0].Transition.pResource = g_gpuMeshPreview.colorTarget.Get();
+            toCopy[0].Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+            toCopy[0].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+            toCopy[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            toCopy[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            toCopy[1].Transition.pResource = g_gpuMeshPreview.postTarget.Get();
+            toCopy[1].Transition.StateBefore = g_gpuMeshPreview.postState;
+            toCopy[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+            toCopy[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            commandList->ResourceBarrier(2, toCopy);
+
+            commandList->CopyResource(g_gpuMeshPreview.postTarget.Get(), g_gpuMeshPreview.colorTarget.Get());
+
+            D3D12_RESOURCE_BARRIER afterCopy[2]{};
+            afterCopy[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            afterCopy[0].Transition.pResource = g_gpuMeshPreview.colorTarget.Get();
+            afterCopy[0].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+            afterCopy[0].Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+            afterCopy[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            afterCopy[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            afterCopy[1].Transition.pResource = g_gpuMeshPreview.postTarget.Get();
+            afterCopy[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+            afterCopy[1].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            afterCopy[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            commandList->ResourceBarrier(2, afterCopy);
+
+            g_gpuMeshPreview.colorState = D3D12_RESOURCE_STATE_RENDER_TARGET;
+            g_gpuMeshPreview.postState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            commandList->OMSetRenderTargets(1, &g_gpuMeshPreview.rtvCpu, FALSE, &g_gpuMeshPreview.dsvCpu);
+            commandList->RSSetViewports(1, &vp);
+            commandList->RSSetScissorRects(1, &scissor);
+        }
+
         if (showWater && g_gpuMeshPreview.waterVertexBuffer && g_gpuMeshPreview.waterIndexBuffer && g_gpuMeshPreview.waterIndexCount > 0)
         {
             MeshPreviewConstants waterConstants = constants;
@@ -12530,6 +12598,8 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.waterTerrainSizeMeters = g_graph.Evaluation().previewHeightfield.terrainSizeMeters;
         g_gpuMeshPreview.waterWavesScale = previewSettings.waterWavesScale;
         g_gpuMeshPreview.waterRefractiveIndex = previewSettings.waterRefractiveIndex;
+        g_gpuMeshPreview.waterRefractionStrength = previewSettings.waterRefractionStrength;
+        g_gpuMeshPreview.waterRefractionBlur = previewSettings.waterRefractionBlur;
         g_gpuMeshPreview.waterHeightfieldVersion = currentVersion;
         g_gpuMeshPreview.colorState    = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         return true;
@@ -13675,42 +13745,46 @@ void DrawNodeGraph()
     const auto dotsEnd = std::chrono::steady_clock::now();
     g_frameTiming.nodeEditorDotsMs = std::chrono::duration<double, std::milli>(dotsEnd - dotsStart).count();
 
+    const bool hasPendingNodePositions = !g_pendingNodePositions.empty();
+    if (hasPendingNodePositions || !g_nodePositionsInitialized)
+    {
+        for (const rock::Node& node : g_graph.Nodes())
+        {
+            if (hasPendingNodePositions)
+            {
+                const auto pending = std::ranges::find_if(g_pendingNodePositions, [&](const auto& entry) {
+                    return entry.first == node.id;
+                });
+                if (pending != g_pendingNodePositions.end())
+                {
+                    ed::SetNodePosition(ed::NodeId(node.id), pending->second);
+                    continue;
+                }
+            }
+            if (!g_nodePositionsInitialized)
+            {
+                ed::SetNodePosition(ed::NodeId(node.id), InitialNodePosition(node.kind));
+            }
+        }
+        if (hasPendingNodePositions)
+        {
+            g_pendingNodePositions.clear();
+        }
+        g_nodePositionsInitialized = true;
+    }
+
     const auto shadowsStart = std::chrono::steady_clock::now();
     DrawRockNodeShadows();
     const auto shadowsEnd = std::chrono::steady_clock::now();
     g_frameTiming.nodeEditorShadowsMs = std::chrono::duration<double, std::milli>(shadowsEnd - shadowsStart).count();
 
-    const bool hasPendingNodePositions = !g_pendingNodePositions.empty();
     const auto nodesStart = std::chrono::steady_clock::now();
     for (const rock::Node& node : g_graph.Nodes())
     {
         DrawRockNode(node, canvasMin, canvasMax);
-        if (hasPendingNodePositions)
-        {
-            const auto pending = std::ranges::find_if(g_pendingNodePositions, [&](const auto& entry) {
-                return entry.first == node.id;
-            });
-            if (pending != g_pendingNodePositions.end())
-            {
-                ed::SetNodePosition(ed::NodeId(node.id), pending->second);
-            }
-            else if (!g_nodePositionsInitialized)
-            {
-                ed::SetNodePosition(ed::NodeId(node.id), InitialNodePosition(node.kind));
-            }
-        }
-        else if (!g_nodePositionsInitialized)
-        {
-            ed::SetNodePosition(ed::NodeId(node.id), InitialNodePosition(node.kind));
-        }
     }
     const auto nodesEnd = std::chrono::steady_clock::now();
     g_frameTiming.nodeEditorNodesMs = std::chrono::duration<double, std::milli>(nodesEnd - nodesStart).count();
-    if (hasPendingNodePositions)
-    {
-        g_pendingNodePositions.clear();
-    }
-    g_nodePositionsInitialized = true;
 
     if (!g_nodeGraphNavigatedToContent)
     {

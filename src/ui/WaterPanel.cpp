@@ -38,10 +38,10 @@ void DrawWaterSettingsPanel(WaterPanelState state)
         }
         if (preview.waterEnabled)
         {
-            if (DrawPropertyFloatRow("Water Level (m)", "DisplayWaterLevel", &preview.waterLevelMeters, -2000.0f, 4000.0f, rock::PreviewSettings{}.waterLevelMeters, "Water level changed", false,
-                "水面の高さです。地形の窪地に対して水平な水位として表示されます。", "%.1f"))
+            if (DrawPropertyFloatRow("Water Level (m)", "DisplayWaterLevel", &preview.waterLevelMeters, 0.0f, 4000.0f, rock::PreviewSettings{}.waterLevelMeters, "Water level changed", false,
+                "水面の高さです。0m 以上の水平な水位として表示されます。", "%.1f"))
             {
-                preview.waterLevelMeters = std::clamp(preview.waterLevelMeters, -10000.0f, 10000.0f);
+                preview.waterLevelMeters = std::clamp(preview.waterLevelMeters, 0.0f, 10000.0f);
                 SaveAppSettings(state);
             }
             if (DrawPropertyFloatRow("Opacity", "DisplayWaterOpacity", &preview.waterOpacity, 0.0f, 1.0f, rock::PreviewSettings{}.waterOpacity, "Water opacity changed", false,
@@ -61,9 +61,21 @@ void DrawWaterSettingsPanel(WaterPanelState state)
                 SaveAppSettings(state);
             }
             if (DrawPropertyFloatRow("Refractive Index", "DisplayWaterRefractiveIndex", &preview.waterRefractiveIndex, 1.0f, 2.0f, rock::PreviewSettings{}.waterRefractiveIndex, "Water refractive index changed", false,
-                "水の屈折率です。フレネル反射の強さを決定します。1.0 = 反射なし、1.33 = 水相当、2.0 = ガラス相当。", "%.2f"))
+                "フレネル反射用の屈折率です。スクリーンスペース屈折の歪み量は Refraction Strength で調整します。1.0 = 反射なし、1.33 = 水相当、2.0 = ガラス相当。", "%.2f"))
             {
                 preview.waterRefractiveIndex = std::clamp(preview.waterRefractiveIndex, 1.0f, 4.0f);
+                SaveAppSettings(state);
+            }
+            if (DrawPropertyFloatRow("Refraction Strength", "DisplayWaterRefractionStrength", &preview.waterRefractionStrength, 0.0f, 2.0f, rock::PreviewSettings{}.waterRefractionStrength, "Water refraction strength changed", false,
+                "水面越しの背景をどれだけ歪ませるかです。0 で屈折なし、1 が標準、2 で強めになります。", "%.2f"))
+            {
+                preview.waterRefractionStrength = std::clamp(preview.waterRefractionStrength, 0.0f, 2.0f);
+                SaveAppSettings(state);
+            }
+            if (DrawPropertyFloatRow("Refraction Blur", "DisplayWaterRefractionBlur", &preview.waterRefractionBlur, 0.0f, 1.0f, rock::PreviewSettings{}.waterRefractionBlur, "Water refraction blur changed", false,
+                "屈折した背景のにじみ量です。主に断面側壁で効きます。0 でシャープ、1 で柔らかくぼかします。", "%.2f"))
+            {
+                preview.waterRefractionBlur = std::clamp(preview.waterRefractionBlur, 0.0f, 1.0f);
                 SaveAppSettings(state);
             }
         }

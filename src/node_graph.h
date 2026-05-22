@@ -617,6 +617,8 @@ struct PreviewSettings
     std::array<float, 3> waterColor = {0.05f, 0.34f, 0.58f};
     float waterWavesScale = 24.0f;
     float waterRefractiveIndex = 1.33f;
+    float waterRefractionStrength = 1.0f;
+    float waterRefractionBlur = 0.45f;
 };
 
 enum class SkyMode
