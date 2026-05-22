@@ -608,6 +608,9 @@ struct PreviewSettings
     std::array<float, 3> viewportBackground = {0.268f, 0.268f, 0.268f};
     MaskShadingMode maskShading = MaskShadingMode::Grayscale;
     bool maskPreviewUseNearestHeightmap = false;
+    bool aoEnabled = false;
+    float aoStrength = 0.7f;
+    float aoRadius = 100.0f;
 };
 
 enum class SkyMode

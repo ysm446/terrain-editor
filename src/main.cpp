@@ -509,7 +509,7 @@ struct MeshPreviewConstants
     float lightWorldRadius;
     float lightNearPlane;
     float lightFarPlane;
-    float padding2;
+    float lightDepthMin;  // シャドウ深度レンジの最小値 (LightSpace01 で使用)
 };
 
 static_assert(offsetof(MeshPreviewConstants, lightRight) == 160);
@@ -517,7 +517,7 @@ static_assert(offsetof(MeshPreviewConstants, lightUp) == 176);
 static_assert(offsetof(MeshPreviewConstants, lightForward) == 192);
 static_assert(offsetof(MeshPreviewConstants, lightCenter) == 208);
 static_assert(offsetof(MeshPreviewConstants, lightWorldRadius) == 224);
-static_assert(offsetof(MeshPreviewConstants, padding2) == 236);
+static_assert(offsetof(MeshPreviewConstants, lightDepthMin) == 236);
 static_assert(sizeof(MeshPreviewConstants) == 240);
 
 // Cloud shadow + sky environment data lives in its own cbuffer (b1) bound
@@ -529,7 +529,7 @@ struct CloudShadowMeshConstants
     float cloudShadowEnabled;
     float cloudShadowStrength;
     float cloudShadowAltitudeMin;
-    float cloudShadowPadA;
+    float aoEnabled;  // 0 = off, 1 = on (PS のみ参照)
     float cloudShadowMinX;
     float cloudShadowMinZ;
     float cloudShadowSizeX;
@@ -541,7 +541,7 @@ struct CloudShadowMeshConstants
     float sectionColor[4];
     float atmosphereDensity;
     float atmosphereMieStrength;
-    float pad0;
+    float aoStrength;  // AO の暗化強度 (0–1)
     float pad1;
 };
 static_assert(sizeof(CloudShadowMeshConstants) == 128);
@@ -680,6 +680,20 @@ struct GpuMeshPreview
     float dofHighlightBoost = 0.0f;
     bool dofMiniatureEnabled = false;
     float dofMiniatureScale = 0.0f;
+
+    // ホライゾン AO テクスチャ。ハイトフィールドと同解像度の R8_UNORM。
+    ComPtr<ID3D12Resource> aoTexture;
+    int aoTextureResolution = 0;
+    D3D12_RESOURCE_STATES aoTextureState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    D3D12_CPU_DESCRIPTOR_HANDLE aoSrvCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE aoSrvGpu{};
+    D3D12_CPU_DESCRIPTOR_HANDLE aoUavCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE aoUavGpu{};
+    bool aoSrvAllocated = false;
+    bool aoUavAllocated = false;
+    uint64_t aoUploadKey = 0;
+    float aoCachedRadius = -1.0f;
+
     PreviewRenderStats renderStats;
 
     D3D12_RESOURCE_STATES colorState = D3D12_RESOURCE_STATE_COMMON;
@@ -743,6 +757,9 @@ ComPtr<ID3D12PipelineState> g_snowSurfaceSmoothingPso;
 ComPtr<ID3D12PipelineState> g_snowApplyPso;
 ComPtr<ID3D12RootSignature> g_colorizeComputeRootSignature;
 ComPtr<ID3D12PipelineState> g_colorizeComputePso;
+ComPtr<ID3D12RootSignature> g_aoComputeRootSignature;
+ComPtr<ID3D12PipelineState> g_aoComputePso;
+bool g_aoComputeReady = false;
 ComPtr<ID3D12RootSignature> g_skyRootSignature;
 ComPtr<ID3D12PipelineState> g_skyPso;
 bool g_skyPipelineReady = false;
@@ -1399,6 +1416,12 @@ void CleanupD3D()
     g_colorizeComputePso.Reset();
     g_colorizeComputeRootSignature.Reset();
     g_colorizeComputeReady = false;
+    g_aoComputePso.Reset();
+    g_aoComputeRootSignature.Reset();
+    g_aoComputeReady = false;
+    g_gpuMeshPreview.aoTexture.Reset();
+    g_gpuMeshPreview.aoTextureResolution = 0;
+    g_gpuMeshPreview.aoUploadKey = 0;
     g_skyPso.Reset();
     g_skyRootSignature.Reset();
     g_skyPipelineReady = false;
@@ -1507,6 +1530,11 @@ std::filesystem::path SnowComputeShaderPath()
 std::filesystem::path ColorizeComputeShaderPath()
 {
     return ShaderPath("colorize_compute.hlsl");
+}
+
+std::filesystem::path AOComputeShaderPath()
+{
+    return ShaderPath("ao_compute.hlsl");
 }
 
 std::filesystem::path SkyShaderPath()
@@ -3166,6 +3194,9 @@ nlohmann::json MakeProjectSettingsJson()
                 preview.gridColor[2],
             }},
             {"maskPreviewUseNearestHeightmap", preview.maskPreviewUseNearestHeightmap},
+            {"aoEnabled", preview.aoEnabled},
+            {"aoStrength", preview.aoStrength},
+            {"aoRadius", preview.aoRadius},
         }},
         {"sky", {
             {"mode", static_cast<int>(sky.mode)},
@@ -3503,6 +3534,9 @@ void ReadPreviewSettingsJson(const nlohmann::json& settingsJson, rock::PreviewSe
     preview.gridCellSizeMeters = std::clamp(previewJson.value("gridCellSizeMeters", preview.gridCellSizeMeters), 1.0f, 10000.0f);
     ReadColor3Json(previewJson, "gridColor", preview.gridColor, 1.0f);
     preview.maskPreviewUseNearestHeightmap = previewJson.value("maskPreviewUseNearestHeightmap", preview.maskPreviewUseNearestHeightmap);
+    preview.aoEnabled = previewJson.value("aoEnabled", preview.aoEnabled);
+    preview.aoStrength = std::clamp(previewJson.value("aoStrength", preview.aoStrength), 0.0f, 1.0f);
+    preview.aoRadius = std::clamp(previewJson.value("aoRadius", preview.aoRadius), 10.0f, 5000.0f);
 }
 
 void ReadDisplaySettingsJson(const nlohmann::json& settingsJson,
@@ -3851,7 +3885,7 @@ bool EnsureMeshPreviewPipeline(std::string* error)
 
     D3D12_DESCRIPTOR_RANGE meshResourceRange{};
     meshResourceRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    meshResourceRange.NumDescriptors = 5; // t0 shadow, t1 cloud shadow, t2/t3 displacement, t4 Colorize
+    meshResourceRange.NumDescriptors = 6; // t0 shadow, t1 cloud shadow, t2/t3 displacement, t4 Colorize, t5 AO
     meshResourceRange.BaseShaderRegister = 0;
     meshResourceRange.RegisterSpace = 0;
     meshResourceRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
@@ -4063,9 +4097,15 @@ bool EnsureMeshPreviewDisplacementPipeline(std::string* error)
     colorRange.BaseShaderRegister = 4; // t4
     colorRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
+    D3D12_DESCRIPTOR_RANGE aoRange{};
+    aoRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    aoRange.NumDescriptors = 1;
+    aoRange.BaseShaderRegister = 5; // t5
+    aoRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
     // Budget: 2 (mesh CBV) + 2 (cloud shadow CBV) + 8 (displacement consts)
-    // + 1*5 (5 SRV tables) = 17 DWORDs of 64.
-    D3D12_ROOT_PARAMETER rootParams[8]{};
+    // + 1*6 (6 SRV tables) = 18 DWORDs of 64.
+    D3D12_ROOT_PARAMETER rootParams[9]{};
     rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParams[0].Descriptor.ShaderRegister = 0;
     rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
@@ -4096,6 +4136,10 @@ bool EnsureMeshPreviewDisplacementPipeline(std::string* error)
     rootParams[7].DescriptorTable.NumDescriptorRanges = 1;
     rootParams[7].DescriptorTable.pDescriptorRanges = &colorRange;
     rootParams[7].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    rootParams[8].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[8].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[8].DescriptorTable.pDescriptorRanges = &aoRange;
+    rootParams[8].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
     D3D12_STATIC_SAMPLER_DESC samplers[2]{};
     samplers[0].Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
@@ -4676,7 +4720,7 @@ bool EnsureMeshResourceTable(std::string* error)
     }
     try
     {
-        AllocateSrvDescriptorRange(5, &g_gpuMeshPreview.meshResourceTableCpu, &g_gpuMeshPreview.meshResourceTableGpu);
+        AllocateSrvDescriptorRange(6, &g_gpuMeshPreview.meshResourceTableCpu, &g_gpuMeshPreview.meshResourceTableGpu);
         g_gpuMeshPreview.meshResourceTableAllocated = true;
         return true;
     }
@@ -4821,7 +4865,10 @@ void UpdateMeshResourceTable(D3D12_GPU_DESCRIPTOR_HANDLE cloudShadowGpu)
             : g_gpuClouds.dummyShadowSrvCpu,
         g_gpuMeshPreview.displacementHeightSrvCpu.ptr ? g_gpuMeshPreview.displacementHeightSrvCpu : g_gpuClouds.dummyShadowSrvCpu,
         g_gpuMeshPreview.displacementMaskSrvCpu.ptr ? g_gpuMeshPreview.displacementMaskSrvCpu : g_gpuClouds.dummyShadowSrvCpu,
-        g_gpuClouds.dummyShadowSrvCpu,
+        g_gpuClouds.dummyShadowSrvCpu,  // slot 4: colorize (fallback)
+        g_gpuMeshPreview.aoSrvAllocated && g_gpuMeshPreview.aoTexture
+            ? g_gpuMeshPreview.aoSrvCpu
+            : g_gpuClouds.dummyShadowSrvCpu,  // slot 5: AO
     };
     for (int i = 0; i < 4; ++i)
     {
@@ -4831,6 +4878,7 @@ void UpdateMeshResourceTable(D3D12_GPU_DESCRIPTOR_HANDLE cloudShadowGpu)
     {
         g_device->CopyDescriptorsSimple(1, OffsetCpuSrv(g_gpuMeshPreview.meshResourceTableCpu, 4), src[4], D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     }
+    g_device->CopyDescriptorsSimple(1, OffsetCpuSrv(g_gpuMeshPreview.meshResourceTableCpu, 5), src[5], D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 }
 
 
@@ -5639,6 +5687,233 @@ bool EnsureColorizeComputePipeline(std::string* error)
 
     g_colorizeComputeReady = true;
     g_colorizeComputeStatus = "Colorize GPU Compute dispatch ready";
+    return true;
+}
+
+// =============================================================================
+// Horizon AO コンピュートパイプライン
+// =============================================================================
+
+bool EnsureAOComputePipeline(std::string* error)
+{
+    if (g_aoComputeReady && g_aoComputeRootSignature && g_aoComputePso)
+    {
+        return true;
+    }
+    if (!g_device)
+    {
+        if (error) *error = "D3D12 device is not available";
+        return false;
+    }
+
+    D3D12_DESCRIPTOR_RANGE srvRange{};
+    srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    srvRange.NumDescriptors = 1;
+    srvRange.BaseShaderRegister = 0;
+    srvRange.RegisterSpace = 0;
+    srvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_DESCRIPTOR_RANGE uavRange{};
+    uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    uavRange.NumDescriptors = 1;
+    uavRange.BaseShaderRegister = 0;
+    uavRange.RegisterSpace = 0;
+    uavRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_ROOT_PARAMETER rootParams[3]{};
+    rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    rootParams[0].Constants.ShaderRegister = 0;
+    rootParams[0].Constants.RegisterSpace = 0;
+    rootParams[0].Constants.Num32BitValues = 4;
+    rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[1].DescriptorTable.pDescriptorRanges = &srvRange;
+    rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    rootParams[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[2].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[2].DescriptorTable.pDescriptorRanges = &uavRange;
+    rootParams[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    D3D12_STATIC_SAMPLER_DESC sampler{};
+    sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.ShaderRegister = 0;
+    sampler.RegisterSpace = 0;
+    sampler.MaxLOD = D3D12_FLOAT32_MAX;
+    sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    D3D12_ROOT_SIGNATURE_DESC rsDesc{};
+    rsDesc.NumParameters = _countof(rootParams);
+    rsDesc.pParameters = rootParams;
+    rsDesc.NumStaticSamplers = 1;
+    rsDesc.pStaticSamplers = &sampler;
+    rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+    ComPtr<ID3DBlob> sigBlob, errBlob;
+    HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
+    if (FAILED(hr))
+    {
+        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Serialize AO root sig failed";
+        return false;
+    }
+    hr = g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_aoComputeRootSignature));
+    if (FAILED(hr)) { if (error) *error = "Create AO root sig failed"; return false; }
+
+    const std::filesystem::path shaderPath = AOComputeShaderPath();
+    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
+#if defined(_DEBUG)
+    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+#endif
+    ComPtr<ID3DBlob> csBlob;
+    errBlob.Reset();
+    const HRESULT compileHr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE,
+                                                 "CSAmbientOcclusion", "cs_5_0", compileFlags, 0, &csBlob, &errBlob);
+    if (FAILED(compileHr))
+    {
+        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile AO shader failed";
+        return false;
+    }
+
+    D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{};
+    psoDesc.pRootSignature = g_aoComputeRootSignature.Get();
+    psoDesc.CS = {csBlob->GetBufferPointer(), csBlob->GetBufferSize()};
+    hr = g_device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&g_aoComputePso));
+    if (FAILED(hr)) { if (error) *error = "Create AO PSO failed"; return false; }
+
+    g_aoComputeReady = true;
+    return true;
+}
+
+bool EnsureAOTexture(int resolution, std::string* error)
+{
+    if (g_gpuMeshPreview.aoTexture && g_gpuMeshPreview.aoTextureResolution == resolution)
+    {
+        return true;
+    }
+    if (!g_device) { if (error) *error = "D3D12 device not available"; return false; }
+
+    g_gpuMeshPreview.aoTexture.Reset();
+    g_gpuMeshPreview.aoTextureResolution = resolution;
+    g_gpuMeshPreview.aoUploadKey = 0;
+
+    const D3D12_HEAP_PROPERTIES defaultHeap = HeapProperties(D3D12_HEAP_TYPE_DEFAULT);
+    const D3D12_RESOURCE_DESC desc = Texture2DResourceDesc(
+        static_cast<UINT>(resolution), static_cast<UINT>(resolution),
+        DXGI_FORMAT_R8_UNORM, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    HRESULT hr = g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &desc,
+                                                   D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+                                                   IID_PPV_ARGS(&g_gpuMeshPreview.aoTexture));
+    if (FAILED(hr)) { if (error) *error = "Create AO texture failed"; return false; }
+    g_gpuMeshPreview.aoTextureState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+
+    if (!g_gpuMeshPreview.aoSrvAllocated)
+    {
+        AllocateSrvDescriptor(nullptr, &g_gpuMeshPreview.aoSrvCpu, &g_gpuMeshPreview.aoSrvGpu);
+        g_gpuMeshPreview.aoSrvAllocated = true;
+    }
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+    srvDesc.Format = DXGI_FORMAT_R8_UNORM;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Texture2D.MipLevels = 1;
+    g_device->CreateShaderResourceView(g_gpuMeshPreview.aoTexture.Get(), &srvDesc, g_gpuMeshPreview.aoSrvCpu);
+
+    if (!g_gpuMeshPreview.aoUavAllocated)
+    {
+        AllocateSrvDescriptor(nullptr, &g_gpuMeshPreview.aoUavCpu, &g_gpuMeshPreview.aoUavGpu);
+        g_gpuMeshPreview.aoUavAllocated = true;
+    }
+    D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+    uavDesc.Format = DXGI_FORMAT_R8_UNORM;
+    uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+    g_device->CreateUnorderedAccessView(g_gpuMeshPreview.aoTexture.Get(), nullptr, &uavDesc, g_gpuMeshPreview.aoUavCpu);
+
+    return true;
+}
+
+// ハイトフィールドテクスチャから AO をコンピュートシェーダーで生成する。
+// commandList は g_srvHeap がバインド済みであることを前提とする。
+bool DispatchAOCompute(ID3D12GraphicsCommandList* commandList,
+                       int resolution, float terrainSizeMeters,
+                       float maxDistanceMeters, uint64_t graphVersion,
+                       std::string* error)
+{
+    // サンプル半径が変わった場合もキャッシュを無効化する
+    if (g_gpuMeshPreview.aoCachedRadius != maxDistanceMeters)
+    {
+        g_gpuMeshPreview.aoUploadKey = 0;
+        g_gpuMeshPreview.aoCachedRadius = maxDistanceMeters;
+    }
+    if (g_gpuMeshPreview.aoUploadKey == graphVersion && graphVersion != 0)
+    {
+        return true;
+    }
+    if (!EnsureAOComputePipeline(error))
+    {
+        return false;
+    }
+    if (!EnsureAOTexture(resolution, error))
+    {
+        return false;
+    }
+    if (!g_gpuMeshPreview.displacementHeightSrvGpu.ptr)
+    {
+        return false;
+    }
+
+    if (g_gpuMeshPreview.aoTextureState != D3D12_RESOURCE_STATE_UNORDERED_ACCESS)
+    {
+        D3D12_RESOURCE_BARRIER b{};
+        b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        b.Transition.pResource = g_gpuMeshPreview.aoTexture.Get();
+        b.Transition.StateBefore = g_gpuMeshPreview.aoTextureState;
+        b.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        commandList->ResourceBarrier(1, &b);
+        g_gpuMeshPreview.aoTextureState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    }
+
+    struct AOShaderConstants
+    {
+        UINT  resolution;
+        float worldDX;
+        float maxDistanceMeters;
+        float pad0;
+    };
+    AOShaderConstants aoConsts{};
+    aoConsts.resolution = static_cast<UINT>(resolution);
+    aoConsts.worldDX = (resolution > 1)
+        ? terrainSizeMeters / static_cast<float>(resolution - 1)
+        : 1.0f;
+    aoConsts.maxDistanceMeters = std::max(1.0f, maxDistanceMeters);
+
+    commandList->SetComputeRootSignature(g_aoComputeRootSignature.Get());
+    commandList->SetPipelineState(g_aoComputePso.Get());
+    commandList->SetComputeRoot32BitConstants(0, 4, &aoConsts, 0);
+    commandList->SetComputeRootDescriptorTable(1, g_gpuMeshPreview.displacementHeightSrvGpu);
+    commandList->SetComputeRootDescriptorTable(2, g_gpuMeshPreview.aoUavGpu);
+
+    const UINT groupCount = (static_cast<UINT>(resolution) + 7u) / 8u;
+    commandList->Dispatch(groupCount, groupCount, 1);
+
+    D3D12_RESOURCE_BARRIER uavBarrier{};
+    uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    uavBarrier.UAV.pResource = g_gpuMeshPreview.aoTexture.Get();
+    commandList->ResourceBarrier(1, &uavBarrier);
+
+    D3D12_RESOURCE_BARRIER toSrv{};
+    toSrv.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    toSrv.Transition.pResource = g_gpuMeshPreview.aoTexture.Get();
+    toSrv.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    toSrv.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    toSrv.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    commandList->ResourceBarrier(1, &toSrv);
+    g_gpuMeshPreview.aoTextureState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+
+    g_gpuMeshPreview.aoUploadKey = graphVersion;
     return true;
 }
 
@@ -10717,6 +10992,31 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             // while the displacement backend uses height + mask in the VS.
             previewGridTextureUploaded = UploadDisplacementHeightfield(commandList.Get(), previewGrid, currentVersion, &ignoredErr);
         }
+
+        // AO コンピュート: ハイトフィールドが更新されたフレームで再計算する。
+        // SetDescriptorHeaps を早期に呼んでコンピュートディスパッチを inline 実行。
+        bool aoTextureReady = false;
+        const bool wantsAO = g_graph.Settings().preview.aoEnabled
+            && !g_graph.Evaluation().previewShowsMask
+            && previewGridTexturesReady;
+        if (wantsAO)
+        {
+            ID3D12DescriptorHeap* aoHeaps[] = {g_srvHeap.Get()};
+            commandList->SetDescriptorHeaps(1, aoHeaps);
+            std::string aoErr;
+            aoTextureReady = DispatchAOCompute(
+                commandList.Get(),
+                previewGrid.resolution,
+                previewGrid.terrainSizeMeters,
+                g_graph.Settings().preview.aoRadius,
+                currentVersion,
+                &aoErr);
+        }
+        else if (g_gpuMeshPreview.aoTexture)
+        {
+            aoTextureReady = (g_gpuMeshPreview.aoUploadKey == currentVersion);
+        }
+
         bool colorTextureReady = false;
         if (g_graph.Evaluation().previewIsColor)
         {
@@ -10869,7 +11169,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         constants.lightWorldRadius = lightHalfXY;
         constants.lightNearPlane = lightHalfXY;
         constants.lightFarPlane = lightDepthRange;
-        constants.padding2 = lightDepthMin;
+        constants.lightDepthMin = lightDepthMin;
 
         D3D12_VERTEX_BUFFER_VIEW vbv{};
         if (hasMeshVertices)
@@ -10956,6 +11256,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
                 commandList->SetGraphicsRootDescriptorTable(5, g_gpuMeshPreview.displacementHeightSrvGpu);
                 commandList->SetGraphicsRootDescriptorTable(6, g_gpuMeshPreview.displacementMaskSrvGpu);
                 commandList->SetGraphicsRootDescriptorTable(7, g_gpuClouds.dummyShadowSrvGpu);
+                commandList->SetGraphicsRootDescriptorTable(8, g_gpuClouds.dummyShadowSrvGpu);
 
                 ID3D12Resource* shadowIndexBuffer = useTessellation
                     ? g_gpuMeshPreview.displacementPatchIndexBuffer.Get()
@@ -11105,7 +11406,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         cloudShadowCb.cloudShadowEnabled = cloudShadowReady ? 1.0f : 0.0f;
         cloudShadowCb.cloudShadowStrength = cloudShadowReady ? std::clamp(cloudSettingsForShadow.shadowStrength, 0.0f, 1.0f) : 0.0f;
         cloudShadowCb.cloudShadowAltitudeMin = cloudSettingsForShadow.altitudeMin;
-        cloudShadowCb.cloudShadowPadA = 0.0f;
+        cloudShadowCb.aoEnabled = (g_graph.Settings().preview.aoEnabled && aoTextureReady && !g_graph.Evaluation().previewShowsMask) ? 1.0f : 0.0f;
         cloudShadowCb.cloudShadowMinX = shadowMinX;
         cloudShadowCb.cloudShadowMinZ = shadowMinZ;
         cloudShadowCb.cloudShadowSizeX = shadowSizeX;
@@ -11154,7 +11455,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             (sky.mode == rock::SkyMode::Atmospheric) ? std::clamp(sky.atmosphereDensity, 0.05f, 8.0f) : 0.0f;
         cloudShadowCb.atmosphereMieStrength =
             (sky.mode == rock::SkyMode::Atmospheric) ? std::clamp(sky.mieStrength, 0.0f, 8.0f) : 0.0f;
-        cloudShadowCb.pad0 = 0.0f;
+        cloudShadowCb.aoStrength = std::clamp(g_graph.Settings().preview.aoStrength, 0.0f, 1.0f);
         cloudShadowCb.pad1 = 0.0f;
 
         if (g_gpuClouds.meshCbMapped)
@@ -11222,6 +11523,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             commandList->SetGraphicsRootDescriptorTable(5, g_gpuMeshPreview.displacementHeightSrvGpu);
             commandList->SetGraphicsRootDescriptorTable(6, g_gpuMeshPreview.displacementMaskSrvGpu);
             commandList->SetGraphicsRootDescriptorTable(7, g_gpuMeshPreview.meshResourceTableAllocated ? OffsetGpuSrv(g_gpuMeshPreview.meshResourceTableGpu, 4) : g_gpuClouds.dummyShadowSrvGpu);
+            commandList->SetGraphicsRootDescriptorTable(8, g_gpuMeshPreview.meshResourceTableAllocated ? OffsetGpuSrv(g_gpuMeshPreview.meshResourceTableGpu, 5) : g_gpuClouds.dummyShadowSrvGpu);
 
             ID3D12Resource* surfaceIndexBuffer = useTessellation
                 ? g_gpuMeshPreview.displacementPatchIndexBuffer.Get()
@@ -11332,6 +11634,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             commandList->SetGraphicsRootDescriptorTable(5, g_gpuMeshPreview.displacementHeightSrvGpu);
             commandList->SetGraphicsRootDescriptorTable(6, g_gpuMeshPreview.displacementMaskSrvGpu);
             commandList->SetGraphicsRootDescriptorTable(7, g_gpuClouds.dummyShadowSrvGpu);
+            commandList->SetGraphicsRootDescriptorTable(8, g_gpuClouds.dummyShadowSrvGpu);
 
             ID3D12Resource* wireIndexBuffer = useTessellation
                 ? g_gpuMeshPreview.displacementPatchIndexBuffer.Get()

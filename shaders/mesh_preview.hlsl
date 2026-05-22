@@ -29,7 +29,7 @@ cbuffer Constants : register(b0)
     float lightWorldRadius;
     float lightNearPlane;
     float lightFarPlane;
-    float padding2;
+    float lightDepthMin;
 };
 
 cbuffer CloudShadowMeshConstants : register(b1)
@@ -37,7 +37,7 @@ cbuffer CloudShadowMeshConstants : register(b1)
     float cloudShadowEnabled;
     float cloudShadowStrength;
     float cloudShadowAltitudeMin;
-    float cloudShadowPadA;
+    float aoEnabled;  // 0 = off, 1 = on
     float cloudShadowMinX;
     float cloudShadowMinZ;
     float cloudShadowSizeX;
@@ -49,7 +49,7 @@ cbuffer CloudShadowMeshConstants : register(b1)
     float4 sectionColor;
     float atmosphereDensity;
     float atmosphereMieStrength;
-    float atmospherePad0;
+    float aoStrength;     // AO の暗化強度 (0–1)
     float atmospherePad1;
 };
 
@@ -61,6 +61,7 @@ Texture2D<float> cloudShadowMap : register(t1);
 Texture2D<float> displacementHeights : register(t2);
 Texture2D<float> displacementMask : register(t3);
 Texture2D<float4> colorTexture : register(t4);
+Texture2D<float>  aoTexture    : register(t5);
 SamplerState shadowSampler : register(s0);
 SamplerState linearSampler : register(s1);
 
@@ -86,7 +87,7 @@ float3 LightSpace01(float3 worldPos)
     float halfX = max(lightWorldRadius, 1.0);
     float halfY = max(lightNearPlane, 1.0);
     float depthRange = max(lightFarPlane, 1.0);
-    float depthMin = padding2;
+    float depthMin = lightDepthMin;
     return float3(
         dot(view, lightRight.xyz) / (halfX * 2.0) + 0.5,
         dot(view, lightUp.xyz) / (halfY * 2.0) + 0.5,
@@ -587,7 +588,11 @@ float4 PSSurface(VSOut i) : SV_TARGET
         return float4(col, 1.0);
     }
 
-    float light = ambient + key * 0.78 + fill * 0.18 + sky + rim * 0.34;
+    float aoSample = (aoEnabled > 0.5 && maskPreview < 0.5)
+        ? aoTexture.Sample(linearSampler, TerrainTextureUv(i.worldPos))
+        : 1.0;
+    float aoFactor = lerp(1.0, aoSample, aoStrength);
+    float light = ambient * aoFactor + key * 0.78 + fill * 0.18 + sky * aoFactor + rim * 0.34;
     float3 lowland = float3(0.32, 0.38, 0.32);
     float3 highland = float3(0.54, 0.52, 0.46);
     float3 slopeTint = float3(0.43, 0.39, 0.34);
@@ -621,6 +626,7 @@ float4 PSSurface(VSOut i) : SV_TARGET
             skyAmbient = lerp(skyHorizonColor.rgb, skyGroundColor.rgb, -n.y);
         }
         skyAmbient *= ambientStrength;
+        skyAmbient *= aoFactor;
 
         // Cloud shadow attenuates the sun (direct light) fully but only
         // partially attenuates ambient sky light, since clouds scatter light

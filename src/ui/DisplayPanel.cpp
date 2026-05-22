@@ -360,6 +360,25 @@ void DrawDisplaySettingsPanel(DisplayPanelState state)
             }
         }
 
+        ImGui::SeparatorText("アンビエントオクルージョン");
+        if (DrawPropertyBoolRow("AO", "DisplayAOEnabled", &settings.preview.aoEnabled, "AO toggled", "ハイトフィールドから水平線仰角を計算した静的アンビエントオクルージョンです。谷や凹部のアンビエントライトを遮蔽します。ハイトフィールドが変わると自動で再計算されます。", rock::PreviewSettings{}.aoEnabled, true))
+        {
+            SaveAppSettings(state);
+        }
+        if (settings.preview.aoEnabled)
+        {
+            if (DrawPropertyFloatRow("AO 強度", "DisplayAOStrength", &settings.preview.aoStrength, 0.0f, 1.0f, rock::PreviewSettings{}.aoStrength, "AO strength changed", false, "AO がアンビエント項を暗化する強度です。0 で無効、1 で最大。"))
+            {
+                settings.preview.aoStrength = std::clamp(settings.preview.aoStrength, 0.0f, 1.0f);
+                SaveAppSettings(state);
+            }
+            if (DrawPropertyFloatRow("AO 半径 (m)", "DisplayAORadius", &settings.preview.aoRadius, 10.0f, 1000.0f, rock::PreviewSettings{}.aoRadius, "AO radius changed", false, "遮蔽をサンプリングする最大半径です。小さいと岩の窪みや細部のみ暗く、大きいと谷や盆地スケールまで暗くなります。変更時は AO を再計算します。", "%.0f"))
+            {
+                settings.preview.aoRadius = std::clamp(settings.preview.aoRadius, 10.0f, 5000.0f);
+                SaveAppSettings(state);
+            }
+        }
+
         ImGui::SeparatorText("マスクテクスチャー");
         {
             int maskShadingInt = static_cast<int>(settings.preview.maskShading);
