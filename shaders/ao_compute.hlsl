@@ -1,5 +1,5 @@
 // ハイトフィールドベースのホライゾン AO コンピュートシェーダー。
-// 各テクセルから 8 方向にサンプリングし、地平線仰角の最大値から
+// 各テクセルから 8 方向へ指定半径内をサンプリングし、地平線仰角の最大値から
 // 天空可視率を計算してアンビエントオクルージョンを生成する。
 
 cbuffer AOConstants : register(b0)
@@ -23,9 +23,10 @@ void CSAmbientOcclusion(uint3 id : SV_DispatchThreadID)
     if (id.x >= resolution || id.y >= resolution)
         return;
 
-    float2 uv      = (float2(id.xy) + 0.5f) / float(resolution);
-    float  hCenter = inputHeight.SampleLevel(linearSampler, uv, 0);
-    float  invRes  = 1.0f / float(resolution);
+    float2 uv         = (float2(id.xy) + 0.5f) / float(resolution);
+    float  hCenter    = inputHeight.SampleLevel(linearSampler, uv, 0);
+    float  invRes     = 1.0f / float(resolution);
+    float  safeWorldDX = max(worldDX, 0.0001f);
 
     float totalOcclusion = 0.0f;
     for (uint d = 0; d < kNumDirections; ++d)
@@ -36,11 +37,11 @@ void CSAmbientOcclusion(uint3 id : SV_DispatchThreadID)
 
         for (uint s = 1; s <= kNumSamples; ++s)
         {
-            float worldDist = float(s) * worldDX;
-            if (worldDist > maxDistanceMeters)
-                break;
+            float sampleT = float(s) / float(kNumSamples);
+            float worldDist = max(0.001f, sampleT * sampleT * maxDistanceMeters);
+            float texelDist = worldDist / safeWorldDX;
 
-            float2 sampleUv = uv + dir * (float(s) * invRes);
+            float2 sampleUv = uv + dir * (texelDist * invRes);
             if (any(sampleUv < 0.0f) || any(sampleUv > 1.0f))
                 break;
             float hSample   = inputHeight.SampleLevel(linearSampler, sampleUv, 0);
