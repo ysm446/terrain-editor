@@ -32,6 +32,40 @@ struct DebugPanelRenderStats
     uint64_t displayedTriangles = 0;
 };
 
+struct DebugPanelFrameTiming
+{
+    float frameMs = 0.0f;
+    float messagePumpMs = 0.0f;
+    float newFrameMs = 0.0f;
+    float mainThreadWorkMs = 0.0f;
+    float drawUiMs = 0.0f;
+    float viewportTabsMs = 0.0f;
+    float nodeEditorMs = 0.0f;
+    float nodeEditorDotsMs = 0.0f;
+    float nodeEditorShadowsMs = 0.0f;
+    float nodeEditorNodesMs = 0.0f;
+    float nodeEditorLinksMs = 0.0f;
+    float nodeEditorInteractionMs = 0.0f;
+    float nodeEditorPositionMs = 0.0f;
+    float inspectorMs = 0.0f;
+    float statusBarMs = 0.0f;
+    float gpuPreviewMs = 0.0f;
+    float imguiRenderMs = 0.0f;
+    float renderFrameMs = 0.0f;
+    float presentMs = 0.0f;
+    float frameLimitSleepMs = 0.0f;
+    float backgroundSleepMs = 0.0f;
+    float fenceWaitMs = 0.0f;
+    int frameRateLimitFps = 0;
+    bool windowActive = true;
+    bool windowForeground = true;
+    bool windowMinimized = false;
+    bool backgroundThrottled = false;
+    std::string gpuPreviewReason;
+    int nodeCount = 0;
+    int linkCount = 0;
+};
+
 struct DebugPanelState
 {
     rock::GraphSettings& settings;
@@ -39,6 +73,7 @@ struct DebugPanelState
     const std::string& lastEvaluationDuration;
     bool& showDrawStats;
     DebugPanelRenderStats renderStats;
+    DebugPanelFrameTiming frameTiming;
     std::function<void()> saveAppSettings;
 };
 

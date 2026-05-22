@@ -312,6 +312,43 @@ struct PreviewRenderStats
     bool cloudsPass = false;
 };
 
+struct FrameTimingStats
+{
+    double frameMs = 0.0;
+    double messagePumpMs = 0.0;
+    double newFrameMs = 0.0;
+    double mainThreadWorkMs = 0.0;
+    double drawUiMs = 0.0;
+    double viewportTabsMs = 0.0;
+    double nodeEditorMs = 0.0;
+    double nodeEditorDotsMs = 0.0;
+    double nodeEditorShadowsMs = 0.0;
+    double nodeEditorNodesMs = 0.0;
+    double nodeEditorLinksMs = 0.0;
+    double nodeEditorInteractionMs = 0.0;
+    double nodeEditorPositionMs = 0.0;
+    double inspectorMs = 0.0;
+    double statusBarMs = 0.0;
+    double gpuPreviewMs = 0.0;
+    double imguiRenderMs = 0.0;
+    double renderFrameMs = 0.0;
+    double presentMs = 0.0;
+    double frameLimitSleepMs = 0.0;
+    double backgroundSleepMs = 0.0;
+    double fenceWaitMs = 0.0;
+    int frameRateLimitFps = 0;
+    bool windowActive = true;
+    bool windowForeground = true;
+    bool windowMinimized = false;
+    bool backgroundThrottled = false;
+    std::string gpuPreviewReason;
+    int nodeCount = 0;
+    int linkCount = 0;
+};
+
+FrameTimingStats g_frameTiming;
+FrameTimingStats g_lastFrameTiming;
+
 enum class ViewportDisplayMode
 {
     Simple,
@@ -1175,8 +1212,11 @@ void WaitForFenceValue(UINT64 value)
         return;
     }
 
+    const auto waitStart = std::chrono::steady_clock::now();
     ThrowIfFailed(g_fence->SetEventOnCompletion(value, g_fenceEvent), "SetEventOnCompletion failed");
     WaitForSingleObject(g_fenceEvent, INFINITE);
+    const auto waitEnd = std::chrono::steady_clock::now();
+    g_frameTiming.fenceWaitMs += std::chrono::duration<double, std::milli>(waitEnd - waitStart).count();
 }
 
 void WaitForLastSubmittedFrame()
@@ -10848,6 +10888,89 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         (showTerrainBoundaryLines && !g_gpuMeshPreview.terrainBoundaryLineVertexBuffer) ||
         g_gpuMeshPreview.colorState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE ||
         (useDepthOfField && g_gpuMeshPreview.postState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    auto addDirtyReason = [](std::string& reason, const char* text) {
+        if (!reason.empty())
+        {
+            reason += ", ";
+        }
+        reason += text;
+    };
+    std::string dirtyReason;
+    if (meshDirty) addDirtyReason(dirtyReason, "mesh");
+    if (g_gpuMeshPreview.yaw != g_viewport.yaw || g_gpuMeshPreview.pitch != g_viewport.pitch ||
+        g_gpuMeshPreview.fovDegrees != g_viewport.fovDegrees || g_gpuMeshPreview.orbitDistance != g_viewport.orbitDistance ||
+        g_gpuMeshPreview.pan.x != g_viewport.pan.x || g_gpuMeshPreview.pan.y != g_viewport.pan.y)
+    {
+        addDirtyReason(dirtyReason, "camera");
+    }
+    if (g_gpuMeshPreview.showSurface != showSurface || g_gpuMeshPreview.showWireframe != showWireframe ||
+        g_gpuMeshPreview.showGrid != showGrid)
+    {
+        addDirtyReason(dirtyReason, "visibility");
+    }
+    if (g_gpuMeshPreview.skyMode != static_cast<int>(g_graph.Settings().sky.mode) ||
+        g_gpuMeshPreview.skyAtmosphereDensity != g_graph.Settings().sky.atmosphereDensity ||
+        g_gpuMeshPreview.skyMieStrength != g_graph.Settings().sky.mieStrength ||
+        g_gpuMeshPreview.skyMieEccentricity != g_graph.Settings().sky.mieEccentricity ||
+        g_gpuMeshPreview.skyGroundAlbedo != g_graph.Settings().sky.groundAlbedo ||
+        g_gpuMeshPreview.skySunSizeDegrees != g_graph.Settings().sky.sunSizeDegrees ||
+        g_gpuMeshPreview.skySunGlowStrength != g_graph.Settings().sky.sunGlowStrength)
+    {
+        addDirtyReason(dirtyReason, "sky");
+    }
+    const bool cloudsAnimated =
+        g_graph.Settings().sky.mode == rock::SkyMode::Atmospheric &&
+        g_graph.Settings().clouds.enabled &&
+        g_graph.Settings().clouds.animate &&
+        g_graph.Settings().clouds.windSpeedMetersPerSec > 0.0f;
+    if (cloudsAnimated)
+    {
+        addDirtyReason(dirtyReason, "cloud animation");
+    }
+    else if (g_gpuMeshPreview.cloudsEnabled != ((g_graph.Settings().sky.mode == rock::SkyMode::Atmospheric && g_graph.Settings().clouds.enabled) ? 1 : 0) ||
+        g_gpuMeshPreview.cloudSeed != g_graph.Settings().clouds.seed ||
+        g_gpuMeshPreview.cloudCoverage != g_graph.Settings().clouds.coverage ||
+        g_gpuMeshPreview.cloudDensityMultiplier != g_graph.Settings().clouds.densityMultiplier ||
+        g_gpuMeshPreview.cloudAltitudeMin != g_graph.Settings().clouds.altitudeMin ||
+        g_gpuMeshPreview.cloudAltitudeMax != g_graph.Settings().clouds.altitudeMax ||
+        g_gpuMeshPreview.cloudHorizontalScale != g_graph.Settings().clouds.horizontalScale ||
+        g_gpuMeshPreview.cloudAbsorption != g_graph.Settings().clouds.absorption ||
+        g_gpuMeshPreview.cloudColor != g_graph.Settings().clouds.color ||
+        g_gpuMeshPreview.cloudAnimate != (g_graph.Settings().clouds.animate ? 1 : 0) ||
+        g_gpuMeshPreview.cloudLoopPhase != g_graph.Settings().clouds.loopPhase ||
+        g_gpuMeshPreview.cloudWindDirectionDegrees != g_graph.Settings().clouds.windDirectionDegrees ||
+        g_gpuMeshPreview.cloudWindSpeed != g_graph.Settings().clouds.windSpeedMetersPerSec ||
+        g_gpuMeshPreview.cloudQualitySamples != g_graph.Settings().clouds.qualitySamples ||
+        g_gpuMeshPreview.cloudShadowStrength != g_graph.Settings().clouds.shadowStrength ||
+        g_gpuMeshPreview.cloudShadowResolution != g_graph.Settings().clouds.shadowResolution ||
+        g_gpuMeshPreview.cloudShadowSamples != g_graph.Settings().clouds.shadowSamples ||
+        g_gpuMeshPreview.cloudFieldRadius != g_graph.Settings().clouds.fieldRadius ||
+        g_gpuMeshPreview.cloudFieldFalloff != g_graph.Settings().clouds.fieldFalloff ||
+        g_gpuMeshPreview.cloudLightSamples != g_graph.Settings().clouds.lightSamples ||
+        g_gpuMeshPreview.cloudLightStepMeters != g_graph.Settings().clouds.lightStepMeters ||
+        g_gpuMeshPreview.cloudPhaseEccentricity != g_graph.Settings().clouds.phaseEccentricity)
+    {
+        addDirtyReason(dirtyReason, "cloud settings");
+    }
+    if (g_gpuMeshPreview.meshBackend != static_cast<int>(g_graph.Settings().preview.meshBackend) ||
+        g_gpuMeshPreview.viewportTessellation != g_graph.Settings().preview.viewportTessellation ||
+        g_gpuMeshPreview.tessellationMinFactor != g_graph.Settings().preview.tessellationMinFactor ||
+        g_gpuMeshPreview.tessellationMaxFactor != g_graph.Settings().preview.tessellationMaxFactor ||
+        g_gpuMeshPreview.tessellationNearDistance != g_graph.Settings().preview.tessellationNearDistance ||
+        g_gpuMeshPreview.tessellationFarDistance != g_graph.Settings().preview.tessellationFarDistance)
+    {
+        addDirtyReason(dirtyReason, "mesh backend");
+    }
+    if (g_gpuMeshPreview.colorState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE ||
+        (useDepthOfField && g_gpuMeshPreview.postState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE))
+    {
+        addDirtyReason(dirtyReason, "resource state");
+    }
+    if (dirtyReason.empty() && viewportDirty)
+    {
+        addDirtyReason(dirtyReason, "other viewport setting");
+    }
+    g_frameTiming.gpuPreviewReason = dirtyReason.empty() ? "cached" : dirtyReason;
     if (!meshDirty && !viewportDirty) return true;
 
     try
@@ -11999,10 +12122,13 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
 void DrawGpuMeshPreview(ImDrawList* drawList, const ImVec2& min, const ImVec2& max,
                         const rock::MeshData& mesh, bool showSurface, bool showWireframe)
 {
+    const auto previewStart = std::chrono::steady_clock::now();
     std::string error;
     if (!RenderGpuMeshPreview(min, max, showSurface, showWireframe, &error))
     {
         DrawMeshPreview(drawList, min, max, mesh, showSurface, showWireframe);
+        const auto previewEnd = std::chrono::steady_clock::now();
+        g_frameTiming.gpuPreviewMs += std::chrono::duration<double, std::milli>(previewEnd - previewStart).count();
         return;
     }
     const bool usePostImage =
@@ -12023,6 +12149,8 @@ void DrawGpuMeshPreview(ImDrawList* drawList, const ImVec2& min, const ImVec2& m
         drawList->AddImage(static_cast<ImTextureID>(imageSrv.ptr), snappedMin, snappedMax);
         drawList->PopClipRect();
     }
+    const auto previewEnd = std::chrono::steady_clock::now();
+    g_frameTiming.gpuPreviewMs += std::chrono::duration<double, std::milli>(previewEnd - previewStart).count();
 }
 
 ViewportDisplayMode CurrentViewportDisplayMode(const rock::GraphSettings& settings)
@@ -12194,8 +12322,7 @@ void DrawViewportCube(const ImVec2& min, const ImVec2& max, float timeSeconds)
     drawList->AddRectFilled(min, max, ColorToU32(ImVec4(viewportBackground[0], viewportBackground[1], viewportBackground[2], 1.0f)));
     const rock::PreviewSettings& preview = g_graph.Settings().preview;
     const bool drawMeshSurface = g_ui.meshPreview;
-    const bool drawGpuViewport = drawMeshSurface || preview.showGrid;
-    if (drawGpuViewport)
+    if (drawMeshSurface)
     {
         DrawGpuMeshPreview(drawList, min, max, g_graph.Evaluation().previewMesh,
                            drawMeshSurface && preview.showSurface,
@@ -12207,7 +12334,9 @@ void DrawViewportCube(const ImVec2& min, const ImVec2& max, float timeSeconds)
     if (g_ui.showFps)
     {
         char fpsText[32]{};
-        std::snprintf(fpsText, sizeof(fpsText), "FPS %.1f", ImGui::GetIO().Framerate);
+        const double measuredFrameMs = g_lastFrameTiming.frameMs;
+        const double measuredFps = measuredFrameMs > 0.0001 ? 1000.0 / measuredFrameMs : 0.0;
+        std::snprintf(fpsText, sizeof(fpsText), "FPS %.1f", measuredFps);
         const ImVec2 fpsSize = ImGui::CalcTextSize(fpsText);
         const ImVec2 fpsPadding(9.0f, 5.0f);
         const ImVec2 fpsMax(max.x - 14.0f, overlayTop + fpsSize.y + fpsPadding.y * 2.0f);
@@ -12274,6 +12403,7 @@ ImU32 MapPreviewColor(float value, bool mask, rock::MaskShadingMode mode, int ce
 
 void DrawHeightfieldMapPreview(const ImVec2& min, const ImVec2& max)
 {
+    constexpr int kMaxMapPreviewSamples = 256;
     UpdateMapViewportInteraction(min, max);
 
     ImDrawList* drawList = ImGui::GetWindowDrawList();
@@ -12330,7 +12460,7 @@ void DrawHeightfieldMapPreview(const ImVec2& min, const ImVec2& max)
         drawList->PushClipRect(ImVec2(min.x + 1.0f, min.y + 42.0f), ImVec2(max.x - 1.0f, max.y - 1.0f), true);
         drawList->AddRectFilled(mapMin, mapMax, IM_COL32(18, 20, 20, 255));
         const int res = cg.resolution;
-        const int maxVisibleSamples = std::clamp(static_cast<int>(std::ceil(mapSize)), 2, 1024);
+        const int maxVisibleSamples = std::clamp(static_cast<int>(std::ceil(mapSize)), 2, kMaxMapPreviewSamples);
         const int samples = std::clamp(std::min(res, maxVisibleSamples), 2, res);
         const float cellSize = mapSize / static_cast<float>(samples);
         for (int z = 0; z < samples; ++z)
@@ -12348,7 +12478,15 @@ void DrawHeightfieldMapPreview(const ImVec2& min, const ImVec2& max)
         drawList->AddRect(mapMin, mapMax, ThemeColor("border", ImVec4(0.20f, 0.23f, 0.22f, 0.85f)));
         drawList->PopClipRect();
         char info[128]{};
-        std::snprintf(info, sizeof(info), "%d x %d / zoom %.2fx", res, res, g_mapViewport.zoom);
+        const bool downsampled = samples != res;
+        if (downsampled)
+        {
+            std::snprintf(info, sizeof(info), "%d x %d texture / %d x %d drawn / zoom %.2fx", res, res, samples, samples, g_mapViewport.zoom);
+        }
+        else
+        {
+            std::snprintf(info, sizeof(info), "%d x %d texture / zoom %.2fx", res, res, g_mapViewport.zoom);
+        }
         drawList->AddText(ImVec2(min.x + 16.0f, max.y - 28.0f), ThemeColor("mutedText", ImVec4(0.54f, 0.59f, 0.56f, 1.0f)), info);
         return;
     }
@@ -12381,7 +12519,7 @@ void DrawHeightfieldMapPreview(const ImVec2& min, const ImVec2& max)
     drawList->PushClipRect(ImVec2(min.x + 1.0f, min.y + 42.0f), ImVec2(max.x - 1.0f, max.y - 1.0f), true);
     drawList->AddRectFilled(mapMin, mapMax, IM_COL32(18, 20, 20, 255));
 
-    const int maxVisibleSamples = std::clamp(static_cast<int>(std::ceil(mapSize)), 2, 1024);
+    const int maxVisibleSamples = std::clamp(static_cast<int>(std::ceil(mapSize)), 2, kMaxMapPreviewSamples);
     const int samples = std::clamp(std::min(gridResolution, maxVisibleSamples), 2, gridResolution);
     const float cellSize = mapSize / static_cast<float>(samples);
     for (int z = 0; z < samples; ++z)
@@ -12879,18 +13017,22 @@ void DrawNodeGraphDots(const ImVec2& screenMin, const ImVec2& screenMax)
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     const ImVec2 canvasMin = ed::ScreenToCanvas(screenMin);
     const ImVec2 canvasMax = ed::ScreenToCanvas(screenMax);
-    constexpr float spacing = 24.0f;
-
-    const float startX = std::floor(std::min(canvasMin.x, canvasMax.x) / spacing) * spacing;
-    const float endX = std::ceil(std::max(canvasMin.x, canvasMax.x) / spacing) * spacing;
-    const float startY = std::floor(std::min(canvasMin.y, canvasMax.y) / spacing) * spacing;
-    const float endY = std::ceil(std::max(canvasMin.y, canvasMax.y) / spacing) * spacing;
+    constexpr float baseSpacing = 24.0f;
     const ImU32 backgroundColor = ThemeColor("nodeEditorBg", ImVec4(0.115f, 0.115f, 0.115f, 1.0f));
     const ImU32 dotColor = ThemeColor("nodeGridDot", ImVec4(0.255f, 0.255f, 0.255f, 0.46f));
 
     ed::Suspend();
     drawList->PushClipRect(screenMin, screenMax, true);
     drawList->AddRectFilled(screenMin, screenMax, backgroundColor);
+    const ImVec2 screen0 = ed::CanvasToScreen(ImVec2(0.0f, 0.0f));
+    const ImVec2 screenStep = ed::CanvasToScreen(ImVec2(baseSpacing, 0.0f));
+    const float baseScreenSpacing = std::max(1.0f, std::abs(screenStep.x - screen0.x));
+    const float spacingMultiplier = std::max(1.0f, std::ceil(12.0f / baseScreenSpacing));
+    const float spacing = baseSpacing * spacingMultiplier;
+    const float startX = std::floor(std::min(canvasMin.x, canvasMax.x) / spacing) * spacing;
+    const float endX = std::ceil(std::max(canvasMin.x, canvasMax.x) / spacing) * spacing;
+    const float startY = std::floor(std::min(canvasMin.y, canvasMax.y) / spacing) * spacing;
+    const float endY = std::ceil(std::max(canvasMin.y, canvasMax.y) / spacing) * spacing;
     for (float y = startY; y <= endY; y += spacing)
     {
         for (float x = startX; x <= endX; x += spacing)
@@ -12900,7 +13042,7 @@ void DrawNodeGraphDots(const ImVec2& screenMin, const ImVec2& screenMax)
             {
                 continue;
             }
-            drawList->AddCircleFilled(screen, 1.15f, dotColor, 8);
+            drawList->AddRectFilled(ImVec2(screen.x - 1.0f, screen.y - 1.0f), ImVec2(screen.x + 1.0f, screen.y + 1.0f), dotColor);
         }
     }
     drawList->PopClipRect();
@@ -13045,6 +13187,8 @@ void PasteNodesFromClipboard(const ImVec2& pasteCenter)
 void DrawNodeGraph()
 {
     static ImVec2 addNodePosition(0.0f, 0.0f);
+    g_frameTiming.nodeCount = static_cast<int>(g_graph.Nodes().size());
+    g_frameTiming.linkCount = static_cast<int>(g_graph.Links().size());
     NodeEditorContextScope editorScope(g_nodeEditor);
     g_nodeEditorFrameActive = true;
     const ImVec2 canvasMin = ImGui::GetCursorScreenPos();
@@ -13055,10 +13199,18 @@ void DrawNodeGraph()
     ed::PushStyleColor(ed::StyleColor_HovNodeBorder, activeNodeBorderColor);
     ed::PushStyleColor(ed::StyleColor_SelNodeBorder, activeNodeBorderColor);
     ed::Begin("Rock Node Graph", ImGui::GetContentRegionAvail());
+    const auto dotsStart = std::chrono::steady_clock::now();
     DrawNodeGraphDots(canvasMin, canvasMax);
+    const auto dotsEnd = std::chrono::steady_clock::now();
+    g_frameTiming.nodeEditorDotsMs = std::chrono::duration<double, std::milli>(dotsEnd - dotsStart).count();
+
+    const auto shadowsStart = std::chrono::steady_clock::now();
     DrawRockNodeShadows();
+    const auto shadowsEnd = std::chrono::steady_clock::now();
+    g_frameTiming.nodeEditorShadowsMs = std::chrono::duration<double, std::milli>(shadowsEnd - shadowsStart).count();
 
     const bool hasPendingNodePositions = !g_pendingNodePositions.empty();
+    const auto nodesStart = std::chrono::steady_clock::now();
     for (const rock::Node& node : g_graph.Nodes())
     {
         DrawRockNode(node);
@@ -13081,6 +13233,8 @@ void DrawNodeGraph()
             ed::SetNodePosition(ed::NodeId(node.id), InitialNodePosition(node.kind));
         }
     }
+    const auto nodesEnd = std::chrono::steady_clock::now();
+    g_frameTiming.nodeEditorNodesMs = std::chrono::duration<double, std::milli>(nodesEnd - nodesStart).count();
     if (hasPendingNodePositions)
     {
         g_pendingNodePositions.clear();
@@ -13093,6 +13247,7 @@ void DrawNodeGraph()
         g_nodeGraphNavigatedToContent = true;
     }
 
+    const auto interactionStart = std::chrono::steady_clock::now();
     if (!g_pendingSelectedNodeIds.empty())
     {
         ApplyNodeSelection(g_pendingSelectedNodeIds);
@@ -13109,10 +13264,13 @@ void DrawNodeGraph()
         PasteNodesFromClipboard(CurrentNodeViewCenter(canvasMin, canvasMax));
     }
 
+    const auto linksStart = std::chrono::steady_clock::now();
     for (const rock::Link& link : g_graph.Links())
     {
         ed::Link(ed::LinkId(link.id), ed::PinId(link.startPin), ed::PinId(link.endPin), LinkColor(link), 2.5f);
     }
+    const auto linksEnd = std::chrono::steady_clock::now();
+    g_frameTiming.nodeEditorLinksMs = std::chrono::duration<double, std::milli>(linksEnd - linksStart).count();
 
     if (ed::BeginCreate(ImVec4(0.52f, 0.70f, 0.59f, 1.0f), 2.5f))
     {
@@ -13293,8 +13451,11 @@ void DrawNodeGraph()
     {
         g_selectedNodeId = 0;
     }
+    const auto interactionEnd = std::chrono::steady_clock::now();
+    g_frameTiming.nodeEditorInteractionMs = std::chrono::duration<double, std::milli>(interactionEnd - interactionStart).count();
 
     ed::End();
+    const auto positionStart = std::chrono::steady_clock::now();
     std::vector<std::pair<rock::GraphId, ImVec2>> currentNodePositions;
     currentNodePositions.reserve(g_graph.Nodes().size());
     for (const rock::Node& node : g_graph.Nodes())
@@ -13321,6 +13482,8 @@ void DrawNodeGraph()
     }
     g_nodePositionCache = std::move(currentNodePositions);
     g_skipNodeMoveUndoThisFrame = false;
+    const auto positionEnd = std::chrono::steady_clock::now();
+    g_frameTiming.nodeEditorPositionMs = std::chrono::duration<double, std::milli>(positionEnd - positionStart).count();
     ed::PopStyleColor(4);
     g_nodeEditorFrameActive = false;
 }
@@ -13419,6 +13582,38 @@ void DrawDebugPanel()
             renderStats.cloudsPass,
             displayedVertices,
             displayedTriangles,
+        },
+        {
+            static_cast<float>(g_lastFrameTiming.frameMs),
+            static_cast<float>(g_lastFrameTiming.messagePumpMs),
+            static_cast<float>(g_lastFrameTiming.newFrameMs),
+            static_cast<float>(g_lastFrameTiming.mainThreadWorkMs),
+            static_cast<float>(g_lastFrameTiming.drawUiMs),
+            static_cast<float>(g_lastFrameTiming.viewportTabsMs),
+            static_cast<float>(g_lastFrameTiming.nodeEditorMs),
+            static_cast<float>(g_lastFrameTiming.nodeEditorDotsMs),
+            static_cast<float>(g_lastFrameTiming.nodeEditorShadowsMs),
+            static_cast<float>(g_lastFrameTiming.nodeEditorNodesMs),
+            static_cast<float>(g_lastFrameTiming.nodeEditorLinksMs),
+            static_cast<float>(g_lastFrameTiming.nodeEditorInteractionMs),
+            static_cast<float>(g_lastFrameTiming.nodeEditorPositionMs),
+            static_cast<float>(g_lastFrameTiming.inspectorMs),
+            static_cast<float>(g_lastFrameTiming.statusBarMs),
+            static_cast<float>(g_lastFrameTiming.gpuPreviewMs),
+            static_cast<float>(g_lastFrameTiming.imguiRenderMs),
+            static_cast<float>(g_lastFrameTiming.renderFrameMs),
+            static_cast<float>(g_lastFrameTiming.presentMs),
+            static_cast<float>(g_lastFrameTiming.frameLimitSleepMs),
+            static_cast<float>(g_lastFrameTiming.backgroundSleepMs),
+            static_cast<float>(g_lastFrameTiming.fenceWaitMs),
+            g_lastFrameTiming.frameRateLimitFps,
+            g_lastFrameTiming.windowActive,
+            g_lastFrameTiming.windowForeground,
+            g_lastFrameTiming.windowMinimized,
+            g_lastFrameTiming.backgroundThrottled,
+            g_lastFrameTiming.gpuPreviewReason,
+            g_lastFrameTiming.nodeCount,
+            g_lastFrameTiming.linkCount,
         },
         []() { SaveAppSettingsSilently(); },
     });
@@ -13852,7 +14047,10 @@ void DrawUi()
     ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.0f);
 
     const TabHeaderStyle defaultTabStyle;
+    const auto viewportTabsStart = std::chrono::steady_clock::now();
     DrawViewportTabs(previewWidth, workHeight, timeSeconds, fixedPaneFlags);
+    const auto viewportTabsEnd = std::chrono::steady_clock::now();
+    g_frameTiming.viewportTabsMs = std::chrono::duration<double, std::milli>(viewportTabsEnd - viewportTabsStart).count();
 
     if (DrawVerticalSplitter("MainLayoutSplitter", &previewWidth, content.x, paneMinWidth, paneMinWidth, workHeight))
     {
@@ -13884,7 +14082,10 @@ void DrawUi()
         g_ui.nodePaneHeight = nodePaneHeight;
     }
 
+    const auto nodeEditorStart = std::chrono::steady_clock::now();
     DrawNodeNetworkTabs(nodePaneHeight, fixedPaneFlags);
+    const auto nodeEditorEnd = std::chrono::steady_clock::now();
+    g_frameTiming.nodeEditorMs = std::chrono::duration<double, std::milli>(nodeEditorEnd - nodeEditorStart).count();
 
     const bool inspectorSplitterReleased = DrawHorizontalSplitter("InspectorLayoutSplitter", &nodePaneHeight, rightColumnHeight, 160.0f, 160.0f);
     if (inspectorLayoutCanFit)
@@ -13896,6 +14097,7 @@ void DrawUi()
         SaveAppSettingsSilently();
     }
 
+    const auto inspectorStart = std::chrono::steady_clock::now();
     ImGui::BeginChild("Inspector", ImVec2(0.0f, 0.0f), false);
     PushTabHeaderStyle(defaultTabStyle);
     if (ImGui::BeginTabBar("InspectorTabs"))
@@ -13946,9 +14148,12 @@ void DrawUi()
     }
     PopTabHeaderStyle();
     ImGui::EndChild();
+    const auto inspectorEnd = std::chrono::steady_clock::now();
+    g_frameTiming.inspectorMs = std::chrono::duration<double, std::milli>(inspectorEnd - inspectorStart).count();
     ImGui::EndChild();
     ImGui::PopStyleVar(2);
 
+    const auto statusBarStart = std::chrono::steady_clock::now();
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 4.0f));
     ImGui::BeginChild("Status Bar", ImVec2(0.0f, statusBarHeight), true, fixedPaneFlags);
     const rock::EvaluationSummary& evaluation = g_graph.Evaluation();
@@ -13963,6 +14168,8 @@ void DrawUi()
     ImGui::Text("| %s | %s | %s | %s", rock::ToString(evaluation.previewStage).data(), g_lastEvaluationDuration.c_str(), g_projectStatus.c_str(), g_exportStatus.c_str());
     ImGui::EndChild();
     ImGui::PopStyleVar();
+    const auto statusBarEnd = std::chrono::steady_clock::now();
+    g_frameTiming.statusBarMs = std::chrono::duration<double, std::milli>(statusBarEnd - statusBarStart).count();
 
     ImGui::PopStyleVar(3);
 
@@ -13972,6 +14179,7 @@ void DrawUi()
 
 void RenderFrame()
 {
+    const auto renderStart = std::chrono::steady_clock::now();
     FrameContext& frameContext = WaitForNextFrameResources();
     ThrowIfFailed(frameContext.commandAllocator->Reset(), "CommandAllocator reset failed");
 
@@ -14004,45 +14212,61 @@ void RenderFrame()
 
     ID3D12CommandList* commandLists[] = {g_commandList.Get()};
     g_commandQueue->ExecuteCommandLists(1, commandLists);
+    const auto presentStart = std::chrono::steady_clock::now();
     ThrowIfFailed(g_swapChain->Present(0, 0), "Present failed");
+    const auto presentEnd = std::chrono::steady_clock::now();
+    g_frameTiming.presentMs = std::chrono::duration<double, std::milli>(presentEnd - presentStart).count();
 
     const UINT64 fenceValue = ++g_fenceLastSignaledValue;
     ThrowIfFailed(g_commandQueue->Signal(g_fence.Get(), fenceValue), "Signal failed");
     frameContext.fenceValue = fenceValue;
+    const auto renderEnd = std::chrono::steady_clock::now();
+    g_frameTiming.renderFrameMs = std::chrono::duration<double, std::milli>(renderEnd - renderStart).count();
 }
 
-void ApplyFrameRateLimit()
+void ApplyFrameRateLimit(std::chrono::steady_clock::time_point frameStart)
 {
     using Clock = std::chrono::steady_clock;
-    static int previousLimitFps = -1;
-    static Clock::time_point nextFrameTime = Clock::now();
 
     const int limitFps = ClampFrameRateLimitFps(g_graph.Settings().preview.frameRateLimitFps);
-    const Clock::time_point now = Clock::now();
     if (limitFps <= 0)
     {
-        previousLimitFps = limitFps;
-        nextFrameTime = now;
+        g_frameTiming.frameLimitSleepMs = 0.0;
         return;
     }
 
     const auto frameDuration = std::chrono::duration_cast<Clock::duration>(
         std::chrono::duration<double>(1.0 / static_cast<double>(limitFps)));
-    if (previousLimitFps != limitFps || nextFrameTime < now - frameDuration)
-    {
-        nextFrameTime = now + frameDuration;
-    }
+    const Clock::time_point targetFrameEnd = frameStart + frameDuration;
+    const Clock::time_point now = Clock::now();
 
-    if (now < nextFrameTime)
+    if (now < targetFrameEnd)
     {
-        std::this_thread::sleep_until(nextFrameTime);
-        nextFrameTime += frameDuration;
+        const auto sleepStart = Clock::now();
+        while (true)
+        {
+            const Clock::time_point loopNow = Clock::now();
+            if (loopNow >= targetFrameEnd)
+            {
+                break;
+            }
+            const auto remaining = targetFrameEnd - loopNow;
+            if (remaining > std::chrono::milliseconds(2))
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            else
+            {
+                std::this_thread::yield();
+            }
+        }
+        const auto sleepEnd = Clock::now();
+        g_frameTiming.frameLimitSleepMs = std::chrono::duration<double, std::milli>(sleepEnd - sleepStart).count();
     }
     else
     {
-        nextFrameTime = now + frameDuration;
+        g_frameTiming.frameLimitSleepMs = 0.0;
     }
-    previousLimitFps = limitFps;
 }
 
 void ProcessMainThreadEvaluationWork()
@@ -14083,6 +14307,21 @@ void UpdateCloudLoopPhase(float deltaSeconds)
 
 LRESULT WINAPI WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
+    switch (msg)
+    {
+    case WM_ACTIVATEAPP:
+        g_windowActive = (wParam != FALSE);
+        break;
+    case WM_ACTIVATE:
+        g_windowActive = (LOWORD(wParam) != WA_INACTIVE);
+        break;
+    case WM_SIZE:
+        g_windowMinimized = (wParam == SIZE_MINIMIZED);
+        break;
+    default:
+        break;
+    }
+
     if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wParam, lParam))
     {
         return true;
@@ -14090,9 +14329,6 @@ LRESULT WINAPI WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
     switch (msg)
     {
-    case WM_ACTIVATEAPP:
-        g_windowActive = (wParam != FALSE);
-        return 0;
     case WM_SETTEXT:
         if (!g_windowTitle.empty())
         {
@@ -14100,7 +14336,6 @@ LRESULT WINAPI WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
         break;
     case WM_SIZE:
-        g_windowMinimized = (wParam == SIZE_MINIMIZED);
         if (!g_windowMinimized)
         {
             ResizeSwapChain(static_cast<UINT>(LOWORD(lParam)), static_cast<UINT>(HIWORD(lParam)));
@@ -14221,6 +14456,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         MSG msg{};
         while (g_running)
         {
+            const auto frameStart = std::chrono::steady_clock::now();
+            g_frameTiming = {};
+            g_frameTiming.frameRateLimitFps = ClampFrameRateLimitFps(g_graph.Settings().preview.frameRateLimitFps);
+
+            const auto messagePumpStart = std::chrono::steady_clock::now();
             while (PeekMessage(&msg, nullptr, 0U, 0U, PM_REMOVE))
             {
                 TranslateMessage(&msg);
@@ -14230,29 +14470,61 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
                     g_running = false;
                 }
             }
+            const auto messagePumpEnd = std::chrono::steady_clock::now();
+            g_frameTiming.messagePumpMs = std::chrono::duration<double, std::milli>(messagePumpEnd - messagePumpStart).count();
 
             if (!g_running)
             {
                 break;
             }
 
-            if (!g_windowActive || g_windowMinimized)
+            const bool windowForeground = (GetForegroundWindow() == g_hwnd);
+            const bool windowMinimized = g_windowMinimized || IsIconic(g_hwnd);
+            g_frameTiming.windowActive = g_windowActive;
+            g_frameTiming.windowForeground = windowForeground;
+            g_frameTiming.windowMinimized = windowMinimized;
+            if ((!g_windowActive && !windowForeground) || windowMinimized)
             {
+                g_frameTiming.backgroundThrottled = true;
                 ProcessMainThreadEvaluationWork();
+                const auto sleepStart = std::chrono::steady_clock::now();
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                const auto sleepEnd = std::chrono::steady_clock::now();
+                g_frameTiming.backgroundSleepMs = std::chrono::duration<double, std::milli>(sleepEnd - sleepStart).count();
+                g_frameTiming.frameMs = std::chrono::duration<double, std::milli>(sleepEnd - frameStart).count();
+                g_lastFrameTiming = g_frameTiming;
                 continue;
             }
 
+            const auto newFrameStart = std::chrono::steady_clock::now();
             ImGui_ImplDX12_NewFrame();
             ImGui_ImplWin32_NewFrame();
             ImGui::NewFrame();
+            const auto newFrameEnd = std::chrono::steady_clock::now();
+            g_frameTiming.newFrameMs = std::chrono::duration<double, std::milli>(newFrameEnd - newFrameStart).count();
+
             UpdateCloudLoopPhase(ImGui::GetIO().DeltaTime);
             UpdateColorizeScreenPick(g_graph);
+            const auto mainThreadWorkStart = std::chrono::steady_clock::now();
             ProcessMainThreadEvaluationWork();
+            const auto mainThreadWorkEnd = std::chrono::steady_clock::now();
+            g_frameTiming.mainThreadWorkMs = std::chrono::duration<double, std::milli>(mainThreadWorkEnd - mainThreadWorkStart).count();
+
+            const auto drawUiStart = std::chrono::steady_clock::now();
             DrawUi();
+            const auto drawUiEnd = std::chrono::steady_clock::now();
+            g_frameTiming.drawUiMs = std::chrono::duration<double, std::milli>(drawUiEnd - drawUiStart).count();
+
+            const auto imguiRenderStart = std::chrono::steady_clock::now();
             ImGui::Render();
+            const auto imguiRenderEnd = std::chrono::steady_clock::now();
+            g_frameTiming.imguiRenderMs = std::chrono::duration<double, std::milli>(imguiRenderEnd - imguiRenderStart).count();
+
             RenderFrame();
-            ApplyFrameRateLimit();
+            ApplyFrameRateLimit(frameStart);
+            const auto frameEnd = std::chrono::steady_clock::now();
+            g_frameTiming.frameMs = std::chrono::duration<double, std::milli>(frameEnd - frameStart).count();
+            g_lastFrameTiming = g_frameTiming;
         }
 
         WaitForAsyncEvaluationForShutdown();
