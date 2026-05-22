@@ -10211,10 +10211,49 @@ void DrawFocusPickOverlay(ImDrawList* drawList, const ImVec2& min, const ImVec2&
     if (g_focusPickCursorActive)
     {
         const ImVec2 m = ImGui::GetIO().MousePos;
-        drawList->AddLine(ImVec2(m.x - 11.0f, m.y), ImVec2(m.x + 11.0f, m.y), IM_COL32(235, 238, 236, 245), 1.5f);
-        drawList->AddLine(ImVec2(m.x, m.y - 11.0f), ImVec2(m.x, m.y + 11.0f), IM_COL32(235, 238, 236, 245), 1.5f);
-        drawList->AddCircle(m, 3.0f, IM_COL32(176, 182, 179, 220), 12, 1.4f);
+        const ImU32 cursorColor = IM_COL32(235, 238, 236, 245);
+        constexpr float outer = 13.0f;
+        constexpr float corner = 5.5f;
+        constexpr float box = 3.5f;
+        constexpr float thickness = 1.5f;
+        drawList->PathLineTo(ImVec2(m.x - outer + corner, m.y - outer));
+        drawList->PathLineTo(ImVec2(m.x - outer, m.y - outer));
+        drawList->PathLineTo(ImVec2(m.x - outer, m.y - outer + corner));
+        drawList->PathStroke(cursorColor, 0, thickness);
+        drawList->PathLineTo(ImVec2(m.x + outer - corner, m.y - outer));
+        drawList->PathLineTo(ImVec2(m.x + outer, m.y - outer));
+        drawList->PathLineTo(ImVec2(m.x + outer, m.y - outer + corner));
+        drawList->PathStroke(cursorColor, 0, thickness);
+        drawList->PathLineTo(ImVec2(m.x - outer + corner, m.y + outer));
+        drawList->PathLineTo(ImVec2(m.x - outer, m.y + outer));
+        drawList->PathLineTo(ImVec2(m.x - outer, m.y + outer - corner));
+        drawList->PathStroke(cursorColor, 0, thickness);
+        drawList->PathLineTo(ImVec2(m.x + outer - corner, m.y + outer));
+        drawList->PathLineTo(ImVec2(m.x + outer, m.y + outer));
+        drawList->PathLineTo(ImVec2(m.x + outer, m.y + outer - corner));
+        drawList->PathStroke(cursorColor, 0, thickness);
+        drawList->AddRect(ImVec2(m.x - box, m.y - box), ImVec2(m.x + box, m.y + box), cursorColor, 0.0f, 0, thickness);
     }
+
+    const auto drawFocusFrame = [&](const ImVec2& p, ImU32 color, float outer, float corner, float box, float thickness) {
+        drawList->PathLineTo(ImVec2(p.x - outer + corner, p.y - outer));
+        drawList->PathLineTo(ImVec2(p.x - outer, p.y - outer));
+        drawList->PathLineTo(ImVec2(p.x - outer, p.y - outer + corner));
+        drawList->PathStroke(color, 0, thickness);
+        drawList->PathLineTo(ImVec2(p.x + outer - corner, p.y - outer));
+        drawList->PathLineTo(ImVec2(p.x + outer, p.y - outer));
+        drawList->PathLineTo(ImVec2(p.x + outer, p.y - outer + corner));
+        drawList->PathStroke(color, 0, thickness);
+        drawList->PathLineTo(ImVec2(p.x - outer + corner, p.y + outer));
+        drawList->PathLineTo(ImVec2(p.x - outer, p.y + outer));
+        drawList->PathLineTo(ImVec2(p.x - outer, p.y + outer - corner));
+        drawList->PathStroke(color, 0, thickness);
+        drawList->PathLineTo(ImVec2(p.x + outer - corner, p.y + outer));
+        drawList->PathLineTo(ImVec2(p.x + outer, p.y + outer));
+        drawList->PathLineTo(ImVec2(p.x + outer, p.y + outer - corner));
+        drawList->PathStroke(color, 0, thickness);
+        drawList->AddRect(ImVec2(p.x - box, p.y - box), ImVec2(p.x + box, p.y + box), color, 0.0f, 0, thickness);
+    };
 
     const auto drawTarget = [&](const Vec3& point, ImU32 color, float radius, float thickness) {
         const ProjectedPoint projected = ProjectWorldToScreen(point.x, point.y, point.z, center, scale);
@@ -10223,11 +10262,7 @@ void DrawFocusPickOverlay(ImDrawList* drawList, const ImVec2& min, const ImVec2&
             return;
         }
         const ImVec2 p = projected.screen;
-        drawList->AddCircle(p, radius, color, 36, thickness);
-        drawList->AddLine(ImVec2(p.x - radius - 5.0f, p.y), ImVec2(p.x - radius + 2.0f, p.y), color, thickness);
-        drawList->AddLine(ImVec2(p.x + radius - 2.0f, p.y), ImVec2(p.x + radius + 5.0f, p.y), color, thickness);
-        drawList->AddLine(ImVec2(p.x, p.y - radius - 5.0f), ImVec2(p.x, p.y - radius + 2.0f), color, thickness);
-        drawList->AddLine(ImVec2(p.x, p.y + radius - 2.0f), ImVec2(p.x, p.y + radius + 5.0f), color, thickness);
+        drawFocusFrame(p, color, radius + 2.0f, 5.5f, 3.5f, thickness);
     };
 
     if (showHover)
@@ -12885,14 +12920,14 @@ void DrawNodeEvaluationBadge(const rock::Node& node, float nodeWidth, const ImVe
     const ImVec2 badgeMax(headerCursor.x + nodeWidth - 4.0f, headerCursor.y + 20.0f);
     const ImVec2 badgeMin(badgeMax.x - textSize.x - padding.x * 2.0f, headerCursor.y - 1.0f);
     const ImVec4 badgeFill = isQueued
-        ? ImVec4(0.08f, 0.12f, 0.10f, 0.96f)
-        : ImVec4(0.06f, 0.15f, 0.10f, 0.96f);
+        ? ImVec4(0.11f, 0.14f, 0.07f, 0.96f)
+        : ImVec4(0.12f, 0.18f, 0.06f, 0.96f);
     const ImVec4 badgeBorder = isQueued
-        ? ImVec4(0.42f, 0.70f, 0.52f, 0.72f)
-        : ImVec4(0.34f, 0.88f, 0.52f, 0.78f);
+        ? ImVec4(0.62f, 0.78f, 0.34f, 0.72f)
+        : ImVec4(0.72f, 0.95f, 0.28f, 0.82f);
     const ImVec4 badgeText = isQueued
-        ? ImVec4(0.64f, 0.84f, 0.68f, 1.0f)
-        : ImVec4(0.62f, 0.96f, 0.68f, 1.0f);
+        ? ImVec4(0.78f, 0.88f, 0.55f, 1.0f)
+        : ImVec4(0.82f, 1.00f, 0.42f, 1.0f);
     drawList->AddRectFilled(badgeMin, badgeMax, ColorToU32(badgeFill), 5.0f);
     drawList->AddRect(badgeMin, badgeMax, ColorToU32(badgeBorder), 5.0f, 0, 1.0f);
     drawList->AddText(ImVec2(badgeMin.x + padding.x, badgeMin.y + padding.y - 1.0f), ColorToU32(badgeText), text);
@@ -12917,8 +12952,8 @@ void DrawNodeEvaluationPulse(const rock::Node& node, const ImVec2& clipMin, cons
         ? 0.5f + 0.5f * std::sin(t * 5.2f)
         : 0.45f + 0.25f * std::sin(t * 2.7f);
     const ImVec4 color = state == NodeEvaluationVisualState::Processing
-        ? ImVec4(0.34f, 0.96f, 0.52f, 0.38f + 0.34f * pulse)
-        : ImVec4(0.50f, 0.76f, 0.58f, 0.24f + 0.20f * pulse);
+        ? ImVec4(0.72f, 0.98f, 0.26f, 0.38f + 0.34f * pulse)
+        : ImVec4(0.58f, 0.76f, 0.36f, 0.24f + 0.20f * pulse);
     const ImVec4 glowColor(color.x, color.y, color.z, color.w * 0.32f);
 
     const ImVec2 nodePos = ed::GetNodePosition(ed::NodeId(node.id));
