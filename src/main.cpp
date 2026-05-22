@@ -621,6 +621,7 @@ struct GpuMeshPreview
     ComPtr<ID3D12Resource> colorTarget;
     ComPtr<ID3D12Resource> postTarget;
     ComPtr<ID3D12Resource> depthTarget;
+    ComPtr<ID3D12Resource> sceneDepthTarget;
     ComPtr<ID3D12Resource> shadowTarget;
     ComPtr<ID3D12Resource> vertexBuffer;
     ComPtr<ID3D12Resource> indexBuffer;
@@ -641,10 +642,13 @@ struct GpuMeshPreview
     D3D12_GPU_DESCRIPTOR_HANDLE shadowSrvGpu{};
     D3D12_CPU_DESCRIPTOR_HANDLE depthSrvCpu{};
     D3D12_GPU_DESCRIPTOR_HANDLE depthSrvGpu{};
+    D3D12_CPU_DESCRIPTOR_HANDLE sceneDepthSrvCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE sceneDepthSrvGpu{};
     bool srvAllocated = false;
     bool postSrvAllocated = false;
     bool shadowSrvAllocated = false;
     bool depthSrvAllocated = false;
+    bool sceneDepthSrvAllocated = false;
     UINT vertexCount = 0;
     UINT triIndexCount = 0;
     UINT edgeIndexCount = 0;
@@ -760,6 +764,7 @@ struct GpuMeshPreview
     D3D12_RESOURCE_STATES postState = D3D12_RESOURCE_STATE_COMMON;
     D3D12_RESOURCE_STATES shadowState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     D3D12_RESOURCE_STATES depthState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+    D3D12_RESOURCE_STATES sceneDepthState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 };
 
 ComPtr<ID3D12RootSignature> g_meshPreviewRootSignature;
@@ -1400,9 +1405,15 @@ void CleanupD3D()
         FreeSrvDescriptor(nullptr, g_gpuMeshPreview.postSrvCpu, g_gpuMeshPreview.postSrvGpu);
         g_gpuMeshPreview.postSrvAllocated = false;
     }
+    if (g_gpuMeshPreview.sceneDepthSrvAllocated)
+    {
+        FreeSrvDescriptor(nullptr, g_gpuMeshPreview.sceneDepthSrvCpu, g_gpuMeshPreview.sceneDepthSrvGpu);
+        g_gpuMeshPreview.sceneDepthSrvAllocated = false;
+    }
     g_gpuMeshPreview.colorTarget.Reset();
     g_gpuMeshPreview.postTarget.Reset();
     g_gpuMeshPreview.depthTarget.Reset();
+    g_gpuMeshPreview.sceneDepthTarget.Reset();
     g_gpuMeshPreview.vertexBuffer.Reset();
     g_gpuMeshPreview.indexBuffer.Reset();
     g_gpuMeshPreview.edgeIndexBuffer.Reset();
@@ -3998,7 +4009,7 @@ bool EnsureMeshPreviewPipeline(std::string* error)
 
     D3D12_DESCRIPTOR_RANGE meshResourceRange{};
     meshResourceRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    meshResourceRange.NumDescriptors = 7; // t0 shadow, t1 cloud shadow, t2/t3 displacement, t4 Colorize, t5 AO, t6 scene color
+    meshResourceRange.NumDescriptors = 8; // t0 shadow, t1 cloud shadow, t2/t3 displacement, t4 Colorize, t5 AO, t6 scene color, t7 scene depth
     meshResourceRange.BaseShaderRegister = 0;
     meshResourceRange.RegisterSpace = 0;
     meshResourceRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
@@ -4849,7 +4860,7 @@ bool EnsureMeshResourceTable(std::string* error)
     }
     try
     {
-        AllocateSrvDescriptorRange(7, &g_gpuMeshPreview.meshResourceTableCpu, &g_gpuMeshPreview.meshResourceTableGpu);
+        AllocateSrvDescriptorRange(8, &g_gpuMeshPreview.meshResourceTableCpu, &g_gpuMeshPreview.meshResourceTableGpu);
         g_gpuMeshPreview.meshResourceTableAllocated = true;
         return true;
     }
@@ -5001,6 +5012,9 @@ void UpdateMeshResourceTable(D3D12_GPU_DESCRIPTOR_HANDLE cloudShadowGpu)
         g_gpuMeshPreview.postSrvAllocated && g_gpuMeshPreview.postTarget
             ? g_gpuMeshPreview.postSrvCpu
             : g_gpuClouds.dummyShadowSrvCpu,  // slot 6: scene color before water
+        g_gpuMeshPreview.sceneDepthSrvAllocated && g_gpuMeshPreview.sceneDepthTarget
+            ? g_gpuMeshPreview.sceneDepthSrvCpu
+            : g_gpuClouds.dummyShadowSrvCpu,  // slot 7: scene depth before water
     };
     for (int i = 0; i < 4; ++i)
     {
@@ -5012,6 +5026,7 @@ void UpdateMeshResourceTable(D3D12_GPU_DESCRIPTOR_HANDLE cloudShadowGpu)
     }
     g_device->CopyDescriptorsSimple(1, OffsetCpuSrv(g_gpuMeshPreview.meshResourceTableCpu, 5), src[5], D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     g_device->CopyDescriptorsSimple(1, OffsetCpuSrv(g_gpuMeshPreview.meshResourceTableCpu, 6), src[6], D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    g_device->CopyDescriptorsSimple(1, OffsetCpuSrv(g_gpuMeshPreview.meshResourceTableCpu, 7), src[7], D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 }
 
 
@@ -10418,6 +10433,7 @@ bool EnsureMeshPreviewRenderTarget(int width, int height, std::string* error)
         g_gpuMeshPreview.colorTarget.Reset();
         g_gpuMeshPreview.postTarget.Reset();
         g_gpuMeshPreview.depthTarget.Reset();
+        g_gpuMeshPreview.sceneDepthTarget.Reset();
         g_gpuMeshPreview.shadowTarget.Reset();
         g_gpuMeshPreview.width = width;
         g_gpuMeshPreview.height = height;
@@ -10425,6 +10441,7 @@ bool EnsureMeshPreviewRenderTarget(int width, int height, std::string* error)
         g_gpuMeshPreview.colorState = D3D12_RESOURCE_STATE_RENDER_TARGET;
         g_gpuMeshPreview.postState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         g_gpuMeshPreview.shadowState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        g_gpuMeshPreview.sceneDepthState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 
         if (!g_meshPreviewRtvHeap)
         {
@@ -10460,6 +10477,11 @@ bool EnsureMeshPreviewRenderTarget(int width, int height, std::string* error)
         {
             AllocateSrvDescriptor(nullptr, &g_gpuMeshPreview.shadowSrvCpu, &g_gpuMeshPreview.shadowSrvGpu);
             g_gpuMeshPreview.shadowSrvAllocated = true;
+        }
+        if (!g_gpuMeshPreview.sceneDepthSrvAllocated)
+        {
+            AllocateSrvDescriptor(nullptr, &g_gpuMeshPreview.sceneDepthSrvCpu, &g_gpuMeshPreview.sceneDepthSrvGpu);
+            g_gpuMeshPreview.sceneDepthSrvAllocated = true;
         }
 
         const D3D12_HEAP_PROPERTIES defaultHeap = HeapProperties(D3D12_HEAP_TYPE_DEFAULT);
@@ -10527,6 +10549,21 @@ bool EnsureMeshPreviewRenderTarget(int width, int height, std::string* error)
             srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
             srvDesc.Texture2D.MipLevels = 1;
             g_device->CreateShaderResourceView(g_gpuMeshPreview.depthTarget.Get(), &srvDesc, g_gpuMeshPreview.depthSrvCpu);
+        }
+        {
+            const D3D12_RESOURCE_DESC desc = Texture2DResourceDesc(
+                static_cast<UINT>(width), static_cast<UINT>(height),
+                DXGI_FORMAT_R32_TYPELESS, D3D12_RESOURCE_FLAG_NONE);
+            ThrowIfFailed(g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &desc,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, IID_PPV_ARGS(&g_gpuMeshPreview.sceneDepthTarget)),
+                "Create mesh scene depth copy failed");
+            g_gpuMeshPreview.sceneDepthState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+            srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
+            srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            srvDesc.Texture2D.MipLevels = 1;
+            g_device->CreateShaderResourceView(g_gpuMeshPreview.sceneDepthTarget.Get(), &srvDesc, g_gpuMeshPreview.sceneDepthSrvCpu);
         }
         {
             D3D12_CLEAR_VALUE clearVal{};
@@ -12128,11 +12165,11 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             recordIndexedDraw(surfaceIndexCount, true);
             renderStats.surfacePass = true;
         }
-        if (showWater && g_gpuMeshPreview.postTarget)
+        if (showWater && g_gpuMeshPreview.postTarget && g_gpuMeshPreview.sceneDepthTarget)
         {
             commandList->OMSetRenderTargets(0, nullptr, FALSE, nullptr);
 
-            D3D12_RESOURCE_BARRIER toCopy[2]{};
+            D3D12_RESOURCE_BARRIER toCopy[4]{};
             toCopy[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
             toCopy[0].Transition.pResource = g_gpuMeshPreview.colorTarget.Get();
             toCopy[0].Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
@@ -12143,11 +12180,22 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             toCopy[1].Transition.StateBefore = g_gpuMeshPreview.postState;
             toCopy[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
             toCopy[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            commandList->ResourceBarrier(2, toCopy);
+            toCopy[2].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            toCopy[2].Transition.pResource = g_gpuMeshPreview.depthTarget.Get();
+            toCopy[2].Transition.StateBefore = g_gpuMeshPreview.depthState;
+            toCopy[2].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+            toCopy[2].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            toCopy[3].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            toCopy[3].Transition.pResource = g_gpuMeshPreview.sceneDepthTarget.Get();
+            toCopy[3].Transition.StateBefore = g_gpuMeshPreview.sceneDepthState;
+            toCopy[3].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+            toCopy[3].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            commandList->ResourceBarrier(4, toCopy);
 
             commandList->CopyResource(g_gpuMeshPreview.postTarget.Get(), g_gpuMeshPreview.colorTarget.Get());
+            commandList->CopyResource(g_gpuMeshPreview.sceneDepthTarget.Get(), g_gpuMeshPreview.depthTarget.Get());
 
-            D3D12_RESOURCE_BARRIER afterCopy[2]{};
+            D3D12_RESOURCE_BARRIER afterCopy[4]{};
             afterCopy[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
             afterCopy[0].Transition.pResource = g_gpuMeshPreview.colorTarget.Get();
             afterCopy[0].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
@@ -12158,10 +12206,22 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             afterCopy[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
             afterCopy[1].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             afterCopy[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            commandList->ResourceBarrier(2, afterCopy);
+            afterCopy[2].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            afterCopy[2].Transition.pResource = g_gpuMeshPreview.depthTarget.Get();
+            afterCopy[2].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+            afterCopy[2].Transition.StateAfter = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+            afterCopy[2].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            afterCopy[3].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            afterCopy[3].Transition.pResource = g_gpuMeshPreview.sceneDepthTarget.Get();
+            afterCopy[3].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+            afterCopy[3].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            afterCopy[3].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            commandList->ResourceBarrier(4, afterCopy);
 
             g_gpuMeshPreview.colorState = D3D12_RESOURCE_STATE_RENDER_TARGET;
             g_gpuMeshPreview.postState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            g_gpuMeshPreview.depthState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+            g_gpuMeshPreview.sceneDepthState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             commandList->OMSetRenderTargets(1, &g_gpuMeshPreview.rtvCpu, FALSE, &g_gpuMeshPreview.dsvCpu);
             commandList->RSSetViewports(1, &vp);
             commandList->RSSetScissorRects(1, &scissor);

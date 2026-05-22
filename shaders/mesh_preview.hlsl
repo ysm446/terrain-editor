@@ -71,6 +71,7 @@ Texture2D<float> displacementMask : register(t3);
 Texture2D<float4> colorTexture : register(t4);
 Texture2D<float>  aoTexture    : register(t5);
 Texture2D<float4> sceneColorTexture : register(t6);
+Texture2D<float>  sceneDepthTexture : register(t7);
 SamplerState shadowSampler : register(s0);
 SamplerState linearSampler : register(s1);
 
@@ -816,6 +817,70 @@ float2 ProjectWorldToSceneUv(float3 worldPos)
     return float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
 }
 
+float SceneDepthToViewDistance(float depth01)
+{
+    return lerp(nearPlane, farPlane, saturate(depth01));
+}
+
+float ScreenEdgeFade(float2 uv)
+{
+    float2 edge = min(uv, 1.0 - uv);
+    return saturate(min(edge.x, edge.y) * 14.0);
+}
+
+float TraceWaterReflection(float3 worldPos, float3 reflectionDir, float terrainSize, out float3 hitColor)
+{
+    hitColor = 0.0;
+    float3 rayDir = normalize(reflectionDir);
+    if (rayDir.y <= 0.015)
+    {
+        return 0.0;
+    }
+
+    float maxTrace = min(max(terrainSize * 0.85, 180.0), 2800.0);
+    float prevDelta = -1.0e6;
+
+    [loop]
+    for (int stepIndex = 1; stepIndex <= 20; ++stepIndex)
+    {
+        float t = maxTrace * (float)stepIndex / 20.0;
+        t = t * t / maxTrace + 4.0;
+        float3 p = worldPos + rayDir * t;
+        float rayViewDistance = dot(p - cameraPosition.xyz, cameraForward.xyz);
+        if (rayViewDistance <= nearPlane)
+        {
+            prevDelta = -1.0e6;
+            continue;
+        }
+
+        float2 uv = ProjectWorldToSceneUv(p);
+        if (uv.x <= 0.001 || uv.x >= 0.999 || uv.y <= 0.001 || uv.y >= 0.999)
+        {
+            break;
+        }
+
+        float sceneDepth = sceneDepthTexture.SampleLevel(shadowSampler, uv, 0).r;
+        if (sceneDepth >= 0.9999)
+        {
+            prevDelta = -1.0e6;
+            continue;
+        }
+
+        float sceneViewDistance = SceneDepthToViewDistance(sceneDepth);
+        float thickness = 8.0 + t * 0.012;
+        float delta = rayViewDistance - sceneViewDistance;
+        if (delta > -thickness && (prevDelta < -thickness || delta < thickness * 2.2))
+        {
+            hitColor = sceneColorTexture.SampleLevel(linearSampler, uv, 0).rgb;
+            float hitFade = ScreenEdgeFade(uv) * saturate(1.0 - t / maxTrace);
+            return hitFade;
+        }
+        prevDelta = delta;
+    }
+
+    return 0.0;
+}
+
 float EstimateWaterViewPathLength(float3 waterPos, float3 rayDir, float terrainSize)
 {
     float3 dir = normalize(rayDir);
@@ -1009,6 +1074,10 @@ float4 PSWater(VSOut i) : SV_TARGET
 
     float terrainReflWeight = saturate(1.0 - shallowDepth * 0.008) * fresnel;
     float3 reflection = lerp(skyRefl * fresnel, terrainRefl, terrainReflWeight) * edgeReflFade;
+    float3 ssrColor = 0.0;
+    float ssrHit = TraceWaterReflection(i.worldPos + fresnelN * 1.5, reflect(-V, fresnelN), terrainSize, ssrColor);
+    float ssrBlend = ssrHit * edgeReflFade * saturate(fresnel * 1.8 + 0.10) * saturate(1.0 - depthColorFactor * 0.32);
+    reflection = lerp(reflection, ssrColor * (0.25 + fresnel * 1.35), ssrBlend);
     water = lerp(water, reflection, saturate(fresnel + terrainReflWeight * 0.5) * edgeReflFade);
     water += spec * skySunColor.rgb;
 
