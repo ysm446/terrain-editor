@@ -929,7 +929,7 @@ void SetAssetPathResolver(AssetPathResolver resolver);
 // evaluation kernel is currently running on a worker thread, or 0 when
 // no kernel is active. Updated only on cache misses (cache hits are
 // instantaneous so the badge wouldn't be visible anyway). The UI thread
-// reads this to draw a "計算中" badge that walks the upstream chain in
+// reads this to draw a "Processing" badge that walks the upstream chain in
 // real time as the pipeline progresses.
 std::atomic<GraphId>& CurrentlyEvaluatingNodeId();
 

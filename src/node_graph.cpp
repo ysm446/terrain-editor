@@ -2969,7 +2969,7 @@ void NodeGraph::Evaluate(int previewMeshResolution)
         previewMeshResolution = EffectiveMeshResolution(settings_.preview, 2048);
     }
 
-    // Track which node's kernel is running so the UI can paint a "計算中"
+    // Track which node's kernel is running so the UI can paint a "Processing"
     // badge that walks the upstream chain. Cleared on exit so the badge
     // disappears when no kernel is active. Cache hits don't store —
     // they're instantaneous and the flicker would just be noise.

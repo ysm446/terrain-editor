@@ -12840,10 +12840,10 @@ void DrawNodeEvaluationBadge(const rock::Node& node, float nodeWidth, const ImVe
     const rock::GraphId currentlyEvaluating =
         rock::CurrentlyEvaluatingNodeId().load(std::memory_order_relaxed);
 
-    // "計算中" follows the worker thread — it walks the upstream chain in
+    // "Processing" follows the worker thread — it walks the upstream chain in
     // real time. Until the first kernel stores its id (or if every step
     // is a cache hit), fall back to the preview target so the user sees
-    // *something* during in-flight evaluation. "計算待ち" only shows on
+    // *something* during in-flight evaluation. "Pending" only shows on
     // the preview target when an evaluation is queued behind another.
     const bool isCurrent = g_evaluationInFlight && currentlyEvaluating == node.id;
     const bool isPreviewFallback = g_evaluationInFlight
@@ -12855,7 +12855,7 @@ void DrawNodeEvaluationBadge(const rock::Node& node, float nodeWidth, const ImVe
         return;
     }
 
-    const char* label = isQueued ? "計算待ち" : "計算中";
+    const char* label = isQueued ? "Pending" : "Processing";
     const int dotCount = isQueued ? 0 : (static_cast<int>(ImGui::GetTime() * 3.0) % 4);
     char text[32]{};
     std::snprintf(text, sizeof(text), "%s%.*s", label, dotCount, "...");
@@ -14158,7 +14158,7 @@ void DrawUi()
     ImGui::BeginChild("Status Bar", ImVec2(0.0f, statusBarHeight), true, fixedPaneFlags);
     const rock::EvaluationSummary& evaluation = g_graph.Evaluation();
     const char* evaluationState = g_evaluationInFlight
-        ? (g_evaluationPending ? "計算待ち" : "計算中")
+        ? (g_evaluationPending ? "Pending" : "Processing")
         : (evaluation.dirty ? "Dirty" : "Evaluated");
     const ImVec4 stateColor = g_evaluationInFlight
         ? ImVec4(0.90f, 0.72f, 0.34f, 1.0f)
