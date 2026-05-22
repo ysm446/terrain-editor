@@ -221,7 +221,7 @@ void DrawSkySettingsPanel(SkyPanelState state)
         }
     }
 
-    if (!ImGui::CollapsingHeader("天球と雲", ImGuiTreeNodeFlags_DefaultOpen))
+    if (!ImGui::CollapsingHeader("天球", ImGuiTreeNodeFlags_DefaultOpen))
     {
         ImGui::EndChild();
         return;
@@ -233,7 +233,7 @@ void DrawSkySettingsPanel(SkyPanelState state)
         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
 
         rock::SkySettings& sky = settings.sky;
-            ImGui::SeparatorText("天球 (大気散乱)");
+            ImGui::SeparatorText("大気散乱");
             DrawPropertyFloatRow("大気厚み (密度)", "SkyAtmosphereDensity", &sky.atmosphereDensity, 0.05f, 5.0f, rock::SkySettings{}.atmosphereDensity, "Sky atmosphere density changed", false, "Rayleigh 散乱係数 β_R と地平ヘイズの倍率。1.0 が地球標準、0.5 で薄い大気、2-3 で濃い大気。地形の遠景フォグもこの値から自動で決まります。");
             DrawPropertyFloatRow("ヘイズ (Mie 強度)", "SkyMieStrength", &sky.mieStrength, 0.0f, 8.0f, rock::SkySettings{}.mieStrength, "Sky mie strength changed", false, "Mie 散乱の強さ。0.2 前後が編集ビュー向けの標準です。大きいほど太陽方向の霞とグローが強くなりますが、地平の暖色帯も出やすくなります。0 で純 Rayleigh。");
             DrawPropertyFloatRow("Mie 偏向 (g)", "SkyMieG", &sky.mieEccentricity, -0.95f, 0.95f, rock::SkySettings{}.mieEccentricity, "Sky mie g changed", false, "Henyey-Greenstein g 値。0 で等方散乱、正で前方 (太陽方向) 散乱が強くなりグローが太陽周りに集中。0.7-0.85 が現実的。");
@@ -241,11 +241,27 @@ void DrawSkySettingsPanel(SkyPanelState state)
             DrawPropertyFloatRow("太陽サイズ (deg)", "SkySunSize", &sky.sunSizeDegrees, 0.1f, 20.0f, rock::SkySettings{}.sunSizeDegrees, "Sky sun size changed", false, "太陽ディスクの直径(度)。実際の太陽は約 0.5 度ですが、視認性のためデフォルトはやや大きめです。");
             DrawPropertyFloatRow("太陽グロー", "SkySunGlow", &sky.sunGlowStrength, 0.0f, 2.0f, rock::SkySettings{}.sunGlowStrength, "Sky sun glow changed", false, "太陽周辺の柔らかい光の強さ。0 でグロー無し。");
 
+        ImGui::EndTable();
+    }
+    ImGui::EndChild();
+}
+
+void DrawCloudSettingsPanel(SkyPanelState state)
+{
+    rock::GraphSettings& settings = state.settings;
+    const float headerRightPadding = 10.0f;
+    const float sectionWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x - headerRightPadding);
+    ImGui::BeginChild("CloudSettingsSection", ImVec2(sectionWidth, 0.0f), false);
+
+    if (ImGui::BeginTable("CloudSettingsRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 112.0f);
+        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+
             ImGui::SeparatorText("ボリューム雲");
             rock::CloudSettings& clouds = settings.clouds;
             DrawPropertyBoolRow("有効", "CloudEnabled", &clouds.enabled, "Clouds enabled toggled", "ボリューム雲のレイマーチ描画を有効化します。3D 密度テクスチャ (128³ R8 = 2MB) を生成し、雲帯 [Altitude Min, Max] とのレイ交差をフルスクリーンパスで毎フレーム積分します。", rock::CloudSettings{}.enabled, true);
-            if (clouds.enabled)
-            {
+            ImGui::BeginDisabled(!clouds.enabled);
                 DrawPropertyIntRow("Cloud Seed", "CloudSeed", &clouds.seed, 0, 999999, rock::CloudSettings{}.seed, "Cloud seed changed", false, "3D 密度ノイズのシード。変更すると雲のパターンが変わります(テクスチャを再生成)。");
                 DrawPropertyFloatRow("Coverage", "CloudCoverage", &clouds.coverage, 0.0f, 1.0f, rock::CloudSettings{}.coverage, "Cloud coverage changed", false, "空に占める雲の割合。0 で雲無し、1 で空一面が雲。");
                 DrawPropertyFloatRow("Density", "CloudDensity", &clouds.densityMultiplier, 0.0f, 4.0f, rock::CloudSettings{}.densityMultiplier, "Cloud density changed", false, "雲の濃さ倍率。大きいほど雲が不透明になります。");
@@ -273,7 +289,7 @@ void DrawSkySettingsPanel(SkyPanelState state)
                 DrawPropertyIntRow("Light Samples", "CloudLightSamples", &clouds.lightSamples, 0, 16, rock::CloudSettings{}.lightSamples, "Cloud light samples changed", false, "雲内自己遮蔽の太陽方向レイマーチ段数。0 で無効化(従来の上下ランプのみ)、6 が標準。大きいほど雲塊の陰影がはっきりしますが負荷も増えます。");
                 DrawPropertyFloatRow("Light Step (m)", "CloudLightStep", &clouds.lightStepMeters, 1.0f, 1000.0f, rock::CloudSettings{}.lightStepMeters, "Cloud light step changed", false, "自己遮蔽レイマーチの 1 ステップあたりの距離 (m)。Light Samples × Light Step が太陽方向への投光距離になります。雲スケールに対して短すぎると深い雲の中まで届かず、長すぎるとサンプルが粗くなります。", "%.0f");
                 DrawPropertyFloatRow("Phase Eccentricity", "CloudPhaseG", &clouds.phaseEccentricity, -0.99f, 0.99f, rock::CloudSettings{}.phaseEccentricity, "Cloud phase eccentricity changed", false, "Henyey-Greenstein 位相関数の g 値。0 で等方散乱、正値で前方散乱(逆光時に太陽周りが明るくなるシルバーライニング)、負値で後方散乱。0.4 前後が雲らしい見た目。");
-            }
+            ImGui::EndDisabled();
         ImGui::EndTable();
     }
     ImGui::EndChild();

@@ -611,6 +611,10 @@ struct PreviewSettings
     bool aoEnabled = false;
     float aoStrength = 0.7f;
     float aoRadius = 100.0f;
+    bool waterEnabled = false;
+    float waterLevelMeters = 0.0f;
+    float waterOpacity = 0.52f;
+    std::array<float, 3> waterColor = {0.05f, 0.34f, 0.58f};
 };
 
 enum class SkyMode

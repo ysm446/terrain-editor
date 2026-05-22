@@ -47,6 +47,7 @@
 #include "ui/PropertyWidgets.h"
 #include "ui/SkyPanel.h"
 #include "ui/UiTheme.h"
+#include "ui/WaterPanel.h"
 #include "Version.h"
 
 using Microsoft::WRL::ComPtr;
@@ -618,6 +619,8 @@ struct GpuMeshPreview
     ComPtr<ID3D12Resource> edgeIndexBuffer;
     ComPtr<ID3D12Resource> gridVertexBuffer;
     ComPtr<ID3D12Resource> terrainBoundaryLineVertexBuffer;
+    ComPtr<ID3D12Resource> waterVertexBuffer;
+    ComPtr<ID3D12Resource> waterIndexBuffer;
     D3D12_CPU_DESCRIPTOR_HANDLE rtvCpu{};
     D3D12_CPU_DESCRIPTOR_HANDLE postRtvCpu{};
     D3D12_CPU_DESCRIPTOR_HANDLE dsvCpu{};
@@ -639,9 +642,15 @@ struct GpuMeshPreview
     UINT edgeIndexCount = 0;
     UINT gridVertexCount = 0;
     UINT terrainBoundaryLineVertexCount = 0;
+    UINT waterIndexCount = 0;
     uint64_t terrainBoundaryLineUploadKey = UINT64_MAX;
     int gridCellCount = 0;
     float gridCellSizeMeters = 0.0f;
+    bool waterEnabled = false;
+    float waterLevelMeters = 0.0f;
+    float waterOpacity = 0.0f;
+    std::array<float, 3> waterColor = {};
+    float waterTerrainSizeMeters = 0.0f;
     int skyMode = -1;
     float skyAtmosphereDensity = 0.0f;
     float skyMieStrength = 0.0f;
@@ -741,6 +750,7 @@ struct GpuMeshPreview
 
 ComPtr<ID3D12RootSignature> g_meshPreviewRootSignature;
 ComPtr<ID3D12PipelineState> g_meshPreviewSurfacePso;
+ComPtr<ID3D12PipelineState> g_meshPreviewWaterPso;
 ComPtr<ID3D12PipelineState> g_meshPreviewWirePso;
 ComPtr<ID3D12RootSignature> g_meshPreviewDisplacementRootSignature;
 ComPtr<ID3D12PipelineState> g_meshPreviewDisplacementSurfacePso;
@@ -1384,10 +1394,14 @@ void CleanupD3D()
     g_gpuMeshPreview.edgeIndexBuffer.Reset();
     g_gpuMeshPreview.gridVertexBuffer.Reset();
     g_gpuMeshPreview.terrainBoundaryLineVertexBuffer.Reset();
+    g_gpuMeshPreview.waterVertexBuffer.Reset();
+    g_gpuMeshPreview.waterIndexBuffer.Reset();
     g_gpuMeshPreview.gridVertexCount = 0;
     g_gpuMeshPreview.terrainBoundaryLineVertexCount = 0;
+    g_gpuMeshPreview.waterIndexCount = 0;
     g_gpuMeshPreview.terrainBoundaryLineUploadKey = UINT64_MAX;
     g_meshPreviewSurfacePso.Reset();
+    g_meshPreviewWaterPso.Reset();
     g_meshPreviewWirePso.Reset();
     g_meshPreviewGridPso.Reset();
     g_meshPreviewRootSignature.Reset();
@@ -1953,6 +1967,14 @@ bool SaveAppSettings(std::string* error = nullptr)
             {"tessellationMaxFactor", settings.preview.tessellationMaxFactor},
             {"tessellationNearDistance", settings.preview.tessellationNearDistance},
             {"tessellationFarDistance", settings.preview.tessellationFarDistance},
+            {"waterEnabled", settings.preview.waterEnabled},
+            {"waterLevelMeters", settings.preview.waterLevelMeters},
+            {"waterOpacity", settings.preview.waterOpacity},
+            {"waterColor", {
+                settings.preview.waterColor[0],
+                settings.preview.waterColor[1],
+                settings.preview.waterColor[2],
+            }},
             {"sunAzimuthDegrees", settings.preview.sunAzimuthDegrees},
             {"sunElevationDegrees", settings.preview.sunElevationDegrees},
             {"sunIntensity", settings.preview.sunIntensity},
@@ -2119,6 +2141,15 @@ bool LoadAppSettings(std::string* error = nullptr)
         settings.preview.tessellationMaxFactor = std::clamp(visibilityJson.value("tessellationMaxFactor", settings.preview.tessellationMaxFactor), settings.preview.tessellationMinFactor, 64.0f);
         settings.preview.tessellationNearDistance = std::clamp(visibilityJson.value("tessellationNearDistance", settings.preview.tessellationNearDistance), 1.0f, 100000.0f);
         settings.preview.tessellationFarDistance = std::clamp(visibilityJson.value("tessellationFarDistance", settings.preview.tessellationFarDistance), settings.preview.tessellationNearDistance + 1.0f, 200000.0f);
+        settings.preview.waterEnabled = visibilityJson.value("waterEnabled", settings.preview.waterEnabled);
+        settings.preview.waterLevelMeters = std::clamp(visibilityJson.value("waterLevelMeters", settings.preview.waterLevelMeters), -10000.0f, 10000.0f);
+        settings.preview.waterOpacity = std::clamp(visibilityJson.value("waterOpacity", settings.preview.waterOpacity), 0.0f, 1.0f);
+        if (visibilityJson.contains("waterColor") && visibilityJson["waterColor"].is_array() && visibilityJson["waterColor"].size() == 3)
+        {
+            settings.preview.waterColor[0] = std::clamp(visibilityJson["waterColor"][0].get<float>(), 0.0f, 1.0f);
+            settings.preview.waterColor[1] = std::clamp(visibilityJson["waterColor"][1].get<float>(), 0.0f, 1.0f);
+            settings.preview.waterColor[2] = std::clamp(visibilityJson["waterColor"][2].get<float>(), 0.0f, 1.0f);
+        }
         settings.preview.sunAzimuthDegrees = std::clamp(visibilityJson.value("sunAzimuthDegrees", settings.preview.sunAzimuthDegrees), 0.0f, 360.0f);
         settings.preview.sunElevationDegrees = std::clamp(visibilityJson.value("sunElevationDegrees", settings.preview.sunElevationDegrees), -10.0f, 89.0f);
         settings.preview.sunIntensity = std::clamp(visibilityJson.value("sunIntensity", settings.preview.sunIntensity), 0.0f, 5.0f);
@@ -3200,6 +3231,14 @@ nlohmann::json MakeProjectSettingsJson()
             {"tessellationMaxFactor", preview.tessellationMaxFactor},
             {"tessellationNearDistance", preview.tessellationNearDistance},
             {"tessellationFarDistance", preview.tessellationFarDistance},
+            {"waterEnabled", preview.waterEnabled},
+            {"waterLevelMeters", preview.waterLevelMeters},
+            {"waterOpacity", preview.waterOpacity},
+            {"waterColor", {
+                preview.waterColor[0],
+                preview.waterColor[1],
+                preview.waterColor[2],
+            }},
             {"depthOfFieldEnabled", preview.depthOfFieldEnabled},
             {"dofFStop", preview.dofFStop},
             {"dofFocusDistanceMeters", preview.dofFocusDistanceMeters},
@@ -3539,6 +3578,10 @@ void ReadPreviewSettingsJson(const nlohmann::json& settingsJson, rock::PreviewSe
     preview.tessellationMaxFactor = std::clamp(previewJson.value("tessellationMaxFactor", preview.tessellationMaxFactor), preview.tessellationMinFactor, 64.0f);
     preview.tessellationNearDistance = std::clamp(previewJson.value("tessellationNearDistance", preview.tessellationNearDistance), 1.0f, 100000.0f);
     preview.tessellationFarDistance = std::clamp(previewJson.value("tessellationFarDistance", preview.tessellationFarDistance), preview.tessellationNearDistance + 1.0f, 200000.0f);
+    preview.waterEnabled = previewJson.value("waterEnabled", preview.waterEnabled);
+    preview.waterLevelMeters = std::clamp(previewJson.value("waterLevelMeters", preview.waterLevelMeters), -10000.0f, 10000.0f);
+    preview.waterOpacity = std::clamp(previewJson.value("waterOpacity", preview.waterOpacity), 0.0f, 1.0f);
+    ReadColor3Json(previewJson, "waterColor", preview.waterColor, 1.0f);
     preview.depthOfFieldEnabled = previewJson.value("depthOfFieldEnabled", preview.depthOfFieldEnabled);
     preview.dofFStop = std::clamp(previewJson.value("dofFStop", preview.dofFStop), 0.7f, 32.0f);
     preview.dofFocusDistanceMeters = std::clamp(previewJson.value("dofFocusDistanceMeters", preview.dofFocusDistanceMeters), 0.1f, 20000.0f);
@@ -3987,7 +4030,7 @@ bool EnsureMeshPreviewPipeline(std::string* error)
 #if defined(_DEBUG)
     compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
 #endif
-    ComPtr<ID3DBlob> vsBlob, psBlob, psEdgeBlob, vsShadowBlob;
+    ComPtr<ID3DBlob> vsBlob, psBlob, psEdgeBlob, psWaterBlob, vsShadowBlob;
     hr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "VSMain", "vs_5_0", compileFlags, 0, &vsBlob, &errBlob);
     if (FAILED(hr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile mesh VS failed"; return false; }
     errBlob.Reset();
@@ -3996,6 +4039,9 @@ bool EnsureMeshPreviewPipeline(std::string* error)
     errBlob.Reset();
     hr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "PSEdge", "ps_5_0", compileFlags, 0, &psEdgeBlob, &errBlob);
     if (FAILED(hr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile mesh edge PS failed"; return false; }
+    errBlob.Reset();
+    hr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "PSWater", "ps_5_0", compileFlags, 0, &psWaterBlob, &errBlob);
+    if (FAILED(hr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile mesh water PS failed"; return false; }
     errBlob.Reset();
     hr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "VSShadow", "vs_5_0", compileFlags, 0, &vsShadowBlob, &errBlob);
     if (FAILED(hr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile mesh shadow VS failed"; return false; }
@@ -4029,6 +4075,19 @@ bool EnsureMeshPreviewPipeline(std::string* error)
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewSurfacePso));
     if (FAILED(hr)) { if (error) *error = "Create mesh surface PSO failed"; return false; }
+
+    psoDesc.PS = {psWaterBlob->GetBufferPointer(), psWaterBlob->GetBufferSize()};
+    psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    psoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    psoDesc.BlendState.RenderTarget[0].BlendEnable = TRUE;
+    psoDesc.BlendState.RenderTarget[0].SrcBlend = D3D12_BLEND_SRC_ALPHA;
+    psoDesc.BlendState.RenderTarget[0].DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+    psoDesc.BlendState.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
+    psoDesc.BlendState.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
+    psoDesc.BlendState.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+    psoDesc.BlendState.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewWaterPso));
+    if (FAILED(hr)) { if (error) *error = "Create mesh water PSO failed"; return false; }
 
     psoDesc.PS = {psEdgeBlob->GetBufferPointer(), psEdgeBlob->GetBufferSize()};
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
@@ -10581,6 +10640,81 @@ void EnsureGridPreviewBuffer()
     g_gpuMeshPreview.gridCellSizeMeters = cellSizeMeters;
 }
 
+void EnsureWaterPreviewBuffer(float terrainSizeMeters)
+{
+    const rock::PreviewSettings& preview = g_graph.Settings().preview;
+    const bool enabled = preview.waterEnabled;
+    const float terrainSize = std::max(1.0f, terrainSizeMeters);
+    const float waterLevel = preview.waterLevelMeters;
+    const float waterOpacity = std::clamp(preview.waterOpacity, 0.0f, 1.0f);
+    if (g_gpuMeshPreview.waterVertexBuffer &&
+        g_gpuMeshPreview.waterIndexBuffer &&
+        g_gpuMeshPreview.waterIndexCount > 0 &&
+        g_gpuMeshPreview.waterEnabled == enabled &&
+        g_gpuMeshPreview.waterLevelMeters == waterLevel &&
+        g_gpuMeshPreview.waterOpacity == waterOpacity &&
+        g_gpuMeshPreview.waterColor == preview.waterColor &&
+        g_gpuMeshPreview.waterTerrainSizeMeters == terrainSize)
+    {
+        return;
+    }
+
+    g_gpuMeshPreview.waterVertexBuffer.Reset();
+    g_gpuMeshPreview.waterIndexBuffer.Reset();
+    g_gpuMeshPreview.waterIndexCount = 0;
+    g_gpuMeshPreview.waterEnabled = enabled;
+    g_gpuMeshPreview.waterLevelMeters = waterLevel;
+    g_gpuMeshPreview.waterOpacity = waterOpacity;
+    g_gpuMeshPreview.waterColor = preview.waterColor;
+    g_gpuMeshPreview.waterTerrainSizeMeters = terrainSize;
+    if (!enabled || waterOpacity <= 0.001f)
+    {
+        return;
+    }
+
+    const float half = terrainSize * 0.5f;
+    const auto makeVertex = [&](float x, float y, float z, float nx, float ny, float nz) {
+        return rock::MeshVertex{
+            x, y, z,
+            nx, ny, nz,
+            waterOpacity,
+            preview.waterColor[0], preview.waterColor[1], preview.waterColor[2]};
+    };
+
+    std::vector<rock::MeshVertex> vertices;
+    vertices.reserve(4);
+    vertices.push_back(makeVertex(-half, waterLevel, half, 0.0f, 1.0f, 0.0f));
+    vertices.push_back(makeVertex(half, waterLevel, half, 0.0f, 1.0f, 0.0f));
+    vertices.push_back(makeVertex(half, waterLevel, -half, 0.0f, 1.0f, 0.0f));
+    vertices.push_back(makeVertex(-half, waterLevel, -half, 0.0f, 1.0f, 0.0f));
+
+    const std::array<UINT, 6> indices = {
+        0, 1, 2, 0, 2, 3,
+    };
+
+    const D3D12_HEAP_PROPERTIES uploadHeap = HeapProperties(D3D12_HEAP_TYPE_UPLOAD);
+    const UINT64 vbSize = vertices.size() * sizeof(rock::MeshVertex);
+    const D3D12_RESOURCE_DESC vbDesc = BufferResourceDesc(vbSize);
+    ThrowIfFailed(g_device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE,
+        &vbDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+        IID_PPV_ARGS(&g_gpuMeshPreview.waterVertexBuffer)), "Create water VB failed");
+    D3D12_RANGE readRange{};
+    void* mapped = nullptr;
+    g_gpuMeshPreview.waterVertexBuffer->Map(0, &readRange, &mapped);
+    std::memcpy(mapped, vertices.data(), static_cast<size_t>(vbSize));
+    g_gpuMeshPreview.waterVertexBuffer->Unmap(0, nullptr);
+
+    const UINT64 ibSize = indices.size() * sizeof(UINT);
+    const D3D12_RESOURCE_DESC ibDesc = BufferResourceDesc(ibSize);
+    ThrowIfFailed(g_device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE,
+        &ibDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+        IID_PPV_ARGS(&g_gpuMeshPreview.waterIndexBuffer)), "Create water IB failed");
+    g_gpuMeshPreview.waterIndexBuffer->Map(0, &readRange, &mapped);
+    std::memcpy(mapped, indices.data(), static_cast<size_t>(ibSize));
+    g_gpuMeshPreview.waterIndexBuffer->Unmap(0, nullptr);
+    g_gpuMeshPreview.waterIndexCount = static_cast<UINT>(indices.size());
+}
+
 void EnsureTerrainBoundaryLineBuffer(const rock::HeightfieldGrid& grid, uint64_t uploadKey)
 {
     if (g_gpuMeshPreview.terrainBoundaryLineVertexBuffer &&
@@ -10818,8 +10952,10 @@ CloudLoopVector ComputeCloudLoopVector(const rock::CloudSettings& clouds)
 
 bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface, bool showWireframe, std::string* error)
 {
-    const bool showGrid = g_graph.Settings().preview.showGrid;
-    if (!showSurface && !showWireframe && !showGrid)
+    const rock::PreviewSettings& previewSettings = g_graph.Settings().preview;
+    const bool showGrid = previewSettings.showGrid;
+    const bool showWater = previewSettings.waterEnabled && previewSettings.waterOpacity > 0.001f && showSurface;
+    if (!showSurface && !showWireframe && !showGrid && !showWater)
     {
         g_gpuMeshPreview.renderStats = {};
         return true;
@@ -10918,8 +11054,14 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.dofHighlightBoost != g_graph.Settings().preview.dofHighlightBoost ||
         g_gpuMeshPreview.dofMiniatureEnabled != g_graph.Settings().preview.dofMiniatureEnabled ||
         g_gpuMeshPreview.dofMiniatureScale != g_graph.Settings().preview.dofMiniatureScale ||
+        g_gpuMeshPreview.waterEnabled != previewSettings.waterEnabled ||
+        g_gpuMeshPreview.waterLevelMeters != previewSettings.waterLevelMeters ||
+        g_gpuMeshPreview.waterOpacity != previewSettings.waterOpacity ||
+        g_gpuMeshPreview.waterColor != previewSettings.waterColor ||
+        g_gpuMeshPreview.waterTerrainSizeMeters != g_graph.Evaluation().previewHeightfield.terrainSizeMeters ||
         (g_graph.Settings().sky.mode == rock::SkyMode::Atmospheric && g_graph.Settings().clouds.enabled && g_graph.Settings().clouds.animate && g_graph.Settings().clouds.windSpeedMetersPerSec > 0.0f) ||
         (showGrid && !g_gpuMeshPreview.gridVertexBuffer) ||
+        (showWater && (!g_gpuMeshPreview.waterVertexBuffer || !g_gpuMeshPreview.waterIndexBuffer)) ||
         (showTerrainBoundaryLines && !g_gpuMeshPreview.terrainBoundaryLineVertexBuffer) ||
         g_gpuMeshPreview.colorState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE ||
         (useDepthOfField && g_gpuMeshPreview.postState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -11000,6 +11142,14 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         (useDepthOfField && g_gpuMeshPreview.postState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE))
     {
         addDirtyReason(dirtyReason, "resource state");
+    }
+    if (g_gpuMeshPreview.waterEnabled != previewSettings.waterEnabled ||
+        g_gpuMeshPreview.waterLevelMeters != previewSettings.waterLevelMeters ||
+        g_gpuMeshPreview.waterOpacity != previewSettings.waterOpacity ||
+        g_gpuMeshPreview.waterColor != previewSettings.waterColor ||
+        g_gpuMeshPreview.waterTerrainSizeMeters != g_graph.Evaluation().previewHeightfield.terrainSizeMeters)
+    {
+        addDirtyReason(dirtyReason, "water");
     }
     if (dirtyReason.empty() && viewportDirty)
     {
@@ -11099,6 +11249,10 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         }
 
         const rock::HeightfieldGrid& previewGrid = g_graph.Evaluation().previewHeightfield;
+        if (showWater)
+        {
+            EnsureWaterPreviewBuffer(previewGrid.terrainSizeMeters);
+        }
         if (showTerrainBoundaryLines)
         {
             EnsureTerrainBoundaryLineBuffer(previewGrid, currentVersion);
@@ -11131,7 +11285,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         }
 
         const bool hasMeshVertices = g_gpuMeshPreview.vertexCount > 0 && g_gpuMeshPreview.vertexBuffer;
-        if (!hasMeshVertices && !displacementReady && (!showGrid || g_gpuMeshPreview.gridVertexCount == 0))
+        if (!hasMeshVertices && !displacementReady && (!showGrid || g_gpuMeshPreview.gridVertexCount == 0) && (!showWater || g_gpuMeshPreview.waterIndexCount == 0))
         {
             return false;
         }
@@ -11751,6 +11905,37 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             recordIndexedDraw(surfaceIndexCount, true);
             renderStats.surfacePass = true;
         }
+        if (showWater && g_gpuMeshPreview.waterVertexBuffer && g_gpuMeshPreview.waterIndexBuffer && g_gpuMeshPreview.waterIndexCount > 0)
+        {
+            MeshPreviewConstants waterConstants = constants;
+            waterConstants.albedoColor[0] = std::clamp(g_graph.Settings().preview.waterColor[0], 0.0f, 1.0f);
+            waterConstants.albedoColor[1] = std::clamp(g_graph.Settings().preview.waterColor[1], 0.0f, 1.0f);
+            waterConstants.albedoColor[2] = std::clamp(g_graph.Settings().preview.waterColor[2], 0.0f, 1.0f);
+            waterConstants.albedoColor[3] = std::max(previewGrid.terrainSizeMeters, 1.0f);
+            waterConstants.maskPreview = 0.0f;
+            waterConstants.colorTextureMode = 0.0f;
+            commandList->SetGraphicsRoot32BitConstants(0, sizeof(waterConstants) / 4, &waterConstants, 0);
+
+            D3D12_VERTEX_BUFFER_VIEW waterVbv{};
+            waterVbv.BufferLocation = g_gpuMeshPreview.waterVertexBuffer->GetGPUVirtualAddress();
+            waterVbv.SizeInBytes = 4u * static_cast<UINT>(sizeof(rock::MeshVertex));
+            waterVbv.StrideInBytes = static_cast<UINT>(sizeof(rock::MeshVertex));
+            D3D12_INDEX_BUFFER_VIEW waterIbv{
+                g_gpuMeshPreview.waterIndexBuffer->GetGPUVirtualAddress(),
+                g_gpuMeshPreview.waterIndexCount * static_cast<UINT>(sizeof(UINT)),
+                DXGI_FORMAT_R32_UINT};
+            commandList->IASetVertexBuffers(0, 1, &waterVbv);
+            commandList->IASetIndexBuffer(&waterIbv);
+            commandList->SetPipelineState(g_meshPreviewWaterPso.Get());
+            commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            commandList->DrawIndexedInstanced(g_gpuMeshPreview.waterIndexCount, 1, 0, 0, 0);
+            recordIndexedDraw(g_gpuMeshPreview.waterIndexCount, true);
+            commandList->SetGraphicsRoot32BitConstants(0, sizeof(constants) / 4, &constants, 0);
+            if (hasMeshVertices)
+            {
+                commandList->IASetVertexBuffers(0, 1, &vbv);
+            }
+        }
         if (showWireframe && displacementReady &&
             (useTessellation ? g_gpuMeshPreview.displacementPatchIndexCount > 0 : g_gpuMeshPreview.displacementTriIndexCount > 0))
         {
@@ -12144,6 +12329,11 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.dofHighlightBoost = g_graph.Settings().preview.dofHighlightBoost;
         g_gpuMeshPreview.dofMiniatureEnabled = g_graph.Settings().preview.dofMiniatureEnabled;
         g_gpuMeshPreview.dofMiniatureScale = g_graph.Settings().preview.dofMiniatureScale;
+        g_gpuMeshPreview.waterEnabled = previewSettings.waterEnabled;
+        g_gpuMeshPreview.waterLevelMeters = previewSettings.waterLevelMeters;
+        g_gpuMeshPreview.waterOpacity = previewSettings.waterOpacity;
+        g_gpuMeshPreview.waterColor = previewSettings.waterColor;
+        g_gpuMeshPreview.waterTerrainSizeMeters = g_graph.Evaluation().previewHeightfield.terrainSizeMeters;
         g_gpuMeshPreview.colorState    = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         return true;
     }
@@ -13597,6 +13787,23 @@ void DrawSkySettingsPanel()
         []() { SaveAppSettingsSilently(); },
     });
 }
+
+void DrawCloudSettingsPanel()
+{
+    terrain::ui::DrawCloudSettingsPanel({
+        g_graph.Settings(),
+        []() { SaveAppSettingsSilently(); },
+    });
+}
+
+void DrawWaterSettingsPanel()
+{
+    terrain::ui::DrawWaterSettingsPanel({
+        g_graph.Settings(),
+        []() { SaveAppSettingsSilently(); },
+    });
+}
+
 void DrawCameraPanel()
 {
     rock::PreviewSettings& preview = g_graph.Settings().preview;
@@ -14204,6 +14411,20 @@ void DrawUi()
         {
             BeginInspectorTabContent();
             DrawSkySettingsPanel();
+            EndInspectorTabContent();
+            EndStyledTabItem(defaultTabStyle);
+        }
+        if (BeginStyledTabItem("雲"))
+        {
+            BeginInspectorTabContent();
+            DrawCloudSettingsPanel();
+            EndInspectorTabContent();
+            EndStyledTabItem(defaultTabStyle);
+        }
+        if (BeginStyledTabItem("水面"))
+        {
+            BeginInspectorTabContent();
+            DrawWaterSettingsPanel();
             EndInspectorTabContent();
             EndStyledTabItem(defaultTabStyle);
         }

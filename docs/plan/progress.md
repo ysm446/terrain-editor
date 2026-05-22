@@ -8,10 +8,16 @@
 - 主要な地形生成ノードとして、`Rock`、`Scatter`、`Crumbling`、`Sediment`、`Snow`、`Mask Fluvial` などを追加済み。
 - マスク系は `Mask Height`、`Mask Slope`、`Mask Curvature`、`Mask Levels` を実装済み。`Mask Invert` は単独ノードにするか保留中。
 - カラー系は `Colorize` を実装済み。アクセント色は青紫系に調整済みで、今後は色ピックやグラデーションキー化の使い勝手を詰める。
-- ビューポートは、カメラ初期化、`F` キーリセット、Depth of Field、GPU Displacement / Tessellation、地形境界表示、近い地形でのマスク表示に対応済み。
+- ビューポートは、カメラ初期化、`F` キーリセット、Depth of Field、GPU Displacement / Tessellation、地形境界表示、近い地形でのマスク表示、水面表示に対応済み。
 - プロジェクト保存まわりは、未保存変更の `*` 表示と、新規作成・読み込み・終了時の保存確認に対応済み。
 - GPU backend は複数ノードで導入済み。`Scatter` は `Mask` 入力なし、`Ground Detail Level = Max` の場合に GPU 評価し、それ以外や失敗時は CPU にフォールバックする。
 - 次の大きな候補は、`Crumbling` のランダム散らばり改善、`Scatter` を使った植生分布ワークフローの確認、`Spline` / `River` / `Lake` の仕様整理。
+
+## 2026-05-23
+
+- 表示設定に `Water Surface` を追加し、`Water Level (m)`、`Opacity`、`Water Color` でビューポート専用の透明な水面を調整できるようにした。断面確認用に地形外周へ水ボリューム側面も描画する。
+- 右ペインの `天球` から雲設定を分離して `雲` タブにし、水面設定も独立した `水面` タブへ移した。水面は断面へ側面を重ねず、水平な上面だけを描くようにした。
+- `雲` タブの `有効` がオフのときも雲パラメータを非アクティブ表示するようにした。
 
 ## 2026-05-22
 

@@ -19,4 +19,5 @@ struct SkyPanelState
 };
 
 void DrawSkySettingsPanel(SkyPanelState state);
+void DrawCloudSettingsPanel(SkyPanelState state);
 } // namespace terrain::ui

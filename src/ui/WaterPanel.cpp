@@ -1,0 +1,62 @@
+#include "WaterPanel.h"
+
+#include <algorithm>
+
+#include <imgui.h>
+
+#include "PropertyWidgets.h"
+
+namespace terrain::ui
+{
+namespace
+{
+void SaveAppSettings(const WaterPanelState& state)
+{
+    if (state.saveAppSettings)
+    {
+        state.saveAppSettings();
+    }
+}
+} // namespace
+
+void DrawWaterSettingsPanel(WaterPanelState state)
+{
+    rock::PreviewSettings& preview = state.settings.preview;
+    const float headerRightPadding = 10.0f;
+    const float sectionWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x - headerRightPadding);
+    ImGui::BeginChild("WaterSettingsSection", ImVec2(sectionWidth, 0.0f), false);
+    if (ImGui::BeginTable("WaterSettingsRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 112.0f);
+        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+
+        ImGui::SeparatorText("水面");
+        if (DrawPropertyBoolRow("Water Surface", "DisplayWaterEnabled", &preview.waterEnabled, "Water surface toggled",
+            "表示専用の水平な水面です。ノード評価や OBJ エクスポートには影響しません。", rock::PreviewSettings{}.waterEnabled, true))
+        {
+            SaveAppSettings(state);
+        }
+        if (preview.waterEnabled)
+        {
+            if (DrawPropertyFloatRow("Water Level (m)", "DisplayWaterLevel", &preview.waterLevelMeters, -2000.0f, 4000.0f, rock::PreviewSettings{}.waterLevelMeters, "Water level changed", false,
+                "水面の高さです。地形の窪地に対して水平な水位として表示されます。", "%.1f"))
+            {
+                preview.waterLevelMeters = std::clamp(preview.waterLevelMeters, -10000.0f, 10000.0f);
+                SaveAppSettings(state);
+            }
+            if (DrawPropertyFloatRow("Opacity", "DisplayWaterOpacity", &preview.waterOpacity, 0.05f, 0.95f, rock::PreviewSettings{}.waterOpacity, "Water opacity changed", false,
+                "水面の透明度です。", "%.2f"))
+            {
+                preview.waterOpacity = std::clamp(preview.waterOpacity, 0.0f, 1.0f);
+                SaveAppSettings(state);
+            }
+            if (DrawColorRgbRow("Water Color", "DisplayWaterColor", preview.waterColor, rock::PreviewSettings{}.waterColor))
+            {
+                SaveAppSettings(state);
+            }
+        }
+        ImGui::EndTable();
+    }
+    ImGui::EndChild();
+}
+} // namespace terrain::ui

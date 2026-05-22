@@ -765,3 +765,24 @@ float4 PSEdge(VSOut i) : SV_TARGET
     }
     return float4(albedoColor.rgb, saturate(albedoColor.a));
 }
+
+float4 PSWater(VSOut i) : SV_TARGET
+{
+    float waveA = sin(i.worldPos.x * 0.055 + i.worldPos.z * 0.031);
+    float waveB = sin(i.worldPos.x * -0.018 + i.worldPos.z * 0.074);
+    float waveC = sin(i.worldPos.x * 0.11 + i.worldPos.z * -0.087);
+    float3 n = normalize(i.worldNor + float3(waveA * 0.035 + waveC * 0.018, 0.0, waveB * 0.035 - waveC * 0.014));
+    float3 V = normalize(cameraPosition.xyz - i.worldPos);
+    float3 L = normalize(sunDirection.xyz);
+    float fresnel = pow(1.0 - saturate(abs(dot(n, V))), 4.0);
+    float ripple = (waveA + waveB + waveC * 0.5) * 0.4;
+    float sunMirror = saturate(dot(reflect(-L, n), V));
+    float spec = (pow(sunMirror, 18.0) * 0.18 + pow(sunMirror, 96.0) * 1.35) * sunIntensity;
+    float3 shallow = albedoColor.rgb * 1.35;
+    float3 deep = albedoColor.rgb * 0.72 + float3(0.0, 0.05, 0.10);
+    float3 water = lerp(deep, shallow, saturate(0.5 + ripple * 0.18));
+    water = lerp(water, skyHorizonColor.rgb, fresnel * 0.50);
+    water += spec * skySunColor.rgb;
+    water = pow(saturate(water), 1.0 / 1.18);
+    return float4(water, saturate(i.mask));
+}
