@@ -12900,39 +12900,6 @@ NodeEvaluationVisualState GetNodeEvaluationVisualState(const rock::Node& node)
     return isQueued ? NodeEvaluationVisualState::Pending : NodeEvaluationVisualState::Processing;
 }
 
-void DrawNodeEvaluationBadge(const rock::Node& node, float nodeWidth, const ImVec2& headerCursor)
-{
-    const NodeEvaluationVisualState state = GetNodeEvaluationVisualState(node);
-    if (state == NodeEvaluationVisualState::None)
-    {
-        return;
-    }
-
-    const bool isQueued = state == NodeEvaluationVisualState::Pending;
-    const char* label = isQueued ? "Pending" : "Processing";
-    const int dotCount = isQueued ? 0 : (static_cast<int>(ImGui::GetTime() * 3.0) % 4);
-    char text[32]{};
-    std::snprintf(text, sizeof(text), "%s%.*s", label, dotCount, "...");
-
-    ImDrawList* drawList = ImGui::GetWindowDrawList();
-    const ImVec2 textSize = ImGui::CalcTextSize(text);
-    const ImVec2 padding(8.0f, 3.0f);
-    const ImVec2 badgeMax(headerCursor.x + nodeWidth - 4.0f, headerCursor.y + 20.0f);
-    const ImVec2 badgeMin(badgeMax.x - textSize.x - padding.x * 2.0f, headerCursor.y - 1.0f);
-    const ImVec4 badgeFill = isQueued
-        ? ImVec4(0.11f, 0.14f, 0.07f, 0.96f)
-        : ImVec4(0.12f, 0.18f, 0.06f, 0.96f);
-    const ImVec4 badgeBorder = isQueued
-        ? ImVec4(0.62f, 0.78f, 0.34f, 0.72f)
-        : ImVec4(0.72f, 0.95f, 0.28f, 0.82f);
-    const ImVec4 badgeText = isQueued
-        ? ImVec4(0.78f, 0.88f, 0.55f, 1.0f)
-        : ImVec4(0.82f, 1.00f, 0.42f, 1.0f);
-    drawList->AddRectFilled(badgeMin, badgeMax, ColorToU32(badgeFill), 5.0f);
-    drawList->AddRect(badgeMin, badgeMax, ColorToU32(badgeBorder), 5.0f, 0, 1.0f);
-    drawList->AddText(ImVec2(badgeMin.x + padding.x, badgeMin.y + padding.y - 1.0f), ColorToU32(badgeText), text);
-}
-
 void DrawNodeEvaluationPulse(const rock::Node& node, const ImVec2& clipMin, const ImVec2& clipMax)
 {
     const NodeEvaluationVisualState state = GetNodeEvaluationVisualState(node);
@@ -13048,7 +13015,6 @@ void DrawRockNode(const rock::Node& node, const ImVec2& editorScreenMin, const I
     ImGui::TextUnformatted(node.title.c_str());
     ImGui::SetWindowFontScale(1.0f);
     ImGui::PopStyleColor();
-    DrawNodeEvaluationBadge(node, nodeWidth, headerCursor);
 
     ImGui::Dummy(ImVec2(nodeWidth, 10.0f));
     const float rowStartX = ImGui::GetCursorPosX();
