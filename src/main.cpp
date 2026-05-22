@@ -10700,37 +10700,110 @@ void EnsureWaterPreviewBuffer(float terrainSizeMeters, const rock::HeightfieldGr
             preview.waterColor[0], preview.waterColor[1], preview.waterColor[2]};
     };
 
-    // 水面上面 (4 頂点)
-    std::vector<rock::MeshVertex> vertices;
-    vertices.push_back(makeVertex(-half, waterLevel,  half, 0.0f, 1.0f, 0.0f));
-    vertices.push_back(makeVertex( half, waterLevel,  half, 0.0f, 1.0f, 0.0f));
-    vertices.push_back(makeVertex( half, waterLevel, -half, 0.0f, 1.0f, 0.0f));
-    vertices.push_back(makeVertex(-half, waterLevel, -half, 0.0f, 1.0f, 0.0f));
+    // ハイトフィールドを UV(0-1) でバイリニアサンプリング
+    // u: worldX = lerp(-half, half, u)
+    // v: worldZ = lerp( half,-half, v)
+    const auto sampleH = [&](float u, float v) -> float {
+        if (grid.heights.empty() || grid.resolution < 2) return 0.0f;
+        u = std::clamp(u, 0.0f, 1.0f);
+        v = std::clamp(v, 0.0f, 1.0f);
+        float fx = u * (grid.resolution - 1);
+        float fz = v * (grid.resolution - 1);
+        int x0 = std::clamp(static_cast<int>(fx), 0, grid.resolution - 2);
+        int z0 = std::clamp(static_cast<int>(fz), 0, grid.resolution - 2);
+        float tx = fx - x0, tz = fz - z0;
+        float h00 = grid.heights[ z0      * grid.resolution + x0];
+        float h10 = grid.heights[ z0      * grid.resolution + x0 + 1];
+        float h01 = grid.heights[(z0 + 1) * grid.resolution + x0];
+        float h11 = grid.heights[(z0 + 1) * grid.resolution + x0 + 1];
+        return h00*(1-tx)*(1-tz) + h10*tx*(1-tz) + h01*(1-tx)*tz + h11*tx*tz;
+    };
 
-    std::vector<UINT> indices = {0, 1, 2, 0, 2, 3};
+    std::vector<rock::MeshVertex> vertices;
+    std::vector<UINT> indices;
+
+    struct WaterClipPoint
+    {
+        float u = 0.0f;
+        float v = 0.0f;
+        float depth = 0.0f;
+    };
+
+    const auto makeClipPoint = [&](float u, float v) -> WaterClipPoint {
+        return WaterClipPoint{u, v, waterLevel - sampleH(u, v)};
+    };
+    const auto interpolateClipPoint = [](const WaterClipPoint& a, const WaterClipPoint& b) -> WaterClipPoint {
+        const float denom = a.depth - b.depth;
+        const float t = std::abs(denom) > 1e-6f ? std::clamp(a.depth / denom, 0.0f, 1.0f) : 0.5f;
+        return WaterClipPoint{
+            a.u + (b.u - a.u) * t,
+            a.v + (b.v - a.v) * t,
+            0.0f};
+    };
+    const auto addSurfaceVertex = [&](const WaterClipPoint& p) -> UINT {
+        const float wx = -half + p.u * terrainSize;
+        const float wz =  half - p.v * terrainSize;
+        vertices.push_back(makeVertex(wx, waterLevel, wz, 0.0f, 1.0f, 0.0f));
+        return static_cast<UINT>(vertices.size() - 1);
+    };
+
+    // 水面上面: ハイトフィールドでクリップし、水位より低い領域だけ描画する。
+    const int surfaceRes = grid.resolution >= 2 ? std::min(grid.resolution - 1, 512) : 1;
+    vertices.reserve(static_cast<size_t>(surfaceRes) * static_cast<size_t>(surfaceRes) * 4u);
+    indices.reserve(static_cast<size_t>(surfaceRes) * static_cast<size_t>(surfaceRes) * 6u);
+    for (int z = 0; z < surfaceRes; ++z)
+    {
+        const float v0 = static_cast<float>(z) / surfaceRes;
+        const float v1 = static_cast<float>(z + 1) / surfaceRes;
+        for (int x = 0; x < surfaceRes; ++x)
+        {
+            const float u0 = static_cast<float>(x) / surfaceRes;
+            const float u1 = static_cast<float>(x + 1) / surfaceRes;
+            const WaterClipPoint corners[4] = {
+                makeClipPoint(u0, v0),
+                makeClipPoint(u1, v0),
+                makeClipPoint(u1, v1),
+                makeClipPoint(u0, v1),
+            };
+
+            std::vector<WaterClipPoint> polygon;
+            polygon.reserve(6);
+            for (int i = 0; i < 4; ++i)
+            {
+                const WaterClipPoint& a = corners[i];
+                const WaterClipPoint& b = corners[(i + 1) % 4];
+                const bool aWet = a.depth > 0.0f;
+                const bool bWet = b.depth > 0.0f;
+                if (aWet)
+                {
+                    polygon.push_back(a);
+                }
+                if (aWet != bWet)
+                {
+                    polygon.push_back(interpolateClipPoint(a, b));
+                }
+            }
+            if (polygon.size() < 3)
+            {
+                continue;
+            }
+
+            const UINT base = addSurfaceVertex(polygon[0]);
+            UINT prev = addSurfaceVertex(polygon[1]);
+            for (size_t i = 2; i < polygon.size(); ++i)
+            {
+                const UINT next = addSurfaceVertex(polygon[i]);
+                indices.push_back(base);
+                indices.push_back(prev);
+                indices.push_back(next);
+                prev = next;
+            }
+        }
+    }
 
     // 断面側壁 (水位 > 0 の場合のみ): 地形高さに沿った輪郭
     if (waterLevel > 0.01f)
     {
-        // ハイトフィールドを UV(0–1) でバイリニアサンプリング
-        // u: worldX = lerp(-half, half, u)
-        // v: worldZ = lerp( half,-half, v)
-        auto sampleH = [&](float u, float v) -> float {
-            if (grid.heights.empty() || grid.resolution < 2) return 0.0f;
-            u = std::clamp(u, 0.0f, 1.0f);
-            v = std::clamp(v, 0.0f, 1.0f);
-            float fx = u * (grid.resolution - 1);
-            float fz = v * (grid.resolution - 1);
-            int x0 = std::clamp(static_cast<int>(fx), 0, grid.resolution - 2);
-            int z0 = std::clamp(static_cast<int>(fz), 0, grid.resolution - 2);
-            float tx = fx - x0, tz = fz - z0;
-            float h00 = grid.heights[ z0      * grid.resolution + x0];
-            float h10 = grid.heights[ z0      * grid.resolution + x0 + 1];
-            float h01 = grid.heights[(z0 + 1) * grid.resolution + x0];
-            float h11 = grid.heights[(z0 + 1) * grid.resolution + x0 + 1];
-            return h00*(1-tx)*(1-tz) + h10*tx*(1-tz) + h01*(1-tx)*tz + h11*tx*tz;
-        };
-
         const int wallRes = grid.resolution >= 2 ? std::min(grid.resolution - 1, 256) : 1;
 
         // 各辺の定義: 法線 nx/nz, パラメータ t ∈ [0,1] での worldX/Z と UV を返す lambda
@@ -10792,6 +10865,11 @@ void EnsureWaterPreviewBuffer(float terrainSizeMeters, const rock::HeightfieldGr
                 indices.push_back(tl); indices.push_back(br); indices.push_back(bl);
             }
         }
+    }
+
+    if (indices.empty())
+    {
+        return;
     }
 
     const D3D12_HEAP_PROPERTIES uploadHeap = HeapProperties(D3D12_HEAP_TYPE_UPLOAD);
