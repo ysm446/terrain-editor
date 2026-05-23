@@ -29,9 +29,11 @@ add_executable(terrain_editor WIN32
     src/evaluation/ShapeSource.cpp
     src/evaluation/Snow.cpp
     src/main.cpp
+    src/NodeSerialization.cpp
     src/node_graph.cpp
     src/obj_exporter.cpp
     src/PathUtils.cpp
+    src/ProjectSettingsSerialization.cpp
     src/platform/FileDialogs.cpp
     src/platform/ShellUtils.cpp
     src/screenshot_capture.cpp
@@ -48,6 +50,8 @@ add_executable(terrain_editor WIN32
     src/ui/SkyPanel.cpp
     src/ui/UiTheme.cpp
     src/ui/WaterPanel.cpp
+    src/ViewportMath.cpp
+    src/ViewportSerialization.cpp
 )
 
 target_link_libraries(terrain_editor PRIVATE

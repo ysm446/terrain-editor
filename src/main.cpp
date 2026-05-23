@@ -36,7 +36,9 @@
 #include <nlohmann/json.hpp>
 
 #include "node_graph.h"
+#include "NodeSerialization.h"
 #include "PathUtils.h"
+#include "ProjectSettingsSerialization.h"
 #include "platform/FileDialogs.h"
 #include "platform/ShellUtils.h"
 #include "resource.h"
@@ -50,6 +52,8 @@
 #include "ui/NodeIcon.h"
 #include "ui/NodePins.h"
 #include "ui/NodeProperties.h"
+#include "ViewportMath.h"
+#include "ViewportSerialization.h"
 #include "ui/PropertyWidgets.h"
 #include "ui/SkyPanel.h"
 #include "ui/UiTheme.h"
@@ -66,6 +70,9 @@ namespace
 using namespace terrain::ui;
 using terrain::PathFromUtf8;
 using terrain::PathToUtf8;
+using terrain::CameraBasis;
+using terrain::ProjectedPoint;
+using terrain::Vec3;
 
 constexpr int kFrameCount = 2;
 constexpr int kSrvDescriptorCount = 128;
@@ -390,14 +397,19 @@ ViewportState g_viewport;
 
 void NormalizeLoadedViewport(bool migrateCloseOrbitDistance)
 {
-    g_viewport.pitch = std::clamp(g_viewport.pitch, -1.25f, 1.25f);
-    g_viewport.fovDegrees = std::clamp(g_viewport.fovDegrees, 15.0f, 90.0f);
-    g_viewport.orbitDistance = std::clamp(g_viewport.orbitDistance, 1.0f, kMaxViewportOrbitDistance);
-    if (migrateCloseOrbitDistance && g_viewport.orbitDistance <= 40.0f)
-    {
-        g_viewport.pitch = kDefaultViewportPitch;
-        g_viewport.orbitDistance = kDefaultViewportOrbitDistance;
-    }
+    terrain::ViewportCameraState viewport{
+        g_viewport.yaw,
+        g_viewport.pitch,
+        g_viewport.fovDegrees,
+        g_viewport.orbitDistance,
+        g_viewport.pan,
+    };
+    terrain::NormalizeViewportCameraState(viewport, migrateCloseOrbitDistance, kDefaultViewportPitch, kDefaultViewportOrbitDistance);
+    g_viewport.yaw = viewport.yaw;
+    g_viewport.pitch = viewport.pitch;
+    g_viewport.fovDegrees = viewport.fovDegrees;
+    g_viewport.orbitDistance = viewport.orbitDistance;
+    g_viewport.pan = viewport.pan;
 }
 
 int DaysInMonth(int month)
@@ -513,28 +525,7 @@ struct MapViewportState
 
 MapViewportState g_mapViewport;
 
-struct Vec3
-{
-    float x = 0.0f;
-    float y = 0.0f;
-    float z = 0.0f;
-};
-
 std::optional<Vec3> g_focusPickHoverPoint;
-
-struct CameraBasis
-{
-    Vec3 position;
-    Vec3 right;
-    Vec3 up;
-    Vec3 forward;
-};
-
-struct ProjectedPoint
-{
-    ImVec2 screen;
-    float depth = 0.0f;
-};
 
 struct MeshPreviewConstants
 {
@@ -1684,6 +1675,7 @@ void ProcessPendingSnowGpuRequests();
 void ProcessPendingColorizeGpuRequests();
 int CurrentPreviewMeshResolution();
 bool IsTerrainNodeKind(rock::NodeKind kind);
+terrain::ViewportCameraState MakeViewportCameraState();
 void ResetViewport();
 void UpdateMapViewportInteraction(const ImVec2& min, const ImVec2& max);
 ImVec2 InitialNodePosition(rock::NodeKind kind);
@@ -2462,843 +2454,9 @@ void NewProject()
     EvaluateGraph();
 }
 
-nlohmann::json MakeBasicHeightfieldSettingsJson(const rock::Node& node)
-{
-    return {
-        {"heightmap", {
-            {"path", MakeProjectAssetPathForJson(node.heightmap.path)},
-            {"scaleMeters", node.heightmap.scaleMeters},
-            {"relativeVerticalScalePercent", node.heightmap.relativeVerticalScalePercent},
-            {"verticalOffsetMeters", node.heightmap.verticalOffsetMeters},
-        }},
-        {"shape", {
-            {"kind", static_cast<int>(node.shape.kind)},
-            {"scaleMeters", node.shape.scaleMeters},
-            {"relativeHeightPercent", node.shape.relativeHeightPercent},
-        }},
-        {"heightmapBlur", {
-            {"radius", node.heightmapBlur.radius},
-            {"strength", node.heightmapBlur.strength},
-            {"iterations", node.heightmapBlur.iterations},
-        }},
-    };
-}
-
-nlohmann::json MakeMultiScaleErosionSettingsJson(const rock::Node& node)
-{
-    return {
-        {"multiScaleErosion", {
-            {"iterations", node.multiScaleErosion.iterations},
-            {"enableStreamPower", node.multiScaleErosion.enableStreamPower},
-            {"enableThermal", node.multiScaleErosion.enableThermal},
-            {"enableDeposition", node.multiScaleErosion.enableDeposition},
-            {"speStrength", node.multiScaleErosion.speStrength},
-            {"streamExponent", node.multiScaleErosion.streamExponent},
-            {"slopeExponent", node.multiScaleErosion.slopeExponent},
-            {"maxStreamPower", node.multiScaleErosion.maxStreamPower},
-            {"flowExponent", node.multiScaleErosion.flowExponent},
-            {"speTimeStep", node.multiScaleErosion.speTimeStep},
-            {"thermalAngleDegrees", node.multiScaleErosion.thermalAngleDegrees},
-            {"thermalStrength", node.multiScaleErosion.thermalStrength},
-            {"thermalNoisifyAngle", node.multiScaleErosion.thermalNoisifyAngle},
-            {"thermalNoiseMin", node.multiScaleErosion.thermalNoiseMin},
-            {"thermalNoiseMax", node.multiScaleErosion.thermalNoiseMax},
-            {"thermalNoiseWavelength", node.multiScaleErosion.thermalNoiseWavelength},
-            {"depositionStrength", node.multiScaleErosion.depositionStrength},
-            {"rain", node.multiScaleErosion.rain},
-            {"useMultigrid", node.multiScaleErosion.useMultigrid},
-            {"backend", static_cast<int>(node.multiScaleErosion.backend)},
-        }},
-    };
-}
-
-nlohmann::json MakeMaskSettingsJson(const rock::Node& node)
-{
-    return {
-        {"maskNoise", {
-            {"seed", node.maskNoise.seed},
-            {"octaves", node.maskNoise.octaves},
-            {"frequency", node.maskNoise.frequency},
-            {"lacunarity", node.maskNoise.lacunarity},
-            {"persistence", node.maskNoise.persistence},
-            {"backend", static_cast<int>(node.maskNoise.backend)},
-        }},
-        {"maskFluvial", {
-            {"simulationMode", static_cast<int>(node.maskFluvial.simulationMode)},
-            {"algorithm", static_cast<int>(node.maskFluvial.algorithm)},
-            {"outputCurve", static_cast<int>(node.maskFluvial.outputCurve)},
-            {"accumulationThreshold", node.maskFluvial.accumulationThreshold},
-            {"gamma", node.maskFluvial.gamma},
-            {"softness", node.maskFluvial.softness},
-            {"power", node.maskFluvial.power},
-            {"largestDetailLevelM", node.maskFluvial.largestDetailLevelM},
-            {"mfdExponent", node.maskFluvial.mfdExponent},
-            {"particleCount", node.maskFluvial.particleCount},
-            {"particleLifetime", node.maskFluvial.particleLifetime},
-            {"particleInertia", node.maskFluvial.particleInertia},
-            {"particleStepLengthM", node.maskFluvial.particleStepLengthM},
-            {"particleSeed", node.maskFluvial.particleSeed},
-            {"backend", static_cast<int>(node.maskFluvial.backend)},
-        }},
-        {"maskCurvature", {
-            {"mode", static_cast<int>(node.maskCurvature.mode)},
-            {"largestDetailLevelM", node.maskCurvature.largestDetailLevelM},
-            {"radius", node.maskCurvature.radius},
-            {"sensitivityMeters", node.maskCurvature.sensitivityMeters},
-            {"threshold", node.maskCurvature.threshold},
-            {"gamma", node.maskCurvature.gamma},
-        }},
-        {"maskLevels", {
-            {"blackPoint", node.maskLevels.blackPoint},
-            {"whitePoint", node.maskLevels.whitePoint},
-            {"gamma", node.maskLevels.gamma},
-            {"invert", node.maskLevels.invert},
-        }},
-        {"maskSlope", {
-            {"largestDetailLevelM", node.maskSlope.largestDetailLevelM},
-            {"slopeMinDeg", node.maskSlope.slopeMinDeg},
-            {"slopeMaxDeg", node.maskSlope.slopeMaxDeg},
-            {"gamma", node.maskSlope.gamma},
-            {"invert", node.maskSlope.invert},
-        }},
-        {"maskHeight", {
-            {"useFullRange", node.maskHeight.useFullRange},
-            {"heightMinMeters", node.maskHeight.heightMinMeters},
-            {"heightMaxMeters", node.maskHeight.heightMaxMeters},
-            {"featherMeters", node.maskHeight.featherMeters},
-            {"gamma", node.maskHeight.gamma},
-            {"invert", node.maskHeight.invert},
-        }},
-        {"maskBlend", {
-            {"mode", static_cast<int>(node.maskBlend.mode)},
-            {"intensity", node.maskBlend.intensity},
-        }},
-    };
-}
-
-nlohmann::json MakeSnowSettingsJson(const rock::Node& node)
-{
-    return {
-        {"snow", {
-            {"emissionAmount", node.snow.emissionAmount},
-            {"slopeLimitMinDeg", node.snow.slopeLimitMinDeg},
-            {"slopeLimitMaxDeg", node.snow.slopeLimitMaxDeg},
-            {"maskMaxSnow", node.snow.maskMaxSnow},
-            {"iterationCount", node.snow.iterationCount},
-            {"emissionTime", node.snow.emissionTime},
-            {"smoothingIterations", node.snow.smoothingIterations},
-            {"motionSlopeLimitDeg", node.snow.motionSlopeLimitDeg},
-            {"transportRate", node.snow.transportRate},
-            {"surfaceSmoothing", node.snow.surfaceSmoothing},
-            {"maskThresholdM", node.snow.maskThresholdM},
-            {"maskFeatherM", node.snow.maskFeatherM},
-            {"largestDetailLevelM", node.snow.largestDetailLevelM},
-            {"fillRadius", node.snow.fillRadius},
-            {"backend", static_cast<int>(node.snow.backend)},
-        }},
-    };
-}
-
-nlohmann::json MakeColorizeSettingsJson(const rock::Node& node)
-{
-    nlohmann::json stopsArr = nlohmann::json::array();
-    for (const rock::ColorStop& s : node.colorize.stops)
-    {
-        stopsArr.push_back({{"position", s.position}, {"r", s.r}, {"g", s.g}, {"b", s.b}});
-    }
-    return {{"colorize", {
-        {"backend", static_cast<int>(node.colorize.backend)},
-        {"stops", stopsArr},
-    }}};
-}
-
-nlohmann::json MakeRockSettingsJson(const rock::Node& node)
-{
-    return {
-        {"rock", {
-            {"style", static_cast<int>(node.rock.style)},
-            {"orientationRule", static_cast<int>(node.rock.orientationRule)},
-            {"layerCount", node.rock.layerCount},
-            {"seed", node.rock.seed},
-            {"density", node.rock.density},
-            {"coverage", node.rock.coverage},
-            {"rockSizeMinM", node.rock.rockSizeMinM},
-            {"rockSizeMaxM", node.rock.rockSizeMaxM},
-            {"rockHeight", node.rock.rockHeight},
-            {"heightJitter", node.rock.heightJitter},
-            {"rotationVariation", node.rock.rotationVariation},
-            {"aspectVariation", node.rock.aspectVariation},
-            {"edgeSharpness", node.rock.edgeSharpness},
-            {"bumpiness", node.rock.bumpiness},
-            {"facetSharpness", node.rock.facetSharpness},
-            {"facetScale", node.rock.facetScale},
-            {"groundDetailLevelM", node.rock.groundDetailLevelM},
-            {"backend", static_cast<int>(node.rock.backend)},
-        }},
-    };
-}
-
-nlohmann::json MakeScatterSettingsJson(const rock::Node& node)
-{
-    return {
-        {"scatter", {
-            {"shapeType", static_cast<int>(node.scatter.shapeType)},
-            {"orientationRule", static_cast<int>(node.scatter.orientationRule)},
-            {"seed", node.scatter.seed},
-            {"density", node.scatter.density},
-            {"coverage", node.scatter.coverage},
-            {"sizeMinM", node.scatter.sizeMinM},
-            {"sizeMaxM", node.scatter.sizeMaxM},
-            {"height", node.scatter.height},
-            {"heightJitter", node.scatter.heightJitter},
-            {"rotationVariation", node.scatter.rotationVariation},
-            {"aspectVariation", node.scatter.aspectVariation},
-            {"groundDetailLevelM", node.scatter.groundDetailLevelM},
-            {"backend", static_cast<int>(node.scatter.backend)},
-        }},
-    };
-}
-
-nlohmann::json MakeCrumblingSettingsJson(const rock::Node& node)
-{
-    return {
-        {"crumbling", {
-            {"physicsCount", node.crumbling.physicsCount},
-            {"debrisAmount", node.crumbling.debrisAmount},
-            {"debrisSizeMinM", node.crumbling.debrisSizeMinM},
-            {"debrisSizeMaxM", node.crumbling.debrisSizeMaxM},
-            {"style", static_cast<int>(node.crumbling.style)},
-            {"gravity", node.crumbling.gravity},
-            {"spread", node.crumbling.spread},
-            {"seed", node.crumbling.seed},
-        }},
-    };
-}
-
-nlohmann::json MakeSedimentSettingsJson(const rock::Node& node)
-{
-    return {
-        {"sediment", {
-            {"iterations", node.sediment.iterations},
-            {"stabilizationIterations", node.sediment.stabilizationIterations},
-            {"largestDetailLevelM", node.sediment.largestDetailLevelM},
-            {"emissionAmountM", node.sediment.emissionAmountM},
-            {"emissionTime", node.sediment.emissionTime},
-            {"sedimentViscosity", node.sediment.sedimentViscosity},
-            {"convertTerrainToSediment", node.sediment.convertTerrainToSediment},
-            {"maskContrast", node.sediment.maskContrast},
-            {"backend", static_cast<int>(node.sediment.backend)},
-        }},
-    };
-}
-
-nlohmann::json MakeNodeSettingsJson(const rock::Node& node)
-{
-    nlohmann::json nodeJson;
-    nodeJson.update(MakeBasicHeightfieldSettingsJson(node));
-    nodeJson.update(MakeMultiScaleErosionSettingsJson(node));
-    nodeJson.update(MakeMaskSettingsJson(node));
-    nodeJson.update(MakeCrumblingSettingsJson(node));
-    nodeJson.update(MakeRockSettingsJson(node));
-    nodeJson.update(MakeScatterSettingsJson(node));
-    nodeJson.update(MakeSedimentSettingsJson(node));
-    nodeJson.update(MakeSnowSettingsJson(node));
-    nodeJson.update(MakeColorizeSettingsJson(node));
-    return nodeJson;
-}
-
-nlohmann::json MakeSerializedNodeJson(const rock::Node& node)
-{
-    nlohmann::json nodeJson = {
-        {"id", node.id},
-        {"kind", static_cast<int>(node.kind)},
-        {"title", node.title},
-        {"inputs", nlohmann::json::array()},
-        {"outputs", nlohmann::json::array()},
-    };
-    nodeJson.update(MakeNodeSettingsJson(node));
-
-    for (const rock::Pin& pin : node.inputs)
-    {
-        nodeJson["inputs"].push_back({
-            {"id", pin.id},
-            {"valueType", static_cast<int>(pin.valueType)},
-            {"label", pin.label},
-        });
-    }
-    for (const rock::Pin& pin : node.outputs)
-    {
-        nodeJson["outputs"].push_back({
-            {"id", pin.id},
-            {"valueType", static_cast<int>(pin.valueType)},
-            {"label", pin.label},
-        });
-    }
-    return nodeJson;
-}
-
-std::optional<rock::NodeKind> ReadSerializedNodeKind(const nlohmann::json& nodeJson)
-{
-    const int kindInt = nodeJson.value("kind", 0);
-    const rock::NodeKind kind = static_cast<rock::NodeKind>(kindInt);
-    if (!IsTerrainNodeKind(kind))
-    {
-        return std::nullopt;
-    }
-    return kind;
-}
-
-std::optional<rock::PreviewStage> ReadSerializedPreviewStage(const nlohmann::json& root)
-{
-    const int stageInt = root.value("previewStage", static_cast<int>(g_graph.Preview()));
-    const rock::PreviewStage stage = static_cast<rock::PreviewStage>(stageInt);
-    switch (stage)
-    {
-    case rock::PreviewStage::Graph:
-    case rock::PreviewStage::HeightmapBlur:
-    case rock::PreviewStage::Shape:
-    case rock::PreviewStage::MultiScaleErosion:
-    case rock::PreviewStage::MaskNoise:
-    case rock::PreviewStage::MaskBlend:
-    case rock::PreviewStage::MaskLevels:
-    case rock::PreviewStage::MaskSlope:
-    case rock::PreviewStage::MaskHeight:
-    case rock::PreviewStage::Crumbling:
-    case rock::PreviewStage::MaskCurvature:
-    case rock::PreviewStage::MaskFluvial:
-    case rock::PreviewStage::Rock:
-    case rock::PreviewStage::Scatter:
-    case rock::PreviewStage::Sediment:
-    case rock::PreviewStage::Snow:
-    case rock::PreviewStage::Colorize:
-        return stage;
-    default:
-        return std::nullopt;
-    }
-}
-
-void ReadBasicHeightfieldSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
-{
-    const nlohmann::json nodeHeightmapJson = nodeJson.value("heightmap", nlohmann::json::object());
-    const nlohmann::json nodeShapeJson = nodeJson.value("shape", nlohmann::json::object());
-    const nlohmann::json nodeBlurJson = nodeJson.value("heightmapBlur", nlohmann::json::object());
-    node.heightmap.path = nodeHeightmapJson.value("path", node.heightmap.path);
-    node.heightmap.scaleMeters = std::clamp(nodeHeightmapJson.value("scaleMeters", node.heightmap.scaleMeters), 1.0f, 1000000.0f);
-    node.heightmap.relativeVerticalScalePercent = std::clamp(nodeHeightmapJson.value("relativeVerticalScalePercent", node.heightmap.relativeVerticalScalePercent), 0.0f, 10000.0f);
-    node.heightmap.verticalOffsetMeters = std::clamp(nodeHeightmapJson.value("verticalOffsetMeters", node.heightmap.verticalOffsetMeters), -1000000.0f, 1000000.0f);
-    node.heightmap.simulationResolution = NearestResolutionPreset(nodeHeightmapJson.value("simulationResolution", node.heightmap.simulationResolution));
-    node.shape.kind = static_cast<rock::ShapeKind>(std::clamp(nodeShapeJson.value("kind", static_cast<int>(node.shape.kind)), 0, 1));
-    node.shape.scaleMeters = std::clamp(nodeShapeJson.value("scaleMeters", node.shape.scaleMeters), 1.0f, 1000000.0f);
-    node.shape.relativeHeightPercent = std::clamp(nodeShapeJson.value("relativeHeightPercent", node.shape.relativeHeightPercent), 0.0f, 10000.0f);
-    node.shape.simulationResolution = NearestResolutionPreset(nodeShapeJson.value("simulationResolution", node.shape.simulationResolution));
-    node.heightmapBlur.radius = std::clamp(nodeBlurJson.value("radius", node.heightmapBlur.radius), 0.0f, 128.0f);
-    node.heightmapBlur.strength = std::clamp(nodeBlurJson.value("strength", node.heightmapBlur.strength), 0.0f, 1.0f);
-    node.heightmapBlur.iterations = std::clamp(nodeBlurJson.value("iterations", node.heightmapBlur.iterations), 0, 64);
-}
-
-void ReadMultiScaleErosionSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
-{
-    const nlohmann::json nodeMultiScaleErosionJson = nodeJson.value("multiScaleErosion", nlohmann::json::object());
-
-    node.multiScaleErosion.iterations = std::clamp(nodeMultiScaleErosionJson.value("iterations", node.multiScaleErosion.iterations), 0, 500);
-    node.multiScaleErosion.enableStreamPower = nodeMultiScaleErosionJson.value("enableStreamPower", node.multiScaleErosion.enableStreamPower);
-    node.multiScaleErosion.enableThermal = nodeMultiScaleErosionJson.value("enableThermal", node.multiScaleErosion.enableThermal);
-    node.multiScaleErosion.enableDeposition = nodeMultiScaleErosionJson.value("enableDeposition", node.multiScaleErosion.enableDeposition);
-    node.multiScaleErosion.speStrength = std::clamp(nodeMultiScaleErosionJson.value("speStrength", node.multiScaleErosion.speStrength), 0.0f, 0.01f);
-    node.multiScaleErosion.streamExponent = std::clamp(nodeMultiScaleErosionJson.value("streamExponent", node.multiScaleErosion.streamExponent), 0.0f, 2.0f);
-    node.multiScaleErosion.slopeExponent = std::clamp(nodeMultiScaleErosionJson.value("slopeExponent", node.multiScaleErosion.slopeExponent), 0.0f, 4.0f);
-    node.multiScaleErosion.maxStreamPower = std::clamp(nodeMultiScaleErosionJson.value("maxStreamPower", node.multiScaleErosion.maxStreamPower), 1.0f, 1000000.0f);
-    node.multiScaleErosion.flowExponent = std::clamp(nodeMultiScaleErosionJson.value("flowExponent", node.multiScaleErosion.flowExponent), 0.5f, 4.0f);
-    node.multiScaleErosion.speTimeStep = std::clamp(nodeMultiScaleErosionJson.value("speTimeStep", node.multiScaleErosion.speTimeStep), 0.0f, 4.0f);
-    node.multiScaleErosion.thermalAngleDegrees = std::clamp(nodeMultiScaleErosionJson.value("thermalAngleDegrees", node.multiScaleErosion.thermalAngleDegrees), 0.0f, 60.0f);
-    node.multiScaleErosion.thermalStrength = std::clamp(nodeMultiScaleErosionJson.value("thermalStrength", node.multiScaleErosion.thermalStrength), 0.0f, 0.01f);
-    node.multiScaleErosion.thermalNoisifyAngle = nodeMultiScaleErosionJson.value("thermalNoisifyAngle", node.multiScaleErosion.thermalNoisifyAngle);
-    node.multiScaleErosion.thermalNoiseMin = std::clamp(nodeMultiScaleErosionJson.value("thermalNoiseMin", node.multiScaleErosion.thermalNoiseMin), 0.0f, 4.0f);
-    node.multiScaleErosion.thermalNoiseMax = std::clamp(nodeMultiScaleErosionJson.value("thermalNoiseMax", node.multiScaleErosion.thermalNoiseMax), 0.0f, 4.0f);
-    node.multiScaleErosion.thermalNoiseWavelength = std::clamp(nodeMultiScaleErosionJson.value("thermalNoiseWavelength", node.multiScaleErosion.thermalNoiseWavelength), 0.0f, 0.05f);
-    node.multiScaleErosion.depositionStrength = std::clamp(nodeMultiScaleErosionJson.value("depositionStrength", node.multiScaleErosion.depositionStrength), 0.0f, 8.0f);
-    node.multiScaleErosion.rain = std::clamp(nodeMultiScaleErosionJson.value("rain", node.multiScaleErosion.rain), 0.0f, 10.0f);
-    node.multiScaleErosion.useMultigrid = nodeMultiScaleErosionJson.value("useMultigrid", node.multiScaleErosion.useMultigrid);
-    {
-        const int backendInt = std::clamp(nodeMultiScaleErosionJson.value("backend", static_cast<int>(node.multiScaleErosion.backend)),
-                                           static_cast<int>(rock::MultiScaleErosionBackend::CpuReference),
-                                           static_cast<int>(rock::MultiScaleErosionBackend::GpuCompute));
-        node.multiScaleErosion.backend = static_cast<rock::MultiScaleErosionBackend>(backendInt);
-    }
-}
-
-void ReadMaskSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
-{
-    const nlohmann::json nodeMaskNoiseJson = nodeJson.value("maskNoise", nlohmann::json::object());
-    const nlohmann::json nodeMaskBlendJson = nodeJson.value("maskBlend", nlohmann::json::object());
-    const nlohmann::json nodeMaskFluvialJson = nodeJson.value("maskFluvial", nlohmann::json::object());
-    const nlohmann::json nodeMaskCurvatureJson = nodeJson.value("maskCurvature", nlohmann::json::object());
-    const nlohmann::json nodeMaskLevelsJson = nodeJson.value("maskLevels", nlohmann::json::object());
-    const nlohmann::json nodeMaskSlopeJson = nodeJson.value("maskSlope", nlohmann::json::object());
-    const nlohmann::json nodeMaskHeightJson = nodeJson.value("maskHeight", nlohmann::json::object());
-
-    node.maskNoise.seed = std::clamp(nodeMaskNoiseJson.value("seed", node.maskNoise.seed), 0, 999999);
-    node.maskNoise.octaves = std::clamp(nodeMaskNoiseJson.value("octaves", node.maskNoise.octaves), 1, 12);
-    node.maskNoise.frequency = std::clamp(nodeMaskNoiseJson.value("frequency", node.maskNoise.frequency), 0.0f, 256.0f);
-    node.maskNoise.lacunarity = std::clamp(nodeMaskNoiseJson.value("lacunarity", node.maskNoise.lacunarity), 0.0f, 8.0f);
-    node.maskNoise.persistence = std::clamp(nodeMaskNoiseJson.value("persistence", node.maskNoise.persistence), 0.0f, 1.0f);
-    node.maskNoise.simulationResolution = NearestResolutionPreset(nodeMaskNoiseJson.value("simulationResolution", node.maskNoise.simulationResolution));
-    {
-        const int maskNoiseBackendInt = std::clamp(nodeMaskNoiseJson.value("backend", static_cast<int>(node.maskNoise.backend)),
-                                                    static_cast<int>(rock::MaskNoiseBackend::CpuParallel),
-                                                    static_cast<int>(rock::MaskNoiseBackend::GpuCompute));
-        node.maskNoise.backend = static_cast<rock::MaskNoiseBackend>(maskNoiseBackendInt);
-    }
-    {
-        const int modeInt = std::clamp(nodeMaskBlendJson.value("mode", static_cast<int>(node.maskBlend.mode)),
-                                        static_cast<int>(rock::MaskBlendMode::Add),
-                                        static_cast<int>(rock::MaskBlendMode::Max));
-        node.maskBlend.mode = static_cast<rock::MaskBlendMode>(modeInt);
-    }
-    node.maskBlend.intensity = std::clamp(nodeMaskBlendJson.value("intensity", node.maskBlend.intensity), 0.0f, 1.0f);
-    {
-        const int modeInt = std::clamp(nodeMaskCurvatureJson.value("mode", static_cast<int>(node.maskCurvature.mode)),
-                                        static_cast<int>(rock::MaskCurvatureMode::Ridges),
-                                        static_cast<int>(rock::MaskCurvatureMode::Absolute));
-        node.maskCurvature.mode = static_cast<rock::MaskCurvatureMode>(modeInt);
-    }
-    node.maskCurvature.radius = std::clamp(nodeMaskCurvatureJson.value("radius", node.maskCurvature.radius), 1, 64);
-    node.maskCurvature.largestDetailLevelM = std::clamp(
-        nodeMaskCurvatureJson.value("largestDetailLevelM", static_cast<float>(node.maskCurvature.radius)),
-        1.0f,
-        1024.0f);
-    node.maskCurvature.sensitivityMeters = std::clamp(nodeMaskCurvatureJson.value("sensitivityMeters", node.maskCurvature.sensitivityMeters), 0.001f, 1000.0f);
-    node.maskCurvature.threshold = std::clamp(nodeMaskCurvatureJson.value("threshold", node.maskCurvature.threshold), 0.0f, 0.99f);
-    node.maskCurvature.gamma = std::clamp(nodeMaskCurvatureJson.value("gamma", node.maskCurvature.gamma), 0.05f, 8.0f);
-    node.maskLevels.blackPoint = std::clamp(nodeMaskLevelsJson.value("blackPoint", node.maskLevels.blackPoint), 0.0f, 1.0f);
-    node.maskLevels.whitePoint = std::clamp(nodeMaskLevelsJson.value("whitePoint", node.maskLevels.whitePoint), 0.0f, 1.0f);
-    node.maskLevels.gamma = std::clamp(nodeMaskLevelsJson.value("gamma", node.maskLevels.gamma), 0.05f, 8.0f);
-    node.maskLevels.invert = nodeMaskLevelsJson.value("invert", node.maskLevels.invert);
-    node.maskSlope.largestDetailLevelM = std::clamp(nodeMaskSlopeJson.value("largestDetailLevelM", node.maskSlope.largestDetailLevelM), 0.0f, 1024.0f);
-    node.maskSlope.slopeMinDeg = std::clamp(nodeMaskSlopeJson.value("slopeMinDeg", node.maskSlope.slopeMinDeg), 0.0f, 89.9f);
-    node.maskSlope.slopeMaxDeg = std::clamp(nodeMaskSlopeJson.value("slopeMaxDeg", node.maskSlope.slopeMaxDeg), 0.0f, 89.9f);
-    if (node.maskSlope.slopeMaxDeg < node.maskSlope.slopeMinDeg)
-    {
-        std::swap(node.maskSlope.slopeMinDeg, node.maskSlope.slopeMaxDeg);
-    }
-    node.maskSlope.gamma = std::clamp(nodeMaskSlopeJson.value("gamma", node.maskSlope.gamma), 0.05f, 8.0f);
-    node.maskSlope.invert = nodeMaskSlopeJson.value("invert", node.maskSlope.invert);
-    node.maskHeight.useFullRange = nodeMaskHeightJson.value("useFullRange", node.maskHeight.useFullRange);
-    node.maskHeight.heightMinMeters = std::clamp(nodeMaskHeightJson.value("heightMinMeters", node.maskHeight.heightMinMeters), -100000.0f, 100000.0f);
-    node.maskHeight.heightMaxMeters = std::clamp(nodeMaskHeightJson.value("heightMaxMeters", node.maskHeight.heightMaxMeters), -100000.0f, 100000.0f);
-    if (node.maskHeight.heightMaxMeters < node.maskHeight.heightMinMeters)
-    {
-        std::swap(node.maskHeight.heightMinMeters, node.maskHeight.heightMaxMeters);
-    }
-    node.maskHeight.featherMeters = std::clamp(nodeMaskHeightJson.value("featherMeters", node.maskHeight.featherMeters), 0.0f, 100000.0f);
-    node.maskHeight.gamma = std::clamp(nodeMaskHeightJson.value("gamma", node.maskHeight.gamma), 0.05f, 8.0f);
-    node.maskHeight.invert = nodeMaskHeightJson.value("invert", node.maskHeight.invert);
-    {
-        const int modeInt = std::clamp(nodeMaskFluvialJson.value("simulationMode", static_cast<int>(node.maskFluvial.simulationMode)),
-                                       static_cast<int>(rock::MaskFluvialSimulationMode::FlowAccumulation),
-                                       static_cast<int>(rock::MaskFluvialSimulationMode::Particles));
-        node.maskFluvial.simulationMode = static_cast<rock::MaskFluvialSimulationMode>(modeInt);
-    }
-    {
-        (void)nodeMaskFluvialJson.value("algorithm", static_cast<int>(node.maskFluvial.algorithm));
-        node.maskFluvial.algorithm = rock::FlowAccumulationAlgorithm::MFD;
-    }
-    {
-        const int curveInt = std::clamp(nodeMaskFluvialJson.value("outputCurve", static_cast<int>(node.maskFluvial.outputCurve)),
-                                         static_cast<int>(rock::MaskFluvialOutputCurve::Log),
-                                         static_cast<int>(rock::MaskFluvialOutputCurve::Linear));
-        node.maskFluvial.outputCurve = static_cast<rock::MaskFluvialOutputCurve>(curveInt);
-    }
-    node.maskFluvial.accumulationThreshold = std::clamp(nodeMaskFluvialJson.value("accumulationThreshold", node.maskFluvial.accumulationThreshold), 0.0f, 1.0f);
-    node.maskFluvial.gamma = std::clamp(nodeMaskFluvialJson.value("gamma", node.maskFluvial.gamma), 0.05f, 8.0f);
-    node.maskFluvial.softness = std::clamp(nodeMaskFluvialJson.value("softness", node.maskFluvial.softness), 0.001f, 4.0f);
-    node.maskFluvial.power = std::clamp(nodeMaskFluvialJson.value("power", node.maskFluvial.power), 0.1f, 8.0f);
-    (void)nodeMaskFluvialJson.value("pitFillIterations", node.maskFluvial.pitFillIterations);
-    node.maskFluvial.pitFillIterations = rock::MaskFluvialSettings{}.pitFillIterations;
-    node.maskFluvial.largestDetailLevelM = std::clamp(nodeMaskFluvialJson.value("largestDetailLevelM", node.maskFluvial.largestDetailLevelM), 1.0f, 1024.0f);
-    node.maskFluvial.mfdExponent = std::clamp(nodeMaskFluvialJson.value("mfdExponent", node.maskFluvial.mfdExponent), 0.1f, 16.0f);
-    (void)nodeMaskFluvialJson.value("inertia", node.maskFluvial.inertia);
-    node.maskFluvial.inertia = rock::MaskFluvialSettings{}.inertia;
-    node.maskFluvial.particleCount = std::clamp(nodeMaskFluvialJson.value("particleCount", node.maskFluvial.particleCount), 1, 200000);
-    node.maskFluvial.particleLifetime = std::clamp(nodeMaskFluvialJson.value("particleLifetime", node.maskFluvial.particleLifetime), 1, 2048);
-    node.maskFluvial.particleInertia = std::clamp(nodeMaskFluvialJson.value("particleInertia", node.maskFluvial.particleInertia), 0.0f, 0.98f);
-    node.maskFluvial.particleStepLengthM = std::clamp(nodeMaskFluvialJson.value("particleStepLengthM", node.maskFluvial.particleStepLengthM), 0.01f, 1024.0f);
-    node.maskFluvial.particleSeed = std::clamp(nodeMaskFluvialJson.value("particleSeed", node.maskFluvial.particleSeed), 0, 999999);
-    {
-        const int backendInt = std::clamp(nodeMaskFluvialJson.value("backend", static_cast<int>(node.maskFluvial.backend)),
-                                           static_cast<int>(rock::MaskFluvialBackend::CpuReference),
-                                           static_cast<int>(rock::MaskFluvialBackend::GpuCompute));
-        node.maskFluvial.backend = static_cast<rock::MaskFluvialBackend>(backendInt);
-    }
-}
-
-void ReadRockSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
-{
-    const nlohmann::json nodeRockJson = nodeJson.value("rock", nlohmann::json::object());
-
-    if (nodeRockJson.contains("style"))
-    {
-        const int styleInt = nodeRockJson.value("style", static_cast<int>(node.rock.style));
-        node.rock.style = static_cast<rock::RockStyle>(std::clamp(styleInt,
-            static_cast<int>(rock::RockStyle::Classic),
-            static_cast<int>(rock::RockStyle::Shard)));
-    }
-    else
-    {
-        node.rock.style = rock::RockStyle::Classic;
-    }
-    {
-        const int orientationInt = nodeRockJson.value("orientationRule", static_cast<int>(node.rock.orientationRule));
-        node.rock.orientationRule = static_cast<rock::RockOrientationRule>(std::clamp(orientationInt,
-            static_cast<int>(rock::RockOrientationRule::Flat),
-            static_cast<int>(rock::RockOrientationRule::SlopeOriented)));
-    }
-    node.rock.layerCount = std::clamp(nodeRockJson.value("layerCount", node.rock.layerCount), 1, 8);
-    node.rock.seed = std::clamp(nodeRockJson.value("seed", node.rock.seed), 0, 999999);
-    node.rock.density = std::clamp(nodeRockJson.value("density", node.rock.density), 0.5f, 1000.0f);
-    node.rock.coverage = std::clamp(nodeRockJson.value("coverage", node.rock.coverage), 0.0f, 1.0f);
-    const float density = node.rock.density;
-    const float legacyRockFill = nodeRockJson.value("rockFill", -1.0f);
-    const float legacyRockSize = nodeRockJson.value("rockSize", -1.0f);
-    const float legacyMinRatio = nodeRockJson.value("rockSizeMin", -1.0f);
-    const float legacyMaxRatio = nodeRockJson.value("rockSizeMax", -1.0f);
-    if (legacyRockFill > 0.0f)
-    {
-        node.rock.rockSizeMinM = legacyRockFill * density;
-        node.rock.rockSizeMaxM = node.rock.rockSizeMinM;
-    }
-    else if (legacyRockSize > 0.0f)
-    {
-        node.rock.rockSizeMinM = legacyRockSize * density;
-        node.rock.rockSizeMaxM = node.rock.rockSizeMinM;
-    }
-    else if (legacyMinRatio > 0.0f || legacyMaxRatio > 0.0f)
-    {
-        const float minR = (legacyMinRatio > 0.0f) ? legacyMinRatio : 0.7f;
-        const float maxR = (legacyMaxRatio > 0.0f) ? legacyMaxRatio : 1.2f;
-        node.rock.rockSizeMinM = minR * density;
-        node.rock.rockSizeMaxM = maxR * density;
-    }
-    else
-    {
-        node.rock.rockSizeMinM = nodeRockJson.value("rockSizeMinM", node.rock.rockSizeMinM);
-        node.rock.rockSizeMaxM = nodeRockJson.value("rockSizeMaxM", node.rock.rockSizeMaxM);
-    }
-    node.rock.rockSizeMinM = std::clamp(node.rock.rockSizeMinM, 0.1f, 200.0f);
-    node.rock.rockSizeMaxM = std::clamp(std::max(node.rock.rockSizeMaxM, node.rock.rockSizeMinM), 0.1f, 200.0f);
-    node.rock.rockHeight = std::clamp(nodeRockJson.value("rockHeight", node.rock.rockHeight), 0.0f, 100.0f);
-    node.rock.heightJitter = std::clamp(nodeRockJson.value("heightJitter", node.rock.heightJitter), 0.0f, 1.0f);
-    node.rock.rotationVariation = std::clamp(nodeRockJson.value("rotationVariation", node.rock.rotationVariation), 0.0f, 1.0f);
-    node.rock.aspectVariation = std::clamp(nodeRockJson.value("aspectVariation", node.rock.aspectVariation), 0.0f, 1.0f);
-    node.rock.edgeSharpness = std::clamp(nodeRockJson.value("edgeSharpness", node.rock.edgeSharpness), 0.0f, 1.0f);
-    node.rock.bumpiness = std::clamp(nodeRockJson.value("bumpiness", node.rock.bumpiness), 0.0f, 1.0f);
-    node.rock.facetSharpness = std::clamp(nodeRockJson.value("facetSharpness", node.rock.facetSharpness), 0.0f, 1.0f);
-    node.rock.facetScale = std::clamp(nodeRockJson.value("facetScale", node.rock.facetScale), 0.5f, 8.0f);
-    node.rock.groundDetailLevelM = std::clamp(nodeRockJson.value("groundDetailLevelM", node.rock.groundDetailLevelM), 0.0f, 1024.0f);
-    {
-        const int backendInt = nodeRockJson.value("backend", static_cast<int>(node.rock.backend));
-        node.rock.backend = static_cast<rock::RockBackend>(std::clamp(backendInt,
-            static_cast<int>(rock::RockBackend::CpuReference),
-            static_cast<int>(rock::RockBackend::GpuCompute)));
-    }
-}
-
-void ReadScatterSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
-{
-    const nlohmann::json nodeScatterJson = nodeJson.value("scatter", nlohmann::json::object());
-    {
-        const int shapeInt = std::clamp(nodeScatterJson.value("shapeType", static_cast<int>(node.scatter.shapeType)),
-            static_cast<int>(rock::ScatterShapeType::Hemisphere),
-            static_cast<int>(rock::ScatterShapeType::Cone));
-        node.scatter.shapeType = static_cast<rock::ScatterShapeType>(shapeInt);
-    }
-    node.scatter.seed = std::clamp(nodeScatterJson.value("seed", node.scatter.seed), 0, 999999);
-    {
-        const int orientationInt = nodeScatterJson.value("orientationRule", static_cast<int>(node.scatter.orientationRule));
-        node.scatter.orientationRule = static_cast<rock::RockOrientationRule>(std::clamp(orientationInt,
-            static_cast<int>(rock::RockOrientationRule::Flat),
-            static_cast<int>(rock::RockOrientationRule::SlopeOriented)));
-    }
-    node.scatter.density = std::clamp(nodeScatterJson.value("density", node.scatter.density), 0.5f, 1000.0f);
-    node.scatter.coverage = std::clamp(nodeScatterJson.value("coverage", node.scatter.coverage), 0.0f, 1.0f);
-    node.scatter.sizeMinM = std::clamp(nodeScatterJson.value("sizeMinM", node.scatter.sizeMinM), 0.1f, 200.0f);
-    node.scatter.sizeMaxM = std::clamp(std::max(nodeScatterJson.value("sizeMaxM", node.scatter.sizeMaxM), node.scatter.sizeMinM), 0.1f, 200.0f);
-    node.scatter.height = std::clamp(nodeScatterJson.value("height", node.scatter.height), 0.0f, 100.0f);
-    node.scatter.heightJitter = std::clamp(nodeScatterJson.value("heightJitter", node.scatter.heightJitter), 0.0f, 1.0f);
-    node.scatter.rotationVariation = std::clamp(nodeScatterJson.value("rotationVariation", node.scatter.rotationVariation), 0.0f, 1.0f);
-    node.scatter.aspectVariation = std::clamp(nodeScatterJson.value("aspectVariation", node.scatter.aspectVariation), 0.0f, 1.0f);
-    node.scatter.groundDetailLevelM = std::clamp(nodeScatterJson.value("groundDetailLevelM", node.scatter.groundDetailLevelM), 0.0f, 1024.0f);
-    {
-        const int backendInt = nodeScatterJson.value("backend", static_cast<int>(node.scatter.backend));
-        node.scatter.backend = static_cast<rock::ScatterBackend>(std::clamp(backendInt,
-            static_cast<int>(rock::ScatterBackend::CpuReference),
-            static_cast<int>(rock::ScatterBackend::GpuCompute)));
-    }
-}
-
-void ReadCrumblingSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
-{
-    const nlohmann::json nodeCrumblingJson = nodeJson.value("crumbling", nlohmann::json::object());
-    node.crumbling.physicsCount = std::clamp(nodeCrumblingJson.value("physicsCount", node.crumbling.physicsCount), 0, 512);
-    node.crumbling.debrisAmount = std::clamp(nodeCrumblingJson.value("debrisAmount", node.crumbling.debrisAmount), 0.0f, 1.0f);
-    node.crumbling.debrisSizeMinM = std::clamp(nodeCrumblingJson.value("debrisSizeMinM", node.crumbling.debrisSizeMinM), 0.1f, 1000.0f);
-    node.crumbling.debrisSizeMaxM = std::clamp(nodeCrumblingJson.value("debrisSizeMaxM", node.crumbling.debrisSizeMaxM), 0.1f, 1000.0f);
-    if (node.crumbling.debrisSizeMaxM < node.crumbling.debrisSizeMinM)
-    {
-        std::swap(node.crumbling.debrisSizeMinM, node.crumbling.debrisSizeMaxM);
-    }
-    {
-        const int styleInt = std::clamp(nodeCrumblingJson.value("style", static_cast<int>(node.crumbling.style)),
-            static_cast<int>(rock::RockStyle::Classic),
-            static_cast<int>(rock::RockStyle::Shard));
-        node.crumbling.style = static_cast<rock::RockStyle>(styleInt);
-    }
-    node.crumbling.gravity = std::clamp(nodeCrumblingJson.value("gravity", node.crumbling.gravity), 0.0f, 1.0f);
-    node.crumbling.spread = std::clamp(nodeCrumblingJson.value("spread", node.crumbling.spread), 0.0f, 1.0f);
-    node.crumbling.seed = std::clamp(nodeCrumblingJson.value("seed", node.crumbling.seed), 0, 999999);
-}
-
-void ReadSedimentSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
-{
-    const nlohmann::json nodeSedimentJson = nodeJson.value("sediment", nlohmann::json::object());
-
-    node.sediment.iterations = std::clamp(nodeSedimentJson.value("iterations", node.sediment.iterations), 1, 1000);
-    node.sediment.stabilizationIterations = std::clamp(nodeSedimentJson.value("stabilizationIterations", node.sediment.stabilizationIterations), 1, 32);
-    node.sediment.largestDetailLevelM = std::clamp(nodeSedimentJson.value("largestDetailLevelM", node.sediment.largestDetailLevelM), 1.0f, 1024.0f);
-    node.sediment.emissionAmountM = std::clamp(nodeSedimentJson.value("emissionAmountM", node.sediment.emissionAmountM), 0.0f, 1000.0f);
-    node.sediment.emissionTime = std::clamp(nodeSedimentJson.value("emissionTime", node.sediment.emissionTime), 0.0f, 1.0f);
-    node.sediment.sedimentViscosity = std::clamp(nodeSedimentJson.value("sedimentViscosity", node.sediment.sedimentViscosity), 0.0f, 1.0f);
-    node.sediment.convertTerrainToSediment = nodeSedimentJson.value("convertTerrainToSediment", node.sediment.convertTerrainToSediment);
-    node.sediment.maskContrast = std::clamp(nodeSedimentJson.value("maskContrast", node.sediment.maskContrast), 0.0f, 1.0f);
-    {
-        const int backendInt = nodeSedimentJson.value("backend", static_cast<int>(node.sediment.backend));
-        node.sediment.backend = static_cast<rock::SedimentBackend>(std::clamp(backendInt,
-            static_cast<int>(rock::SedimentBackend::CpuReference),
-            static_cast<int>(rock::SedimentBackend::GpuCompute)));
-    }
-}
-
-void ReadSnowSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
-{
-    const nlohmann::json nodeSnowJson = nodeJson.value("snow", nlohmann::json::object());
-
-    node.snow.emissionAmount = std::clamp(nodeSnowJson.value("emissionAmount", node.snow.emissionAmount), 0.0f, 100.0f);
-    node.snow.slopeLimitMinDeg = std::clamp(nodeSnowJson.value("slopeLimitMinDeg", node.snow.slopeLimitMinDeg), 0.0f, 89.9f);
-    node.snow.slopeLimitMaxDeg = std::clamp(std::max(nodeSnowJson.value("slopeLimitMaxDeg", node.snow.slopeLimitMaxDeg), node.snow.slopeLimitMinDeg), 0.0f, 89.9f);
-    node.snow.maskMaxSnow = std::clamp(nodeSnowJson.value("maskMaxSnow", node.snow.maskMaxSnow), 0.001f, 1000.0f);
-    node.snow.iterationCount = std::clamp(nodeSnowJson.value("iterationCount", node.snow.iterationCount), 1, 256);
-    node.snow.emissionTime = std::clamp(nodeSnowJson.value("emissionTime", node.snow.emissionTime), 0.0f, 1.0f);
-    node.snow.smoothingIterations = std::clamp(nodeSnowJson.value("smoothingIterations", node.snow.smoothingIterations), 1, 16);
-    node.snow.motionSlopeLimitDeg = std::clamp(nodeSnowJson.value("motionSlopeLimitDeg", node.snow.motionSlopeLimitDeg), 0.0f, 89.9f);
-    node.snow.transportRate = std::clamp(nodeSnowJson.value("transportRate", node.snow.transportRate), 0.0f, 1.0f);
-    node.snow.surfaceSmoothing = std::clamp(nodeSnowJson.value("surfaceSmoothing", node.snow.surfaceSmoothing), 0.0f, 1.0f);
-    node.snow.maskThresholdM = std::clamp(nodeSnowJson.value("maskThresholdM", node.snow.maskThresholdM), 0.0f, 1000.0f);
-    node.snow.maskFeatherM = std::clamp(nodeSnowJson.value("maskFeatherM", node.snow.maskFeatherM), 0.0f, 1000.0f);
-    node.snow.largestDetailLevelM = std::clamp(nodeSnowJson.value("largestDetailLevelM", node.snow.largestDetailLevelM), 1.0f, 1024.0f);
-    node.snow.fillRadius = std::clamp(nodeSnowJson.value("fillRadius", node.snow.fillRadius), 1, 8);
-    {
-        const int backendInt = std::clamp(nodeSnowJson.value("backend", static_cast<int>(node.snow.backend)),
-                                           static_cast<int>(rock::SnowBackend::CpuReference),
-                                           static_cast<int>(rock::SnowBackend::GpuCompute));
-        node.snow.backend = static_cast<rock::SnowBackend>(backendInt);
-    }
-}
-
-void ReadColorizeSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
-{
-    const nlohmann::json colorizeJson = nodeJson.value("colorize", nlohmann::json::object());
-    {
-        const int backendInt = std::clamp(colorizeJson.value("backend", static_cast<int>(node.colorize.backend)),
-                                          static_cast<int>(rock::ColorizeBackend::CpuParallel),
-                                          static_cast<int>(rock::ColorizeBackend::GpuCompute));
-        node.colorize.backend = static_cast<rock::ColorizeBackend>(backendInt);
-    }
-    if (!colorizeJson.contains("stops") || !colorizeJson["stops"].is_array())
-    {
-        return;
-    }
-    node.colorize.stops.clear();
-    for (const auto& stopJson : colorizeJson["stops"])
-    {
-        rock::ColorStop s;
-        s.position = std::clamp(stopJson.value("position", 0.0f), 0.0f, 1.0f);
-        s.r = std::clamp(stopJson.value("r", 0.0f), 0.0f, 1.0f);
-        s.g = std::clamp(stopJson.value("g", 0.0f), 0.0f, 1.0f);
-        s.b = std::clamp(stopJson.value("b", 0.0f), 0.0f, 1.0f);
-        node.colorize.stops.push_back(s);
-    }
-    // デフォルトに戻す (stops が空になった場合)
-    if (node.colorize.stops.empty())
-    {
-        node.colorize.stops = {{0.0f, 0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f, 1.0f}};
-    }
-}
-
-void ReadNodeSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
-{
-    ReadBasicHeightfieldSettingsJson(nodeJson, node);
-    ReadMultiScaleErosionSettingsJson(nodeJson, node);
-    ReadMaskSettingsJson(nodeJson, node);
-    ReadCrumblingSettingsJson(nodeJson, node);
-    ReadRockSettingsJson(nodeJson, node);
-    ReadScatterSettingsJson(nodeJson, node);
-    ReadSedimentSettingsJson(nodeJson, node);
-    ReadSnowSettingsJson(nodeJson, node);
-    ReadColorizeSettingsJson(nodeJson, node);
-}
-
-nlohmann::json MakeProjectSettingsJson()
-{
-    const rock::GraphSettings& graphSettings = g_graph.Settings();
-    const rock::PreviewSettings& preview = graphSettings.preview;
-    const rock::SkySettings& sky = graphSettings.sky;
-    const rock::CloudSettings& clouds = graphSettings.clouds;
-    const int displayMode = sky.mode == rock::SkyMode::Atmospheric
-        ? 2
-        : (preview.lightingMode >= 1 ? 1 : 0);
-
-    return {
-        {"display", {
-            {"mode", displayMode},
-            {"showFps", g_ui.showFps},
-            {"cloudsEnabled", clouds.enabled},
-        }},
-        {"preview", {
-            {"terrainSizeMeters", preview.terrainSizeMeters},
-            {"simulationResolution", preview.simulationResolution},
-            {"lightingMode", preview.lightingMode},
-            {"meshBackend", static_cast<int>(preview.meshBackend)},
-            {"terrainBoundaryMode", static_cast<int>(preview.terrainBoundaryMode)},
-            {"frameRateLimitFps", preview.frameRateLimitFps},
-            {"viewportTessellation", preview.viewportTessellation},
-            {"tessellationMinFactor", preview.tessellationMinFactor},
-            {"tessellationMaxFactor", preview.tessellationMaxFactor},
-            {"tessellationNearDistance", preview.tessellationNearDistance},
-            {"tessellationFarDistance", preview.tessellationFarDistance},
-            {"waterEnabled", preview.waterEnabled},
-            {"waterLevelMeters", preview.waterLevelMeters},
-            {"waterOpacity", preview.waterOpacity},
-            {"waterColor", {
-                preview.waterColor[0],
-                preview.waterColor[1],
-                preview.waterColor[2],
-            }},
-            {"waterWavesScale", preview.waterWavesScale},
-            {"waterRefractiveIndex", preview.waterRefractiveIndex},
-            {"waterFresnelPower", preview.waterFresnelPower},
-            {"waterRefractionStrength", preview.waterRefractionStrength},
-            {"waterAnimationEnabled", preview.waterAnimationEnabled},
-            {"waterReflectionStrength", preview.waterReflectionStrength},
-            {"waterSsrEnabled", preview.waterSsrEnabled},
-            {"depthOfFieldEnabled", preview.depthOfFieldEnabled},
-            {"dofFStop", preview.dofFStop},
-            {"dofFocusDistanceMeters", preview.dofFocusDistanceMeters},
-            {"dofSensorHeightMm", preview.dofSensorHeightMm},
-            {"dofMaxBlurPixels", preview.dofMaxBlurPixels},
-            {"dofApertureShape", preview.dofApertureShape},
-            {"dofApertureBlades", preview.dofApertureBlades},
-            {"dofApertureRotationDegrees", preview.dofApertureRotationDegrees},
-            {"dofHighlightBoost", preview.dofHighlightBoost},
-            {"dofMiniatureEnabled", preview.dofMiniatureEnabled},
-            {"dofMiniatureScale", preview.dofMiniatureScale},
-            {"sunAzimuthDegrees", preview.sunAzimuthDegrees},
-            {"sunElevationDegrees", preview.sunElevationDegrees},
-            {"sunIntensity", preview.sunIntensity},
-            {"ambientStrength", preview.ambientStrength},
-            {"shadowStrength", preview.shadowStrength},
-            {"shadowMapResolution", preview.shadowMapResolution},
-            {"shadowBias", preview.shadowBias},
-            {"sunDirectionMode", static_cast<int>(preview.sunDirectionMode)},
-            {"sunLatitudeDegrees", preview.sunLatitudeDegrees},
-            {"sunLongitudeDegrees", preview.sunLongitudeDegrees},
-            {"sunUtcOffsetHours", preview.sunUtcOffsetHours},
-            {"sunMonth", preview.sunMonth},
-            {"sunDay", preview.sunDay},
-            {"sunTimeHours", preview.sunTimeHours},
-            {"showGrid", preview.showGrid},
-            {"gridCellCount", preview.gridCellCount},
-            {"gridCellSizeMeters", preview.gridCellSizeMeters},
-            {"gridColor", {
-                preview.gridColor[0],
-                preview.gridColor[1],
-                preview.gridColor[2],
-            }},
-            {"maskPreviewUseNearestHeightmap", preview.maskPreviewUseNearestHeightmap},
-            {"aoEnabled", preview.aoEnabled},
-            {"aoStrength", preview.aoStrength},
-            {"aoRadius", preview.aoRadius},
-        }},
-        {"sky", {
-            {"mode", static_cast<int>(sky.mode)},
-            {"atmosphereDensity", sky.atmosphereDensity},
-            {"mieStrength", sky.mieStrength},
-            {"mieEccentricity", sky.mieEccentricity},
-            {"groundAlbedo", {sky.groundAlbedo[0], sky.groundAlbedo[1], sky.groundAlbedo[2]}},
-            {"sunSizeDegrees", sky.sunSizeDegrees},
-            {"sunGlowStrength", sky.sunGlowStrength},
-        }},
-        {"clouds", {
-            {"enabled", clouds.enabled},
-            {"seed", clouds.seed},
-            {"coverage", clouds.coverage},
-            {"densityMultiplier", clouds.densityMultiplier},
-            {"altitudeMin", clouds.altitudeMin},
-            {"altitudeMax", clouds.altitudeMax},
-            {"horizontalScale", clouds.horizontalScale},
-            {"absorption", clouds.absorption},
-            {"color", {clouds.color[0], clouds.color[1], clouds.color[2]}},
-            {"animate", clouds.animate},
-            {"loopPhase", clouds.loopPhase},
-            {"windDirectionDegrees", clouds.windDirectionDegrees},
-            {"windSpeedMetersPerSec", clouds.windSpeedMetersPerSec},
-            {"qualitySamples", clouds.qualitySamples},
-            {"shadowStrength", clouds.shadowStrength},
-            {"shadowResolution", clouds.shadowResolution},
-            {"shadowSamples", clouds.shadowSamples},
-            {"fieldRadius", clouds.fieldRadius},
-            {"fieldFalloff", clouds.fieldFalloff},
-            {"selfShadowEnabled", clouds.selfShadowEnabled},
-            {"lightSamples", clouds.lightSamples},
-            {"lightStepMeters", clouds.lightStepMeters},
-            {"phaseEccentricity", clouds.phaseEccentricity},
-            {"shadowAmbientStrength", clouds.shadowAmbientStrength},
-        }},
-    };
-}
-
 nlohmann::json MakeViewportJson()
 {
-    return {
-        {"yaw", g_viewport.yaw},
-        {"pitch", g_viewport.pitch},
-        {"fovDegrees", g_viewport.fovDegrees},
-        {"orbitDistance", g_viewport.orbitDistance},
-        {"pan", {g_viewport.pan.x, g_viewport.pan.y}},
-    };
-}
-
-nlohmann::json MakeSerializedNodesJson()
-{
-    nlohmann::json nodesJson = nlohmann::json::array();
-    for (const rock::Node& node : g_graph.Nodes())
-    {
-        nodesJson.push_back(MakeSerializedNodeJson(node));
-    }
-    return nodesJson;
-}
-
-nlohmann::json MakeSerializedLinksJson()
-{
-    nlohmann::json linksJson = nlohmann::json::array();
-    for (const rock::Link& link : g_graph.Links())
-    {
-        linksJson.push_back({
-            {"id", link.id},
-            {"startPin", link.startPin},
-            {"endPin", link.endPin},
-        });
-    }
-    return linksJson;
+    return terrain::MakeViewportJson(MakeViewportCameraState());
 }
 
 void WriteSelectedNodesJson(nlohmann::json& root)
@@ -3356,12 +2514,12 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
         WriteSelectedNodesJson(root);
         root["previewStage"] = static_cast<int>(g_graph.Preview());
         root["previewPinId"] = g_graph.Evaluation().previewPinId;
-        root["settings"] = MakeProjectSettingsJson();
+        root["settings"] = terrain::MakeProjectSettingsJson(g_graph.Settings(), terrain::ProjectDisplaySettings{g_ui.showFps});
 
         root["nodeSettings"] = nlohmann::json::object();
         root["viewport"] = MakeViewportJson();
-        root["nodes"] = MakeSerializedNodesJson();
-        root["links"] = MakeSerializedLinksJson();
+        root["nodes"] = terrain::MakeSerializedNodesJson(g_graph.Nodes(), MakeProjectAssetPathForJson);
+        root["links"] = terrain::MakeSerializedLinksJson(g_graph.Links());
         root["nodePositions"] = MakeNodePositionsJson();
 
         if (path.has_parent_path())
@@ -3435,320 +2593,11 @@ bool ConfirmSaveUnsavedChanges()
     return false;
 }
 
-void ReadColor3Json(const nlohmann::json& ownerJson, const char* key, std::array<float, 3>& target, float maxValue)
-{
-    if (ownerJson.contains(key) && ownerJson[key].is_array() && ownerJson[key].size() == 3)
-    {
-        target[0] = std::clamp(ownerJson[key][0].get<float>(), 0.0f, maxValue);
-        target[1] = std::clamp(ownerJson[key][1].get<float>(), 0.0f, maxValue);
-        target[2] = std::clamp(ownerJson[key][2].get<float>(), 0.0f, maxValue);
-    }
-}
-
-void ReadSkySettingsJson(const nlohmann::json& settingsJson, rock::SkySettings& sky)
-{
-    const nlohmann::json skyJson = settingsJson.value("sky", nlohmann::json::object());
-    sky = rock::SkySettings{};
-    if (skyJson.empty())
-    {
-        return;
-    }
-
-    const int skyModeInt = std::clamp(skyJson.value("mode", static_cast<int>(sky.mode)),
-                                      static_cast<int>(rock::SkyMode::SolidColor),
-                                      static_cast<int>(rock::SkyMode::Atmospheric));
-    sky.mode = static_cast<rock::SkyMode>(skyModeInt);
-    sky.atmosphereDensity = std::clamp(skyJson.value("atmosphereDensity", sky.atmosphereDensity), 0.05f, 8.0f);
-    sky.mieStrength = std::clamp(skyJson.value("mieStrength", sky.mieStrength), 0.0f, 8.0f);
-    sky.mieEccentricity = std::clamp(skyJson.value("mieEccentricity", sky.mieEccentricity), -0.99f, 0.99f);
-    ReadColor3Json(skyJson, "groundAlbedo", sky.groundAlbedo, 8.0f);
-    sky.sunSizeDegrees = std::clamp(skyJson.value("sunSizeDegrees", sky.sunSizeDegrees), 0.1f, 30.0f);
-    sky.sunGlowStrength = std::clamp(skyJson.value("sunGlowStrength", sky.sunGlowStrength), 0.0f, 4.0f);
-}
-
-void ReadCloudSettingsJson(const nlohmann::json& settingsJson, rock::CloudSettings& clouds)
-{
-    const nlohmann::json cloudsJson = settingsJson.value("clouds", nlohmann::json::object());
-    clouds = rock::CloudSettings{};
-    if (cloudsJson.empty())
-    {
-        return;
-    }
-
-    clouds.enabled = cloudsJson.value("enabled", clouds.enabled);
-    clouds.seed = std::clamp(cloudsJson.value("seed", clouds.seed), 0, 999999);
-    clouds.coverage = std::clamp(cloudsJson.value("coverage", clouds.coverage), 0.0f, 1.0f);
-    clouds.densityMultiplier = std::clamp(cloudsJson.value("densityMultiplier", clouds.densityMultiplier), 0.0f, 8.0f);
-    clouds.altitudeMin = std::clamp(cloudsJson.value("altitudeMin", clouds.altitudeMin), 0.0f, 30000.0f);
-    clouds.altitudeMax = std::clamp(cloudsJson.value("altitudeMax", clouds.altitudeMax), 0.0f, 30000.0f);
-    clouds.horizontalScale = std::clamp(cloudsJson.value("horizontalScale", clouds.horizontalScale), 50.0f, 100000.0f);
-    clouds.absorption = std::clamp(cloudsJson.value("absorption", clouds.absorption), 0.0f, 2.0f);
-    ReadColor3Json(cloudsJson, "color", clouds.color, 8.0f);
-    const bool legacyAnimatedClouds = !cloudsJson.contains("animate") &&
-        cloudsJson.value("windSpeedMetersPerSec", clouds.windSpeedMetersPerSec) > 0.0f;
-    clouds.animate = cloudsJson.value("animate", legacyAnimatedClouds ? true : clouds.animate);
-    clouds.loopPhase = std::clamp(cloudsJson.value("loopPhase", clouds.loopPhase), 0.0f, 1.0f);
-    clouds.windDirectionDegrees = std::clamp(cloudsJson.value("windDirectionDegrees", clouds.windDirectionDegrees), 0.0f, 360.0f);
-    clouds.windSpeedMetersPerSec = std::clamp(cloudsJson.value("windSpeedMetersPerSec", clouds.windSpeedMetersPerSec), 0.0f, 500.0f);
-    clouds.qualitySamples = std::clamp(cloudsJson.value("qualitySamples", clouds.qualitySamples), 8, 128);
-    clouds.shadowStrength = std::clamp(cloudsJson.value("shadowStrength", clouds.shadowStrength), 0.0f, 1.0f);
-    clouds.shadowResolution = NearestShadowResolutionPreset(cloudsJson.value("shadowResolution", clouds.shadowResolution));
-    clouds.shadowSamples = std::clamp(cloudsJson.value("shadowSamples", clouds.shadowSamples), 4, 64);
-    clouds.fieldRadius = std::clamp(cloudsJson.value("fieldRadius", clouds.fieldRadius), 100.0f, 200000.0f);
-    clouds.fieldFalloff = std::clamp(cloudsJson.value("fieldFalloff", clouds.fieldFalloff), 1.0f, 50000.0f);
-    clouds.lightSamples = std::clamp(cloudsJson.value("lightSamples", clouds.lightSamples), 0, 16);
-    clouds.selfShadowEnabled = cloudsJson.value("selfShadowEnabled", clouds.lightSamples > 0);
-    clouds.lightStepMeters = std::clamp(cloudsJson.value("lightStepMeters", clouds.lightStepMeters), 1.0f, 2000.0f);
-    clouds.phaseEccentricity = std::clamp(cloudsJson.value("phaseEccentricity", clouds.phaseEccentricity), -0.99f, 0.99f);
-    clouds.shadowAmbientStrength = std::clamp(cloudsJson.value("shadowAmbientStrength", clouds.shadowAmbientStrength), 0.0f, 2.0f);
-}
-
-void ReadPreviewSettingsJson(const nlohmann::json& settingsJson, rock::PreviewSettings& preview, const rock::SkySettings& sky)
-{
-    const nlohmann::json previewJson = settingsJson.value("preview", nlohmann::json::object());
-    if (previewJson.empty())
-    {
-        if (sky.mode == rock::SkyMode::Atmospheric)
-        {
-            preview.lightingMode = 1;
-        }
-        return;
-    }
-
-    preview.terrainSizeMeters = static_cast<float>(NearestTerrainSizePreset(previewJson.value("terrainSizeMeters", preview.terrainSizeMeters)));
-    preview.simulationResolution = NearestResolutionPreset(previewJson.value("simulationResolution", preview.simulationResolution));
-    g_projectSettingsHadSimulationResolution = previewJson.contains("simulationResolution");
-    preview.lightingMode = std::clamp(previewJson.value("lightingMode", preview.lightingMode), 0, 1);
-    const int backendInt = std::clamp(previewJson.value("meshBackend", static_cast<int>(preview.meshBackend)),
-                                      static_cast<int>(rock::MeshPreviewBackend::CpuMesh),
-                                      static_cast<int>(rock::MeshPreviewBackend::GpuDisplacement));
-    preview.meshBackend = static_cast<rock::MeshPreviewBackend>(backendInt);
-    const int boundaryInt = std::clamp(previewJson.value("terrainBoundaryMode", static_cast<int>(preview.terrainBoundaryMode)),
-                                      static_cast<int>(rock::TerrainBoundaryMode::None),
-                                      static_cast<int>(rock::TerrainBoundaryMode::Lines));
-    preview.terrainBoundaryMode = static_cast<rock::TerrainBoundaryMode>(boundaryInt);
-    preview.frameRateLimitFps = ClampFrameRateLimitFps(previewJson.value("frameRateLimitFps", preview.frameRateLimitFps));
-    preview.viewportTessellation = previewJson.value("viewportTessellation", preview.viewportTessellation);
-    preview.tessellationMinFactor = std::clamp(previewJson.value("tessellationMinFactor", preview.tessellationMinFactor), 1.0f, 64.0f);
-    preview.tessellationMaxFactor = std::clamp(previewJson.value("tessellationMaxFactor", preview.tessellationMaxFactor), preview.tessellationMinFactor, 64.0f);
-    preview.tessellationNearDistance = std::clamp(previewJson.value("tessellationNearDistance", preview.tessellationNearDistance), 1.0f, 100000.0f);
-    preview.tessellationFarDistance = std::clamp(previewJson.value("tessellationFarDistance", preview.tessellationFarDistance), preview.tessellationNearDistance + 1.0f, 200000.0f);
-    preview.waterEnabled = previewJson.value("waterEnabled", preview.waterEnabled);
-    preview.waterLevelMeters = std::clamp(previewJson.value("waterLevelMeters", preview.waterLevelMeters), 0.0f, 10000.0f);
-    preview.waterOpacity = std::clamp(previewJson.value("waterOpacity", preview.waterOpacity), 0.0f, 1.0f);
-    ReadColor3Json(previewJson, "waterColor", preview.waterColor, 1.0f);
-    preview.waterWavesScale = std::clamp(previewJson.value("waterWavesScale", preview.waterWavesScale), 1.0f, 500.0f);
-    preview.waterRefractiveIndex = std::clamp(previewJson.value("waterRefractiveIndex", preview.waterRefractiveIndex), 1.0f, 4.0f);
-    preview.waterFresnelPower = std::clamp(previewJson.value("waterFresnelPower", preview.waterFresnelPower), 1.0f, 8.0f);
-    preview.waterRefractionStrength = std::clamp(previewJson.value("waterRefractionStrength", preview.waterRefractionStrength), 0.0f, 2.0f);
-    preview.waterAnimationEnabled = previewJson.value("waterAnimationEnabled", preview.waterAnimationEnabled);
-    preview.waterReflectionStrength = std::clamp(previewJson.value("waterReflectionStrength", preview.waterReflectionStrength), 0.0f, 3.0f);
-    preview.waterSsrEnabled = previewJson.value("waterSsrEnabled", preview.waterSsrEnabled);
-    preview.depthOfFieldEnabled = previewJson.value("depthOfFieldEnabled", preview.depthOfFieldEnabled);
-    preview.dofFStop = std::clamp(previewJson.value("dofFStop", preview.dofFStop), 0.7f, 32.0f);
-    preview.dofFocusDistanceMeters = std::clamp(previewJson.value("dofFocusDistanceMeters", preview.dofFocusDistanceMeters), 0.1f, 20000.0f);
-    preview.dofSensorHeightMm = std::clamp(previewJson.value("dofSensorHeightMm", preview.dofSensorHeightMm), 4.0f, 80.0f);
-    preview.dofMaxBlurPixels = std::clamp(previewJson.value("dofMaxBlurPixels", preview.dofMaxBlurPixels), 0.0f, 64.0f);
-    preview.dofApertureShape = std::clamp(previewJson.value("dofApertureShape", preview.dofApertureShape), 0, 4);
-    preview.dofApertureBlades = std::clamp(previewJson.value("dofApertureBlades", preview.dofApertureBlades), 3, 12);
-    preview.dofApertureRotationDegrees = std::clamp(previewJson.value("dofApertureRotationDegrees", preview.dofApertureRotationDegrees), -180.0f, 180.0f);
-    preview.dofHighlightBoost = std::clamp(previewJson.value("dofHighlightBoost", preview.dofHighlightBoost), 0.0f, 4.0f);
-    preview.dofMiniatureEnabled = previewJson.value("dofMiniatureEnabled", preview.dofMiniatureEnabled);
-    preview.dofMiniatureScale = std::clamp(previewJson.value("dofMiniatureScale", preview.dofMiniatureScale), 1.0f, 50.0f);
-    preview.sunAzimuthDegrees = std::clamp(previewJson.value("sunAzimuthDegrees", preview.sunAzimuthDegrees), 0.0f, 360.0f);
-    preview.sunElevationDegrees = std::clamp(previewJson.value("sunElevationDegrees", preview.sunElevationDegrees), -10.0f, 89.0f);
-    preview.sunIntensity = std::clamp(previewJson.value("sunIntensity", preview.sunIntensity), 0.0f, 5.0f);
-    preview.ambientStrength = std::clamp(previewJson.value("ambientStrength", preview.ambientStrength), 0.0f, 2.0f);
-    preview.shadowStrength = std::clamp(previewJson.value("shadowStrength", preview.shadowStrength), 0.0f, 1.0f);
-    preview.shadowMapResolution = NearestShadowResolutionPreset(previewJson.value("shadowMapResolution", preview.shadowMapResolution));
-    preview.shadowBias = std::clamp(previewJson.value("shadowBias", preview.shadowBias), 0.0f, 0.05f);
-    {
-        const int sunModeInt = std::clamp(previewJson.value("sunDirectionMode", static_cast<int>(preview.sunDirectionMode)),
-            static_cast<int>(rock::SunDirectionMode::Manual),
-            static_cast<int>(rock::SunDirectionMode::DateTime));
-        preview.sunDirectionMode = static_cast<rock::SunDirectionMode>(sunModeInt);
-    }
-    preview.sunLatitudeDegrees = std::clamp(previewJson.value("sunLatitudeDegrees", preview.sunLatitudeDegrees), -90.0f, 90.0f);
-    preview.sunLongitudeDegrees = std::clamp(previewJson.value("sunLongitudeDegrees", preview.sunLongitudeDegrees), -180.0f, 180.0f);
-    preview.sunUtcOffsetHours = std::clamp(previewJson.value("sunUtcOffsetHours", preview.sunUtcOffsetHours), -12.0f, 14.0f);
-    preview.sunMonth = std::clamp(previewJson.value("sunMonth", preview.sunMonth), 1, 12);
-    preview.sunDay = std::clamp(previewJson.value("sunDay", preview.sunDay), 1, DaysInMonth(preview.sunMonth));
-    preview.sunTimeHours = std::clamp(previewJson.value("sunTimeHours", preview.sunTimeHours), 0.0f, 24.0f);
-    preview.showGrid = previewJson.value("showGrid", preview.showGrid);
-    preview.gridCellCount = std::clamp(previewJson.value("gridCellCount", preview.gridCellCount), 1, 200);
-    preview.gridCellSizeMeters = std::clamp(previewJson.value("gridCellSizeMeters", preview.gridCellSizeMeters), 1.0f, 10000.0f);
-    ReadColor3Json(previewJson, "gridColor", preview.gridColor, 1.0f);
-    preview.maskPreviewUseNearestHeightmap = previewJson.value("maskPreviewUseNearestHeightmap", preview.maskPreviewUseNearestHeightmap);
-    preview.aoEnabled = previewJson.value("aoEnabled", preview.aoEnabled);
-    preview.aoStrength = std::clamp(previewJson.value("aoStrength", preview.aoStrength), 0.0f, 1.0f);
-    preview.aoRadius = std::clamp(previewJson.value("aoRadius", preview.aoRadius), 10.0f, 5000.0f);
-}
-
-void ReadDisplaySettingsJson(const nlohmann::json& settingsJson,
-                             rock::PreviewSettings& preview,
-                             rock::SkySettings& sky,
-                             rock::CloudSettings& clouds)
-{
-    const nlohmann::json displayJson = settingsJson.value("display", nlohmann::json::object());
-    if (displayJson.empty())
-    {
-        return;
-    }
-
-    g_ui.showFps = displayJson.value("showFps", g_ui.showFps);
-    clouds.enabled = displayJson.value("cloudsEnabled", clouds.enabled);
-    const int displayMode = std::clamp(displayJson.value("mode", -1), -1, 2);
-    if (displayMode == 0)
-    {
-        preview.lightingMode = 0;
-        sky.mode = rock::SkyMode::SolidColor;
-    }
-    else if (displayMode == 1)
-    {
-        preview.lightingMode = 1;
-        sky.mode = rock::SkyMode::SolidColor;
-    }
-    else if (displayMode == 2)
-    {
-        preview.lightingMode = 1;
-        sky.mode = rock::SkyMode::Atmospheric;
-    }
-}
-
-void ReadProjectSettingsJson(const nlohmann::json& root)
-{
-    const nlohmann::json settingsJson = root.value("settings", nlohmann::json::object());
-    rock::GraphSettings& graphSettings = g_graph.Settings();
-    rock::PreviewSettings& preview = graphSettings.preview;
-    rock::SkySettings& sky = graphSettings.sky;
-    rock::CloudSettings& clouds = graphSettings.clouds;
-
-    g_projectSettingsHadSimulationResolution = false;
-    ReadSkySettingsJson(settingsJson, sky);
-    ReadCloudSettingsJson(settingsJson, clouds);
-    ReadPreviewSettingsJson(settingsJson, preview, sky);
-    ReadDisplaySettingsJson(settingsJson, preview, sky, clouds);
-}
-
-void ReadSerializedPinsJson(const nlohmann::json& pinsJson,
-                            rock::GraphId nodeId,
-                            rock::PinKind pinKind,
-                            std::vector<rock::Pin>& pins)
-{
-    if (!pinsJson.is_array())
-    {
-        return;
-    }
-
-    for (const nlohmann::json& pinJson : pinsJson)
-    {
-        rock::Pin pin;
-        pin.id = pinJson.value("id", 0);
-        pin.nodeId = nodeId;
-        pin.kind = pinKind;
-        const int serializedValueType = pinJson.value("valueType", static_cast<int>(rock::ValueType::HeightField));
-        if (serializedValueType == static_cast<int>(rock::ValueType::Mask))
-            pin.valueType = rock::ValueType::Mask;
-        else if (serializedValueType == static_cast<int>(rock::ValueType::ColorTexture))
-            pin.valueType = rock::ValueType::ColorTexture;
-        else
-            pin.valueType = rock::ValueType::HeightField;
-        pin.label = pinJson.value("label", std::string(rock::ToString(pin.valueType)));
-        // 旧プロジェクトでは入力 / 出力どちらの heightfield ピンも `HeightField`
-        // と保存されていた可能性があるが、現在は両方とも `Heightmap` に統一
-        // しているのでマイグレーションする。
-        if (pin.valueType == rock::ValueType::HeightField && pin.label == "HeightField")
-        {
-            pin.label = "Heightmap";
-        }
-        pins.push_back(std::move(pin));
-    }
-}
-
-std::optional<rock::Node> ReadSerializedNodeJson(const nlohmann::json& nodeJson)
-{
-    rock::Node node;
-    node.id = nodeJson.value("id", 0);
-    const std::optional<rock::NodeKind> nodeKind = ReadSerializedNodeKind(nodeJson);
-    if (!nodeKind || node.id == 0)
-    {
-        return std::nullopt;
-    }
-
-    node.kind = *nodeKind;
-    node.title = nodeJson.value("title", std::string(rock::ToString(node.kind)));
-    if (node.kind == rock::NodeKind::HeightmapLoad && node.title == "Load Heightmap")
-    {
-        node.title = std::string(rock::ToString(node.kind));
-    }
-    ReadNodeSettingsJson(nodeJson, node);
-    ReadSerializedPinsJson(nodeJson.value("inputs", nlohmann::json::array()), node.id, rock::PinKind::Input, node.inputs);
-    ReadSerializedPinsJson(nodeJson.value("outputs", nlohmann::json::array()), node.id, rock::PinKind::Output, node.outputs);
-    return node;
-}
-
-void MigrateRockUniqueMaskPins(std::vector<rock::Node>& nodes)
-{
-    rock::GraphId nextId = 1;
-    for (const rock::Node& node : nodes)
-    {
-        nextId = std::max(nextId, node.id + 1);
-        for (const rock::Pin& pin : node.inputs)
-        {
-            nextId = std::max(nextId, pin.id + 1);
-        }
-        for (const rock::Pin& pin : node.outputs)
-        {
-            nextId = std::max(nextId, pin.id + 1);
-        }
-    }
-
-    for (rock::Node& node : nodes)
-    {
-        if (node.kind != rock::NodeKind::Rock)
-        {
-            continue;
-        }
-        const bool hasUniqueMask = std::ranges::any_of(node.outputs, [](const rock::Pin& pin) {
-            return pin.kind == rock::PinKind::Output &&
-                   pin.valueType == rock::ValueType::Mask &&
-                   pin.label == "Unique Mask";
-        });
-        if (hasUniqueMask)
-        {
-            continue;
-        }
-
-        rock::Pin pin;
-        pin.id = nextId++;
-        pin.nodeId = node.id;
-        pin.kind = rock::PinKind::Output;
-        pin.valueType = rock::ValueType::Mask;
-        pin.label = "Unique Mask";
-        node.outputs.push_back(std::move(pin));
-    }
-}
-
 void ReadSerializedNodesJson(const nlohmann::json& root)
 {
-    const nlohmann::json nodesJson = root.value("nodes", nlohmann::json::array());
-    if (!nodesJson.is_array() || nodesJson.empty())
-    {
-        return;
-    }
-
-    std::vector<rock::Node> nodes;
-    for (const nlohmann::json& nodeJson : nodesJson)
-    {
-        std::optional<rock::Node> node = ReadSerializedNodeJson(nodeJson);
-        if (node)
-        {
-            nodes.push_back(std::move(*node));
-        }
-    }
+    std::vector<rock::Node> nodes = terrain::ReadSerializedNodesJson(root);
     if (!nodes.empty())
     {
-        MigrateRockUniqueMaskPins(nodes);
         g_graph.ReplaceNodes(std::move(nodes));
     }
 }
@@ -3782,36 +2631,21 @@ void MigrateLegacySimulationResolutionFromNodes()
 
 void ReadViewportJson(const nlohmann::json& root)
 {
-    const nlohmann::json viewportJson = root.value("viewport", nlohmann::json::object());
-    g_viewport.yaw = viewportJson.value("yaw", g_viewport.yaw);
-    g_viewport.pitch = viewportJson.value("pitch", g_viewport.pitch);
-    g_viewport.fovDegrees = viewportJson.value("fovDegrees", g_viewport.fovDegrees);
-    g_viewport.orbitDistance = viewportJson.value("orbitDistance", g_viewport.orbitDistance);
     const std::string savedAppVersion = root.value("appVersion", std::string());
-    NormalizeLoadedViewport(savedAppVersion != TERRAIN_EDITOR_VERSION_STRING);
-    if (viewportJson.contains("pan") && viewportJson["pan"].is_array() && viewportJson["pan"].size() == 2)
-    {
-        g_viewport.pan = ImVec2(viewportJson["pan"][0].get<float>(), viewportJson["pan"][1].get<float>());
-    }
+    terrain::ViewportCameraState viewport = MakeViewportCameraState();
+    terrain::ReadViewportJson(root, viewport, savedAppVersion != TERRAIN_EDITOR_VERSION_STRING, kDefaultViewportPitch, kDefaultViewportOrbitDistance);
+    g_viewport.yaw = viewport.yaw;
+    g_viewport.pitch = viewport.pitch;
+    g_viewport.fovDegrees = viewport.fovDegrees;
+    g_viewport.orbitDistance = viewport.orbitDistance;
+    g_viewport.pan = viewport.pan;
 }
 
 void ReadSerializedLinksJson(const nlohmann::json& root)
 {
-    std::vector<rock::Link> links;
-    if (root.contains("links") && root["links"].is_array())
-    {
-        for (const nlohmann::json& linkJson : root["links"])
-        {
-            rock::Link link;
-            link.id = linkJson.value("id", 0);
-            link.startPin = linkJson.value("startPin", 0);
-            link.endPin = linkJson.value("endPin", 0);
-            if (link.id > 0 && g_graph.CanCreateLink(link.startPin, link.endPin))
-            {
-                links.push_back(link);
-            }
-        }
-    }
+    std::vector<rock::Link> links = terrain::ReadSerializedLinksJson(root, [](rock::GraphId startPin, rock::GraphId endPin) {
+        return g_graph.CanCreateLink(startPin, endPin);
+    });
     g_graph.ReplaceLinks(std::move(links));
 }
 
@@ -3842,7 +2676,7 @@ void ReadSelectedNodesJson(const nlohmann::json& root)
 
 void ReadPreviewSelectionJson(const nlohmann::json& root)
 {
-    g_graph.SetPreviewStage(ReadSerializedPreviewStage(root).value_or(rock::PreviewStage::Graph));
+    g_graph.SetPreviewStage(terrain::ReadSerializedPreviewStage(root, g_graph.Preview()).value_or(rock::PreviewStage::Graph));
     const rock::GraphId previewPinId = root.value("previewPinId", 0);
     if (previewPinId != 0 && g_graph.FindPin(previewPinId) != nullptr)
     {
@@ -3897,7 +2731,9 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
             return false;
         }
 
-        ReadProjectSettingsJson(root);
+        terrain::ProjectDisplaySettings displaySettings{g_ui.showFps};
+        g_projectSettingsHadSimulationResolution = terrain::ReadProjectSettingsJson(root, g_graph.Settings(), displaySettings);
+        g_ui.showFps = displaySettings.showFps;
         ReadSerializedNodesJson(root);
         MigrateLegacySimulationResolutionFromNodes();
         ReadViewportJson(root);
@@ -9893,13 +8729,20 @@ void OpenExportFolder(const std::filesystem::path& exportPath)
     OpenFolderInExplorer(folder);
 }
 
+terrain::ViewportCameraState MakeViewportCameraState()
+{
+    return terrain::ViewportCameraState{
+        g_viewport.yaw,
+        g_viewport.pitch,
+        g_viewport.fovDegrees,
+        g_viewport.orbitDistance,
+        g_viewport.pan,
+    };
+}
+
 float DefaultViewportOrbitDistance()
 {
-    const float terrainSize = std::max(1.0f, g_graph.Settings().preview.terrainSizeMeters);
-    const float fovRadians = std::clamp(kDefaultViewportFovDegrees, 15.0f, 90.0f) * kDegreesToRadians;
-    const float horizontalBoundingRadius = terrainSize * 0.70710678f;
-    const float distance = horizontalBoundingRadius / std::sin(fovRadians * 0.5f);
-    return std::clamp(distance * 1.08f, 1.0f, kMaxViewportOrbitDistance);
+    return terrain::DefaultViewportOrbitDistance(g_graph.Settings().preview.terrainSizeMeters);
 }
 
 void ResetViewport()
@@ -9913,17 +8756,12 @@ void ResetViewport()
 
 float CameraFocalLengthMmFromFovYDegrees(float fovYDegrees)
 {
-    const float clampedFovYDegrees = std::clamp(fovYDegrees, 15.0f, 90.0f);
-    const float fovRadians = clampedFovYDegrees * 3.1415926535f / 180.0f;
-    return kFullFrameSensorHeightMm / (2.0f * std::tan(fovRadians * 0.5f));
+    return terrain::CameraFocalLengthMmFromFovYDegrees(fovYDegrees);
 }
 
 float CameraFovYDegreesFromFocalLengthMm(float focalLengthMm)
 {
-    const float defaultFocalLengthMm = CameraFocalLengthMmFromFovYDegrees(45.0f);
-    const float clampedFocalLengthMm = std::max(0.1f, std::isfinite(focalLengthMm) ? focalLengthMm : defaultFocalLengthMm);
-    const float fovRadians = 2.0f * std::atan(kFullFrameSensorHeightMm / (2.0f * clampedFocalLengthMm));
-    return std::clamp(fovRadians * 180.0f / 3.1415926535f, 15.0f, 90.0f);
+    return terrain::CameraFovYDegreesFromFocalLengthMm(focalLengthMm);
 }
 
 bool TryPickViewportFocusPoint(const ImVec2& min, const ImVec2& max, const ImVec2& mouse, Vec3* outPoint, float* outFocusDistance, ImVec2* outScreenPoint);
@@ -9931,85 +8769,54 @@ bool TryPickViewportFocusPoint(const ImVec2& min, const ImVec2& max, const ImVec
 void UpdateViewportInteraction(const ImVec2& min, const ImVec2& max)
 {
     ImGuiIO& io = ImGui::GetIO();
-    if (g_layoutSplitterActive)
-    {
-        return;
-    }
-    const bool dofFocusPickEnabled = g_graph.Settings().preview.depthOfFieldEnabled;
-    if (!dofFocusPickEnabled)
-    {
-        g_focusPickMode = false;
-        g_focusPickCursorActive = false;
-        g_focusPickHoverPoint.reset();
-    }
-    if (g_focusPickMode && (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsMouseClicked(ImGuiMouseButton_Right)))
-    {
-        g_focusPickMode = false;
-        g_focusPickCursorActive = false;
-        g_focusPickHoverPoint.reset();
-    }
-
     const bool hovered = ImGui::IsMouseHoveringRect(min, max);
-    if (!hovered && !ImGui::IsMouseDragging(ImGuiMouseButton_Left) && !ImGui::IsMouseDragging(ImGuiMouseButton_Right) && !ImGui::IsMouseDragging(ImGuiMouseButton_Middle))
-    {
-        g_focusPickHoverPoint.reset();
-        g_focusPickCursorActive = false;
-        return;
-    }
+    const bool focusPickShortcut = hovered && io.KeyCtrl && !io.WantCaptureMouse;
+    g_focusPickCursorActive = g_focusPickMode || focusPickShortcut;
+    g_focusPickHoverPoint.reset();
 
-    const bool ctrlFocusPick = dofFocusPickEnabled && hovered && io.KeyCtrl && !io.WantTextInput;
-    const bool focusPickActive = hovered && (ctrlFocusPick || g_focusPickMode);
-    g_focusPickCursorActive = focusPickActive;
-    if (focusPickActive)
+    if (g_focusPickCursorActive && hovered)
     {
-        ImGui::SetMouseCursor(ImGuiMouseCursor_None);
-        Vec3 hitPoint{};
+        Vec3 hitPoint;
         float focusDistance = 0.0f;
         if (TryPickViewportFocusPoint(min, max, io.MousePos, &hitPoint, &focusDistance, nullptr))
         {
             g_focusPickHoverPoint = hitPoint;
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.WantCaptureMouse)
             {
-                rock::PreviewSettings& preview = g_graph.Settings().preview;
-                preview.dofFocusDistanceMeters = std::clamp(focusDistance, 0.1f, 20000.0f);
+                g_graph.Settings().preview.dofFocusDistanceMeters = focusDistance;
                 g_focusPickMode = false;
-                MarkGraphChanged("Depth of Field focus distance picked");
+                g_focusPickCursorActive = false;
+                MarkProjectDirty();
             }
         }
-        else
-        {
-            g_focusPickHoverPoint.reset();
-        }
-
-        if ((g_focusPickMode && (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsMouseClicked(ImGuiMouseButton_Right))) ||
-            (!io.KeyCtrl && !g_focusPickMode))
-        {
-            g_focusPickMode = false;
-        }
-        return;
     }
-    if (!g_focusPickMode)
+
+    if (g_focusPickMode && ImGui::IsKeyPressed(ImGuiKey_Escape))
     {
-        g_focusPickHoverPoint.reset();
+        g_focusPickMode = false;
         g_focusPickCursorActive = false;
     }
 
-    if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+    if (g_focusPickCursorActive)
     {
-        ResetViewport();
         return;
     }
 
-    if (hovered && io.MouseWheel != 0.0f)
+    if (!hovered)
     {
-        g_viewport.orbitDistance *= std::pow(1.12f, -io.MouseWheel);
-        g_viewport.orbitDistance = std::clamp(g_viewport.orbitDistance, 1.0f, kMaxViewportOrbitDistance);
+        return;
     }
 
-    if (ImGui::IsMouseDragging(ImGuiMouseButton_Left) && hovered)
+    if (io.MouseWheel != 0.0f)
     {
-        g_viewport.yaw -= io.MouseDelta.x * 0.010f;
-        g_viewport.pitch += io.MouseDelta.y * 0.010f;
+        const float zoomFactor = std::pow(0.86f, io.MouseWheel);
+        g_viewport.orbitDistance = std::clamp(g_viewport.orbitDistance * zoomFactor, 1.0f, kMaxViewportOrbitDistance);
+    }
+
+    if (ImGui::IsMouseDragging(ImGuiMouseButton_Left) && !io.KeyCtrl)
+    {
+        g_viewport.yaw += io.MouseDelta.x * 0.01f;
+        g_viewport.pitch += io.MouseDelta.y * 0.01f;
         g_viewport.pitch = std::clamp(g_viewport.pitch, -1.25f, 1.25f);
     }
 
@@ -10020,242 +8827,34 @@ void UpdateViewportInteraction(const ImVec2& min, const ImVec2& max)
     }
 }
 
-Vec3 Subtract(Vec3 a, Vec3 b)
-{
-    return Vec3(a.x - b.x, a.y - b.y, a.z - b.z);
-}
-
-Vec3 Add(Vec3 a, Vec3 b)
-{
-    return Vec3(a.x + b.x, a.y + b.y, a.z + b.z);
-}
-
-Vec3 Scale(Vec3 value, float scalar)
-{
-    return Vec3(value.x * scalar, value.y * scalar, value.z * scalar);
-}
-
-float Dot(Vec3 a, Vec3 b)
-{
-    return a.x * b.x + a.y * b.y + a.z * b.z;
-}
-
-float Length(Vec3 value)
-{
-    return std::sqrt(Dot(value, value));
-}
-
-Vec3 Cross(Vec3 a, Vec3 b)
-{
-    return Vec3(
-        a.y * b.z - a.z * b.y,
-        a.z * b.x - a.x * b.z,
-        a.x * b.y - a.y * b.x);
-}
-
-Vec3 Normalize(Vec3 value, Vec3 fallback)
-{
-    const float lengthSq = Dot(value, value);
-    if (lengthSq <= 0.000001f)
-    {
-        return fallback;
-    }
-    return Scale(value, 1.0f / std::sqrt(lengthSq));
-}
-
 CameraBasis BuildCameraBasis()
 {
-    const float distance = std::clamp(g_viewport.orbitDistance, 1.0f, kMaxViewportOrbitDistance);
-    const float cosPitch = std::cos(g_viewport.pitch);
-    const float sinPitch = std::sin(g_viewport.pitch);
-    const float cosYaw = std::cos(g_viewport.yaw);
-    const float sinYaw = std::sin(g_viewport.yaw);
-    const Vec3 worldUp(0.0f, 1.0f, 0.0f);
-
-    CameraBasis basis;
-    basis.position = Vec3(sinYaw * cosPitch * distance, sinPitch * distance, cosYaw * cosPitch * distance);
-    basis.forward = Normalize(Scale(basis.position, -1.0f), Vec3(0.0f, 0.0f, -1.0f));
-    basis.right = Normalize(Cross(basis.forward, worldUp), Vec3(1.0f, 0.0f, 0.0f));
-    basis.up = Normalize(Cross(basis.right, basis.forward), worldUp);
-    return basis;
+    return terrain::BuildCameraBasis(MakeViewportCameraState());
 }
 
 ImVec2 ProjectWorldNormalized(float x, float y, float z)
 {
-    const CameraBasis basis = BuildCameraBasis();
-    const Vec3 world(x, y, z);
-    const Vec3 view = Subtract(world, basis.position);
-    const float cameraX = Dot(view, basis.right);
-    const float cameraY = Dot(view, basis.up);
-    const float depth = std::max(0.05f, Dot(view, basis.forward));
-    const float fovRadians = std::clamp(g_viewport.fovDegrees, 15.0f, 90.0f) * 3.1415926535f / 180.0f;
-    const float focalLength = 1.0f / std::tan(fovRadians * 0.5f);
-    const float perspective = focalLength / depth;
-    return ImVec2(cameraX * perspective, -cameraY * perspective);
+    return terrain::ProjectWorldNormalized(MakeViewportCameraState(), x, y, z);
 }
 
 ProjectedPoint ProjectWorldToScreen(float x, float y, float z, const ImVec2& center, float scale)
 {
-    const CameraBasis basis = BuildCameraBasis();
-    const Vec3 world(x, y, z);
-    const Vec3 view = Subtract(world, basis.position);
-    const float cameraX = Dot(view, basis.right);
-    const float cameraY = Dot(view, basis.up);
-    const float depth = std::max(0.05f, Dot(view, basis.forward));
-    const float fovRadians = std::clamp(g_viewport.fovDegrees, 15.0f, 90.0f) * 3.1415926535f / 180.0f;
-    const float focalLength = 1.0f / std::tan(fovRadians * 0.5f);
-    const float perspective = focalLength / depth;
-    return ProjectedPoint(ImVec2(center.x + cameraX * perspective * scale, center.y - cameraY * perspective * scale), depth);
-}
-
-float SamplePreviewHeightAtWorld(const rock::HeightfieldGrid& grid, float worldX, float worldZ)
-{
-    const int n = grid.resolution;
-    if (n < 2 || grid.heights.size() < static_cast<size_t>(n) * static_cast<size_t>(n))
-    {
-        return 0.0f;
-    }
-
-    const float terrainSize = std::max(1.0f, grid.terrainSizeMeters);
-    const float halfSize = terrainSize * 0.5f;
-    const float u = std::clamp((worldX + halfSize) / terrainSize, 0.0f, 1.0f);
-    const float v = std::clamp((halfSize - worldZ) / terrainSize, 0.0f, 1.0f);
-    const float gx = u * static_cast<float>(n - 1);
-    const float gz = v * static_cast<float>(n - 1);
-    const int x0 = std::clamp(static_cast<int>(std::floor(gx)), 0, n - 1);
-    const int z0 = std::clamp(static_cast<int>(std::floor(gz)), 0, n - 1);
-    const int x1 = std::min(x0 + 1, n - 1);
-    const int z1 = std::min(z0 + 1, n - 1);
-    const float tx = gx - static_cast<float>(x0);
-    const float tz = gz - static_cast<float>(z0);
-    const auto h = [&](int x, int z) {
-        return grid.heights[static_cast<size_t>(z) * static_cast<size_t>(n) + static_cast<size_t>(x)];
-    };
-    const float h0 = std::lerp(h(x0, z0), h(x1, z0), tx);
-    const float h1 = std::lerp(h(x0, z1), h(x1, z1), tx);
-    return std::lerp(h0, h1, tz);
-}
-
-bool RayTerrainSquareRange(Vec3 origin, Vec3 dir, float halfSize, float* outEnter, float* outExit)
-{
-    float tEnter = 0.0f;
-    float tExit = kViewportFarPlane;
-    const auto clipAxis = [&](float originAxis, float dirAxis) {
-        if (std::abs(dirAxis) < 1e-6f)
-        {
-            return originAxis >= -halfSize && originAxis <= halfSize;
-        }
-        float t0 = (-halfSize - originAxis) / dirAxis;
-        float t1 = ( halfSize - originAxis) / dirAxis;
-        if (t0 > t1)
-        {
-            std::swap(t0, t1);
-        }
-        tEnter = std::max(tEnter, t0);
-        tExit = std::min(tExit, t1);
-        return tEnter <= tExit;
-    };
-    if (!clipAxis(origin.x, dir.x) || !clipAxis(origin.z, dir.z))
-    {
-        return false;
-    }
-    *outEnter = std::max(0.0f, tEnter);
-    *outExit = std::max(*outEnter, tExit);
-    return *outEnter <= *outExit;
+    return terrain::ProjectWorldToScreen(MakeViewportCameraState(), x, y, z, center, scale);
 }
 
 bool TryPickViewportFocusPoint(const ImVec2& min, const ImVec2& max, const ImVec2& mouse, Vec3* outPoint, float* outFocusDistance, ImVec2* outScreenPoint)
 {
-    const rock::HeightfieldGrid& grid = g_graph.Evaluation().previewHeightfield;
-    const int n = grid.resolution;
-    if (n < 2 || grid.heights.size() < static_cast<size_t>(n) * static_cast<size_t>(n))
-    {
-        return false;
-    }
-
-    const float viewportWidth = std::max(1.0f, max.x - min.x);
-    const float viewportHeight = std::max(1.0f, max.y - min.y);
-    const float viewportSize = std::min(viewportWidth, viewportHeight);
-    const float scale = viewportSize * 1.20f;
-    const ImVec2 center((min.x + max.x) * 0.5f + g_viewport.pan.x, (min.y + max.y) * 0.5f + g_viewport.pan.y);
-    const float fovRadians = std::clamp(g_viewport.fovDegrees, 15.0f, 90.0f) * kDegreesToRadians;
-    const float focalLength = 1.0f / std::tan(fovRadians * 0.5f);
-    const float cameraX = (mouse.x - center.x) / (focalLength * scale);
-    const float cameraY = -(mouse.y - center.y) / (focalLength * scale);
-
-    const CameraBasis basis = BuildCameraBasis();
-    const Vec3 rayDir = Normalize(
-        Add(Add(basis.forward, Scale(basis.right, cameraX)), Scale(basis.up, cameraY)),
-        basis.forward);
-
-    const float terrainSize = std::max(1.0f, grid.terrainSizeMeters);
-    const float halfSize = terrainSize * 0.5f;
-    float tStart = 0.0f;
-    float tEnd = 0.0f;
-    if (!RayTerrainSquareRange(basis.position, rayDir, halfSize, &tStart, &tEnd))
-    {
-        return false;
-    }
-    tEnd = std::min(tEnd, kViewportFarPlane);
-    if (tEnd <= tStart)
-    {
-        return false;
-    }
-
-    const auto pointAt = [&](float t) {
-        return Add(basis.position, Scale(rayDir, t));
-    };
-    const auto heightDelta = [&](float t) {
-        const Vec3 p = pointAt(t);
-        return p.y - SamplePreviewHeightAtWorld(grid, p.x, p.z);
-    };
-
-    float prevT = tStart;
-    float prevDelta = heightDelta(prevT);
-    if (prevDelta <= 0.0f)
-    {
-        Vec3 p = pointAt(prevT);
-        p.y = SamplePreviewHeightAtWorld(grid, p.x, p.z);
-        if (outPoint) *outPoint = p;
-        if (outFocusDistance) *outFocusDistance = std::max(0.1f, Dot(Subtract(p, basis.position), basis.forward));
-        if (outScreenPoint) *outScreenPoint = ProjectWorldToScreen(p.x, p.y, p.z, center, scale).screen;
-        return true;
-    }
-
-    constexpr int kRaySteps = 256;
-    for (int i = 1; i <= kRaySteps; ++i)
-    {
-        const float t = std::lerp(tStart, tEnd, static_cast<float>(i) / static_cast<float>(kRaySteps));
-        const float delta = heightDelta(t);
-        if (delta <= 0.0f || (prevDelta < 0.0f && delta >= 0.0f))
-        {
-            float lo = prevT;
-            float hi = t;
-            for (int refine = 0; refine < 16; ++refine)
-            {
-                const float mid = (lo + hi) * 0.5f;
-                if (heightDelta(mid) > 0.0f)
-                {
-                    lo = mid;
-                }
-                else
-                {
-                    hi = mid;
-                }
-            }
-            Vec3 p = pointAt(hi);
-            p.y = SamplePreviewHeightAtWorld(grid, p.x, p.z);
-            if (outPoint) *outPoint = p;
-            if (outFocusDistance) *outFocusDistance = std::max(0.1f, Dot(Subtract(p, basis.position), basis.forward));
-            if (outScreenPoint) *outScreenPoint = ProjectWorldToScreen(p.x, p.y, p.z, center, scale).screen;
-            return true;
-        }
-        prevT = t;
-        prevDelta = delta;
-    }
-    return false;
+    return terrain::TryPickViewportFocusPoint(
+        MakeViewportCameraState(),
+        g_graph.Evaluation().previewHeightfield,
+        min,
+        max,
+        mouse,
+        kViewportFarPlane,
+        outPoint,
+        outFocusDistance,
+        outScreenPoint);
 }
-
 void DrawFocusPickOverlay(ImDrawList* drawList, const ImVec2& min, const ImVec2& max)
 {
     const bool showHover = g_focusPickHoverPoint.has_value();
