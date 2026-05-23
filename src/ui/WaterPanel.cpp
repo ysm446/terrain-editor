@@ -85,15 +85,15 @@ void DrawWaterSettingsPanel(WaterPanelState state)
                 SaveAppSettings(state);
             }
 
-            ImGui::SeparatorText("屈折 / 断面");
+            ImGui::SeparatorText("屈折");
             if (DrawPropertyFloatRow("Refraction Strength", "DisplayWaterRefractionStrength", &preview.waterRefractionStrength, 0.0f, 2.0f, rock::PreviewSettings{}.waterRefractionStrength, "Water refraction strength changed", false,
-                "水面越しの背景をどれだけ歪ませるかです。断面の屈折効果にも影響します。0 で屈折なし、1 が標準、2 で強めになります。", "%.2f"))
+                "水面越しの背景をどれだけ歪ませるかです。自然さを優先するため、既定では浅瀬にだけ弱く効きます。0 で屈折なし、1 で強めになります。", "%.2f"))
             {
                 preview.waterRefractionStrength = std::clamp(preview.waterRefractionStrength, 0.0f, 2.0f);
                 SaveAppSettings(state);
             }
             if (DrawPropertyFloatRow("Refraction Blur", "DisplayWaterRefractionBlur", &preview.waterRefractionBlur, 0.0f, 2.0f, rock::PreviewSettings{}.waterRefractionBlur, "Water refraction blur changed", false,
-                "断面側壁の背景のにじみ量です。0 でシャープ、1 が標準、2 で強めにぼかします。薄い水では背後の地形色が透けて見え、厚みがあるほど水色へ戻ります。", "%.2f"))
+                "水面越しの背景のにじみ量です。0 でシャープ、1 で強めにぼかします。断面側壁は水柱の厚みだけで表示します。", "%.2f"))
             {
                 preview.waterRefractionBlur = std::clamp(preview.waterRefractionBlur, 0.0f, 2.0f);
                 SaveAppSettings(state);

@@ -617,8 +617,8 @@ struct PreviewSettings
     std::array<float, 3> waterColor = {0.04f, 0.24f, 0.36f};
     float waterWavesScale = 24.0f;
     float waterRefractiveIndex = 1.33f;
-    float waterRefractionStrength = 1.0f;
-    float waterRefractionBlur = 0.45f;
+    float waterRefractionStrength = 0.25f;
+    float waterRefractionBlur = 0.20f;
     bool waterAnimationEnabled = true;
     float waterReflectionStrength = 1.0f;
     bool waterSsrEnabled = false;

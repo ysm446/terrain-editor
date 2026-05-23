@@ -669,8 +669,8 @@ struct GpuMeshPreview
     float waterTerrainSizeMeters = 0.0f;
     float waterWavesScale = 24.0f;
     float waterRefractiveIndex = 1.33f;
-    float waterRefractionStrength = 1.0f;
-    float waterRefractionBlur = 0.45f;
+    float waterRefractionStrength = 0.25f;
+    float waterRefractionBlur = 0.20f;
     bool waterAnimationEnabled = true;
     float waterReflectionStrength = 1.0f;
     bool waterSsrEnabled = false;
@@ -4122,7 +4122,9 @@ bool EnsureMeshPreviewPipeline(std::string* error)
     psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
     psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
     psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
-    psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    // The terrain grid winding presents the visible top side as D3D's back face.
+    // Cull front faces so the underside of the heightfield is not drawn.
+    psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_FRONT;
     psoDesc.RasterizerState.FrontCounterClockwise = FALSE;
     psoDesc.DepthStencilState.DepthEnable = TRUE;
     psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
@@ -4135,6 +4137,7 @@ bool EnsureMeshPreviewPipeline(std::string* error)
     if (FAILED(hr)) { if (error) *error = "Create mesh surface PSO failed"; return false; }
 
     psoDesc.PS = {psWaterBlob->GetBufferPointer(), psWaterBlob->GetBufferSize()};
+    psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
     psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
     psoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
     psoDesc.BlendState.RenderTarget[0].BlendEnable = TRUE;
@@ -4149,6 +4152,7 @@ bool EnsureMeshPreviewPipeline(std::string* error)
 
     psoDesc.PS = {psEdgeBlob->GetBufferPointer(), psEdgeBlob->GetBufferSize()};
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
+    psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
     psoDesc.RasterizerState.DepthBias = 0;
     psoDesc.DepthStencilState.DepthEnable = TRUE;
     psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
@@ -4375,7 +4379,9 @@ bool EnsureMeshPreviewDisplacementPipeline(std::string* error)
     psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
     psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
     psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
-    psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    // The terrain grid winding presents the visible top side as D3D's back face.
+    // Cull front faces so the underside of the heightfield is not drawn.
+    psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_FRONT;
     psoDesc.RasterizerState.FrontCounterClockwise = FALSE;
     psoDesc.DepthStencilState.DepthEnable = TRUE;
     psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
@@ -4387,6 +4393,7 @@ bool EnsureMeshPreviewDisplacementPipeline(std::string* error)
 
     psoDesc.PS = {psEdgeBlob->GetBufferPointer(), psEdgeBlob->GetBufferSize()};
     psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_WIREFRAME;
+    psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
     psoDesc.RasterizerState.DepthBias = -64;
     psoDesc.RasterizerState.SlopeScaledDepthBias = -0.25f;
     psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
@@ -4403,6 +4410,7 @@ bool EnsureMeshPreviewDisplacementPipeline(std::string* error)
 
     psoDesc.PS = {psBlob->GetBufferPointer(), psBlob->GetBufferSize()};
     psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+    psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
     psoDesc.RasterizerState.DepthBias = 0;
     psoDesc.RasterizerState.SlopeScaledDepthBias = 0.0f;
     psoDesc.BlendState.RenderTarget[0].BlendEnable = FALSE;
@@ -4421,6 +4429,7 @@ bool EnsureMeshPreviewDisplacementPipeline(std::string* error)
 
     psoDesc.PS = {psEdgeBlob->GetBufferPointer(), psEdgeBlob->GetBufferSize()};
     psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_WIREFRAME;
+    psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
     psoDesc.RasterizerState.DepthBias = -64;
     psoDesc.RasterizerState.SlopeScaledDepthBias = -0.25f;
     psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
@@ -4465,6 +4474,7 @@ bool EnsureMeshPreviewDisplacementPipeline(std::string* error)
     psoDesc.PS = {psBlob->GetBufferPointer(), psBlob->GetBufferSize()};
     psoDesc.NumRenderTargets = 1;
     psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_FRONT;
     psoDesc.RasterizerState.DepthBias = 0;
     psoDesc.RasterizerState.SlopeScaledDepthBias = 0.0f;
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_PATCH;
@@ -4473,6 +4483,7 @@ bool EnsureMeshPreviewDisplacementPipeline(std::string* error)
 
     psoDesc.PS = {psEdgeBlob->GetBufferPointer(), psEdgeBlob->GetBufferSize()};
     psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_WIREFRAME;
+    psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
     psoDesc.RasterizerState.DepthBias = -64;
     psoDesc.RasterizerState.SlopeScaledDepthBias = -0.25f;
     psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
@@ -4488,6 +4499,7 @@ bool EnsureMeshPreviewDisplacementPipeline(std::string* error)
     if (FAILED(hr)) { if (error) *error = "Create displacement tessellation wire PSO failed"; return false; }
 
     psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+    psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
     psoDesc.RasterizerState.DepthBias = 0;
     psoDesc.RasterizerState.SlopeScaledDepthBias = 0.0f;
     psoDesc.BlendState.RenderTarget[0].BlendEnable = FALSE;
