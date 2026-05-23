@@ -48,6 +48,7 @@
 #include "NodeSerialization.h"
 #include "PathUtils.h"
 #include "ProjectSettingsSerialization.h"
+#include "rendering/MeshPreviewRenderer.h"
 #include "platform/FileDialogs.h"
 #include "platform/ShellUtils.h"
 #include "resource.h"
@@ -114,6 +115,10 @@ using terrain::gpu::ScatterComputeStatus;
 using terrain::gpu::ProcessPendingSnowGpuRequests;
 using terrain::gpu::RunSnowCompute;
 using terrain::gpu::SnowComputeStatus;
+using terrain::rendering::GpuMeshPreview;
+using terrain::rendering::MeshPreviewPipelineResources;
+using terrain::rendering::PreviewRenderStats;
+using terrain::rendering::ResetMeshPreviewPipelineResources;
 
 constexpr int kFrameCount = 2;
 constexpr int kSrvDescriptorCount = 128;
@@ -357,29 +362,6 @@ struct DebugLogEntry
 
 std::vector<DebugLogEntry> g_debugLogEntries;
 bool g_debugLogAutoScroll = true;
-
-struct PreviewRenderStats
-{
-    uint32_t drawCalls = 0;
-    uint32_t indexedDrawCalls = 0;
-    uint64_t submittedVertices = 0;
-    uint64_t submittedIndices = 0;
-    uint64_t submittedTriangles = 0;
-    uint64_t submittedLines = 0;
-    uint32_t submittedPatches = 0;
-    int renderTargetWidth = 0;
-    int renderTargetHeight = 0;
-    int displayMeshResolution = 0;
-    bool gpuDisplacement = false;
-    bool tessellation = false;
-    float tessellationMaxFactor = 1.0f;
-    bool surfacePass = false;
-    bool wireframePass = false;
-    bool gridPass = false;
-    bool shadowPass = false;
-    bool skyPass = false;
-    bool cloudsPass = false;
-};
 
 struct FrameTimingStats
 {
@@ -646,206 +628,7 @@ struct CloudShadowMeshConstants
 };
 static_assert(sizeof(CloudShadowMeshConstants) == 176);
 
-struct GpuMeshPreview
-{
-    int width = 0;
-    int height = 0;
-    float yaw = 0.0f;
-    float pitch = 0.0f;
-    float fovDegrees = 0.0f;
-    float orbitDistance = 0.0f;
-    ImVec2 pan = ImVec2(0.0f, 0.0f);
-    uint64_t graphVersion = UINT64_MAX;
-    bool showSurface = false;
-    bool showWireframe = false;
-    bool showGrid = false;
-    bool maskPreview = false;
-    int maskShading = -1;
-    int terrainBoundaryMode = -1;
-    int lightingMode = 0;
-    float sunAzimuthDegrees = 0.0f;
-    float sunElevationDegrees = 0.0f;
-    float sunIntensity = 0.0f;
-    float ambientStrength = 0.0f;
-    float shadowStrength = 0.0f;
-    int shadowMapResolution = 0;
-    float shadowBias = 0.0f;
-    std::array<float, 3> pbrAlbedo = {};
-    std::array<float, 3> gridColor = {};
-    ComPtr<ID3D12Resource> colorTarget;
-    ComPtr<ID3D12Resource> postTarget;
-    ComPtr<ID3D12Resource> depthTarget;
-    ComPtr<ID3D12Resource> sceneDepthTarget;
-    ComPtr<ID3D12Resource> shadowTarget;
-    ComPtr<ID3D12Resource> vertexBuffer;
-    ComPtr<ID3D12Resource> indexBuffer;
-    ComPtr<ID3D12Resource> edgeIndexBuffer;
-    ComPtr<ID3D12Resource> gridVertexBuffer;
-    ComPtr<ID3D12Resource> terrainBoundaryLineVertexBuffer;
-    ComPtr<ID3D12Resource> waterVertexBuffer;
-    ComPtr<ID3D12Resource> waterIndexBuffer;
-    D3D12_CPU_DESCRIPTOR_HANDLE rtvCpu{};
-    D3D12_CPU_DESCRIPTOR_HANDLE postRtvCpu{};
-    D3D12_CPU_DESCRIPTOR_HANDLE dsvCpu{};
-    D3D12_CPU_DESCRIPTOR_HANDLE shadowDsvCpu{};
-    D3D12_CPU_DESCRIPTOR_HANDLE srvCpu{};
-    D3D12_GPU_DESCRIPTOR_HANDLE srvGpu{};
-    D3D12_CPU_DESCRIPTOR_HANDLE postSrvCpu{};
-    D3D12_GPU_DESCRIPTOR_HANDLE postSrvGpu{};
-    D3D12_CPU_DESCRIPTOR_HANDLE shadowSrvCpu{};
-    D3D12_GPU_DESCRIPTOR_HANDLE shadowSrvGpu{};
-    D3D12_CPU_DESCRIPTOR_HANDLE depthSrvCpu{};
-    D3D12_GPU_DESCRIPTOR_HANDLE depthSrvGpu{};
-    D3D12_CPU_DESCRIPTOR_HANDLE sceneDepthSrvCpu{};
-    D3D12_GPU_DESCRIPTOR_HANDLE sceneDepthSrvGpu{};
-    bool srvAllocated = false;
-    bool postSrvAllocated = false;
-    bool shadowSrvAllocated = false;
-    bool depthSrvAllocated = false;
-    bool sceneDepthSrvAllocated = false;
-    UINT vertexCount = 0;
-    UINT triIndexCount = 0;
-    UINT edgeIndexCount = 0;
-    UINT gridVertexCount = 0;
-    UINT terrainBoundaryLineVertexCount = 0;
-    UINT waterIndexCount = 0;
-    UINT waterVertexCount = 0;
-    uint64_t waterHeightfieldVersion = UINT64_MAX;
-    uint64_t terrainBoundaryLineUploadKey = UINT64_MAX;
-    int gridCellCount = 0;
-    float gridCellSizeMeters = 0.0f;
-    bool waterEnabled = false;
-    float waterLevelMeters = 0.0f;
-    float waterOpacity = 0.0f;
-    std::array<float, 3> waterColor = {};
-    float waterTerrainSizeMeters = 0.0f;
-    float waterWavesScale = 24.0f;
-    float waterRefractiveIndex = 1.33f;
-    float waterFresnelPower = 5.0f;
-    float waterRefractionStrength = 0.25f;
-    bool waterAnimationEnabled = true;
-    float waterReflectionStrength = 1.0f;
-    bool waterSsrEnabled = false;
-    int skyMode = -1;
-    float skyAtmosphereDensity = 0.0f;
-    float skyMieStrength = 0.0f;
-    float skyMieEccentricity = 0.0f;
-    std::array<float, 3> skyGroundAlbedo = {};
-    float skySunSizeDegrees = 0.0f;
-    float skySunGlowStrength = 0.0f;
-    int cloudsEnabled = -1;
-    int cloudSeed = INT_MIN;
-    float cloudCoverage = 0.0f;
-    float cloudDensityMultiplier = 0.0f;
-    float cloudAltitudeMin = 0.0f;
-    float cloudAltitudeMax = 0.0f;
-    float cloudHorizontalScale = 0.0f;
-    float cloudAbsorption = 0.0f;
-    std::array<float, 3> cloudColor = {};
-    int cloudAnimate = -1;
-    float cloudLoopPhase = 0.0f;
-    float cloudWindDirectionDegrees = 0.0f;
-    float cloudWindSpeed = 0.0f;
-    int cloudQualitySamples = 0;
-    float cloudShadowStrength = 0.0f;
-    int cloudShadowResolution = 0;
-    int cloudShadowSamples = 0;
-    float cloudFieldRadius = 0.0f;
-    float cloudFieldFalloff = 0.0f;
-    int cloudSelfShadowEnabled = -1;
-    int cloudLightSamples = 0;
-    float cloudLightStepMeters = 0.0f;
-    float cloudPhaseEccentricity = 0.0f;
-    float cloudShadowAmbientStrength = 0.0f;
-
-    // GPU vertex displacement (Phase 2). Heightfield + mask are uploaded
-    // to textures each evaluation, while the static UV grid mesh (just
-    // index buffers, no vertex data — VS reads SV_VertexID) is built once
-    // per displacementMeshResolution change.
-    int meshBackend = -1;  // cached PreviewSettings::meshBackend
-    ComPtr<ID3D12Resource> displacementHeightTexture;
-    ComPtr<ID3D12Resource> displacementMaskTexture;
-    int displacementTextureResolution = 0;
-    D3D12_CPU_DESCRIPTOR_HANDLE displacementHeightSrvCpu{};
-    D3D12_GPU_DESCRIPTOR_HANDLE displacementHeightSrvGpu{};
-    D3D12_CPU_DESCRIPTOR_HANDLE displacementMaskSrvCpu{};
-    D3D12_GPU_DESCRIPTOR_HANDLE displacementMaskSrvGpu{};
-    bool displacementSrvAllocated = false;
-    D3D12_CPU_DESCRIPTOR_HANDLE meshResourceTableCpu{};
-    D3D12_GPU_DESCRIPTOR_HANDLE meshResourceTableGpu{};
-    bool meshResourceTableAllocated = false;
-    ComPtr<ID3D12Resource> colorizeTexture;
-    int colorizeTextureResolution = 0;
-    uint64_t colorizeTextureUploadKey = 0;
-    ComPtr<ID3D12Resource> displacementTriIndexBuffer;
-    ComPtr<ID3D12Resource> displacementPatchIndexBuffer;
-    ComPtr<ID3D12Resource> displacementSectionIndexBuffer;
-    ComPtr<ID3D12Resource> displacementEdgeIndexBuffer;
-    int displacementMeshResolution = 0;
-    UINT displacementTriIndexCount = 0;
-    UINT displacementPatchIndexCount = 0;
-    UINT displacementSectionIndexCount = 0;
-    UINT displacementEdgeIndexCount = 0;
-    uint64_t displacementHeightUploadKey = 0;
-    bool viewportTessellation = false;
-    float tessellationMinFactor = 0.0f;
-    float tessellationMaxFactor = 0.0f;
-    float tessellationNearDistance = 0.0f;
-    float tessellationFarDistance = 0.0f;
-    bool depthOfFieldEnabled = false;
-    float dofFStop = 0.0f;
-    float dofFocusDistanceMeters = 0.0f;
-    float dofSensorHeightMm = 0.0f;
-    float dofMaxBlurPixels = 0.0f;
-    int dofApertureShape = -1;
-    int dofApertureBlades = 0;
-    float dofApertureRotationDegrees = 0.0f;
-    float dofHighlightBoost = 0.0f;
-    bool dofMiniatureEnabled = false;
-    float dofMiniatureScale = 0.0f;
-
-    // ホライゾン AO テクスチャ。ハイトフィールドと同解像度の R8_UNORM。
-    ComPtr<ID3D12Resource> aoTexture;
-    int aoTextureResolution = 0;
-    D3D12_RESOURCE_STATES aoTextureState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-    D3D12_CPU_DESCRIPTOR_HANDLE aoSrvCpu{};
-    D3D12_GPU_DESCRIPTOR_HANDLE aoSrvGpu{};
-    D3D12_CPU_DESCRIPTOR_HANDLE aoUavCpu{};
-    D3D12_GPU_DESCRIPTOR_HANDLE aoUavGpu{};
-    bool aoSrvAllocated = false;
-    bool aoUavAllocated = false;
-    uint64_t aoUploadKey = 0;
-    float aoCachedRadius = -1.0f;
-
-    PreviewRenderStats renderStats;
-
-    D3D12_RESOURCE_STATES colorState = D3D12_RESOURCE_STATE_COMMON;
-    D3D12_RESOURCE_STATES postState = D3D12_RESOURCE_STATE_COMMON;
-    D3D12_RESOURCE_STATES shadowState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-    D3D12_RESOURCE_STATES depthState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
-    D3D12_RESOURCE_STATES sceneDepthState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-};
-
-ComPtr<ID3D12RootSignature> g_meshPreviewRootSignature;
-ComPtr<ID3D12PipelineState> g_meshPreviewSurfacePso;
-ComPtr<ID3D12PipelineState> g_meshPreviewWaterPso;
-ComPtr<ID3D12PipelineState> g_meshPreviewWirePso;
-ComPtr<ID3D12RootSignature> g_meshPreviewDisplacementRootSignature;
-ComPtr<ID3D12PipelineState> g_meshPreviewDisplacementSurfacePso;
-ComPtr<ID3D12PipelineState> g_meshPreviewDisplacementShadowPso;
-ComPtr<ID3D12PipelineState> g_meshPreviewDisplacementWirePso;
-ComPtr<ID3D12PipelineState> g_meshPreviewDisplacementSectionPso;
-ComPtr<ID3D12PipelineState> g_meshPreviewDisplacementSectionShadowPso;
-ComPtr<ID3D12PipelineState> g_meshPreviewDisplacementSectionWirePso;
-ComPtr<ID3D12PipelineState> g_meshPreviewDisplacementTessSurfacePso;
-ComPtr<ID3D12PipelineState> g_meshPreviewDisplacementTessShadowPso;
-ComPtr<ID3D12PipelineState> g_meshPreviewDisplacementTessWirePso;
-// Persistent CBV upload buffer for the displacement path's mesh
-// constants (the regular CPU mesh path keeps its 32BitConstants binding
-// — it's a separate root signature, less invasive).
-ComPtr<ID3D12Resource> g_meshPreviewDisplacementCbv;
-ComPtr<ID3D12PipelineState> g_meshPreviewGridPso;
-ComPtr<ID3D12PipelineState> g_meshPreviewShadowPso;
+MeshPreviewPipelineResources g_meshPreviewPipelines;
 ComPtr<ID3D12RootSignature> g_aoComputeRootSignature;
 ComPtr<ID3D12PipelineState> g_aoComputePso;
 bool g_aoComputeReady = false;
@@ -900,8 +683,6 @@ struct GpuClouds
     bool dummyShadowAllocated = false;
 };
 GpuClouds g_gpuClouds;
-ComPtr<ID3D12DescriptorHeap> g_meshPreviewRtvHeap;
-ComPtr<ID3D12DescriptorHeap> g_meshPreviewDsvHeap;
 GpuMeshPreview g_gpuMeshPreview;
 std::thread::id g_mainThreadId;
 
@@ -1228,22 +1009,7 @@ void CleanupD3D()
     g_gpuMeshPreview.terrainBoundaryLineVertexCount = 0;
     g_gpuMeshPreview.waterIndexCount = 0;
     g_gpuMeshPreview.terrainBoundaryLineUploadKey = UINT64_MAX;
-    g_meshPreviewSurfacePso.Reset();
-    g_meshPreviewWaterPso.Reset();
-    g_meshPreviewWirePso.Reset();
-    g_meshPreviewGridPso.Reset();
-    g_meshPreviewRootSignature.Reset();
-    g_meshPreviewDisplacementSurfacePso.Reset();
-    g_meshPreviewDisplacementShadowPso.Reset();
-    g_meshPreviewDisplacementWirePso.Reset();
-    g_meshPreviewDisplacementSectionPso.Reset();
-    g_meshPreviewDisplacementSectionShadowPso.Reset();
-    g_meshPreviewDisplacementSectionWirePso.Reset();
-    g_meshPreviewDisplacementTessSurfacePso.Reset();
-    g_meshPreviewDisplacementTessShadowPso.Reset();
-    g_meshPreviewDisplacementTessWirePso.Reset();
-    g_meshPreviewDisplacementRootSignature.Reset();
-    g_meshPreviewDisplacementCbv.Reset();
+    ResetMeshPreviewPipelineResources(g_meshPreviewPipelines);
     g_gpuMeshPreview.displacementHeightTexture.Reset();
     g_gpuMeshPreview.displacementMaskTexture.Reset();
     g_gpuMeshPreview.colorizeTexture.Reset();
@@ -1307,8 +1073,6 @@ void CleanupD3D()
     g_gpuClouds.volumeSrvAllocated = false;
     g_gpuClouds.shadowSrvAllocated = false;
     g_gpuClouds.dummyShadowAllocated = false;
-    g_meshPreviewRtvHeap.Reset();
-    g_meshPreviewDsvHeap.Reset();
     if (g_fenceEvent)
     {
         CloseHandle(g_fenceEvent);
@@ -2462,7 +2226,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
 
 bool EnsureMeshPreviewPipeline(std::string* error)
 {
-    if (g_meshPreviewSurfacePso) return true;
+    if (g_meshPreviewPipelines.surfacePso) return true;
     if (!g_device) { if (error) *error = "D3D12 device not initialized"; return false; }
 
     D3D12_DESCRIPTOR_RANGE meshResourceRange{};
@@ -2517,7 +2281,7 @@ bool EnsureMeshPreviewPipeline(std::string* error)
     ComPtr<ID3DBlob> errBlob;
     HRESULT hr = CreateRootSignatureFromDesc(g_device.Get(),
                                              rsDesc,
-                                             g_meshPreviewRootSignature.ReleaseAndGetAddressOf(),
+                                             g_meshPreviewPipelines.rootSignature.ReleaseAndGetAddressOf(),
                                              errBlob.ReleaseAndGetAddressOf());
     if (FAILED(hr))
     {
@@ -2552,7 +2316,7 @@ bool EnsureMeshPreviewPipeline(std::string* error)
     };
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
-    psoDesc.pRootSignature = g_meshPreviewRootSignature.Get();
+    psoDesc.pRootSignature = g_meshPreviewPipelines.rootSignature.Get();
     psoDesc.VS = {vsBlob->GetBufferPointer(), vsBlob->GetBufferSize()};
     psoDesc.InputLayout = {inputLayout, 4};
     psoDesc.SampleMask = UINT_MAX;
@@ -2572,7 +2336,7 @@ bool EnsureMeshPreviewPipeline(std::string* error)
 
     psoDesc.PS = {psBlob->GetBufferPointer(), psBlob->GetBufferSize()};
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewSurfacePso));
+    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewPipelines.surfacePso));
     if (FAILED(hr)) { if (error) *error = "Create mesh surface PSO failed"; return false; }
 
     psoDesc.PS = {psWaterBlob->GetBufferPointer(), psWaterBlob->GetBufferSize()};
@@ -2586,7 +2350,7 @@ bool EnsureMeshPreviewPipeline(std::string* error)
     psoDesc.BlendState.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
     psoDesc.BlendState.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
     psoDesc.BlendState.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
-    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewWaterPso));
+    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewPipelines.waterPso));
     if (FAILED(hr)) { if (error) *error = "Create mesh water PSO failed"; return false; }
 
     psoDesc.PS = {psEdgeBlob->GetBufferPointer(), psEdgeBlob->GetBufferSize()};
@@ -2596,11 +2360,11 @@ bool EnsureMeshPreviewPipeline(std::string* error)
     psoDesc.DepthStencilState.DepthEnable = TRUE;
     psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
     psoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
-    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewWirePso));
+    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewPipelines.wirePso));
     if (FAILED(hr)) { if (error) *error = "Create mesh wire PSO failed"; return false; }
 
     psoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
-    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewGridPso));
+    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewPipelines.gridPso));
     if (FAILED(hr)) { if (error) *error = "Create mesh grid PSO failed"; return false; }
 
     psoDesc.VS = {vsShadowBlob->GetBufferPointer(), vsShadowBlob->GetBufferSize()};
@@ -2613,7 +2377,7 @@ bool EnsureMeshPreviewPipeline(std::string* error)
     psoDesc.DepthStencilState.DepthEnable = TRUE;
     psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
     psoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
-    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewShadowPso));
+    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewPipelines.shadowPso));
     if (FAILED(hr)) { if (error) *error = "Create mesh shadow PSO failed"; return false; }
 
     return true;
@@ -2639,14 +2403,14 @@ static_assert(sizeof(DisplacementShaderConstants) == 8 * sizeof(UINT), "Displace
 
 bool EnsureMeshPreviewDisplacementPipeline(std::string* error)
 {
-    if (g_meshPreviewDisplacementSurfacePso) return true;
+    if (g_meshPreviewPipelines.displacementSurfacePso) return true;
     if (!g_device) { if (error) *error = "D3D12 device not initialized"; return false; }
 
     // Persistent CBV upload buffer for mesh constants. Aligned to 256 bytes
     // (CB requirement) and filled per-draw via memcpy. One instance is
     // sufficient since the GPU consumes it before the next draw of this
     // pass; no in-flight overlap to worry about.
-    if (!g_meshPreviewDisplacementCbv)
+    if (!g_meshPreviewPipelines.displacementCbv)
     {
         const UINT64 cbSize = (sizeof(MeshPreviewConstants) + 255u) & ~255u;
         D3D12_HEAP_PROPERTIES uploadHeap{};
@@ -2663,7 +2427,7 @@ bool EnsureMeshPreviewDisplacementPipeline(std::string* error)
         desc.Flags = D3D12_RESOURCE_FLAG_NONE;
         HRESULT hr = g_device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE,
             &desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-            IID_PPV_ARGS(&g_meshPreviewDisplacementCbv));
+            IID_PPV_ARGS(&g_meshPreviewPipelines.displacementCbv));
         if (FAILED(hr)) { if (error) *error = "Create mesh displacement CBV failed"; return false; }
     }
 
@@ -2767,7 +2531,7 @@ bool EnsureMeshPreviewDisplacementPipeline(std::string* error)
     ComPtr<ID3DBlob> errBlob;
     HRESULT hr = CreateRootSignatureFromDesc(g_device.Get(),
                                              rsDesc,
-                                             g_meshPreviewDisplacementRootSignature.ReleaseAndGetAddressOf(),
+                                             g_meshPreviewPipelines.displacementRootSignature.ReleaseAndGetAddressOf(),
                                              errBlob.ReleaseAndGetAddressOf());
     if (FAILED(hr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Create displacement root sig failed"; return false; }
 
@@ -2805,7 +2569,7 @@ bool EnsureMeshPreviewDisplacementPipeline(std::string* error)
     if (FAILED(hr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile DSDisplacementShadow failed"; return false; }
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
-    psoDesc.pRootSignature = g_meshPreviewDisplacementRootSignature.Get();
+    psoDesc.pRootSignature = g_meshPreviewPipelines.displacementRootSignature.Get();
     psoDesc.VS = {vsBlob->GetBufferPointer(), vsBlob->GetBufferSize()};
     psoDesc.PS = {psBlob->GetBufferPointer(), psBlob->GetBufferSize()};
     // No vertex buffer — VS reads SV_VertexID. Empty input layout.
@@ -2825,7 +2589,7 @@ bool EnsureMeshPreviewDisplacementPipeline(std::string* error)
     psoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
     psoDesc.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewDisplacementSurfacePso));
+    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewPipelines.displacementSurfacePso));
     if (FAILED(hr)) { if (error) *error = "Create displacement surface PSO failed"; return false; }
 
     psoDesc.PS = {psEdgeBlob->GetBufferPointer(), psEdgeBlob->GetBufferSize()};
@@ -2842,7 +2606,7 @@ bool EnsureMeshPreviewDisplacementPipeline(std::string* error)
     psoDesc.BlendState.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
     psoDesc.BlendState.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
     psoDesc.BlendState.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
-    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewDisplacementWirePso));
+    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewPipelines.displacementWirePso));
     if (FAILED(hr)) { if (error) *error = "Create displacement wire PSO failed"; return false; }
 
     psoDesc.PS = {psBlob->GetBufferPointer(), psBlob->GetBufferSize()};
@@ -2861,7 +2625,7 @@ bool EnsureMeshPreviewDisplacementPipeline(std::string* error)
     psoDesc.NumRenderTargets = 1;
     psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewDisplacementSectionPso));
+    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewPipelines.displacementSectionPso));
     if (FAILED(hr)) { if (error) *error = "Create displacement section PSO failed"; return false; }
 
     psoDesc.PS = {psEdgeBlob->GetBufferPointer(), psEdgeBlob->GetBufferSize()};
@@ -2878,7 +2642,7 @@ bool EnsureMeshPreviewDisplacementPipeline(std::string* error)
     psoDesc.BlendState.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
     psoDesc.BlendState.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
     psoDesc.BlendState.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
-    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewDisplacementSectionWirePso));
+    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewPipelines.displacementSectionWirePso));
     if (FAILED(hr)) { if (error) *error = "Create displacement section wire PSO failed"; return false; }
 
     psoDesc.VS = {vsSectionShadowBlob->GetBufferPointer(), vsSectionShadowBlob->GetBufferSize()};
@@ -2891,7 +2655,7 @@ bool EnsureMeshPreviewDisplacementPipeline(std::string* error)
     psoDesc.BlendState.RenderTarget[0].BlendEnable = FALSE;
     psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
     psoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
-    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewDisplacementSectionShadowPso));
+    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewPipelines.displacementSectionShadowPso));
     if (FAILED(hr)) { if (error) *error = "Create displacement section shadow PSO failed"; return false; }
 
     // Shadow PSO — same root sig (so the shader can read displacement
@@ -2902,7 +2666,7 @@ bool EnsureMeshPreviewDisplacementPipeline(std::string* error)
     psoDesc.RTVFormats[0] = DXGI_FORMAT_UNKNOWN;
     psoDesc.RasterizerState.DepthBias = 1200;
     psoDesc.RasterizerState.SlopeScaledDepthBias = 1.5f;
-    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewDisplacementShadowPso));
+    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewPipelines.displacementShadowPso));
     if (FAILED(hr)) { if (error) *error = "Create displacement shadow PSO failed"; return false; }
 
     psoDesc.VS = {vsPatchBlob->GetBufferPointer(), vsPatchBlob->GetBufferSize()};
@@ -2915,7 +2679,7 @@ bool EnsureMeshPreviewDisplacementPipeline(std::string* error)
     psoDesc.RasterizerState.DepthBias = 0;
     psoDesc.RasterizerState.SlopeScaledDepthBias = 0.0f;
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_PATCH;
-    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewDisplacementTessSurfacePso));
+    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewPipelines.displacementTessSurfacePso));
     if (FAILED(hr)) { if (error) *error = "Create displacement tessellation surface PSO failed"; return false; }
 
     psoDesc.PS = {psEdgeBlob->GetBufferPointer(), psEdgeBlob->GetBufferSize()};
@@ -2932,7 +2696,7 @@ bool EnsureMeshPreviewDisplacementPipeline(std::string* error)
     psoDesc.BlendState.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
     psoDesc.BlendState.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
     psoDesc.BlendState.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
-    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewDisplacementTessWirePso));
+    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewPipelines.displacementTessWirePso));
     if (FAILED(hr)) { if (error) *error = "Create displacement tessellation wire PSO failed"; return false; }
 
     psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
@@ -2949,7 +2713,7 @@ bool EnsureMeshPreviewDisplacementPipeline(std::string* error)
     psoDesc.RTVFormats[0] = DXGI_FORMAT_UNKNOWN;
     psoDesc.RasterizerState.DepthBias = 1200;
     psoDesc.RasterizerState.SlopeScaledDepthBias = 1.5f;
-    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewDisplacementTessShadowPso));
+    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_meshPreviewPipelines.displacementTessShadowPso));
     if (FAILED(hr)) { if (error) *error = "Create displacement tessellation shadow PSO failed"; return false; }
 
     return true;
@@ -5581,21 +5345,21 @@ bool EnsureMeshPreviewRenderTarget(int width, int height, std::string* error)
         g_gpuMeshPreview.shadowState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         g_gpuMeshPreview.sceneDepthState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 
-        if (!g_meshPreviewRtvHeap)
+        if (!g_meshPreviewPipelines.rtvHeap)
         {
             D3D12_DESCRIPTOR_HEAP_DESC desc =
                 DescriptorHeapDesc(D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 2);
-            ThrowIfFailed(g_device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&g_meshPreviewRtvHeap)), "Create mesh RTV heap failed");
-            g_gpuMeshPreview.rtvCpu = g_meshPreviewRtvHeap->GetCPUDescriptorHandleForHeapStart();
+            ThrowIfFailed(g_device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&g_meshPreviewPipelines.rtvHeap)), "Create mesh RTV heap failed");
+            g_gpuMeshPreview.rtvCpu = g_meshPreviewPipelines.rtvHeap->GetCPUDescriptorHandleForHeapStart();
             g_gpuMeshPreview.postRtvCpu = g_gpuMeshPreview.rtvCpu;
             g_gpuMeshPreview.postRtvCpu.ptr += g_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
         }
-        if (!g_meshPreviewDsvHeap)
+        if (!g_meshPreviewPipelines.dsvHeap)
         {
             D3D12_DESCRIPTOR_HEAP_DESC desc =
                 DescriptorHeapDesc(D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 2);
-            ThrowIfFailed(g_device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&g_meshPreviewDsvHeap)), "Create mesh DSV heap failed");
-            g_gpuMeshPreview.dsvCpu = g_meshPreviewDsvHeap->GetCPUDescriptorHandleForHeapStart();
+            ThrowIfFailed(g_device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&g_meshPreviewPipelines.dsvHeap)), "Create mesh DSV heap failed");
+            g_gpuMeshPreview.dsvCpu = g_meshPreviewPipelines.dsvHeap->GetCPUDescriptorHandleForHeapStart();
             g_gpuMeshPreview.shadowDsvCpu = g_gpuMeshPreview.dsvCpu;
             g_gpuMeshPreview.shadowDsvCpu.ptr += g_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
         }
@@ -6891,7 +6655,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             vbv.StrideInBytes  = static_cast<UINT>(sizeof(rock::MeshVertex));
             commandList->IASetVertexBuffers(0, 1, &vbv);
         }
-        commandList->SetGraphicsRootSignature(g_meshPreviewRootSignature.Get());
+        commandList->SetGraphicsRootSignature(g_meshPreviewPipelines.rootSignature.Get());
         commandList->SetGraphicsRoot32BitConstants(0, sizeof(constants) / 4, &constants, 0);
 
         const bool wantsShadow = constants.shadowEnabled > 0.5f && showSurface;
@@ -6938,9 +6702,9 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
 
                 void* mappedCbv = nullptr;
                 D3D12_RANGE readRange{0, 0};
-                g_meshPreviewDisplacementCbv->Map(0, &readRange, &mappedCbv);
+                g_meshPreviewPipelines.displacementCbv->Map(0, &readRange, &mappedCbv);
                 std::memcpy(mappedCbv, &constants, sizeof(constants));
-                g_meshPreviewDisplacementCbv->Unmap(0, nullptr);
+                g_meshPreviewPipelines.displacementCbv->Unmap(0, nullptr);
 
                 DisplacementShaderConstants dispConsts{};
                 const int M = g_gpuMeshPreview.displacementMeshResolution;
@@ -6953,8 +6717,8 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
                 dispConsts.tessellationNearDistance = std::max(1.0f, g_graph.Settings().preview.tessellationNearDistance);
                 dispConsts.tessellationFarDistance = std::max(dispConsts.tessellationNearDistance + 1.0f, g_graph.Settings().preview.tessellationFarDistance);
 
-                commandList->SetGraphicsRootSignature(g_meshPreviewDisplacementRootSignature.Get());
-                commandList->SetGraphicsRootConstantBufferView(0, g_meshPreviewDisplacementCbv->GetGPUVirtualAddress());
+                commandList->SetGraphicsRootSignature(g_meshPreviewPipelines.displacementRootSignature.Get());
+                commandList->SetGraphicsRootConstantBufferView(0, g_meshPreviewPipelines.displacementCbv->GetGPUVirtualAddress());
                 commandList->SetGraphicsRootConstantBufferView(1, g_gpuClouds.meshCbUploadBuffer->GetGPUVirtualAddress());
                 commandList->SetGraphicsRoot32BitConstants(2, sizeof(dispConsts) / 4, &dispConsts, 0);
                 // Slot 3 (shadow SRV) — we are CURRENTLY writing the shadow
@@ -6983,8 +6747,8 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
                 commandList->IASetIndexBuffer(&shadowIbv);
                 commandList->IASetVertexBuffers(0, 0, nullptr);
                 commandList->SetPipelineState(useTessellation
-                    ? g_meshPreviewDisplacementTessShadowPso.Get()
-                    : g_meshPreviewDisplacementShadowPso.Get());
+                    ? g_meshPreviewPipelines.displacementTessShadowPso.Get()
+                    : g_meshPreviewPipelines.displacementShadowPso.Get());
                 commandList->IASetPrimitiveTopology(useTessellation
                     ? D3D_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST
                     : D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -7004,7 +6768,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
                         g_gpuMeshPreview.displacementSectionIndexCount * static_cast<UINT>(sizeof(UINT)),
                         DXGI_FORMAT_R32_UINT};
                     commandList->IASetIndexBuffer(&sectionIbv);
-                    commandList->SetPipelineState(g_meshPreviewDisplacementSectionShadowPso.Get());
+                    commandList->SetPipelineState(g_meshPreviewPipelines.displacementSectionShadowPso.Get());
                     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
                     commandList->DrawIndexedInstanced(g_gpuMeshPreview.displacementSectionIndexCount, 1, 0, 0, 0);
                     recordIndexedDraw(g_gpuMeshPreview.displacementSectionIndexCount, true);
@@ -7013,7 +6777,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
 
                 // Restore CPU root sig + bindings for the surface / grid
                 // draws below (they assume the CPU root sig is current).
-                commandList->SetGraphicsRootSignature(g_meshPreviewRootSignature.Get());
+                commandList->SetGraphicsRootSignature(g_meshPreviewPipelines.rootSignature.Get());
                 commandList->SetGraphicsRoot32BitConstants(0, sizeof(constants) / 4, &constants, 0);
                 if (g_gpuClouds.meshCbUploadBuffer)
                 {
@@ -7029,7 +6793,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
                 const UINT shadowIndexCount = cpuSurfaceIndexCount();
                 D3D12_INDEX_BUFFER_VIEW shadowIbv{g_gpuMeshPreview.indexBuffer->GetGPUVirtualAddress(), shadowIndexCount * sizeof(UINT), DXGI_FORMAT_R32_UINT};
                 commandList->IASetIndexBuffer(&shadowIbv);
-                commandList->SetPipelineState(g_meshPreviewShadowPso.Get());
+                commandList->SetPipelineState(g_meshPreviewPipelines.shadowPso.Get());
                 commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
                 commandList->DrawIndexedInstanced(shadowIndexCount, 1, 0, 0, 0);
                 recordIndexedDraw(shadowIndexCount, true);
@@ -7191,7 +6955,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         // after the mesh draws so it can sample depth and limit ray-march.
         ID3D12DescriptorHeap* descriptorHeaps[] = {g_srvHeap.Get()};
         commandList->SetDescriptorHeaps(1, descriptorHeaps);
-        commandList->SetGraphicsRootSignature(g_meshPreviewRootSignature.Get());
+        commandList->SetGraphicsRootSignature(g_meshPreviewPipelines.rootSignature.Get());
         commandList->SetGraphicsRoot32BitConstants(0, sizeof(constants) / 4, &constants, 0);
         if (g_gpuClouds.meshCbUploadBuffer)
         {
@@ -7218,9 +6982,9 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             // work as before.
             void* mappedCbv = nullptr;
             D3D12_RANGE readRange{0, 0};
-            g_meshPreviewDisplacementCbv->Map(0, &readRange, &mappedCbv);
+            g_meshPreviewPipelines.displacementCbv->Map(0, &readRange, &mappedCbv);
             std::memcpy(mappedCbv, &constants, sizeof(constants));
-            g_meshPreviewDisplacementCbv->Unmap(0, nullptr);
+            g_meshPreviewPipelines.displacementCbv->Unmap(0, nullptr);
 
             DisplacementShaderConstants dispConsts{};
             const int previewMeshResolutionForDisp = g_gpuMeshPreview.displacementMeshResolution;
@@ -7235,8 +6999,8 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             dispConsts.tessellationNearDistance = std::max(1.0f, g_graph.Settings().preview.tessellationNearDistance);
             dispConsts.tessellationFarDistance = std::max(dispConsts.tessellationNearDistance + 1.0f, g_graph.Settings().preview.tessellationFarDistance);
 
-            commandList->SetGraphicsRootSignature(g_meshPreviewDisplacementRootSignature.Get());
-            commandList->SetGraphicsRootConstantBufferView(0, g_meshPreviewDisplacementCbv->GetGPUVirtualAddress());
+            commandList->SetGraphicsRootSignature(g_meshPreviewPipelines.displacementRootSignature.Get());
+            commandList->SetGraphicsRootConstantBufferView(0, g_meshPreviewPipelines.displacementCbv->GetGPUVirtualAddress());
             if (g_gpuClouds.meshCbUploadBuffer)
             {
                 commandList->SetGraphicsRootConstantBufferView(1, g_gpuClouds.meshCbUploadBuffer->GetGPUVirtualAddress());
@@ -7263,8 +7027,8 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             // No vertex buffer for displacement — VS reads SV_VertexID.
             commandList->IASetVertexBuffers(0, 0, nullptr);
             commandList->SetPipelineState(useTessellation
-                ? g_meshPreviewDisplacementTessSurfacePso.Get()
-                : g_meshPreviewDisplacementSurfacePso.Get());
+                ? g_meshPreviewPipelines.displacementTessSurfacePso.Get()
+                : g_meshPreviewPipelines.displacementSurfacePso.Get());
             commandList->IASetPrimitiveTopology(useTessellation
                 ? D3D_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST
                 : D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -7284,7 +7048,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
                     g_gpuMeshPreview.displacementSectionIndexCount * static_cast<UINT>(sizeof(UINT)),
                     DXGI_FORMAT_R32_UINT};
                 commandList->IASetIndexBuffer(&sectionIbv);
-                commandList->SetPipelineState(g_meshPreviewDisplacementSectionPso.Get());
+                commandList->SetPipelineState(g_meshPreviewPipelines.displacementSectionPso.Get());
                 commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
                 commandList->DrawIndexedInstanced(g_gpuMeshPreview.displacementSectionIndexCount, 1, 0, 0, 0);
                 recordIndexedDraw(g_gpuMeshPreview.displacementSectionIndexCount, true);
@@ -7293,7 +7057,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
 
             // Restore the CPU root sig + constants for wireframe / grid
             // draws below (those still expect the CPU mesh root sig).
-            commandList->SetGraphicsRootSignature(g_meshPreviewRootSignature.Get());
+            commandList->SetGraphicsRootSignature(g_meshPreviewPipelines.rootSignature.Get());
             commandList->SetGraphicsRoot32BitConstants(0, sizeof(constants) / 4, &constants, 0);
             if (g_gpuClouds.meshCbUploadBuffer)
             {
@@ -7311,7 +7075,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             const UINT surfaceIndexCount = cpuSurfaceIndexCount();
             D3D12_INDEX_BUFFER_VIEW ibv{g_gpuMeshPreview.indexBuffer->GetGPUVirtualAddress(), surfaceIndexCount * sizeof(UINT), DXGI_FORMAT_R32_UINT};
             commandList->IASetIndexBuffer(&ibv);
-            commandList->SetPipelineState(g_meshPreviewSurfacePso.Get());
+            commandList->SetPipelineState(g_meshPreviewPipelines.surfacePso.Get());
             commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             commandList->DrawIndexedInstanced(surfaceIndexCount, 1, 0, 0, 0);
             recordIndexedDraw(surfaceIndexCount, true);
@@ -7400,7 +7164,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
                 DXGI_FORMAT_R32_UINT};
             commandList->IASetVertexBuffers(0, 1, &waterVbv);
             commandList->IASetIndexBuffer(&waterIbv);
-            commandList->SetPipelineState(g_meshPreviewWaterPso.Get());
+            commandList->SetPipelineState(g_meshPreviewPipelines.waterPso.Get());
             commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             commandList->DrawIndexedInstanced(g_gpuMeshPreview.waterIndexCount, 1, 0, 0, 0);
             recordIndexedDraw(g_gpuMeshPreview.waterIndexCount, true);
@@ -7422,9 +7186,9 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
 
             void* mappedCbv = nullptr;
             D3D12_RANGE readRange{0, 0};
-            g_meshPreviewDisplacementCbv->Map(0, &readRange, &mappedCbv);
+            g_meshPreviewPipelines.displacementCbv->Map(0, &readRange, &mappedCbv);
             std::memcpy(mappedCbv, &wireConstants, sizeof(wireConstants));
-            g_meshPreviewDisplacementCbv->Unmap(0, nullptr);
+            g_meshPreviewPipelines.displacementCbv->Unmap(0, nullptr);
 
             DisplacementShaderConstants dispConsts{};
             const int previewMeshResolutionForDisp = g_gpuMeshPreview.displacementMeshResolution;
@@ -7439,8 +7203,8 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             dispConsts.tessellationNearDistance = std::max(1.0f, g_graph.Settings().preview.tessellationNearDistance);
             dispConsts.tessellationFarDistance = std::max(dispConsts.tessellationNearDistance + 1.0f, g_graph.Settings().preview.tessellationFarDistance);
 
-            commandList->SetGraphicsRootSignature(g_meshPreviewDisplacementRootSignature.Get());
-            commandList->SetGraphicsRootConstantBufferView(0, g_meshPreviewDisplacementCbv->GetGPUVirtualAddress());
+            commandList->SetGraphicsRootSignature(g_meshPreviewPipelines.displacementRootSignature.Get());
+            commandList->SetGraphicsRootConstantBufferView(0, g_meshPreviewPipelines.displacementCbv->GetGPUVirtualAddress());
             if (g_gpuClouds.meshCbUploadBuffer)
             {
                 commandList->SetGraphicsRootConstantBufferView(1, g_gpuClouds.meshCbUploadBuffer->GetGPUVirtualAddress());
@@ -7466,8 +7230,8 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             commandList->IASetIndexBuffer(&ibv);
             commandList->IASetVertexBuffers(0, 0, nullptr);
             commandList->SetPipelineState(useTessellation
-                ? g_meshPreviewDisplacementTessWirePso.Get()
-                : g_meshPreviewDisplacementWirePso.Get());
+                ? g_meshPreviewPipelines.displacementTessWirePso.Get()
+                : g_meshPreviewPipelines.displacementWirePso.Get());
             commandList->IASetPrimitiveTopology(useTessellation
                 ? D3D_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST
                 : D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -7487,14 +7251,14 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
                     g_gpuMeshPreview.displacementSectionIndexCount * static_cast<UINT>(sizeof(UINT)),
                     DXGI_FORMAT_R32_UINT};
                 commandList->IASetIndexBuffer(&sectionIbv);
-                commandList->SetPipelineState(g_meshPreviewDisplacementSectionWirePso.Get());
+                commandList->SetPipelineState(g_meshPreviewPipelines.displacementSectionWirePso.Get());
                 commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
                 commandList->DrawIndexedInstanced(g_gpuMeshPreview.displacementSectionIndexCount, 1, 0, 0, 0);
                 recordIndexedDraw(g_gpuMeshPreview.displacementSectionIndexCount, true);
             }
             renderStats.wireframePass = true;
 
-            commandList->SetGraphicsRootSignature(g_meshPreviewRootSignature.Get());
+            commandList->SetGraphicsRootSignature(g_meshPreviewPipelines.rootSignature.Get());
             commandList->SetGraphicsRoot32BitConstants(0, sizeof(constants) / 4, &constants, 0);
             if (g_gpuClouds.meshCbUploadBuffer)
             {
@@ -7519,7 +7283,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             boundaryVbv.SizeInBytes = g_gpuMeshPreview.terrainBoundaryLineVertexCount * static_cast<UINT>(sizeof(rock::MeshVertex));
             boundaryVbv.StrideInBytes = static_cast<UINT>(sizeof(rock::MeshVertex));
             commandList->IASetVertexBuffers(0, 1, &boundaryVbv);
-            commandList->SetPipelineState(g_meshPreviewGridPso.Get());
+            commandList->SetPipelineState(g_meshPreviewPipelines.gridPso.Get());
             commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
             commandList->DrawInstanced(g_gpuMeshPreview.terrainBoundaryLineVertexCount, 1, 0, 0);
             recordDraw(g_gpuMeshPreview.terrainBoundaryLineVertexCount, false);
@@ -7541,7 +7305,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             gridVbv.SizeInBytes = g_gpuMeshPreview.gridVertexCount * static_cast<UINT>(sizeof(rock::MeshVertex));
             gridVbv.StrideInBytes = static_cast<UINT>(sizeof(rock::MeshVertex));
             commandList->IASetVertexBuffers(0, 1, &gridVbv);
-            commandList->SetPipelineState(g_meshPreviewGridPso.Get());
+            commandList->SetPipelineState(g_meshPreviewPipelines.gridPso.Get());
             commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
             commandList->DrawInstanced(g_gpuMeshPreview.gridVertexCount, 1, 0, 0);
             recordDraw(g_gpuMeshPreview.gridVertexCount, false);
@@ -7562,7 +7326,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             const UINT edgeIndexCount = cpuEdgeIndexCount();
             D3D12_INDEX_BUFFER_VIEW ibv{g_gpuMeshPreview.edgeIndexBuffer->GetGPUVirtualAddress(), edgeIndexCount * sizeof(UINT), DXGI_FORMAT_R32_UINT};
             commandList->IASetIndexBuffer(&ibv);
-            commandList->SetPipelineState(g_meshPreviewWirePso.Get());
+            commandList->SetPipelineState(g_meshPreviewPipelines.wirePso.Get());
             commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
             commandList->DrawIndexedInstanced(edgeIndexCount, 1, 0, 0, 0);
             recordIndexedDraw(edgeIndexCount, false);

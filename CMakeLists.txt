@@ -45,6 +45,7 @@ add_executable(terrain_editor WIN32
     src/ProjectSettingsSerialization.cpp
     src/platform/FileDialogs.cpp
     src/platform/ShellUtils.cpp
+    src/rendering/MeshPreviewRenderer.cpp
     src/screenshot_capture.cpp
     src/texture_exporter.cpp
     src/ui/AppFonts.cpp
