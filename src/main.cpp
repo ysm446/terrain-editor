@@ -1,6 +1,4 @@
 #include <windows.h>
-#include <commdlg.h>
-#include <shellapi.h>
 
 #include <algorithm>
 #include <array>
@@ -38,13 +36,19 @@
 #include <nlohmann/json.hpp>
 
 #include "node_graph.h"
+#include "PathUtils.h"
+#include "platform/FileDialogs.h"
+#include "platform/ShellUtils.h"
 #include "resource.h"
 #include "screenshot_capture.h"
 #include "texture_exporter.h"
+#include "ui/AppFonts.h"
 #include "ui/AssetExportPanel.h"
 #include "ui/CameraPanel.h"
 #include "ui/DebugPanel.h"
 #include "ui/DisplayPanel.h"
+#include "ui/NodeIcon.h"
+#include "ui/NodePins.h"
 #include "ui/NodeProperties.h"
 #include "ui/PropertyWidgets.h"
 #include "ui/SkyPanel.h"
@@ -60,6 +64,8 @@ extern LRESULT ImGui_ImplWin32_WndProcHandler(HWND hwnd, UINT msg, WPARAM wParam
 namespace
 {
 using namespace terrain::ui;
+using terrain::PathFromUtf8;
+using terrain::PathToUtf8;
 
 constexpr int kFrameCount = 2;
 constexpr int kSrvDescriptorCount = 128;
@@ -1684,115 +1690,27 @@ ImVec2 InitialNodePosition(rock::NodeKind kind);
 
 std::optional<std::filesystem::path> ShowProjectFileDialog(bool save)
 {
-    wchar_t fileName[MAX_PATH]{};
-    if (!g_projectPath.empty())
-    {
-        const std::wstring current = g_projectPath.wstring();
-        wcsncpy_s(fileName, current.c_str(), _TRUNCATE);
-    }
-
-    OPENFILENAMEW ofn{};
-    ofn.lStructSize = sizeof(ofn);
-    ofn.hwndOwner = g_hwnd;
-    ofn.lpstrFilter = L"Terrain Editor Project (*.terrainproj)\0*.terrainproj\0Legacy Rock Generator Project (*.rockproj)\0*.rockproj\0JSON (*.json)\0*.json\0All Files (*.*)\0*.*\0";
-    ofn.lpstrFile = fileName;
-    ofn.nMaxFile = MAX_PATH;
-    ofn.lpstrDefExt = L"terrainproj";
-    ofn.Flags = OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
-    if (save)
-    {
-        ofn.Flags |= OFN_OVERWRITEPROMPT;
-        if (!GetSaveFileNameW(&ofn))
-        {
-            return std::nullopt;
-        }
-    }
-    else
-    {
-        ofn.Flags |= OFN_FILEMUSTEXIST;
-        if (!GetOpenFileNameW(&ofn))
-        {
-            return std::nullopt;
-        }
-    }
-
-    return std::filesystem::path(fileName);
-}
-
-std::string PathToUtf8(const std::filesystem::path& path)
-{
-    const std::u8string value = path.u8string();
-    return std::string(value.begin(), value.end());
-}
-
-std::filesystem::path PathFromUtf8(const std::string& value)
-{
-    const std::u8string utf8(value.begin(), value.end());
-    return std::filesystem::path(utf8);
+    return terrain::platform::ShowProjectFileDialog(g_hwnd, g_projectPath, save);
 }
 
 std::optional<std::filesystem::path> ShowHeightmapFileDialog(const std::string& currentPath)
 {
-    wchar_t fileName[MAX_PATH]{};
-    if (!currentPath.empty())
-    {
-        std::filesystem::path current = PathFromUtf8(currentPath);
-        if (current.is_relative() && !g_projectPath.empty())
-        {
-            const std::filesystem::path parent = g_projectPath.parent_path();
-            current = (parent.empty() ? std::filesystem::current_path() : parent) / current;
-        }
-        const std::wstring currentWide = current.wstring();
-        wcsncpy_s(fileName, currentWide.c_str(), _TRUNCATE);
-    }
-
-    OPENFILENAMEW ofn{};
-    ofn.lStructSize = sizeof(ofn);
-    ofn.hwndOwner = g_hwnd;
-    ofn.lpstrFilter = L"Heightmap Images (*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.bmp)\0*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.bmp\0All Files (*.*)\0*.*\0";
-    ofn.lpstrFile = fileName;
-    ofn.nMaxFile = MAX_PATH;
-    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
-    if (!GetOpenFileNameW(&ofn))
-    {
-        return std::nullopt;
-    }
-
-    return std::filesystem::path(fileName);
+    return terrain::platform::ShowHeightmapFileDialog(g_hwnd, g_projectPath, currentPath);
 }
 
 std::filesystem::path ScreenshotDirectory()
 {
-    if (!g_projectPath.empty())
-    {
-        const std::filesystem::path parent = g_projectPath.parent_path();
-        if (!parent.empty())
-        {
-            return parent / "screenshots";
-        }
-    }
-    return std::filesystem::current_path() / "screenshots";
+    return terrain::ScreenshotDirectoryForProject(g_projectPath);
 }
 
 void RevealFileInExplorer(const std::filesystem::path& path)
 {
-    if (path.empty())
-    {
-        return;
-    }
-
-    const std::wstring args = L"/select,\"" + std::filesystem::absolute(path).wstring() + L"\"";
-    ShellExecuteW(nullptr, L"open", L"explorer.exe", args.c_str(), nullptr, SW_SHOWNORMAL);
+    terrain::platform::RevealFileInExplorer(path);
 }
 
 void OpenFolderInExplorer(const std::filesystem::path& folder)
 {
-    if (folder.empty())
-    {
-        return;
-    }
-
-    ShellExecuteW(nullptr, L"open", std::filesystem::absolute(folder).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    terrain::platform::OpenFolderInExplorer(folder);
 }
 
 std::filesystem::path ProjectFolder()
@@ -1807,12 +1725,7 @@ std::filesystem::path ProjectFolder()
 
 std::filesystem::path ProjectFolderForPath(const std::filesystem::path& projectPath)
 {
-    if (projectPath.empty())
-    {
-        return {};
-    }
-    const std::filesystem::path parent = projectPath.parent_path();
-    return parent.empty() ? std::filesystem::current_path() : parent;
+    return terrain::ProjectFolderForPath(projectPath);
 }
 
 std::filesystem::path ActiveProjectFolderForAssetPaths()
@@ -1826,53 +1739,17 @@ std::filesystem::path ActiveProjectFolderForAssetPaths()
 
 std::string ResolveProjectAssetPath(std::string_view value)
 {
-    if (value.empty())
-    {
-        return {};
-    }
-    std::filesystem::path path = PathFromUtf8(std::string(value));
-    if (path.is_absolute())
-    {
-        return PathToUtf8(path.lexically_normal());
-    }
-    const std::filesystem::path base = ProjectFolder();
-    if (base.empty())
-    {
-        return PathToUtf8(path.lexically_normal());
-    }
-    return PathToUtf8((base / path).lexically_normal());
+    return terrain::ResolveProjectAssetPath(value, ProjectFolder());
 }
 
 std::string MakeProjectAssetPathForJson(const std::string& value)
 {
-    if (value.empty())
-    {
-        return {};
-    }
-    std::filesystem::path path = PathFromUtf8(value);
-    if (path.is_relative())
-    {
-        return PathToUtf8(path.lexically_normal());
-    }
-
-    const std::filesystem::path base = ActiveProjectFolderForAssetPaths();
-    if (base.empty())
-    {
-        return PathToUtf8(path.lexically_normal());
-    }
-
-    std::error_code error;
-    const std::filesystem::path relative = std::filesystem::relative(path, base, error);
-    if (error || relative.empty())
-    {
-        return PathToUtf8(path.lexically_normal());
-    }
-    return PathToUtf8(relative.lexically_normal());
+    return terrain::MakeProjectAssetPathForJson(value, ActiveProjectFolderForAssetPaths());
 }
 
 std::filesystem::path NormalizedProjectPath(const std::filesystem::path& path)
 {
-    return std::filesystem::absolute(path).lexically_normal();
+    return terrain::NormalizedProjectPath(path);
 }
 
 bool ProjectPathExists(const std::filesystem::path& path)
@@ -10489,8 +10366,6 @@ ImVec2 RotatePoint(float x, float y, float z, float, float)
 
 ImU32 ColorToU32(const ImVec4& color);
 ImU32 ThemeColor(const std::string& name, const ImVec4& fallback);
-ImVec4 PinColor(const rock::Pin& pin);
-ImVec4 PinLabelColor(const rock::Pin& pin, bool hovered, bool selected);
 
 bool EnsureMeshPreviewRenderTarget(int width, int height, std::string* error)
 {
@@ -13375,31 +13250,6 @@ void EvaluateWhenParameterEditEnds()
     }
 }
 
-void LoadJapaneseFont(ImGuiIO& io)
-{
-    const char* fontPaths[] = {
-        "C:\\Windows\\Fonts\\meiryo.ttc",
-        "C:\\Windows\\Fonts\\YuGothM.ttc",
-        "C:\\Windows\\Fonts\\msgothic.ttc",
-    };
-
-    for (const char* fontPath : fontPaths)
-    {
-        if (!std::filesystem::exists(fontPath))
-        {
-            continue;
-        }
-
-        ImFont* font = io.Fonts->AddFontFromFileTTF(fontPath, 18.0f, nullptr, io.Fonts->GetGlyphRangesJapanese());
-        if (font != nullptr)
-        {
-            return;
-        }
-    }
-
-    io.Fonts->AddFontDefault();
-}
-
 ImU32 ColorToU32(const ImVec4& color)
 {
     return ImGui::ColorConvertFloat4ToU32(color);
@@ -13408,35 +13258,6 @@ ImU32 ColorToU32(const ImVec4& color)
 ImU32 ThemeColor(const std::string& name, const ImVec4& fallback)
 {
     return ColorToU32(g_themeManager.AppColor(name, fallback));
-}
-
-ImVec4 PinLabelColor(const rock::Pin& pin, bool hovered, bool selected)
-{
-    if (selected)
-    {
-        return PinColor(pin);
-    }
-    if (hovered)
-    {
-        return ImVec4(0.94f, 0.94f, 0.92f, 1.0f);
-    }
-    return ImVec4(0.62f, 0.64f, 0.62f, 1.0f);
-}
-
-ImVec4 PinTypeColor(rock::ValueType valueType)
-{
-    switch (valueType)
-    {
-    case rock::ValueType::HeightField:
-        return ImVec4(0.70f, 0.93f, 0.78f, 1.0f);
-    case rock::ValueType::Mask:
-        return ImVec4(0.82f, 0.64f, 0.36f, 1.0f);
-    case rock::ValueType::ColorTexture:
-        return ImVec4(0.54f, 0.60f, 1.0f, 1.0f);
-    case rock::ValueType::Mesh:
-    default:
-        return ImVec4(0.52f, 0.58f, 0.56f, 1.0f);
-    }
 }
 
 void ResetMapViewport()
@@ -13493,11 +13314,6 @@ void UpdateMapViewportInteraction(const ImVec2& min, const ImVec2& max)
     }
 }
 
-ImVec4 PinColor(const rock::Pin& pin)
-{
-    return PinTypeColor(pin.valueType);
-}
-
 ImVec4 LinkColor(const rock::Link& link)
 {
     if (const rock::Pin* startPin = g_graph.FindPin(link.startPin))
@@ -13522,38 +13338,6 @@ ImVec4 LinkPreviewColor(rock::GraphId startPinId, rock::GraphId endPinId)
         return PinTypeColor(endPin->valueType);
     }
     return ImVec4(0.52f, 0.70f, 0.59f, 1.0f);
-}
-
-void DrawNodeIcon(const ImVec2& origin, const ImVec4& color)
-{
-    ImDrawList* drawList = ImGui::GetWindowDrawList();
-    const ImU32 iconColor = ColorToU32(color);
-    drawList->AddTriangleFilled(
-        ImVec2(origin.x + 2.0f, origin.y + 17.0f),
-        ImVec2(origin.x + 7.0f, origin.y + 4.0f),
-        ImVec2(origin.x + 11.0f, origin.y + 17.0f),
-        iconColor);
-    drawList->AddRectFilled(ImVec2(origin.x + 9.0f, origin.y + 9.0f), ImVec2(origin.x + 15.0f, origin.y + 18.0f), iconColor, 2.0f);
-    drawList->AddTriangleFilled(
-        ImVec2(origin.x + 14.0f, origin.y + 18.0f),
-        ImVec2(origin.x + 20.0f, origin.y + 7.0f),
-        ImVec2(origin.x + 24.0f, origin.y + 18.0f),
-        iconColor);
-}
-
-void DrawRoundPin(const rock::Pin& pin)
-{
-    const ImVec2 size(14.0f, 20.0f);
-    ImGui::Dummy(size);
-    const ImVec2 min = ImGui::GetItemRectMin();
-    const ImVec2 max = ImGui::GetItemRectMax();
-    const ImVec2 center((min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f);
-    const ImVec2 pivotMin(center.x - 6.0f, center.y - 6.0f);
-    const ImVec2 pivotMax(center.x + 6.0f, center.y + 6.0f);
-    ed::PinRect(min, max);
-    ed::PinPivotRect(pivotMin, pivotMax);
-    const ImVec4 color = PinColor(pin);
-    ImGui::GetWindowDrawList()->AddCircle(center, 4.3f, ColorToU32(color), 16, 1.6f);
 }
 
 enum class NodeEvaluationVisualState

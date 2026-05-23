@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(TerrainEditor VERSION 0.19.35 LANGUAGES CXX RC)
+project(TerrainEditor VERSION 0.19.36 LANGUAGES CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -31,12 +31,18 @@ add_executable(terrain_editor WIN32
     src/main.cpp
     src/node_graph.cpp
     src/obj_exporter.cpp
+    src/PathUtils.cpp
+    src/platform/FileDialogs.cpp
+    src/platform/ShellUtils.cpp
     src/screenshot_capture.cpp
     src/texture_exporter.cpp
+    src/ui/AppFonts.cpp
     src/ui/AssetExportPanel.cpp
     src/ui/CameraPanel.cpp
     src/ui/DebugPanel.cpp
     src/ui/DisplayPanel.cpp
+    src/ui/NodeIcon.cpp
+    src/ui/NodePins.cpp
     src/ui/NodeProperties.cpp
     src/ui/PropertyWidgets.cpp
     src/ui/SkyPanel.cpp
