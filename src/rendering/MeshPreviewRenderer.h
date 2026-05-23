@@ -3,6 +3,8 @@
 #include <array>
 #include <climits>
 #include <cstdint>
+#include <filesystem>
+#include <string>
 
 #include <d3d12.h>
 #include <imgui.h>
@@ -234,6 +236,18 @@ struct MeshPreviewPipelineResources
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> dsvHeap;
 };
 
+struct MeshPreviewPipelineContext
+{
+    ID3D12Device* device = nullptr;
+    std::filesystem::path shaderPath;
+    DXGI_FORMAT renderTargetFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+    DXGI_FORMAT depthStencilFormat = DXGI_FORMAT_D32_FLOAT;
+    UINT rootConstantDwordCount = 0;
+};
+
+bool EnsureMeshPreviewPipeline(MeshPreviewPipelineResources& resources,
+                               const MeshPreviewPipelineContext& context,
+                               std::string* error);
 void ResetMeshPreviewPipelineResources(MeshPreviewPipelineResources& resources);
 
 } // namespace terrain::rendering
