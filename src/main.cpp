@@ -13001,7 +13001,7 @@ ImU32 MapPreviewColor(float value, bool mask, rock::MaskShadingMode mode, int ce
 
 void DrawHeightfieldMapPreview(const ImVec2& min, const ImVec2& max)
 {
-    constexpr int kMaxMapPreviewSamples = 256;
+    constexpr int kMaxMapPreviewSamples = 1024;
     UpdateMapViewportInteraction(min, max);
 
     ImDrawList* drawList = ImGui::GetWindowDrawList();
