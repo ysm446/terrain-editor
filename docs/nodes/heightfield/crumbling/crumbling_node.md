@@ -22,12 +22,14 @@
 | `Debris Max Size (m)` | 8.0 | 岩片の最大直径 |
 | `Rock Style` | Shard | `Classic` / `Polygonal` / `Shard` から岩片形状を選ぶ |
 | `Gravity` | 75% | 低い方向へ流れる強さ。高いほど直線的に下る |
+| `Spread` | 35% | 進行方向から横へ逸れる強さ。高いほど筋状の重なりを避けて散りやすい |
 | `Seed` | 0 | 発生位置とばらつきのシード |
 
 ## 使い方
 
 - `Mask Slope` や `Mask Curvature` で崩れやすい急斜面を作り、`Emission Mask` へ接続します。
 - `Physics Count` を上げると岩屑が斜面下部や谷底へ届きやすくなります。
+- `Gravity` を下げる、または `Spread` を上げると、一直線にまとまった岩屑を横方向へ崩しやすくなります。
 - `Unique Mask` を `Colorize` の `Gradient Mask` へ接続すると、岩片ごとに色を変えられます。
 
 ## メモ

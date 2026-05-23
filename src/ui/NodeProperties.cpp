@@ -935,6 +935,7 @@ bool DrawCrumblingProperties(rock::Node& editableNode)
         static_cast<int>(rock::RockStyle::Classic),
         static_cast<int>(rock::RockStyle::Shard)));
     cr.gravity = std::clamp(cr.gravity, 0.0f, 1.0f);
+    cr.spread = std::clamp(cr.spread, 0.0f, 1.0f);
     cr.seed = std::clamp(cr.seed, 0, 999999);
 
     if (DrawPropertyIntRow("Physics Count", "CrumblingPhysicsCount", &cr.physicsCount, 0, 512, rock::CrumblingSettings{}.physicsCount, "Crumbling physics count changed", true, "崩落粒子を下方向へ進めるステップ数です。大きいほど岩屑が斜面下部へ長く流れて、広くばらけます。"))
@@ -966,6 +967,10 @@ bool DrawCrumblingProperties(rock::Node& editableNode)
         }
     }
     if (DrawPropertyPercentRow("Gravity (%)", "CrumblingGravity", &cr.gravity, 0.0f, 1.0f, rock::CrumblingSettings{}.gravity, "Crumbling gravity changed", "低い方へ流れる強さです。高いほど直線的に下り、低いほど地形の細部やランダムな散り方が残ります。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyPercentRow("Spread (%)", "CrumblingSpread", &cr.spread, 0.0f, 1.0f, rock::CrumblingSettings{}.spread, "Crumbling spread changed", "進行方向から横へ逸れる強さです。上げるほど岩屑が筋状に重なりにくく、停止後の岩片も軽く押し分けられます。"))
     {
         EvaluateGraph();
     }

@@ -157,6 +157,7 @@ uint64_t HashCrumblingSettings(const CrumblingSettings& settings, int resolution
     HashCombine(hash, HashFloat(settings.debrisSizeMaxM));
     HashCombine(hash, static_cast<uint64_t>(settings.style));
     HashCombine(hash, HashFloat(settings.gravity));
+    HashCombine(hash, HashFloat(settings.spread));
     HashCombine(hash, static_cast<uint64_t>(settings.seed));
     HashCombine(hash, static_cast<uint64_t>(resolution));
     return hash;
@@ -1096,6 +1097,7 @@ void ApplyCrumbling(HeightfieldGrid& grid, const CrumblingSettings& settings, co
     const float minSizeCells = std::max(0.5f, minSizeM / cellSize);
     const float maxSizeCells = std::max(minSizeCells, maxSizeM / cellSize);
     const float gravity = std::clamp(settings.gravity, 0.0f, 1.0f);
+    const float spread = std::clamp(settings.spread, 0.0f, 1.0f);
     const int style = std::clamp(static_cast<int>(settings.style),
         static_cast<int>(RockStyle::Classic),
         static_cast<int>(RockStyle::Shard));
@@ -1175,7 +1177,11 @@ void ApplyCrumbling(HeightfieldGrid& grid, const CrumblingSettings& settings, co
             downX /= downLen;
             downZ /= downLen;
 
-            const float wander = (hash01(state) - 0.5f) * (1.0f - gravity) * 0.75f;
+            const float gravityWander = (hash01(state) - 0.5f) * (1.0f - gravity) * 0.75f;
+            const float spreadWander = spread > 0.0f
+                ? (hash01(state) - 0.5f) * spread * (0.45f + 0.65f * (1.0f - gravity))
+                : 0.0f;
+            const float wander = gravityWander + spreadWander;
             const float cosW = std::cos(wander);
             const float sinW = std::sin(wander);
             const float wx = downX * cosW - downZ * sinW;
@@ -1190,8 +1196,9 @@ void ApplyCrumbling(HeightfieldGrid& grid, const CrumblingSettings& settings, co
             dirX /= dirLen;
             dirZ /= dirLen;
 
-            const float nextX = x + dirX * stepCells;
-            const float nextZ = z + dirZ * stepCells;
+            const float sideStep = spread > 0.0f ? (hash01(state) - 0.5f) * spread * stepCells * 0.45f : 0.0f;
+            const float nextX = x + dirX * stepCells - dirZ * sideStep;
+            const float nextZ = z + dirZ * stepCells + dirX * sideStep;
             if (nextX <= 0.0f || nextX >= static_cast<float>(n - 1) ||
                 nextZ <= 0.0f || nextZ >= static_cast<float>(n - 1))
             {
@@ -1217,6 +1224,86 @@ void ApplyCrumbling(HeightfieldGrid& grid, const CrumblingSettings& settings, co
         p.aspect = std::pow(2.0f, aspectBoost * hash01(state));
         p.unique = hash01(state);
         particles.push_back(p);
+    }
+
+    if (spread > 0.0f && particles.size() > 1)
+    {
+        const int separationPasses = 1 + static_cast<int>(std::round(spread * 3.0f));
+        const float binSize = std::max(1.0f, maxSizeCells);
+        const int binsPerAxis = std::max(1, static_cast<int>(std::ceil(static_cast<float>(n) / binSize)));
+        const auto binIndex = [binsPerAxis](int bx, int bz) {
+            return bz * binsPerAxis + bx;
+        };
+        std::vector<std::vector<int>> bins(static_cast<size_t>(binsPerAxis) * static_cast<size_t>(binsPerAxis));
+        for (int pass = 0; pass < separationPasses; ++pass)
+        {
+            for (std::vector<int>& bin : bins)
+            {
+                bin.clear();
+            }
+            for (int i = 0; i < static_cast<int>(particles.size()); ++i)
+            {
+                const int bx = std::clamp(static_cast<int>(particles[static_cast<size_t>(i)].x / binSize), 0, binsPerAxis - 1);
+                const int bz = std::clamp(static_cast<int>(particles[static_cast<size_t>(i)].z / binSize), 0, binsPerAxis - 1);
+                bins[static_cast<size_t>(binIndex(bx, bz))].push_back(i);
+            }
+            for (int i = 0; i < static_cast<int>(particles.size()); ++i)
+            {
+                CrumblingParticle& a = particles[static_cast<size_t>(i)];
+                const int bx = std::clamp(static_cast<int>(a.x / binSize), 0, binsPerAxis - 1);
+                const int bz = std::clamp(static_cast<int>(a.z / binSize), 0, binsPerAxis - 1);
+                for (int dz = -1; dz <= 1; ++dz)
+                {
+                    const int nbz = bz + dz;
+                    if (nbz < 0 || nbz >= binsPerAxis)
+                    {
+                        continue;
+                    }
+                    for (int dx = -1; dx <= 1; ++dx)
+                    {
+                        const int nbx = bx + dx;
+                        if (nbx < 0 || nbx >= binsPerAxis)
+                        {
+                            continue;
+                        }
+                        const std::vector<int>& bin = bins[static_cast<size_t>(binIndex(nbx, nbz))];
+                        for (const int j : bin)
+                        {
+                            if (j <= i)
+                            {
+                                continue;
+                            }
+                            CrumblingParticle& b = particles[static_cast<size_t>(j)];
+                            float vx = b.x - a.x;
+                            float vz = b.z - a.z;
+                            float distSq = vx * vx + vz * vz;
+                            if (distSq < 1e-6f)
+                            {
+                                const float angle = (a.unique - b.unique) * 2.0f * kPi;
+                                vx = std::cos(angle);
+                                vz = std::sin(angle);
+                                distSq = 1.0f;
+                            }
+                            const float aRadius = std::max(0.5f, a.sizeCells * 0.5f);
+                            const float bRadius = std::max(0.5f, b.sizeCells * 0.5f);
+                            const float minDist = (aRadius + bRadius) * (0.35f + spread * 0.45f);
+                            if (distSq >= minDist * minDist)
+                            {
+                                continue;
+                            }
+                            const float dist = std::sqrt(distSq);
+                            const float push = (minDist - dist) * (0.18f + spread * 0.32f);
+                            const float nx = vx / dist;
+                            const float nz = vz / dist;
+                            a.x = std::clamp(a.x - nx * push, 0.0f, static_cast<float>(n - 1));
+                            a.z = std::clamp(a.z - nz * push, 0.0f, static_cast<float>(n - 1));
+                            b.x = std::clamp(b.x + nx * push, 0.0f, static_cast<float>(n - 1));
+                            b.z = std::clamp(b.z + nz * push, 0.0f, static_cast<float>(n - 1));
+                        }
+                    }
+                }
+            }
+        }
     }
 
     std::vector<float> debrisHeight(cellCount, 0.0f);

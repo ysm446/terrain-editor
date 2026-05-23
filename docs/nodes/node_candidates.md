@@ -63,7 +63,7 @@
 | Terrace | 段丘状に高さを量子化・整形する | Heightfield | Heightfield | Step Count、Strength、Smoothness、Mask | 高さの段を作る。 |
 | Height Curve | 高さカーブで地形の輪郭を再形成する | Heightfield | Heightfield | Curve、Blend、Mask | 旧 `Recurve` 候補を分かりやすく改名。 |
 | Smooth Talus | 不安定な斜面をならす | Heightfield | Heightfield/Mask | Talus Angle、Iterations、Strength | `Multi-Scale Erosion` より単純で制御しやすい斜面緩和。 |
-| Crumbling | 崖下の崩落・岩屑・堆積物を追加する | Heightfield + Emission Mask | Heightfield/Mask/Unique Mask | Physics Count、Debris Amount、Debris Size、Rock Style、Gravity、Seed | 初期実装済み。`Rock` / `Sediment` との差分を見ながら発生密度、停止条件、堆積量を調整する。 |
+| Crumbling | 崖下の崩落・岩屑・堆積物を追加する | Heightfield + Emission Mask | Heightfield/Mask/Unique Mask | Physics Count、Debris Amount、Debris Size、Rock Style、Gravity、Spread、Seed | 初期実装済み。`Rock` / `Sediment` との差分を見ながら発生密度、停止条件、堆積量を調整する。 |
 | Flatten By Proximity | カーブや点の近くを平坦化する | Heightfield + Curve/Points | Heightfield | Radius、Falloff、Target Height | 道路、建物、川岸などの整地に使う。 |
 | Flatten Borders | 外周を平坦化する | Heightfield | Heightfield | Border Width、Falloff、Target Height | タイル端や展示用地形の外周処理。 |
 

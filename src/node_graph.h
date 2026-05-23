@@ -333,6 +333,7 @@ struct CrumblingSettings
     float debrisSizeMaxM = 8.0f;
     RockStyle style = RockStyle::Shard;
     float gravity = 0.75f;
+    float spread = 0.35f;
     int seed = 0;
 };
 

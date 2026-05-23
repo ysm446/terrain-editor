@@ -31,6 +31,7 @@
 - 水面設定に `Refraction Strength` と `Refraction Blur` を追加し、`Refractive Index` はフレネル反射用として整理した。
 - 断面側壁の `Refraction Blur` が分かりやすく効くように強め、水位設定の下限を 0 m にした。
 - プロジェクト読み込み直後のノード位置復元をノード描画前に行い、ノードネットワークが一瞬重なって見える問題を抑えた。
+- `Crumbling` ノードに `Spread (%)` を追加し、進行方向から横へ逸れる量を `Gravity` と分けて調整できるようにした。停止後の岩片には `Spread` に応じた簡易的な近接反発をかけ、一直線に重なって見える結果を抑える。
 
 ## 2026-05-22
 
@@ -149,7 +150,7 @@
 ## 残っていること
 
 - `Crumbling` の見た目、発生密度、停止条件、堆積量、CPU 評価速度、ランダムな散らばり方を実地確認して調整する。
-- `Crumbling` の散らばり改善では、まず `Spread (%)` を `Gravity` と分けて追加する案を優先する。必要に応じて、サイズ依存移動、`Bounce` / `Deflection`、`Path Noise`、`Emission Jitter` を追加候補にする。
+- `Crumbling` の散らばり改善では、追加済みの `Spread (%)` と簡易近接反発を実地確認する。必要に応じて、サイズ依存移動、`Bounce` / `Deflection`、`Path Noise`、`Emission Jitter` を追加候補にする。
 - `Scatter` を植生分布用プロキシとして使い、`Mask` 入力ありのケース、`Unique Mask` の下流利用、GPU / CPU 切り替え時の体感速度を確認する。
 - `Mask Invert` を単独ノードとして残すか、`Mask Levels` の `Invert` に統合した扱いにするか決める。
 - `Colorize` の色ピック対象、サンプル方法、グラデーションキー化をさらに調整する。

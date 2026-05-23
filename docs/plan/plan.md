@@ -13,10 +13,9 @@
 ## 次の優先候補
 
 1. `Crumbling` の見た目調整
-   - 初期実装は完了。
-   - 次は、低い方向へ流れるまとまりを残しつつ、岩屑がもう少しランダムに散るようにする。
-   - 優先案は `Spread (%)` の追加。`Gravity` は低い方へ流れる強さ、`Spread` は進行方向から横へ逸れる強さとして扱う。
-   - 追加候補として、サイズ依存移動、`Bounce` / `Deflection`、`Path Noise`、`Emission Jitter` を検討する。
+   - 初期実装と `Spread (%)` は完了。`Gravity` は低い方へ流れる強さ、`Spread` は進行方向から横へ逸れる強さとして扱う。
+   - `Spread` に応じた簡易的な近接反発で、停止後の岩片が一直線に重なって見える結果を抑える。
+   - 次は実地確認を行い、必要に応じてサイズ依存移動、`Bounce` / `Deflection`、`Path Noise`、`Emission Jitter` を検討する。
 
 2. `Scatter` の検証と植生分布ワークフロー
    - `Scatter` は追加済みで、`Hemisphere` / `Cone`、`Mask`、`Unique Mask`、GPU backend に対応済み。

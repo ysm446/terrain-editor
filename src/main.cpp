@@ -2771,6 +2771,7 @@ nlohmann::json MakeCrumblingSettingsJson(const rock::Node& node)
             {"debrisSizeMaxM", node.crumbling.debrisSizeMaxM},
             {"style", static_cast<int>(node.crumbling.style)},
             {"gravity", node.crumbling.gravity},
+            {"spread", node.crumbling.spread},
             {"seed", node.crumbling.seed},
         }},
     };
@@ -3155,6 +3156,7 @@ void ReadCrumblingSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
         node.crumbling.style = static_cast<rock::RockStyle>(styleInt);
     }
     node.crumbling.gravity = std::clamp(nodeCrumblingJson.value("gravity", node.crumbling.gravity), 0.0f, 1.0f);
+    node.crumbling.spread = std::clamp(nodeCrumblingJson.value("spread", node.crumbling.spread), 0.0f, 1.0f);
     node.crumbling.seed = std::clamp(nodeCrumblingJson.value("seed", node.crumbling.seed), 0, 999999);
 }
 
