@@ -35,6 +35,7 @@ add_executable(terrain_editor WIN32
     src/gpu/RockCompute.cpp
     src/gpu/ScatterCompute.cpp
     src/gpu/SedimentCompute.cpp
+    src/gpu/SnowCompute.cpp
     src/main.cpp
     src/NodeSerialization.cpp
     src/node_graph.cpp
