@@ -35,6 +35,7 @@
 #include <imgui-node-editor/imgui_node_editor.h>
 #include <nlohmann/json.hpp>
 
+#include "D3D12Utils.h"
 #include "node_graph.h"
 #include "NodeSerialization.h"
 #include "PathUtils.h"
@@ -73,6 +74,14 @@ using terrain::PathToUtf8;
 using terrain::CameraBasis;
 using terrain::ProjectedPoint;
 using terrain::Vec3;
+using terrain::d3d12::BufferResourceDesc;
+using terrain::d3d12::CreateRootSignatureFromDesc;
+using terrain::d3d12::DefaultShaderCompileFlags;
+using terrain::d3d12::DescriptorHeapDesc;
+using terrain::d3d12::HeapProperties;
+using terrain::d3d12::ShaderVisibleCbvSrvUavDescriptorHeapDesc;
+using terrain::d3d12::Texture2DResourceDesc;
+using terrain::d3d12::ThrowIfFailed;
 
 constexpr int kFrameCount = 2;
 constexpr int kSrvDescriptorCount = 128;
@@ -1122,59 +1131,6 @@ void MarkGraphChanged(std::string_view reason)
     MarkProjectDirty();
 }
 
-void ThrowIfFailed(HRESULT hr, const char* message)
-{
-    if (FAILED(hr))
-    {
-        throw std::runtime_error(message);
-    }
-}
-
-D3D12_HEAP_PROPERTIES HeapProperties(D3D12_HEAP_TYPE type)
-{
-    D3D12_HEAP_PROPERTIES properties{};
-    properties.Type = type;
-    properties.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
-    properties.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
-    properties.CreationNodeMask = 1;
-    properties.VisibleNodeMask = 1;
-    return properties;
-}
-
-D3D12_RESOURCE_DESC BufferResourceDesc(UINT64 byteSize, D3D12_RESOURCE_FLAGS flags = D3D12_RESOURCE_FLAG_NONE)
-{
-    D3D12_RESOURCE_DESC desc{};
-    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    desc.Alignment = 0;
-    desc.Width = byteSize;
-    desc.Height = 1;
-    desc.DepthOrArraySize = 1;
-    desc.MipLevels = 1;
-    desc.Format = DXGI_FORMAT_UNKNOWN;
-    desc.SampleDesc.Count = 1;
-    desc.SampleDesc.Quality = 0;
-    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-    desc.Flags = flags;
-    return desc;
-}
-
-D3D12_RESOURCE_DESC Texture2DResourceDesc(UINT width, UINT height, DXGI_FORMAT format, D3D12_RESOURCE_FLAGS flags = D3D12_RESOURCE_FLAG_NONE)
-{
-    D3D12_RESOURCE_DESC desc{};
-    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    desc.Alignment = 0;
-    desc.Width = width;
-    desc.Height = height;
-    desc.DepthOrArraySize = 1;
-    desc.MipLevels = 1;
-    desc.Format = format;
-    desc.SampleDesc.Count = 1;
-    desc.SampleDesc.Quality = 0;
-    desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-    desc.Flags = flags;
-    return desc;
-}
-
 std::wstring ModuleDirectory()
 {
     wchar_t path[MAX_PATH]{};
@@ -1383,16 +1339,13 @@ void InitD3D(HWND hwnd)
     ThrowIfFailed(swapChain.As(&g_swapChain), "SwapChain cast failed");
     g_frameIndex = g_swapChain->GetCurrentBackBufferIndex();
 
-    D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc{};
-    rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-    rtvHeapDesc.NumDescriptors = kFrameCount;
+    D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc =
+        DescriptorHeapDesc(D3D12_DESCRIPTOR_HEAP_TYPE_RTV, kFrameCount);
     ThrowIfFailed(g_device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&g_rtvHeap)), "CreateDescriptorHeap RTV failed");
     g_rtvDescriptorSize = g_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
-    D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc{};
-    srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    srvHeapDesc.NumDescriptors = kSrvDescriptorCount;
-    srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc =
+        ShaderVisibleCbvSrvUavDescriptorHeapDesc(kSrvDescriptorCount);
     ThrowIfFailed(g_device->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&g_srvHeap)), "CreateDescriptorHeap SRV failed");
     g_srvDescriptorSize = g_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
@@ -2813,21 +2766,19 @@ bool EnsureMeshPreviewPipeline(std::string* error)
     rsDesc.pStaticSamplers = samplers;
     rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
-    ComPtr<ID3DBlob> sigBlob, errBlob;
-    HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
+    ComPtr<ID3DBlob> errBlob;
+    HRESULT hr = CreateRootSignatureFromDesc(g_device.Get(),
+                                             rsDesc,
+                                             g_meshPreviewRootSignature.ReleaseAndGetAddressOf(),
+                                             errBlob.ReleaseAndGetAddressOf());
     if (FAILED(hr))
     {
-        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Serialize mesh root sig failed";
+        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Create mesh preview root sig failed";
         return false;
     }
-    hr = g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_meshPreviewRootSignature));
-    if (FAILED(hr)) { if (error) *error = "Create mesh preview root sig failed"; return false; }
 
     const std::filesystem::path shaderPath = MeshPreviewShaderPath();
-    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
-#if defined(_DEBUG)
-    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-#endif
+    const UINT compileFlags = DefaultShaderCompileFlags();
     ComPtr<ID3DBlob> vsBlob, psBlob, psEdgeBlob, psWaterBlob, vsShadowBlob;
     hr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "VSMain", "vs_5_0", compileFlags, 0, &vsBlob, &errBlob);
     if (FAILED(hr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile mesh VS failed"; return false; }
@@ -3065,17 +3016,15 @@ bool EnsureMeshPreviewDisplacementPipeline(std::string* error)
     rsDesc.pStaticSamplers = samplers;
     rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
-    ComPtr<ID3DBlob> sigBlob, errBlob;
-    HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
-    if (FAILED(hr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Serialize displacement root sig failed"; return false; }
-    hr = g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_meshPreviewDisplacementRootSignature));
-    if (FAILED(hr)) { if (error) *error = "Create displacement root sig failed"; return false; }
+    ComPtr<ID3DBlob> errBlob;
+    HRESULT hr = CreateRootSignatureFromDesc(g_device.Get(),
+                                             rsDesc,
+                                             g_meshPreviewDisplacementRootSignature.ReleaseAndGetAddressOf(),
+                                             errBlob.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Create displacement root sig failed"; return false; }
 
     const std::filesystem::path shaderPath = MeshPreviewShaderPath();
-    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
-#if defined(_DEBUG)
-    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-#endif
+    const UINT compileFlags = DefaultShaderCompileFlags();
     ComPtr<ID3DBlob> vsBlob, psBlob, psEdgeBlob, vsShadowBlob, vsSectionBlob, vsSectionShadowBlob, vsPatchBlob, hsPatchBlob, dsPatchBlob, dsPatchShadowBlob;
     hr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "VSDisplacement", "vs_5_0", compileFlags, 0, &vsBlob, &errBlob);
     if (FAILED(hr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile VSDisplacement failed"; return false; }
@@ -3871,27 +3820,20 @@ bool EnsureMseComputePipeline(std::string* error)
     rsDesc.pParameters = rootParams;
     rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
-    ComPtr<ID3DBlob> sigBlob, errBlob;
-    HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
+    ComPtr<ID3DBlob> errBlob;
+    HRESULT hr = CreateRootSignatureFromDesc(g_device.Get(),
+                                             rsDesc,
+                                             g_mseComputeRootSignature.ReleaseAndGetAddressOf(),
+                                             errBlob.ReleaseAndGetAddressOf());
     if (FAILED(hr))
     {
-        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Serialize MSE root sig failed";
-        g_mseComputeStatus = "MSE GPU Compute root signature failed";
-        return false;
-    }
-    hr = g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_mseComputeRootSignature));
-    if (FAILED(hr))
-    {
-        if (error) *error = "Create MSE root sig failed";
+        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Create MSE root sig failed";
         g_mseComputeStatus = "MSE GPU Compute root signature failed";
         return false;
     }
 
     const std::filesystem::path shaderPath = MseComputeShaderPath();
-    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
-#if defined(_DEBUG)
-    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-#endif
+    const UINT compileFlags = DefaultShaderCompileFlags();
 
     auto compileEntry = [&](const char* entryPoint, ComPtr<ID3DBlob>& outBlob) -> bool {
         errBlob.Reset();
@@ -4006,10 +3948,8 @@ bool RunMseComputeGridImmediate(rock::HeightfieldGrid& grid, const rock::MultiSc
     constexpr UINT kStateCount = 8;
     constexpr UINT kDescriptorsPerState = 6;
     constexpr UINT kHeapDescriptors = kStateCount * kDescriptorsPerState;
-    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    heapDesc.NumDescriptors = kHeapDescriptors;
-    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc =
+        ShaderVisibleCbvSrvUavDescriptorHeapDesc(kHeapDescriptors);
     ComPtr<ID3D12DescriptorHeap> descriptorHeap;
     HRESULT hr = g_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&descriptorHeap));
     if (FAILED(hr)) { if (error) *error = "Create MSE descriptor heap failed"; return false; }
@@ -4307,27 +4247,20 @@ bool EnsureMaskNoiseComputePipeline(std::string* error)
     rsDesc.pParameters = rootParams;
     rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
-    ComPtr<ID3DBlob> sigBlob, errBlob;
-    HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
+    ComPtr<ID3DBlob> errBlob;
+    HRESULT hr = CreateRootSignatureFromDesc(g_device.Get(),
+                                             rsDesc,
+                                             g_maskNoiseComputeRootSignature.ReleaseAndGetAddressOf(),
+                                             errBlob.ReleaseAndGetAddressOf());
     if (FAILED(hr))
     {
-        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Serialize Mask Noise root sig failed";
-        g_maskNoiseComputeStatus = "Mask Noise GPU Compute root signature failed";
-        return false;
-    }
-    hr = g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_maskNoiseComputeRootSignature));
-    if (FAILED(hr))
-    {
-        if (error) *error = "Create Mask Noise root sig failed";
+        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Create Mask Noise root sig failed";
         g_maskNoiseComputeStatus = "Mask Noise GPU Compute root signature failed";
         return false;
     }
 
     const std::filesystem::path shaderPath = MaskNoiseShaderPath();
-    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
-#if defined(_DEBUG)
-    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-#endif
+    const UINT compileFlags = DefaultShaderCompileFlags();
 
     ComPtr<ID3DBlob> csBlob;
     errBlob.Reset();
@@ -4385,10 +4318,8 @@ bool RunMaskNoiseComputeImmediate(rock::MaskGrid& grid, const rock::MaskNoiseSet
     hr = g_device->CreateCommittedResource(&readbackHeap, D3D12_HEAP_FLAG_NONE, &cpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readback));
     if (FAILED(hr)) { if (error) *error = "Create Mask Noise readback buffer failed"; return false; }
 
-    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    heapDesc.NumDescriptors = 1;
-    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc =
+        ShaderVisibleCbvSrvUavDescriptorHeapDesc(1);
     ComPtr<ID3D12DescriptorHeap> descriptorHeap;
     hr = g_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&descriptorHeap));
     if (FAILED(hr)) { if (error) *error = "Create Mask Noise descriptor heap failed"; return false; }
@@ -4558,27 +4489,20 @@ bool EnsureColorizeComputePipeline(std::string* error)
     rsDesc.pParameters = rootParams;
     rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
-    ComPtr<ID3DBlob> sigBlob, errBlob;
-    HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
+    ComPtr<ID3DBlob> errBlob;
+    HRESULT hr = CreateRootSignatureFromDesc(g_device.Get(),
+                                             rsDesc,
+                                             g_colorizeComputeRootSignature.ReleaseAndGetAddressOf(),
+                                             errBlob.ReleaseAndGetAddressOf());
     if (FAILED(hr))
     {
-        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Serialize Colorize root sig failed";
-        g_colorizeComputeStatus = "Colorize GPU Compute root signature failed";
-        return false;
-    }
-    hr = g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_colorizeComputeRootSignature));
-    if (FAILED(hr))
-    {
-        if (error) *error = "Create Colorize root sig failed";
+        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Create Colorize root sig failed";
         g_colorizeComputeStatus = "Colorize GPU Compute root signature failed";
         return false;
     }
 
     const std::filesystem::path shaderPath = ColorizeComputeShaderPath();
-    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
-#if defined(_DEBUG)
-    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-#endif
+    const UINT compileFlags = DefaultShaderCompileFlags();
 
     ComPtr<ID3DBlob> csBlob;
     errBlob.Reset();
@@ -4669,21 +4593,19 @@ bool EnsureAOComputePipeline(std::string* error)
     rsDesc.pStaticSamplers = &sampler;
     rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
-    ComPtr<ID3DBlob> sigBlob, errBlob;
-    HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
+    ComPtr<ID3DBlob> errBlob;
+    HRESULT hr = CreateRootSignatureFromDesc(g_device.Get(),
+                                             rsDesc,
+                                             g_aoComputeRootSignature.ReleaseAndGetAddressOf(),
+                                             errBlob.ReleaseAndGetAddressOf());
     if (FAILED(hr))
     {
-        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Serialize AO root sig failed";
+        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Create AO root sig failed";
         return false;
     }
-    hr = g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_aoComputeRootSignature));
-    if (FAILED(hr)) { if (error) *error = "Create AO root sig failed"; return false; }
 
     const std::filesystem::path shaderPath = AOComputeShaderPath();
-    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
-#if defined(_DEBUG)
-    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-#endif
+    const UINT compileFlags = DefaultShaderCompileFlags();
     ComPtr<ID3DBlob> csBlob;
     errBlob.Reset();
     const HRESULT compileHr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE,
@@ -4914,10 +4836,8 @@ bool RunColorizeComputeImmediate(rock::ColorGrid& grid, const rock::ColorizeSett
     hr = g_device->CreateCommittedResource(&readbackHeap, D3D12_HEAP_FLAG_NONE, &outputCpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readback));
     if (FAILED(hr)) { if (error) *error = "Create Colorize readback buffer failed"; return false; }
 
-    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    heapDesc.NumDescriptors = 5;
-    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc =
+        ShaderVisibleCbvSrvUavDescriptorHeapDesc(5);
     ComPtr<ID3D12DescriptorHeap> descriptorHeap;
     hr = g_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&descriptorHeap));
     if (FAILED(hr)) { if (error) *error = "Create Colorize descriptor heap failed"; return false; }
@@ -5140,27 +5060,20 @@ bool EnsureSedimentComputePipeline(std::string* error)
     rsDesc.pParameters = rootParams;
     rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
-    ComPtr<ID3DBlob> sigBlob, errBlob;
-    HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
+    ComPtr<ID3DBlob> errBlob;
+    HRESULT hr = CreateRootSignatureFromDesc(g_device.Get(),
+                                             rsDesc,
+                                             g_sedimentComputeRootSignature.ReleaseAndGetAddressOf(),
+                                             errBlob.ReleaseAndGetAddressOf());
     if (FAILED(hr))
     {
-        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Serialize Sediment root sig failed";
-        g_sedimentComputeStatus = "Sediment GPU Compute root signature failed";
-        return false;
-    }
-    hr = g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_sedimentComputeRootSignature));
-    if (FAILED(hr))
-    {
-        if (error) *error = "Create Sediment root sig failed";
+        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Create Sediment root sig failed";
         g_sedimentComputeStatus = "Sediment GPU Compute root signature failed";
         return false;
     }
 
     const std::filesystem::path shaderPath = SedimentComputeShaderPath();
-    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
-#if defined(_DEBUG)
-    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-#endif
+    const UINT compileFlags = DefaultShaderCompileFlags();
 
     auto compileEntry = [&](const char* entryPoint, ComPtr<ID3DBlob>& outBlob) -> bool {
         errBlob.Reset();
@@ -5264,10 +5177,8 @@ bool RunSedimentComputeImmediate(rock::HeightfieldGrid& grid, const rock::Sedime
 
     // Descriptor heap: 4 UAVs in one block (bedrock, sediment, outgoing, inputHeights).
     constexpr UINT kDescriptorCount = 4;
-    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    heapDesc.NumDescriptors = kDescriptorCount;
-    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc =
+        ShaderVisibleCbvSrvUavDescriptorHeapDesc(kDescriptorCount);
     ComPtr<ID3D12DescriptorHeap> descriptorHeap;
     HRESULT hr = g_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&descriptorHeap));
     if (FAILED(hr)) { if (error) *error = "Create Sediment descriptor heap failed"; return false; }
@@ -5556,27 +5467,20 @@ bool EnsureRockComputePipeline(std::string* error)
     rsDesc.pParameters = rootParams;
     rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
-    ComPtr<ID3DBlob> sigBlob, errBlob;
-    HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
+    ComPtr<ID3DBlob> errBlob;
+    HRESULT hr = CreateRootSignatureFromDesc(g_device.Get(),
+                                             rsDesc,
+                                             g_rockComputeRootSignature.ReleaseAndGetAddressOf(),
+                                             errBlob.ReleaseAndGetAddressOf());
     if (FAILED(hr))
     {
-        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Serialize Rock root sig failed";
-        g_rockComputeStatus = "Rock GPU Compute root signature failed";
-        return false;
-    }
-    hr = g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_rockComputeRootSignature));
-    if (FAILED(hr))
-    {
-        if (error) *error = "Create Rock root sig failed";
+        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Create Rock root sig failed";
         g_rockComputeStatus = "Rock GPU Compute root signature failed";
         return false;
     }
 
     const std::filesystem::path shaderPath = RockComputeShaderPath();
-    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
-#if defined(_DEBUG)
-    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-#endif
+    const UINT compileFlags = DefaultShaderCompileFlags();
 
     ComPtr<ID3DBlob> csBlob;
     errBlob.Reset();
@@ -5665,10 +5569,8 @@ bool RunRockComputeImmediate(rock::HeightfieldGrid& grid, const rock::RockSettin
     uploadHeights->Unmap(0, nullptr);
 
     constexpr UINT kDescriptorCount = 4;
-    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    heapDesc.NumDescriptors = kDescriptorCount;
-    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc =
+        ShaderVisibleCbvSrvUavDescriptorHeapDesc(kDescriptorCount);
     ComPtr<ID3D12DescriptorHeap> descriptorHeap;
     HRESULT hr = g_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&descriptorHeap));
     if (FAILED(hr)) { if (error) *error = "Create Rock descriptor heap failed"; return false; }
@@ -5924,27 +5826,20 @@ bool EnsureScatterComputePipeline(std::string* error)
     rsDesc.pParameters = rootParams;
     rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
-    ComPtr<ID3DBlob> sigBlob, errBlob;
-    HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
+    ComPtr<ID3DBlob> errBlob;
+    HRESULT hr = CreateRootSignatureFromDesc(g_device.Get(),
+                                             rsDesc,
+                                             g_scatterComputeRootSignature.ReleaseAndGetAddressOf(),
+                                             errBlob.ReleaseAndGetAddressOf());
     if (FAILED(hr))
     {
-        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Serialize Scatter root sig failed";
-        g_scatterComputeStatus = "Scatter GPU Compute root signature failed";
-        return false;
-    }
-    hr = g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_scatterComputeRootSignature));
-    if (FAILED(hr))
-    {
-        if (error) *error = "Create Scatter root sig failed";
+        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Create Scatter root sig failed";
         g_scatterComputeStatus = "Scatter GPU Compute root signature failed";
         return false;
     }
 
     const std::filesystem::path shaderPath = ScatterComputeShaderPath();
-    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
-#if defined(_DEBUG)
-    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-#endif
+    const UINT compileFlags = DefaultShaderCompileFlags();
 
     ComPtr<ID3DBlob> csBlob;
     errBlob.Reset();
@@ -6032,10 +5927,8 @@ bool RunScatterComputeImmediate(rock::HeightfieldGrid& grid, const rock::Scatter
     uploadHeights->Unmap(0, nullptr);
 
     constexpr UINT kDescriptorCount = 4;
-    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    heapDesc.NumDescriptors = kDescriptorCount;
-    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc =
+        ShaderVisibleCbvSrvUavDescriptorHeapDesc(kDescriptorCount);
     ComPtr<ID3D12DescriptorHeap> descriptorHeap;
     HRESULT hr = g_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&descriptorHeap));
     if (FAILED(hr)) { if (error) *error = "Create Scatter descriptor heap failed"; return false; }
@@ -6277,27 +6170,20 @@ bool EnsureMaskFluvialComputePipeline(std::string* error)
     rsDesc.pParameters = rootParams;
     rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
-    ComPtr<ID3DBlob> sigBlob, errBlob;
-    HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
+    ComPtr<ID3DBlob> errBlob;
+    HRESULT hr = CreateRootSignatureFromDesc(g_device.Get(),
+                                             rsDesc,
+                                             g_maskFluvialComputeRootSignature.ReleaseAndGetAddressOf(),
+                                             errBlob.ReleaseAndGetAddressOf());
     if (FAILED(hr))
     {
-        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Serialize Mask Fluvial root sig failed";
-        g_maskFluvialComputeStatus = "Mask Fluvial GPU Compute root signature failed";
-        return false;
-    }
-    hr = g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_maskFluvialComputeRootSignature));
-    if (FAILED(hr))
-    {
-        if (error) *error = "Create Mask Fluvial root sig failed";
+        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Create Mask Fluvial root sig failed";
         g_maskFluvialComputeStatus = "Mask Fluvial GPU Compute root signature failed";
         return false;
     }
 
     const std::filesystem::path shaderPath = MaskFluvialComputeShaderPath();
-    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
-#if defined(_DEBUG)
-    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-#endif
+    const UINT compileFlags = DefaultShaderCompileFlags();
 
     auto compileEntry = [&](const char* entryPoint, ComPtr<ID3DBlob>& outBlob) -> bool {
         errBlob.Reset();
@@ -6431,10 +6317,8 @@ bool RunMaskFluvialComputeImmediate(rock::HeightfieldGrid& grid, const rock::Mas
     uploadMaxScratch->Unmap(0, nullptr);
 
     constexpr UINT kDescriptorCount = 8;
-    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    heapDesc.NumDescriptors = kDescriptorCount;
-    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc =
+        ShaderVisibleCbvSrvUavDescriptorHeapDesc(kDescriptorCount);
     ComPtr<ID3D12DescriptorHeap> descriptorHeap;
     HRESULT hr = g_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&descriptorHeap));
     if (FAILED(hr)) { if (error) *error = "Create MF descriptor heap failed"; return false; }
@@ -6728,27 +6612,20 @@ bool EnsureSnowComputePipeline(std::string* error)
     rsDesc.pParameters = rootParams;
     rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
-    ComPtr<ID3DBlob> sigBlob, errBlob;
-    HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
+    ComPtr<ID3DBlob> errBlob;
+    HRESULT hr = CreateRootSignatureFromDesc(g_device.Get(),
+                                             rsDesc,
+                                             g_snowComputeRootSignature.ReleaseAndGetAddressOf(),
+                                             errBlob.ReleaseAndGetAddressOf());
     if (FAILED(hr))
     {
-        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Serialize Snow root sig failed";
-        g_snowComputeStatus = "Snow GPU Compute root signature failed";
-        return false;
-    }
-    hr = g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_snowComputeRootSignature));
-    if (FAILED(hr))
-    {
-        if (error) *error = "Create Snow root sig failed";
+        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Create Snow root sig failed";
         g_snowComputeStatus = "Snow GPU Compute root signature failed";
         return false;
     }
 
     const std::filesystem::path shaderPath = SnowComputeShaderPath();
-    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
-#if defined(_DEBUG)
-    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-#endif
+    const UINT compileFlags = DefaultShaderCompileFlags();
 
     auto compileEntry = [&](const char* entryPoint, ComPtr<ID3DBlob>& outBlob) -> bool {
         errBlob.Reset();
@@ -6864,10 +6741,8 @@ bool RunSnowComputeImmediate(rock::HeightfieldGrid& grid, const rock::SnowSettin
     uploadHeights->Unmap(0, nullptr);
 
     constexpr UINT kDescriptorCount = 7;
-    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    heapDesc.NumDescriptors = kDescriptorCount;
-    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc =
+        ShaderVisibleCbvSrvUavDescriptorHeapDesc(kDescriptorCount);
     ComPtr<ID3D12DescriptorHeap> descriptorHeap;
     HRESULT hr = g_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&descriptorHeap));
     if (FAILED(hr)) { if (error) *error = "Create Snow descriptor heap failed"; return false; }
@@ -7208,27 +7083,20 @@ bool EnsureDepthOfFieldPipeline(std::string* error)
     rsDesc.pStaticSamplers = &sampler;
     rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
-    ComPtr<ID3DBlob> sigBlob, errBlob;
-    HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
+    ComPtr<ID3DBlob> errBlob;
+    HRESULT hr = CreateRootSignatureFromDesc(g_device.Get(),
+                                             rsDesc,
+                                             g_dofRootSignature.ReleaseAndGetAddressOf(),
+                                             errBlob.ReleaseAndGetAddressOf());
     if (FAILED(hr))
     {
-        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Serialize DOF root signature failed";
-        g_dofPipelineStatus = "Depth of Field root signature failed";
-        return false;
-    }
-    hr = g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_dofRootSignature));
-    if (FAILED(hr))
-    {
-        if (error) *error = "Create DOF root signature failed";
+        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Create DOF root signature failed";
         g_dofPipelineStatus = "Depth of Field root signature failed";
         return false;
     }
 
     const std::filesystem::path shaderPath = DepthOfFieldShaderPath();
-    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
-#if defined(_DEBUG)
-    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-#endif
+    const UINT compileFlags = DefaultShaderCompileFlags();
 
     auto compileEntry = [&](const char* entryPoint, const char* target, ComPtr<ID3DBlob>& outBlob) -> bool {
         errBlob.Reset();
@@ -7323,27 +7191,20 @@ bool EnsureSkyPipeline(std::string* error)
     rsDesc.pStaticSamplers = &lutSampler;
     rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
-    ComPtr<ID3DBlob> sigBlob, errBlob;
-    HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
+    ComPtr<ID3DBlob> errBlob;
+    HRESULT hr = CreateRootSignatureFromDesc(g_device.Get(),
+                                             rsDesc,
+                                             g_skyRootSignature.ReleaseAndGetAddressOf(),
+                                             errBlob.ReleaseAndGetAddressOf());
     if (FAILED(hr))
     {
-        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Serialize sky root sig failed";
-        g_skyPipelineStatus = "Sky root signature failed";
-        return false;
-    }
-    hr = g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_skyRootSignature));
-    if (FAILED(hr))
-    {
-        if (error) *error = "Create sky root signature failed";
+        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Create sky root signature failed";
         g_skyPipelineStatus = "Sky root signature failed";
         return false;
     }
 
     const std::filesystem::path shaderPath = SkyShaderPath();
-    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
-#if defined(_DEBUG)
-    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-#endif
+    const UINT compileFlags = DefaultShaderCompileFlags();
 
     auto compileEntry = [&](const char* entryPoint, const char* target, ComPtr<ID3DBlob>& outBlob) -> bool {
         errBlob.Reset();
@@ -7427,16 +7288,14 @@ bool EnsureAtmosphereMultiScatterPipeline(std::string* error)
     rsDesc.NumParameters = 2;
     rsDesc.pParameters = rootParams;
 
-    ComPtr<ID3DBlob> sigBlob, errBlob;
-    HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
-    if (FAILED(hr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Serialize multi-scatter root sig failed"; return false; }
-    hr = g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_atmosphereMultiScatterRootSignature));
-    if (FAILED(hr)) { if (error) *error = "Create multi-scatter root signature failed"; return false; }
+    ComPtr<ID3DBlob> errBlob;
+    HRESULT hr = CreateRootSignatureFromDesc(g_device.Get(),
+                                             rsDesc,
+                                             g_atmosphereMultiScatterRootSignature.ReleaseAndGetAddressOf(),
+                                             errBlob.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Create multi-scatter root signature failed"; return false; }
 
-    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
-#if defined(_DEBUG)
-    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-#endif
+    const UINT compileFlags = DefaultShaderCompileFlags();
 
     ComPtr<ID3DBlob> csBlob;
     errBlob.Reset();
@@ -7507,10 +7366,8 @@ bool EnsureAtmosphereMultiScatterLut(float density, float mieStrength, float mie
         commandList->ResourceBarrier(1, &b);
     }
 
-    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    heapDesc.NumDescriptors = 1;
-    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc =
+        ShaderVisibleCbvSrvUavDescriptorHeapDesc(1);
     ComPtr<ID3D12DescriptorHeap> uavHeap;
     HRESULT hr = g_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&uavHeap));
     if (FAILED(hr)) { if (error) *error = "Create multi-scatter UAV heap failed"; return false; }
@@ -7880,10 +7737,7 @@ bool EnsureCloudPipelines(std::string* error)
         return false;
     }
 
-    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
-#if defined(_DEBUG)
-    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-#endif
+    const UINT compileFlags = DefaultShaderCompileFlags();
 
     // -------- Cloud volume compute pipeline --------
     {
@@ -7907,11 +7761,12 @@ bool EnsureCloudPipelines(std::string* error)
         rsDesc.NumParameters = 2;
         rsDesc.pParameters = rootParams;
 
-        ComPtr<ID3DBlob> sigBlob, errBlob;
-        HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
-        if (FAILED(hr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Serialize cloud volume root sig failed"; g_cloudPipelineStatus = "Cloud volume root signature failed"; return false; }
-        hr = g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_cloudVolumeRootSignature));
-        if (FAILED(hr)) { if (error) *error = "Create cloud volume root sig failed"; g_cloudPipelineStatus = "Cloud volume root signature failed"; return false; }
+        ComPtr<ID3DBlob> errBlob;
+        HRESULT hr = CreateRootSignatureFromDesc(g_device.Get(),
+                                                 rsDesc,
+                                                 g_cloudVolumeRootSignature.ReleaseAndGetAddressOf(),
+                                                 errBlob.ReleaseAndGetAddressOf());
+        if (FAILED(hr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Create cloud volume root sig failed"; g_cloudPipelineStatus = "Cloud volume root signature failed"; return false; }
 
         ComPtr<ID3DBlob> csBlob;
         errBlob.Reset();
@@ -7977,11 +7832,12 @@ bool EnsureCloudPipelines(std::string* error)
         rsDesc.pStaticSamplers = &sampler;
         rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
-        ComPtr<ID3DBlob> sigBlob, errBlob;
-        HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
-        if (FAILED(hr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Serialize cloud render root sig failed"; g_cloudPipelineStatus = "Cloud render root signature failed"; return false; }
-        hr = g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_cloudRenderRootSignature));
-        if (FAILED(hr)) { if (error) *error = "Create cloud render root sig failed"; g_cloudPipelineStatus = "Cloud render root signature failed"; return false; }
+        ComPtr<ID3DBlob> errBlob;
+        HRESULT hr = CreateRootSignatureFromDesc(g_device.Get(),
+                                                 rsDesc,
+                                                 g_cloudRenderRootSignature.ReleaseAndGetAddressOf(),
+                                                 errBlob.ReleaseAndGetAddressOf());
+        if (FAILED(hr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Create cloud render root sig failed"; g_cloudPipelineStatus = "Cloud render root signature failed"; return false; }
 
         const std::filesystem::path shaderPath = CloudRenderShaderPath();
         auto compileEntry = [&](const char* entryPoint, const char* target, ComPtr<ID3DBlob>& outBlob) -> bool {
@@ -8070,11 +7926,12 @@ bool EnsureCloudPipelines(std::string* error)
         rsDesc.NumStaticSamplers = 1;
         rsDesc.pStaticSamplers = &sampler;
 
-        ComPtr<ID3DBlob> sigBlob, errBlob;
-        HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
-        if (FAILED(hr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Serialize cloud shadow root sig failed"; g_cloudPipelineStatus = "Cloud shadow root signature failed"; return false; }
-        hr = g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_cloudShadowRootSignature));
-        if (FAILED(hr)) { if (error) *error = "Create cloud shadow root sig failed"; g_cloudPipelineStatus = "Cloud shadow root signature failed"; return false; }
+        ComPtr<ID3DBlob> errBlob;
+        HRESULT hr = CreateRootSignatureFromDesc(g_device.Get(),
+                                                 rsDesc,
+                                                 g_cloudShadowRootSignature.ReleaseAndGetAddressOf(),
+                                                 errBlob.ReleaseAndGetAddressOf());
+        if (FAILED(hr)) { if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Create cloud shadow root sig failed"; g_cloudPipelineStatus = "Cloud shadow root signature failed"; return false; }
 
         ComPtr<ID3DBlob> csBlob;
         errBlob.Reset();
@@ -8155,10 +8012,8 @@ bool EnsureCloudVolume(int seed, std::string* error)
 
     // Per-call descriptor heap (1 UAV slot — cheap and avoids stomping the
     // shared SRV heap that ImGui owns).
-    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    heapDesc.NumDescriptors = 1;
-    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc =
+        ShaderVisibleCbvSrvUavDescriptorHeapDesc(1);
     ComPtr<ID3D12DescriptorHeap> uavHeap;
     HRESULT hr = g_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&uavHeap));
     if (FAILED(hr)) { if (error) *error = "Create cloud volume UAV heap failed"; return false; }
@@ -8438,10 +8293,8 @@ bool RunCloudShadowGeneration(const rock::CloudSettings& clouds,
         commandList->ResourceBarrier(1, &b);
     }
 
-    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    heapDesc.NumDescriptors = 2;
-    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc =
+        ShaderVisibleCbvSrvUavDescriptorHeapDesc(2);
     ComPtr<ID3D12DescriptorHeap> tableHeap;
     HRESULT hr = g_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&tableHeap));
     if (FAILED(hr)) { if (error) *error = "Create cloud shadow descriptor heap failed"; return false; }
@@ -8815,7 +8668,7 @@ void UpdateViewportInteraction(const ImVec2& min, const ImVec2& max)
 
     if (ImGui::IsMouseDragging(ImGuiMouseButton_Left) && !io.KeyCtrl)
     {
-        g_viewport.yaw += io.MouseDelta.x * 0.01f;
+        g_viewport.yaw -= io.MouseDelta.x * 0.01f;
         g_viewport.pitch += io.MouseDelta.y * 0.01f;
         g_viewport.pitch = std::clamp(g_viewport.pitch, -1.25f, 1.25f);
     }
@@ -8994,9 +8847,8 @@ bool EnsureMeshPreviewRenderTarget(int width, int height, std::string* error)
 
         if (!g_meshPreviewRtvHeap)
         {
-            D3D12_DESCRIPTOR_HEAP_DESC desc{};
-            desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-            desc.NumDescriptors = 2;
+            D3D12_DESCRIPTOR_HEAP_DESC desc =
+                DescriptorHeapDesc(D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 2);
             ThrowIfFailed(g_device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&g_meshPreviewRtvHeap)), "Create mesh RTV heap failed");
             g_gpuMeshPreview.rtvCpu = g_meshPreviewRtvHeap->GetCPUDescriptorHandleForHeapStart();
             g_gpuMeshPreview.postRtvCpu = g_gpuMeshPreview.rtvCpu;
@@ -9004,9 +8856,8 @@ bool EnsureMeshPreviewRenderTarget(int width, int height, std::string* error)
         }
         if (!g_meshPreviewDsvHeap)
         {
-            D3D12_DESCRIPTOR_HEAP_DESC desc{};
-            desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
-            desc.NumDescriptors = 2;
+            D3D12_DESCRIPTOR_HEAP_DESC desc =
+                DescriptorHeapDesc(D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 2);
             ThrowIfFailed(g_device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&g_meshPreviewDsvHeap)), "Create mesh DSV heap failed");
             g_gpuMeshPreview.dsvCpu = g_meshPreviewDsvHeap->GetCPUDescriptorHandleForHeapStart();
             g_gpuMeshPreview.shadowDsvCpu = g_gpuMeshPreview.dsvCpu;

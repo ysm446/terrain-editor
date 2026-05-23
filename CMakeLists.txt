@@ -18,6 +18,7 @@ configure_file(
 
 add_executable(terrain_editor WIN32
     src/terrain_editor.rc
+    src/D3D12Utils.cpp
     src/evaluation/Colorize.cpp
     src/evaluation/HeightfieldOps.cpp
     src/evaluation/HeightmapSource.cpp
