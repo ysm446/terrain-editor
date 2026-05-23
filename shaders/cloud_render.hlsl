@@ -49,7 +49,7 @@ cbuffer CloudConstants : register(b0)
     int    lightSamples;          // 0 disables self-shadowing, falls back to vertical ramp only
     float  lightStepMeters;       // step length toward the sun (m)
     float  phaseEccentricity;     // Henyey-Greenstein g; 0 isotropic, 0.4 gentle silver lining
-    float  pad1;
+    float  shadowAmbientStrength; // sky-tinted fill added to self-shadowed cloud regions
 };
 
 Texture3D<float> CloudVolume : register(t0);
@@ -258,13 +258,16 @@ float4 CloudPS(VsOut input) : SV_Target
                 // near the sun direction (silver lining) and dims the
                 // shadow-side without changing total cloud brightness.
                 float3 directLight = sunlitColor * lightTransmittance * phase;
-                lit = ambientColor + directLight;
+                float shadowWeight = saturate(1.0 - lightTransmittance);
+                float3 skyShadowLight = cloudColor.rgb * atmosphereSkyColor.rgb * shadowAmbientStrength * shadowWeight;
+                lit = ambientColor + directLight + skyShadowLight;
             }
             else
             {
                 // Fallback: original vertical ramp (no self-shadowing).
                 float yNorm = saturate((p.y - altitudeMin) / max(altitudeMax - altitudeMin, 1.0));
-                lit = lerp(ambientColor, sunlitColor, yNorm);
+                float3 skyShadowLight = cloudColor.rgb * atmosphereSkyColor.rgb * shadowAmbientStrength * (1.0 - yNorm);
+                lit = lerp(ambientColor, sunlitColor, yNorm) + skyShadowLight;
             }
 
             float dT = exp(-density * absorption * stepLen);

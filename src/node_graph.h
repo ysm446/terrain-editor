@@ -675,6 +675,7 @@ struct CloudSettings
     // Henyey-Greenstein eccentricity for the cloud phase function. 0.4 gives
     // a gentle silver lining around the sun direction; 0.0 is isotropic.
     float phaseEccentricity = 0.4f;
+    float shadowAmbientStrength = 0.45f;
 };
 
 struct GraphSettings

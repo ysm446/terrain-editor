@@ -717,6 +717,7 @@ struct GpuMeshPreview
     int cloudLightSamples = 0;
     float cloudLightStepMeters = 0.0f;
     float cloudPhaseEccentricity = 0.0f;
+    float cloudShadowAmbientStrength = 0.0f;
 
     // GPU vertex displacement (Phase 2). Heightfield + mask are uploaded
     // to textures each evaluation, while the static UV grid mesh (just
@@ -3381,6 +3382,7 @@ nlohmann::json MakeProjectSettingsJson()
             {"lightSamples", clouds.lightSamples},
             {"lightStepMeters", clouds.lightStepMeters},
             {"phaseEccentricity", clouds.phaseEccentricity},
+            {"shadowAmbientStrength", clouds.shadowAmbientStrength},
         }},
     };
 }
@@ -3618,6 +3620,7 @@ void ReadCloudSettingsJson(const nlohmann::json& settingsJson, rock::CloudSettin
     clouds.lightSamples = std::clamp(cloudsJson.value("lightSamples", clouds.lightSamples), 0, 16);
     clouds.lightStepMeters = std::clamp(cloudsJson.value("lightStepMeters", clouds.lightStepMeters), 1.0f, 2000.0f);
     clouds.phaseEccentricity = std::clamp(cloudsJson.value("phaseEccentricity", clouds.phaseEccentricity), -0.99f, 0.99f);
+    clouds.shadowAmbientStrength = std::clamp(cloudsJson.value("shadowAmbientStrength", clouds.shadowAmbientStrength), 0.0f, 2.0f);
 }
 
 void ReadPreviewSettingsJson(const nlohmann::json& settingsJson, rock::PreviewSettings& preview, const rock::SkySettings& sky)
@@ -9144,7 +9147,7 @@ struct CloudRenderShaderConstants
     INT   lightSamples;
     float lightStepMeters;
     float phaseEccentricity;
-    float pad1;
+    float shadowAmbientStrength;
 };
 static_assert(sizeof(CloudRenderShaderConstants) == 56 * sizeof(UINT), "CloudRenderShaderConstants must be 56 DWORDs");
 
@@ -9525,7 +9528,7 @@ bool RenderCloudPass(ID3D12GraphicsCommandList* commandList,
     c.lightSamples = std::clamp(clouds.lightSamples, 0, 16);
     c.lightStepMeters = std::clamp(clouds.lightStepMeters, 1.0f, 2000.0f);
     c.phaseEccentricity = std::clamp(clouds.phaseEccentricity, -0.99f, 0.99f);
-    c.pad1 = 0.0f;
+    c.shadowAmbientStrength = std::clamp(clouds.shadowAmbientStrength, 0.0f, 2.0f);
 
     commandList->SetGraphicsRootSignature(g_cloudRenderRootSignature.Get());
     commandList->SetPipelineState(g_cloudRenderPso.Get());
@@ -11350,6 +11353,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.cloudLightSamples != g_graph.Settings().clouds.lightSamples ||
         g_gpuMeshPreview.cloudLightStepMeters != g_graph.Settings().clouds.lightStepMeters ||
         g_gpuMeshPreview.cloudPhaseEccentricity != g_graph.Settings().clouds.phaseEccentricity ||
+        g_gpuMeshPreview.cloudShadowAmbientStrength != g_graph.Settings().clouds.shadowAmbientStrength ||
         g_gpuMeshPreview.meshBackend != static_cast<int>(g_graph.Settings().preview.meshBackend) ||
         g_gpuMeshPreview.viewportTessellation != g_graph.Settings().preview.viewportTessellation ||
         g_gpuMeshPreview.tessellationMinFactor != g_graph.Settings().preview.tessellationMinFactor ||
@@ -11445,7 +11449,8 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.cloudFieldFalloff != g_graph.Settings().clouds.fieldFalloff ||
         g_gpuMeshPreview.cloudLightSamples != g_graph.Settings().clouds.lightSamples ||
         g_gpuMeshPreview.cloudLightStepMeters != g_graph.Settings().clouds.lightStepMeters ||
-        g_gpuMeshPreview.cloudPhaseEccentricity != g_graph.Settings().clouds.phaseEccentricity)
+        g_gpuMeshPreview.cloudPhaseEccentricity != g_graph.Settings().clouds.phaseEccentricity ||
+        g_gpuMeshPreview.cloudShadowAmbientStrength != g_graph.Settings().clouds.shadowAmbientStrength)
     {
         addDirtyReason(dirtyReason, "cloud settings");
     }
@@ -12715,6 +12720,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.cloudLightSamples = g_graph.Settings().clouds.lightSamples;
         g_gpuMeshPreview.cloudLightStepMeters = g_graph.Settings().clouds.lightStepMeters;
         g_gpuMeshPreview.cloudPhaseEccentricity = g_graph.Settings().clouds.phaseEccentricity;
+        g_gpuMeshPreview.cloudShadowAmbientStrength = g_graph.Settings().clouds.shadowAmbientStrength;
         g_gpuMeshPreview.meshBackend = static_cast<int>(g_graph.Settings().preview.meshBackend);
         g_gpuMeshPreview.viewportTessellation = g_graph.Settings().preview.viewportTessellation;
         g_gpuMeshPreview.tessellationMinFactor = g_graph.Settings().preview.tessellationMinFactor;

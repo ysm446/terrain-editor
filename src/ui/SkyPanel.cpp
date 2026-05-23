@@ -289,6 +289,7 @@ void DrawCloudSettingsPanel(SkyPanelState state)
                 DrawPropertyIntRow("Light Samples", "CloudLightSamples", &clouds.lightSamples, 0, 16, rock::CloudSettings{}.lightSamples, "Cloud light samples changed", false, "雲内自己遮蔽の太陽方向レイマーチ段数。0 で無効化(従来の上下ランプのみ)、6 が標準。大きいほど雲塊の陰影がはっきりしますが負荷も増えます。");
                 DrawPropertyFloatRow("Light Step (m)", "CloudLightStep", &clouds.lightStepMeters, 1.0f, 1000.0f, rock::CloudSettings{}.lightStepMeters, "Cloud light step changed", false, "自己遮蔽レイマーチの 1 ステップあたりの距離 (m)。Light Samples × Light Step が太陽方向への投光距離になります。雲スケールに対して短すぎると深い雲の中まで届かず、長すぎるとサンプルが粗くなります。", "%.0f");
                 DrawPropertyFloatRow("Phase Eccentricity", "CloudPhaseG", &clouds.phaseEccentricity, -0.99f, 0.99f, rock::CloudSettings{}.phaseEccentricity, "Cloud phase eccentricity changed", false, "Henyey-Greenstein 位相関数の g 値。0 で等方散乱、正値で前方散乱(逆光時に太陽周りが明るくなるシルバーライニング)、負値で後方散乱。0.4 前後が雲らしい見た目。");
+                DrawPropertyFloatRow("Shadow Ambient", "CloudShadowAmbient", &clouds.shadowAmbientStrength, 0.0f, 2.0f, rock::CloudSettings{}.shadowAmbientStrength, "Cloud shadow ambient changed", false, "雲の影側に足す空色の環境光です。大きいほど自己遮蔽された部分が青く持ち上がります。");
             ImGui::EndDisabled();
         ImGui::EndTable();
     }
