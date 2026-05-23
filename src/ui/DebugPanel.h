@@ -72,6 +72,7 @@ struct DebugPanelState
     const rock::EvaluationSummary& evaluation;
     const std::string& lastEvaluationDuration;
     bool& showDrawStats;
+    bool& showFrameStats;
     DebugPanelRenderStats renderStats;
     DebugPanelFrameTiming frameTiming;
     std::function<void()> saveAppSettings;

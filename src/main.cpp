@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cfloat>
 #include <cstdint>
+#include <ctime>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -285,11 +286,23 @@ struct UiState
     bool meshPreview = true;
     bool showFps = true;
     bool showDrawStats = false;
+    bool showFrameStats = false;
+    bool debugLogVisible = false;
     float rightPaneWidth = 0.0f;
     float nodePaneHeight = 0.0f;
+    float debugLogHeight = 180.0f;
 };
 
 UiState g_ui;
+
+struct DebugLogEntry
+{
+    std::string time;
+    std::string message;
+};
+
+std::vector<DebugLogEntry> g_debugLogEntries;
+bool g_debugLogAutoScroll = true;
 
 struct PreviewRenderStats
 {
@@ -1982,6 +1995,8 @@ bool SaveAppSettings(std::string* error = nullptr)
             {"mesh", g_ui.meshPreview},
             {"fps", g_ui.showFps},
             {"drawStats", g_ui.showDrawStats},
+            {"frameStats", g_ui.showFrameStats},
+            {"debugLog", g_ui.debugLogVisible},
             {"meshSurface", settings.preview.showSurface},
             {"meshWireframe", settings.preview.showWireframe},
             {"frameRateLimitFps", settings.preview.frameRateLimitFps},
@@ -2042,6 +2057,7 @@ bool SaveAppSettings(std::string* error = nullptr)
         root["layout"] = {
             {"rightPaneWidth", g_ui.rightPaneWidth},
             {"nodePaneHeight", g_ui.nodePaneHeight},
+            {"debugLogHeight", g_ui.debugLogHeight},
         };
         root["window"] = {
             {"width", g_width},
@@ -2153,6 +2169,8 @@ bool LoadAppSettings(std::string* error = nullptr)
         g_ui.meshPreview = visibilityJson.value("mesh", g_ui.meshPreview);
         g_ui.showFps = visibilityJson.value("fps", g_ui.showFps);
         g_ui.showDrawStats = visibilityJson.value("drawStats", g_ui.showDrawStats);
+        g_ui.showFrameStats = visibilityJson.value("frameStats", g_ui.showFrameStats);
+        g_ui.debugLogVisible = visibilityJson.value("debugLog", g_ui.debugLogVisible);
         settings.preview.showSurface = visibilityJson.value("meshSurface", settings.preview.showSurface);
         settings.preview.showWireframe = visibilityJson.value("meshWireframe", settings.preview.showWireframe);
         settings.preview.frameRateLimitFps = ClampFrameRateLimitFps(visibilityJson.value("frameRateLimitFps", settings.preview.frameRateLimitFps));
@@ -2236,6 +2254,7 @@ bool LoadAppSettings(std::string* error = nullptr)
         const nlohmann::json layoutJson = root.value("layout", nlohmann::json::object());
         g_ui.rightPaneWidth = std::max(0.0f, layoutJson.value("rightPaneWidth", g_ui.rightPaneWidth));
         g_ui.nodePaneHeight = std::max(0.0f, layoutJson.value("nodePaneHeight", g_ui.nodePaneHeight));
+        g_ui.debugLogHeight = std::clamp(layoutJson.value("debugLogHeight", g_ui.debugLogHeight), 100.0f, 600.0f);
 
         const nlohmann::json windowJson = root.value("window", nlohmann::json::object());
         g_width = static_cast<UINT>(std::clamp(windowJson.value("width", static_cast<int>(g_width)), 640, 7680));
@@ -12963,6 +12982,79 @@ void DrawViewportCube(const ImVec2& min, const ImVec2& max, float timeSeconds)
         drawList->AddText(ImVec2(fpsMin.x + fpsPadding.x, fpsMin.y + fpsPadding.y), ThemeColor("accentText", ImVec4(0.86f, 0.88f, 0.85f, 1.0f)), fpsText);
         overlayTop = fpsMax.y + 6.0f;
     }
+    if (g_ui.showFrameStats)
+    {
+        const auto formatMs = [](double value) {
+            char buffer[32]{};
+            std::snprintf(buffer, sizeof(buffer), "%.2f ms", value);
+            return std::string(buffer);
+        };
+
+        struct OverlayStatLine
+        {
+            const char* label;
+            std::string value;
+        };
+        const ImU32 labelColor = ThemeColor("accentText", ImVec4(0.86f, 0.88f, 0.85f, 1.0f));
+        const ImU32 valueColor = IM_COL32(204, 222, 207, 255);
+        std::vector<OverlayStatLine> lines = {
+            {"Frame:", formatMs(g_lastFrameTiming.frameMs)},
+            {"Message Pump:", formatMs(g_lastFrameTiming.messagePumpMs)},
+            {"NewFrame:", formatMs(g_lastFrameTiming.newFrameMs)},
+            {"Main Thread Work:", formatMs(g_lastFrameTiming.mainThreadWorkMs)},
+            {"DrawUi:", formatMs(g_lastFrameTiming.drawUiMs)},
+            {"Viewport Tabs:", formatMs(g_lastFrameTiming.viewportTabsMs)},
+            {"Node Editor:", formatMs(g_lastFrameTiming.nodeEditorMs)},
+            {"  Dots:", formatMs(g_lastFrameTiming.nodeEditorDotsMs)},
+            {"  Shadows:", formatMs(g_lastFrameTiming.nodeEditorShadowsMs)},
+            {"  Nodes:", formatMs(g_lastFrameTiming.nodeEditorNodesMs)},
+            {"  Links:", formatMs(g_lastFrameTiming.nodeEditorLinksMs)},
+            {"  Interaction:", formatMs(g_lastFrameTiming.nodeEditorInteractionMs)},
+            {"  Positions:", formatMs(g_lastFrameTiming.nodeEditorPositionMs)},
+            {"  Count:", std::format("{} nodes / {} links", g_lastFrameTiming.nodeCount, g_lastFrameTiming.linkCount)},
+            {"Inspector:", formatMs(g_lastFrameTiming.inspectorMs)},
+            {"Status Bar:", formatMs(g_lastFrameTiming.statusBarMs)},
+            {"GPU Preview:", formatMs(g_lastFrameTiming.gpuPreviewMs)},
+            {"GPU Preview Reason:", g_lastFrameTiming.gpuPreviewReason.empty() ? "-" : g_lastFrameTiming.gpuPreviewReason},
+            {"ImGui Render:", formatMs(g_lastFrameTiming.imguiRenderMs)},
+            {"RenderFrame:", formatMs(g_lastFrameTiming.renderFrameMs)},
+            {"Present:", formatMs(g_lastFrameTiming.presentMs)},
+            {"Frame Limit Sleep:", formatMs(g_lastFrameTiming.frameLimitSleepMs)},
+            {"Background Sleep:", formatMs(g_lastFrameTiming.backgroundSleepMs)},
+            {"Fence Wait:", formatMs(g_lastFrameTiming.fenceWaitMs)},
+            {"FPS Limit:", g_lastFrameTiming.frameRateLimitFps > 0 ? std::format("{} FPS", g_lastFrameTiming.frameRateLimitFps) : "Unlimited"},
+        };
+
+        float labelWidth = 0.0f;
+        float valueWidth = 0.0f;
+        for (const OverlayStatLine& line : lines)
+        {
+            labelWidth = std::max(labelWidth, ImGui::CalcTextSize(line.label).x);
+            valueWidth = std::max(valueWidth, ImGui::CalcTextSize(line.value.c_str()).x);
+        }
+        const float lineHeight = ImGui::GetTextLineHeight() + 2.0f;
+        const ImVec2 padding(10.0f, 7.0f);
+        const float gap = 14.0f;
+        const float maxOverlayWidth = std::max(220.0f, (max.x - min.x) - 28.0f);
+        const ImVec2 statsSize(std::min(maxOverlayWidth, labelWidth + gap + valueWidth + padding.x * 2.0f),
+                               lineHeight * static_cast<float>(lines.size()) + padding.y * 2.0f);
+        const ImVec2 statsMax(max.x - 14.0f, overlayTop + statsSize.y);
+        const ImVec2 statsMin(statsMax.x - statsSize.x, overlayTop);
+        drawList->AddRectFilled(statsMin, statsMax, IM_COL32(8, 10, 10, 168), 4.0f);
+        drawList->AddRect(statsMin, statsMax, ThemeColor("border", ImVec4(0.20f, 0.23f, 0.22f, 0.70f)), 4.0f);
+        const float valueX = statsMin.x + padding.x + labelWidth + gap;
+        const float valueClipMaxX = statsMax.x - padding.x;
+        for (size_t i = 0; i < lines.size(); ++i)
+        {
+            const OverlayStatLine& line = lines[i];
+            const float y = statsMin.y + padding.y + lineHeight * static_cast<float>(i);
+            drawList->AddText(ImVec2(statsMin.x + padding.x, y), labelColor, line.label);
+            drawList->PushClipRect(ImVec2(valueX, statsMin.y), ImVec2(valueClipMaxX, statsMax.y), true);
+            drawList->AddText(ImVec2(valueX, y), valueColor, line.value.c_str());
+            drawList->PopClipRect();
+        }
+        overlayTop = statsMax.y + 6.0f;
+    }
     if (g_ui.showDrawStats)
     {
         const PreviewRenderStats& stats = g_gpuMeshPreview.renderStats;
@@ -12980,6 +13072,7 @@ void DrawViewportCube(const ImVec2& min, const ImVec2& max, float timeSeconds)
         drawList->AddRectFilled(statsMin, statsMax, IM_COL32(8, 10, 10, 168), 4.0f);
         drawList->AddRect(statsMin, statsMax, ThemeColor("border", ImVec4(0.20f, 0.23f, 0.22f, 0.70f)), 4.0f);
         drawList->AddText(ImVec2(statsMin.x + statsPadding.x, statsMin.y + statsPadding.y), ThemeColor("accentText", ImVec4(0.86f, 0.88f, 0.85f, 1.0f)), statsText.c_str());
+        overlayTop = statsMax.y + 6.0f;
     }
     DrawViewportAxisGizmo(drawList, min, max);
 }
@@ -14248,6 +14341,7 @@ void DrawDebugPanel()
         g_graph.Evaluation(),
         g_lastEvaluationDuration,
         g_ui.showDrawStats,
+        g_ui.showFrameStats,
         {
             renderStats.drawCalls,
             renderStats.indexedDrawCalls,
@@ -14505,6 +14599,161 @@ void DrawNodeNetworkTabs(float nodePaneHeight, ImGuiWindowFlags childFlags)
     ImGui::PopStyleVar();
 }
 
+std::string DebugLogTimestamp()
+{
+    const auto now = std::chrono::system_clock::now();
+    const std::time_t time = std::chrono::system_clock::to_time_t(now);
+    std::tm localTime{};
+    localtime_s(&localTime, &time);
+
+    char buffer[16]{};
+    std::strftime(buffer, sizeof(buffer), "%H:%M:%S", &localTime);
+    return buffer;
+}
+
+void AppendDebugLog(std::string message)
+{
+    if (message.empty())
+    {
+        return;
+    }
+
+    constexpr size_t kMaxDebugLogEntries = 500;
+    g_debugLogEntries.push_back({DebugLogTimestamp(), std::move(message)});
+    if (g_debugLogEntries.size() > kMaxDebugLogEntries)
+    {
+        g_debugLogEntries.erase(g_debugLogEntries.begin(), g_debugLogEntries.begin() + static_cast<std::ptrdiff_t>(g_debugLogEntries.size() - kMaxDebugLogEntries));
+    }
+}
+
+void AppendDebugLogIfChanged(const char* label, const std::string& value, std::string& previous)
+{
+    if (value == previous)
+    {
+        return;
+    }
+
+    previous = value;
+    if (!value.empty())
+    {
+        AppendDebugLog(std::string(label) + ": " + value);
+    }
+}
+
+void CaptureDebugStatusLogs()
+{
+    static std::string previousProjectStatus;
+    static std::string previousExportStatus;
+    static std::string previousEvaluationStatus;
+    static std::string previousEvaluationDuration;
+    static std::string previousSkyStatus;
+    static std::string previousCloudStatus;
+    static std::string previousDofStatus;
+    static std::string previousMseStatus;
+    static std::string previousMaskNoiseStatus;
+    static std::string previousSedimentStatus;
+    static std::string previousRockStatus;
+    static std::string previousScatterStatus;
+    static std::string previousMaskFluvialStatus;
+    static std::string previousSnowStatus;
+    static std::string previousColorizeStatus;
+    static std::string previousGpuPreviewReason;
+
+    const rock::EvaluationSummary& evaluation = g_graph.Evaluation();
+    AppendDebugLogIfChanged("Project", g_projectStatus, previousProjectStatus);
+    AppendDebugLogIfChanged("Export", g_exportStatus, previousExportStatus);
+    AppendDebugLogIfChanged("Evaluation", evaluation.status, previousEvaluationStatus);
+    AppendDebugLogIfChanged("Eval Time", g_lastEvaluationDuration, previousEvaluationDuration);
+    AppendDebugLogIfChanged("Sky", g_skyPipelineStatus, previousSkyStatus);
+    AppendDebugLogIfChanged("Cloud", g_cloudPipelineStatus, previousCloudStatus);
+    AppendDebugLogIfChanged("Depth of Field", g_dofPipelineStatus, previousDofStatus);
+    AppendDebugLogIfChanged("MSE GPU", g_mseComputeStatus, previousMseStatus);
+    AppendDebugLogIfChanged("Mask Noise GPU", g_maskNoiseComputeStatus, previousMaskNoiseStatus);
+    AppendDebugLogIfChanged("Sediment GPU", g_sedimentComputeStatus, previousSedimentStatus);
+    AppendDebugLogIfChanged("Rock GPU", g_rockComputeStatus, previousRockStatus);
+    AppendDebugLogIfChanged("Scatter GPU", g_scatterComputeStatus, previousScatterStatus);
+    AppendDebugLogIfChanged("Mask Fluvial GPU", g_maskFluvialComputeStatus, previousMaskFluvialStatus);
+    AppendDebugLogIfChanged("Snow GPU", g_snowComputeStatus, previousSnowStatus);
+    AppendDebugLogIfChanged("Colorize GPU", g_colorizeComputeStatus, previousColorizeStatus);
+    AppendDebugLogIfChanged("GPU Preview", g_lastFrameTiming.gpuPreviewReason, previousGpuPreviewReason);
+}
+
+void DrawDebugLogWindow(float width, float height, ImGuiWindowFlags childFlags)
+{
+    const TabHeaderStyle defaultTabStyle;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::BeginChild("Debug Log Window", ImVec2(width, height), true, childFlags);
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 4.0f));
+    ImGui::BeginChild("DebugAreaHeader", ImVec2(0.0f, ImGui::GetFrameHeight() + 8.0f), false, childFlags);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("デバッグ");
+    const float closeSize = ImGui::GetFrameHeight();
+    ImGui::SameLine(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowContentRegionMax().x - closeSize));
+    if (ImGui::Button("×", ImVec2(closeSize, closeSize)))
+    {
+        g_ui.debugLogVisible = false;
+        SaveAppSettingsSilently();
+    }
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+    {
+        ImGui::SetTooltip("デバッグ領域を閉じる");
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+
+    PushTabHeaderStyle(defaultTabStyle);
+    if (ImGui::BeginTabBar("DebugLogTabs"))
+    {
+        if (ImGui::BeginTabItem("ログ"))
+        {
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 8.0f));
+            ImGui::BeginChild("DebugLogContent", ImVec2(0.0f, 0.0f), false);
+            BeginInspectorTabContent();
+            if (ImGui::SmallButton("クリア"))
+            {
+                g_debugLogEntries.clear();
+            }
+            ImGui::SameLine();
+            ImGui::Checkbox("自動スクロール", &g_debugLogAutoScroll);
+
+            ImGui::Separator();
+            ImGui::BeginChild("DebugLogScroll", ImVec2(0.0f, 0.0f), false, ImGuiWindowFlags_HorizontalScrollbar);
+            for (const DebugLogEntry& entry : g_debugLogEntries)
+            {
+                ImGui::TextDisabled("%s", entry.time.c_str());
+                ImGui::SameLine(74.0f);
+                ImGui::TextWrapped("%s", entry.message.c_str());
+            }
+            if (g_debugLogAutoScroll)
+            {
+                ImGui::SetScrollHereY(1.0f);
+            }
+            ImGui::EndChild();
+            EndInspectorTabContent();
+            ImGui::EndChild();
+            ImGui::PopStyleVar();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("診断"))
+        {
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 8.0f));
+            ImGui::BeginChild("DebugPanelContent", ImVec2(0.0f, 0.0f), false);
+            BeginInspectorTabContent();
+            DrawDebugPanel();
+            EndInspectorTabContent();
+            ImGui::EndChild();
+            ImGui::PopStyleVar();
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
+    PopTabHeaderStyle();
+
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+}
+
 void DrawUi()
 {
     static const auto start = std::chrono::steady_clock::now();
@@ -14569,6 +14818,7 @@ void DrawUi()
             g_projectStatus = "Screenshot failed: " + error;
         }
     }
+    CaptureDebugStatusLogs();
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 8.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12.0f, 9.0f));
@@ -14682,6 +14932,15 @@ void DrawUi()
             ImGui::MenuItem("削除", "Delete", false, false);
             ImGui::EndMenu();
         }
+        if (ImGui::BeginMenu("表示"))
+        {
+            if (ImGui::MenuItem("デバッグログ", nullptr, g_ui.debugLogVisible))
+            {
+                g_ui.debugLogVisible = !g_ui.debugLogVisible;
+                SaveAppSettingsSilently();
+            }
+            ImGui::EndMenu();
+        }
         if (ImGui::BeginMenu("設定"))
         {
             if (ImGui::BeginMenu("UIテーマ"))
@@ -14732,7 +14991,31 @@ void DrawUi()
 
     const TabHeaderStyle defaultTabStyle;
     const auto viewportTabsStart = std::chrono::steady_clock::now();
-    DrawViewportTabs(previewWidth, workHeight, timeSeconds, fixedPaneFlags);
+    {
+        ImGui::BeginChild("Left Work Column", ImVec2(previewWidth, workHeight), false, fixedPaneFlags);
+        const float leftColumnWidth = ImGui::GetContentRegionAvail().x;
+        constexpr float debugLogSplitterHeight = 7.0f;
+        const bool debugLogCanFit = workHeight >= 320.0f;
+        if (g_ui.debugLogVisible && debugLogCanFit)
+        {
+            float debugLogHeight = std::clamp(g_ui.debugLogHeight, 100.0f, std::max(100.0f, workHeight - 180.0f - debugLogSplitterHeight));
+            float viewportHeight = std::max(180.0f, workHeight - debugLogHeight - debugLogSplitterHeight);
+            DrawViewportTabs(leftColumnWidth, viewportHeight, timeSeconds, fixedPaneFlags);
+            const bool debugLogSplitterReleased = DrawHorizontalSplitter("ViewportDebugLogSplitter", &viewportHeight, workHeight, 180.0f, 100.0f);
+            debugLogHeight = std::max(100.0f, workHeight - viewportHeight - debugLogSplitterHeight);
+            g_ui.debugLogHeight = debugLogHeight;
+            if (debugLogSplitterReleased)
+            {
+                SaveAppSettingsSilently();
+            }
+            DrawDebugLogWindow(leftColumnWidth, debugLogHeight, fixedPaneFlags);
+        }
+        else
+        {
+            DrawViewportTabs(leftColumnWidth, workHeight, timeSeconds, fixedPaneFlags);
+        }
+        ImGui::EndChild();
+    }
     const auto viewportTabsEnd = std::chrono::steady_clock::now();
     g_frameTiming.viewportTabsMs = std::chrono::duration<double, std::milli>(viewportTabsEnd - viewportTabsStart).count();
 
@@ -14825,13 +15108,6 @@ void DrawUi()
         {
             BeginInspectorTabContent();
             DrawCameraPanel();
-            EndInspectorTabContent();
-            EndStyledTabItem(defaultTabStyle);
-        }
-        if (BeginStyledTabItem("Debug"))
-        {
-            BeginInspectorTabContent();
-            DrawDebugPanel();
             EndInspectorTabContent();
             EndStyledTabItem(defaultTabStyle);
         }

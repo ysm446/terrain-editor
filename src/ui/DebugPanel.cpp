@@ -28,6 +28,15 @@ void DrawDebugPanel(DebugPanelState state)
                 state.saveAppSettings();
             }
         }
+        if (DrawPropertyBoolRow("Frame Timing", "DebugFrameTiming", &state.showFrameStats, "Frame timing visibility changed",
+                "Shows frame timing stats in the viewport overlay.",
+                false, true))
+        {
+            if (state.saveAppSettings)
+            {
+                state.saveAppSettings();
+            }
+        }
         if (DrawPropertyBoolRow("Wireframe", "DebugWireframe", &settings.preview.showWireframe, "Wireframe visibility changed",
                 "Shows mesh edges for topology debugging. High viewport resolutions can make this expensive.",
                 rock::PreviewSettings{}.showWireframe, true))
@@ -66,46 +75,6 @@ void DrawDebugPanel(DebugPanelState state)
         renderStats.gridPass ? "Grid " : "",
         renderStats.wireframePass ? "Wireframe " : "",
         renderStats.cloudsPass ? "Clouds " : "");
-
-    const DebugPanelFrameTiming& timing = state.frameTiming;
-    ImGui::SeparatorText("Frame Timing");
-    ImGui::Text("Frame: %.2f ms", timing.frameMs);
-    ImGui::Text("Message Pump: %.2f ms", timing.messagePumpMs);
-    ImGui::Text("NewFrame: %.2f ms", timing.newFrameMs);
-    ImGui::Text("Main Thread Work: %.2f ms", timing.mainThreadWorkMs);
-    ImGui::Text("DrawUi: %.2f ms", timing.drawUiMs);
-    ImGui::Text("Viewport Tabs: %.2f ms", timing.viewportTabsMs);
-    ImGui::Text("Node Editor: %.2f ms", timing.nodeEditorMs);
-    ImGui::Text("  Dots: %.2f ms", timing.nodeEditorDotsMs);
-    ImGui::Text("  Shadows: %.2f ms", timing.nodeEditorShadowsMs);
-    ImGui::Text("  Nodes: %.2f ms", timing.nodeEditorNodesMs);
-    ImGui::Text("  Links: %.2f ms", timing.nodeEditorLinksMs);
-    ImGui::Text("  Interaction: %.2f ms", timing.nodeEditorInteractionMs);
-    ImGui::Text("  Positions: %.2f ms", timing.nodeEditorPositionMs);
-    ImGui::Text("  Count: %d nodes / %d links", timing.nodeCount, timing.linkCount);
-    ImGui::Text("Inspector: %.2f ms", timing.inspectorMs);
-    ImGui::Text("Status Bar: %.2f ms", timing.statusBarMs);
-    ImGui::Text("GPU Preview: %.2f ms", timing.gpuPreviewMs);
-    ImGui::TextWrapped("GPU Preview Reason: %s", timing.gpuPreviewReason.empty() ? "-" : timing.gpuPreviewReason.c_str());
-    ImGui::Text("ImGui Render: %.2f ms", timing.imguiRenderMs);
-    ImGui::Text("RenderFrame: %.2f ms", timing.renderFrameMs);
-    ImGui::Text("Present: %.2f ms", timing.presentMs);
-    ImGui::Text("Frame Limit Sleep: %.2f ms", timing.frameLimitSleepMs);
-    ImGui::Text("Background Sleep: %.2f ms", timing.backgroundSleepMs);
-    ImGui::Text("Fence Wait: %.2f ms", timing.fenceWaitMs);
-    if (timing.frameRateLimitFps > 0)
-    {
-        ImGui::Text("FPS Limit: %d", timing.frameRateLimitFps);
-    }
-    else
-    {
-        ImGui::TextUnformatted("FPS Limit: Unlimited");
-    }
-    ImGui::Text("Window: active=%s foreground=%s minimized=%s throttled=%s",
-        timing.windowActive ? "true" : "false",
-        timing.windowForeground ? "true" : "false",
-        timing.windowMinimized ? "true" : "false",
-        timing.backgroundThrottled ? "true" : "false");
 
     ImGui::SeparatorText("Displayed Mesh");
     ImGui::Text("Mesh Resolution: %d", renderStats.displayMeshResolution);
