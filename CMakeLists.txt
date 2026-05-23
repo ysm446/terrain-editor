@@ -30,6 +30,7 @@ add_executable(terrain_editor WIN32
     src/evaluation/ShapeSource.cpp
     src/evaluation/Snow.cpp
     src/gpu/ColorizeCompute.cpp
+    src/gpu/MaskFluvialCompute.cpp
     src/gpu/MaskNoiseCompute.cpp
     src/gpu/RockCompute.cpp
     src/gpu/ScatterCompute.cpp
