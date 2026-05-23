@@ -13,6 +13,10 @@
 - GPU backend は複数ノードで導入済み。`Scatter` は `Mask` 入力なし、`Ground Detail Level = Max` の場合に GPU 評価し、それ以外や失敗時は CPU にフォールバックする。
 - 次の大きな候補は、`Crumbling` のランダム散らばり改善、`Scatter` を使った植生分布ワークフローの確認、`Spline` / `River` / `Lake` の仕様整理。
 
+## 2026-05-24
+
+- `エクスポート` タブをノードのテクスチャー出力用に見直し、現在プレビュー中の出力を `Mask` は 8bit モノクロ PNG、`Color Texture` は 8bit カラー PNG、`Heightmap` は 16bit モノクロ PNG として保存できるようにした。書き出し時は現在の `Simulation Resolution` を使い、出力解像度はその設定値以下から選べるようにした。
+
 ## 2026-05-23
 
 - 表示設定に `Water Surface` を追加し、`Water Level (m)`、`Opacity`、`Water Color` でビューポート専用の透明な水面を調整できるようにした。断面確認用に地形外周へ水ボリューム側面も描画する。

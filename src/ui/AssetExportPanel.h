@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <functional>
 #include <string>
 
@@ -11,7 +12,9 @@ struct AssetExportPanelState
 {
     const rock::EvaluationSummary& evaluation;
     std::string& exportStatus;
-    std::function<void()> ensurePreviewMesh;
+    int maxExportResolution = 512;
+    std::function<bool(const std::filesystem::path&, int, std::string*)> exportTexture;
+    std::function<void(const std::filesystem::path&)> openExportFolder;
 };
 
 void DrawAssetExportPanel(AssetExportPanelState state);

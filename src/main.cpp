@@ -39,6 +39,7 @@
 #include "node_graph.h"
 #include "resource.h"
 #include "screenshot_capture.h"
+#include "texture_exporter.h"
 #include "ui/AssetExportPanel.h"
 #include "ui/CameraPanel.h"
 #include "ui/DebugPanel.h"
@@ -1660,7 +1661,6 @@ void ProcessPendingScatterGpuRequests();
 void ProcessPendingMaskFluvialGpuRequests();
 void ProcessPendingSnowGpuRequests();
 void ProcessPendingColorizeGpuRequests();
-void EnsurePreviewMesh();
 int CurrentPreviewMeshResolution();
 bool IsTerrainNodeKind(rock::NodeKind kind);
 void ResetViewport();
@@ -9964,12 +9964,31 @@ void WaitForAsyncEvaluationForShutdown()
     g_evaluationPending = false;
 }
 
-void EnsurePreviewMesh()
+bool ExportCurrentPreviewTexture(const std::filesystem::path& path, int resolution, std::string* error)
 {
-    if (g_graph.Evaluation().dirty)
+    if (g_evaluationInFlight)
     {
-        EvaluateGraphSync();
+        if (error != nullptr) *error = "Evaluation is still running";
+        return false;
     }
+
+    rock::NodeGraph exportGraph = g_graph;
+    exportGraph.MarkDirty("Texture export");
+    exportGraph.Evaluate(0);
+    return terrain::ExportPreviewTexturePng(exportGraph.Evaluation(), path, resolution, error);
+}
+
+void OpenExportFolder(const std::filesystem::path& exportPath)
+{
+    std::filesystem::path folder = exportPath.parent_path();
+    if (folder.empty())
+    {
+        folder = std::filesystem::current_path();
+    }
+
+    std::error_code ec;
+    std::filesystem::create_directories(folder, ec);
+    OpenFolderInExplorer(folder);
 }
 
 float DefaultViewportOrbitDistance()
@@ -14292,7 +14311,13 @@ void DrawAssetExportPanel()
     terrain::ui::DrawAssetExportPanel({
         g_graph.Evaluation(),
         g_exportStatus,
-        []() { EnsurePreviewMesh(); },
+        g_graph.Settings().preview.simulationResolution,
+        [](const std::filesystem::path& path, int resolution, std::string* error) {
+            return ExportCurrentPreviewTexture(path, resolution, error);
+        },
+        [](const std::filesystem::path& path) {
+            OpenExportFolder(path);
+        },
     });
 }
 
