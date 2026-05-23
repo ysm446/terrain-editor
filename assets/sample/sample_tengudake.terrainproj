@@ -1,5 +1,5 @@
 {
-  "appVersion": "0.18.37",
+  "appVersion": "0.19.36",
   "format": "terrain_editor_project",
   "formatVersion": 1,
   "links": [
@@ -234,11 +234,6 @@
       "startPin": 100241
     },
     {
-      "endPin": 100251,
-      "id": 100254,
-      "startPin": 100121
-    },
-    {
       "endPin": 100252,
       "id": 100255,
       "startPin": 100246
@@ -272,6 +267,41 @@
       "endPin": 100194,
       "id": 100268,
       "startPin": 100260
+    },
+    {
+      "endPin": 100270,
+      "id": 100273,
+      "startPin": 100196
+    },
+    {
+      "endPin": 100277,
+      "id": 100280,
+      "startPin": 100272
+    },
+    {
+      "endPin": 100275,
+      "id": 100281,
+      "startPin": 100271
+    },
+    {
+      "endPin": 100276,
+      "id": 100282,
+      "startPin": 100211
+    },
+    {
+      "endPin": 100284,
+      "id": 100286,
+      "startPin": 100271
+    },
+    {
+      "endPin": 100278,
+      "id": 100287,
+      "startPin": 100285
+    },
+    {
+      "endPin": 100251,
+      "id": 100289,
+      "startPin": 100121
     }
   ],
   "nodePositions": {
@@ -324,8 +354,8 @@
       490.0
     ],
     "100118": [
-      2753.0,
-      658.0
+      2755.0,
+      554.0
     ],
     "100131": [
       2349.0,
@@ -348,8 +378,8 @@
       1610.0
     ],
     "100166": [
-      2647.0,
-      1658.0
+      2641.0,
+      1618.0
     ],
     "100169": [
       2281.0,
@@ -360,7 +390,7 @@
       1274.0
     ],
     "100177": [
-      2637.0,
+      2641.0,
       1474.0
     ],
     "100181": [
@@ -373,7 +403,7 @@
     ],
     "100193": [
       4493.0,
-      698.0
+      498.0
     ],
     "100206": [
       6243.0,
@@ -405,7 +435,19 @@
     ],
     "100257": [
       3953.0,
-      706.0
+      506.0
+    ],
+    "100269": [
+      6241.0,
+      754.0
+    ],
+    "100274": [
+      6989.0,
+      506.0
+    ],
+    "100283": [
+      6621.0,
+      802.0
     ],
     "4": [
       -269.0,
@@ -447,6 +489,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -604,12 +647,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 2
+        "smoothingIterations": 2,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Import Heightmap"
     },
@@ -638,6 +688,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -795,12 +846,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 2
+        "smoothingIterations": 2,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Import Heightmap"
     },
@@ -829,6 +887,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -1002,12 +1061,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 2
+        "smoothingIterations": 2,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Multi-Scale Erosion"
     },
@@ -1036,6 +1102,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -1199,12 +1266,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 2
+        "smoothingIterations": 2,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Heightmap Blur"
     },
@@ -1233,6 +1307,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -1396,12 +1471,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 2
+        "smoothingIterations": 2,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Mask Fluvial"
     },
@@ -1430,6 +1512,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -1608,12 +1691,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 2
+        "smoothingIterations": 2,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Rock"
     },
@@ -1642,6 +1732,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -1810,12 +1901,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 2
+        "smoothingIterations": 2,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Sediment"
     },
@@ -1994,6 +2092,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -2172,12 +2271,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 2
+        "smoothingIterations": 2,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Colorize"
     },
@@ -2206,6 +2312,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -2374,12 +2481,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 0.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 32.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 40.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 40.0,
-        "smoothingIterations": 1
+        "smoothingIterations": 4,
+        "surfaceSmoothing": 0.75,
+        "transportRate": 0.6000000238418579
       },
       "title": "Snow"
     },
@@ -2564,6 +2678,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -2742,12 +2857,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 8
+        "smoothingIterations": 8,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Colorize"
     },
@@ -2776,6 +2898,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -2939,12 +3062,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 8
+        "smoothingIterations": 8,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Mask Curvature"
     },
@@ -2973,6 +3103,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -3136,12 +3267,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 8
+        "smoothingIterations": 8,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Mask Slope"
     },
@@ -3332,6 +3470,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -3510,12 +3649,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 8
+        "smoothingIterations": 8,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Colorize"
     },
@@ -3544,6 +3690,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -3707,12 +3854,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 8
+        "smoothingIterations": 8,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Mask Fluvial"
     },
@@ -3741,6 +3895,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -3904,12 +4059,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 8
+        "smoothingIterations": 8,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Mask Levels"
     },
@@ -3938,6 +4100,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -4106,12 +4269,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 8
+        "smoothingIterations": 8,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Mask Blend"
     },
@@ -4134,12 +4304,13 @@
         ]
       },
       "crumbling": {
-        "debrisAmount": 1.0,
-        "debrisSizeMaxM": 20.0,
-        "debrisSizeMinM": 5.0,
-        "gravity": 0.009999999776482582,
-        "physicsCount": 48,
+        "debrisAmount": 0.30000001192092896,
+        "debrisSizeMaxM": 30.0,
+        "debrisSizeMinM": 15.0,
+        "gravity": 0.07999999821186066,
+        "physicsCount": 20,
         "seed": 0,
+        "spread": 0.75,
         "style": 1
       },
       "heightmap": {
@@ -4318,12 +4489,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 8
+        "smoothingIterations": 8,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Crumbling"
     },
@@ -4352,6 +4530,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -4515,12 +4694,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 8
+        "smoothingIterations": 8,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Mask Levels"
     },
@@ -4549,6 +4735,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -4717,12 +4904,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 8
+        "smoothingIterations": 8,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Mask Blend"
     },
@@ -4751,6 +4945,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -4919,12 +5114,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 8
+        "smoothingIterations": 8,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Mask Blend"
     },
@@ -4953,6 +5155,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -5116,12 +5319,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 8
+        "smoothingIterations": 8,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Mask Levels"
     },
@@ -5150,6 +5360,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -5307,12 +5518,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 8
+        "smoothingIterations": 8,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Mask Noise"
     },
@@ -5341,6 +5559,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -5504,12 +5723,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 8
+        "smoothingIterations": 8,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Mask Fluvial"
     },
@@ -5538,6 +5764,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -5701,12 +5928,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 8
+        "smoothingIterations": 8,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Mask Levels"
     },
@@ -5735,6 +5969,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -5898,12 +6133,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 8
+        "smoothingIterations": 8,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Mask Slope"
     },
@@ -5932,6 +6174,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -6100,12 +6343,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 8
+        "smoothingIterations": 8,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Mask Blend"
     },
@@ -6134,6 +6384,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -6302,12 +6553,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 8
+        "smoothingIterations": 8,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Mask Blend"
     },
@@ -6336,6 +6594,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -6514,12 +6773,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 8
+        "smoothingIterations": 8,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Scatter"
     },
@@ -6674,6 +6940,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -6852,12 +7119,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 2
+        "smoothingIterations": 2,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Colorize"
     },
@@ -6886,6 +7160,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -7049,12 +7324,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 8
+        "smoothingIterations": 8,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Mask Curvature"
     },
@@ -7083,6 +7365,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -7246,12 +7529,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 8
+        "smoothingIterations": 8,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Mask Slope"
     },
@@ -7280,6 +7570,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -7448,12 +7739,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 8
+        "smoothingIterations": 8,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Mask Blend"
     },
@@ -7482,6 +7780,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -7650,12 +7949,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 8
+        "smoothingIterations": 8,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Mask Blend"
     },
@@ -7684,6 +7990,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -7847,12 +8154,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 8
+        "smoothingIterations": 8,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Mask Levels"
     },
@@ -7881,6 +8195,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -8049,12 +8364,19 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 8
+        "smoothingIterations": 8,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Mask Blend"
     },
@@ -8083,6 +8405,7 @@
         "gravity": 0.75,
         "physicsCount": 48,
         "seed": 0,
+        "spread": 0.3499999940395355,
         "style": 2
       },
       "heightmap": {
@@ -8261,14 +8584,656 @@
       "snow": {
         "backend": 1,
         "emissionAmount": 1.0,
+        "emissionTime": 1.0,
         "fillRadius": 3,
+        "iterationCount": 40,
         "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
         "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
         "slopeLimitMaxDeg": 60.0,
         "slopeLimitMinDeg": 50.0,
-        "smoothingIterations": 8
+        "smoothingIterations": 8,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
       },
       "title": "Scatter"
+    },
+    {
+      "colorize": {
+        "backend": 1,
+        "stops": [
+          {
+            "b": 0.0,
+            "g": 0.0,
+            "position": 0.0,
+            "r": 0.0
+          },
+          {
+            "b": 1.0,
+            "g": 1.0,
+            "position": 1.0,
+            "r": 1.0
+          }
+        ]
+      },
+      "crumbling": {
+        "debrisAmount": 0.6499999761581421,
+        "debrisSizeMaxM": 8.0,
+        "debrisSizeMinM": 2.0,
+        "gravity": 0.75,
+        "physicsCount": 48,
+        "seed": 0,
+        "spread": 0.3499999940395355,
+        "style": 2
+      },
+      "heightmap": {
+        "path": "",
+        "relativeVerticalScalePercent": 100.0,
+        "scaleMeters": 1024.0,
+        "verticalOffsetMeters": 0.0
+      },
+      "heightmapBlur": {
+        "iterations": 1,
+        "radius": 3.0,
+        "strength": 1.0
+      },
+      "id": 100269,
+      "inputs": [
+        {
+          "id": 100270,
+          "label": "Heightmap",
+          "valueType": 2
+        }
+      ],
+      "kind": 14,
+      "maskBlend": {
+        "intensity": 1.0,
+        "mode": 0
+      },
+      "maskCurvature": {
+        "gamma": 1.0,
+        "largestDetailLevelM": 8.0,
+        "mode": 2,
+        "radius": 3,
+        "sensitivityMeters": 1.0,
+        "threshold": 0.0
+      },
+      "maskFluvial": {
+        "accumulationThreshold": 0.0,
+        "algorithm": 1,
+        "backend": 1,
+        "gamma": 0.5,
+        "largestDetailLevelM": 8.0,
+        "mfdExponent": 4.0,
+        "outputCurve": 0,
+        "particleCount": 32768,
+        "particleInertia": 0.550000011920929,
+        "particleLifetime": 96,
+        "particleSeed": 1337,
+        "particleStepLengthM": 4.0,
+        "power": 1.600000023841858,
+        "simulationMode": 0,
+        "softness": 0.15000000596046448
+      },
+      "maskHeight": {
+        "featherMeters": 0.0,
+        "gamma": 1.0,
+        "heightMaxMeters": 1000.0,
+        "heightMinMeters": 0.0,
+        "invert": false,
+        "useFullRange": false
+      },
+      "maskLevels": {
+        "blackPoint": 0.0,
+        "gamma": 1.0,
+        "invert": false,
+        "whitePoint": 1.0
+      },
+      "maskNoise": {
+        "backend": 1,
+        "frequency": 4.0,
+        "lacunarity": 2.0,
+        "octaves": 4,
+        "persistence": 0.5,
+        "seed": 0
+      },
+      "maskSlope": {
+        "gamma": 1.0,
+        "invert": false,
+        "largestDetailLevelM": 0.0,
+        "slopeMaxDeg": 60.0,
+        "slopeMinDeg": 25.0
+      },
+      "multiScaleErosion": {
+        "backend": 0,
+        "depositionStrength": 0.20000000298023224,
+        "enableDeposition": true,
+        "enableStreamPower": true,
+        "enableThermal": true,
+        "flowExponent": 1.2999999523162842,
+        "iterations": 50,
+        "maxStreamPower": 10000.0,
+        "rain": 2.5999999046325684,
+        "slopeExponent": 2.0,
+        "speStrength": 0.004000000189989805,
+        "speTimeStep": 1.0,
+        "streamExponent": 0.8999999761581421,
+        "thermalAngleDegrees": 30.0,
+        "thermalNoiseMax": 1.399999976158142,
+        "thermalNoiseMin": 0.8999999761581421,
+        "thermalNoiseWavelength": 0.002300000051036477,
+        "thermalNoisifyAngle": true,
+        "thermalStrength": 0.004999999888241291,
+        "useMultigrid": true
+      },
+      "outputs": [
+        {
+          "id": 100271,
+          "label": "Heightmap",
+          "valueType": 2
+        },
+        {
+          "id": 100272,
+          "label": "Snow",
+          "valueType": 3
+        }
+      ],
+      "rock": {
+        "aspectVariation": 0.30000001192092896,
+        "backend": 1,
+        "bumpiness": 0.6000000238418579,
+        "coverage": 1.0,
+        "density": 8.0,
+        "edgeSharpness": 1.0,
+        "facetScale": 2.5,
+        "facetSharpness": 0.5,
+        "groundDetailLevelM": 0.0,
+        "heightJitter": 0.5,
+        "layerCount": 1,
+        "orientationRule": 0,
+        "rockHeight": 1.5,
+        "rockSizeMaxM": 10.0,
+        "rockSizeMinM": 5.0,
+        "rotationVariation": 1.0,
+        "seed": 0,
+        "style": 1
+      },
+      "scatter": {
+        "aspectVariation": 0.30000001192092896,
+        "backend": 1,
+        "coverage": 1.0,
+        "density": 8.0,
+        "groundDetailLevelM": 0.0,
+        "height": 0.0,
+        "heightJitter": 0.5,
+        "orientationRule": 0,
+        "rotationVariation": 1.0,
+        "seed": 0,
+        "shapeType": 0,
+        "sizeMaxM": 10.0,
+        "sizeMinM": 5.0
+      },
+      "sediment": {
+        "backend": 1,
+        "convertTerrainToSediment": true,
+        "emissionAmountM": 0.5,
+        "emissionTime": 0.0,
+        "iterations": 40,
+        "largestDetailLevelM": 8.0,
+        "maskContrast": 0.0,
+        "sedimentViscosity": 0.20000000298023224,
+        "stabilizationIterations": 2
+      },
+      "shape": {
+        "kind": 0,
+        "relativeHeightPercent": 50.0,
+        "scaleMeters": 1024.0
+      },
+      "snow": {
+        "backend": 1,
+        "emissionAmount": 0.5,
+        "emissionTime": 1.0,
+        "fillRadius": 3,
+        "iterationCount": 60,
+        "largestDetailLevelM": 32.0,
+        "maskFeatherM": 0.014999999664723873,
+        "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 29.200000762939453,
+        "slopeLimitMaxDeg": 15.0,
+        "slopeLimitMinDeg": 5.0,
+        "smoothingIterations": 4,
+        "surfaceSmoothing": 0.75,
+        "transportRate": 0.3499999940395355
+      },
+      "title": "Snow"
+    },
+    {
+      "colorize": {
+        "backend": 1,
+        "stops": [
+          {
+            "b": 1.0,
+            "g": 0.976260781288147,
+            "position": 0.0,
+            "r": 0.9191489219665527
+          },
+          {
+            "b": 1.0,
+            "g": 1.0,
+            "position": 1.0,
+            "r": 1.0
+          }
+        ]
+      },
+      "crumbling": {
+        "debrisAmount": 0.6499999761581421,
+        "debrisSizeMaxM": 8.0,
+        "debrisSizeMinM": 2.0,
+        "gravity": 0.75,
+        "physicsCount": 48,
+        "seed": 0,
+        "spread": 0.3499999940395355,
+        "style": 2
+      },
+      "heightmap": {
+        "path": "",
+        "relativeVerticalScalePercent": 100.0,
+        "scaleMeters": 1024.0,
+        "verticalOffsetMeters": 0.0
+      },
+      "heightmapBlur": {
+        "iterations": 1,
+        "radius": 3.0,
+        "strength": 1.0
+      },
+      "id": 100274,
+      "inputs": [
+        {
+          "id": 100275,
+          "label": "Heightmap",
+          "valueType": 2
+        },
+        {
+          "id": 100276,
+          "label": "Base Color",
+          "valueType": 4
+        },
+        {
+          "id": 100277,
+          "label": "Mask",
+          "valueType": 3
+        },
+        {
+          "id": 100278,
+          "label": "Gradient Mask",
+          "valueType": 3
+        }
+      ],
+      "kind": 15,
+      "maskBlend": {
+        "intensity": 1.0,
+        "mode": 0
+      },
+      "maskCurvature": {
+        "gamma": 1.0,
+        "largestDetailLevelM": 8.0,
+        "mode": 2,
+        "radius": 3,
+        "sensitivityMeters": 1.0,
+        "threshold": 0.0
+      },
+      "maskFluvial": {
+        "accumulationThreshold": 0.0,
+        "algorithm": 1,
+        "backend": 1,
+        "gamma": 0.5,
+        "largestDetailLevelM": 8.0,
+        "mfdExponent": 4.0,
+        "outputCurve": 0,
+        "particleCount": 32768,
+        "particleInertia": 0.550000011920929,
+        "particleLifetime": 96,
+        "particleSeed": 1337,
+        "particleStepLengthM": 4.0,
+        "power": 1.600000023841858,
+        "simulationMode": 0,
+        "softness": 0.15000000596046448
+      },
+      "maskHeight": {
+        "featherMeters": 0.0,
+        "gamma": 1.0,
+        "heightMaxMeters": 1000.0,
+        "heightMinMeters": 0.0,
+        "invert": false,
+        "useFullRange": false
+      },
+      "maskLevels": {
+        "blackPoint": 0.0,
+        "gamma": 1.0,
+        "invert": false,
+        "whitePoint": 1.0
+      },
+      "maskNoise": {
+        "backend": 1,
+        "frequency": 4.0,
+        "lacunarity": 2.0,
+        "octaves": 4,
+        "persistence": 0.5,
+        "seed": 0
+      },
+      "maskSlope": {
+        "gamma": 1.0,
+        "invert": false,
+        "largestDetailLevelM": 0.0,
+        "slopeMaxDeg": 60.0,
+        "slopeMinDeg": 25.0
+      },
+      "multiScaleErosion": {
+        "backend": 0,
+        "depositionStrength": 0.20000000298023224,
+        "enableDeposition": true,
+        "enableStreamPower": true,
+        "enableThermal": true,
+        "flowExponent": 1.2999999523162842,
+        "iterations": 50,
+        "maxStreamPower": 10000.0,
+        "rain": 2.5999999046325684,
+        "slopeExponent": 2.0,
+        "speStrength": 0.004000000189989805,
+        "speTimeStep": 1.0,
+        "streamExponent": 0.8999999761581421,
+        "thermalAngleDegrees": 30.0,
+        "thermalNoiseMax": 1.399999976158142,
+        "thermalNoiseMin": 0.8999999761581421,
+        "thermalNoiseWavelength": 0.002300000051036477,
+        "thermalNoisifyAngle": true,
+        "thermalStrength": 0.004999999888241291,
+        "useMultigrid": true
+      },
+      "outputs": [
+        {
+          "id": 100279,
+          "label": "Color Texture",
+          "valueType": 4
+        }
+      ],
+      "rock": {
+        "aspectVariation": 0.30000001192092896,
+        "backend": 1,
+        "bumpiness": 0.6000000238418579,
+        "coverage": 1.0,
+        "density": 8.0,
+        "edgeSharpness": 1.0,
+        "facetScale": 2.5,
+        "facetSharpness": 0.5,
+        "groundDetailLevelM": 0.0,
+        "heightJitter": 0.5,
+        "layerCount": 1,
+        "orientationRule": 0,
+        "rockHeight": 1.5,
+        "rockSizeMaxM": 10.0,
+        "rockSizeMinM": 5.0,
+        "rotationVariation": 1.0,
+        "seed": 0,
+        "style": 1
+      },
+      "scatter": {
+        "aspectVariation": 0.30000001192092896,
+        "backend": 1,
+        "coverage": 1.0,
+        "density": 8.0,
+        "groundDetailLevelM": 0.0,
+        "height": 0.0,
+        "heightJitter": 0.5,
+        "orientationRule": 0,
+        "rotationVariation": 1.0,
+        "seed": 0,
+        "shapeType": 0,
+        "sizeMaxM": 10.0,
+        "sizeMinM": 5.0
+      },
+      "sediment": {
+        "backend": 1,
+        "convertTerrainToSediment": true,
+        "emissionAmountM": 0.5,
+        "emissionTime": 0.0,
+        "iterations": 40,
+        "largestDetailLevelM": 8.0,
+        "maskContrast": 0.0,
+        "sedimentViscosity": 0.20000000298023224,
+        "stabilizationIterations": 2
+      },
+      "shape": {
+        "kind": 0,
+        "relativeHeightPercent": 50.0,
+        "scaleMeters": 1024.0
+      },
+      "snow": {
+        "backend": 1,
+        "emissionAmount": 1.0,
+        "emissionTime": 1.0,
+        "fillRadius": 3,
+        "iterationCount": 40,
+        "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
+        "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
+        "slopeLimitMaxDeg": 60.0,
+        "slopeLimitMinDeg": 50.0,
+        "smoothingIterations": 8,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
+      },
+      "title": "Colorize"
+    },
+    {
+      "colorize": {
+        "backend": 1,
+        "stops": [
+          {
+            "b": 0.0,
+            "g": 0.0,
+            "position": 0.0,
+            "r": 0.0
+          },
+          {
+            "b": 1.0,
+            "g": 1.0,
+            "position": 1.0,
+            "r": 1.0
+          }
+        ]
+      },
+      "crumbling": {
+        "debrisAmount": 0.6499999761581421,
+        "debrisSizeMaxM": 8.0,
+        "debrisSizeMinM": 2.0,
+        "gravity": 0.75,
+        "physicsCount": 48,
+        "seed": 0,
+        "spread": 0.3499999940395355,
+        "style": 2
+      },
+      "heightmap": {
+        "path": "",
+        "relativeVerticalScalePercent": 100.0,
+        "scaleMeters": 1024.0,
+        "verticalOffsetMeters": 0.0
+      },
+      "heightmapBlur": {
+        "iterations": 1,
+        "radius": 3.0,
+        "strength": 1.0
+      },
+      "id": 100283,
+      "inputs": [
+        {
+          "id": 100284,
+          "label": "Heightmap",
+          "valueType": 2
+        }
+      ],
+      "kind": 11,
+      "maskBlend": {
+        "intensity": 1.0,
+        "mode": 0
+      },
+      "maskCurvature": {
+        "gamma": 1.0,
+        "largestDetailLevelM": 8.0,
+        "mode": 2,
+        "radius": 3,
+        "sensitivityMeters": 1.0,
+        "threshold": 0.0
+      },
+      "maskFluvial": {
+        "accumulationThreshold": 0.0,
+        "algorithm": 1,
+        "backend": 1,
+        "gamma": 0.5,
+        "largestDetailLevelM": 4.0,
+        "mfdExponent": 4.0,
+        "outputCurve": 0,
+        "particleCount": 32768,
+        "particleInertia": 0.550000011920929,
+        "particleLifetime": 96,
+        "particleSeed": 1337,
+        "particleStepLengthM": 4.0,
+        "power": 1.600000023841858,
+        "simulationMode": 0,
+        "softness": 0.15000000596046448
+      },
+      "maskHeight": {
+        "featherMeters": 0.0,
+        "gamma": 1.0,
+        "heightMaxMeters": 1000.0,
+        "heightMinMeters": 0.0,
+        "invert": false,
+        "useFullRange": false
+      },
+      "maskLevels": {
+        "blackPoint": 0.0,
+        "gamma": 1.0,
+        "invert": false,
+        "whitePoint": 1.0
+      },
+      "maskNoise": {
+        "backend": 1,
+        "frequency": 4.0,
+        "lacunarity": 2.0,
+        "octaves": 4,
+        "persistence": 0.5,
+        "seed": 0
+      },
+      "maskSlope": {
+        "gamma": 1.0,
+        "invert": false,
+        "largestDetailLevelM": 0.0,
+        "slopeMaxDeg": 60.0,
+        "slopeMinDeg": 25.0
+      },
+      "multiScaleErosion": {
+        "backend": 0,
+        "depositionStrength": 0.20000000298023224,
+        "enableDeposition": true,
+        "enableStreamPower": true,
+        "enableThermal": true,
+        "flowExponent": 1.2999999523162842,
+        "iterations": 50,
+        "maxStreamPower": 10000.0,
+        "rain": 2.5999999046325684,
+        "slopeExponent": 2.0,
+        "speStrength": 0.004000000189989805,
+        "speTimeStep": 1.0,
+        "streamExponent": 0.8999999761581421,
+        "thermalAngleDegrees": 30.0,
+        "thermalNoiseMax": 1.399999976158142,
+        "thermalNoiseMin": 0.8999999761581421,
+        "thermalNoiseWavelength": 0.002300000051036477,
+        "thermalNoisifyAngle": true,
+        "thermalStrength": 0.004999999888241291,
+        "useMultigrid": true
+      },
+      "outputs": [
+        {
+          "id": 100285,
+          "label": "Mask",
+          "valueType": 3
+        }
+      ],
+      "rock": {
+        "aspectVariation": 0.30000001192092896,
+        "backend": 1,
+        "bumpiness": 0.6000000238418579,
+        "coverage": 1.0,
+        "density": 8.0,
+        "edgeSharpness": 1.0,
+        "facetScale": 2.5,
+        "facetSharpness": 0.5,
+        "groundDetailLevelM": 0.0,
+        "heightJitter": 0.5,
+        "layerCount": 1,
+        "orientationRule": 0,
+        "rockHeight": 1.5,
+        "rockSizeMaxM": 10.0,
+        "rockSizeMinM": 5.0,
+        "rotationVariation": 1.0,
+        "seed": 0,
+        "style": 1
+      },
+      "scatter": {
+        "aspectVariation": 0.30000001192092896,
+        "backend": 1,
+        "coverage": 1.0,
+        "density": 8.0,
+        "groundDetailLevelM": 0.0,
+        "height": 0.0,
+        "heightJitter": 0.5,
+        "orientationRule": 0,
+        "rotationVariation": 1.0,
+        "seed": 0,
+        "shapeType": 0,
+        "sizeMaxM": 10.0,
+        "sizeMinM": 5.0
+      },
+      "sediment": {
+        "backend": 1,
+        "convertTerrainToSediment": true,
+        "emissionAmountM": 0.5,
+        "emissionTime": 0.0,
+        "iterations": 40,
+        "largestDetailLevelM": 8.0,
+        "maskContrast": 0.0,
+        "sedimentViscosity": 0.20000000298023224,
+        "stabilizationIterations": 2
+      },
+      "shape": {
+        "kind": 0,
+        "relativeHeightPercent": 50.0,
+        "scaleMeters": 1024.0
+      },
+      "snow": {
+        "backend": 1,
+        "emissionAmount": 1.0,
+        "emissionTime": 1.0,
+        "fillRadius": 3,
+        "iterationCount": 40,
+        "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
+        "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
+        "slopeLimitMaxDeg": 60.0,
+        "slopeLimitMinDeg": 50.0,
+        "smoothingIterations": 8,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
+      },
+      "title": "Mask Fluvial"
     }
   ],
   "previewPinId": 100211,
@@ -8277,50 +9242,57 @@
   "selectedNodeIds": [],
   "settings": {
     "clouds": {
-      "absorption": 0.3499999940395355,
-      "altitudeMax": 2400.0,
-      "altitudeMin": 200.0,
-      "animate": true,
+      "absorption": 0.15000000596046448,
+      "altitudeMax": 2256.0,
+      "altitudeMin": 197.0,
+      "animate": false,
       "color": [
         1.0,
         1.0,
         1.0
       ],
-      "coverage": 0.38499999046325684,
-      "densityMultiplier": 0.4000000059604645,
+      "coverage": 0.3790000081062317,
+      "densityMultiplier": 1.0,
       "enabled": true,
       "fieldFalloff": 700.0,
       "fieldRadius": 1500.0,
       "horizontalScale": 4000.0,
       "lightSamples": 6,
       "lightStepMeters": 80.0,
-      "phaseEccentricity": 0.4000000059604645,
+      "loopPhase": 0.01965000107884407,
+      "phaseEccentricity": 0.0,
       "qualitySamples": 32,
-      "seed": 0,
+      "seed": 6098,
+      "selfShadowEnabled": true,
+      "shadowAmbientStrength": 2.0,
       "shadowResolution": 1024,
       "shadowSamples": 16,
       "shadowStrength": 0.699999988079071,
       "windDirectionDegrees": 135.0,
-      "windSpeedMetersPerSec": 40.0
+      "windSpeedMetersPerSec": 95.36599731445313
     },
     "display": {
       "cloudsEnabled": true,
       "mode": 2,
-      "showFps": false
+      "showFps": true
     },
     "preview": {
-      "ambientStrength": 0.3799999952316284,
+      "ambientStrength": 0.6000000238418579,
+      "aoEnabled": true,
+      "aoRadius": 10.0,
+      "aoStrength": 0.699999988079071,
       "depthOfFieldEnabled": false,
       "dofApertureBlades": 6,
       "dofApertureRotationDegrees": 0.0,
       "dofApertureShape": 0,
       "dofFStop": 4.0,
-      "dofFocusDistanceMeters": 877.5999755859375,
+      "dofFocusDistanceMeters": 5526.75732421875,
       "dofHighlightBoost": 0.0,
       "dofMaxBlurPixels": 6.199999809265137,
-      "dofMiniatureEnabled": false,
+      "dofMiniatureEnabled": true,
       "dofMiniatureScale": 10.0,
       "dofSensorHeightMm": 24.0,
+      "frameRateLimitFps": 60,
       "gridCellCount": 30,
       "gridCellSizeMeters": 100.0,
       "gridColor": [
@@ -8335,16 +9307,16 @@
       "shadowMapResolution": 2048,
       "shadowStrength": 1.0,
       "showGrid": false,
-      "simulationResolution": 2048,
-      "sunAzimuthDegrees": 350.0,
+      "simulationResolution": 1024,
+      "sunAzimuthDegrees": 37.31700134277344,
       "sunDay": 21,
-      "sunDirectionMode": 1,
-      "sunElevationDegrees": 46.0369987487793,
+      "sunDirectionMode": 0,
+      "sunElevationDegrees": 31.652000427246094,
       "sunIntensity": 1.600000023841858,
       "sunLatitudeDegrees": 35.0,
       "sunLongitudeDegrees": 139.0,
       "sunMonth": 2,
-      "sunTimeHours": 10.780481338500977,
+      "sunTimeHours": 9.609749794006348,
       "sunUtcOffsetHours": 9.0,
       "terrainBoundaryMode": 2,
       "terrainSizeMeters": 2048.0,
@@ -8352,7 +9324,22 @@
       "tessellationMaxFactor": 2.0,
       "tessellationMinFactor": 1.0,
       "tessellationNearDistance": 400.0,
-      "viewportTessellation": true
+      "viewportTessellation": true,
+      "waterAnimationEnabled": true,
+      "waterColor": [
+        0.029334543272852898,
+        0.07614991813898087,
+        0.11489361524581909
+      ],
+      "waterEnabled": false,
+      "waterFresnelPower": 5.0,
+      "waterLevelMeters": 300.0,
+      "waterOpacity": 0.7900000214576721,
+      "waterReflectionStrength": 1.0,
+      "waterRefractionStrength": 0.7200000286102295,
+      "waterRefractiveIndex": 1.3300000429153442,
+      "waterSsrEnabled": true,
+      "waterWavesScale": 24.0
     },
     "sky": {
       "atmosphereDensity": 0.30000001192092896,
@@ -8370,12 +9357,12 @@
   },
   "viewport": {
     "fovDegrees": 45.0,
-    "orbitDistance": 7202.59765625,
+    "orbitDistance": 6194.2333984375,
     "pan": [
-      -6.0,
-      52.0
+      41.0,
+      62.0
     ],
-    "pitch": 0.6200000047683716,
-    "yaw": -1.3164045810699463
+    "pitch": 0.4300000071525574,
+    "yaw": 5.013566970825195
   }
 }
