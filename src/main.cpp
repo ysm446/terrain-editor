@@ -14464,13 +14464,13 @@ void EndStyledTabItem(const TabHeaderStyle& style = {})
 
 bool DrawVerticalSplitter(const char* id, float* leftWidth, float totalWidth, float minLeftWidth, float minRightWidth, float height)
 {
-    constexpr float splitterWidth = 7.0f;
-    const float maxLeftWidth = std::max(minLeftWidth, totalWidth - minRightWidth - splitterWidth);
+    constexpr float splitterHitWidth = 7.0f;
+    const float maxLeftWidth = std::max(minLeftWidth, totalWidth - minRightWidth - splitterHitWidth);
     *leftWidth = std::clamp(*leftWidth, minLeftWidth, maxLeftWidth);
 
     ImGui::SameLine();
     ImGui::PushID(id);
-    ImGui::InvisibleButton("##splitter", ImVec2(splitterWidth, height));
+    ImGui::InvisibleButton("##splitter", ImVec2(splitterHitWidth, height));
     const bool active = ImGui::IsItemActive();
     const bool hovered = ImGui::IsItemHovered();
     if (active)
@@ -14505,12 +14505,12 @@ bool DrawVerticalSplitter(const char* id, float* leftWidth, float totalWidth, fl
 
 bool DrawHorizontalSplitter(const char* id, float* topHeight, float totalHeight, float minTopHeight, float minBottomHeight)
 {
-    constexpr float splitterHeight = 7.0f;
-    const float maxTopHeight = std::max(minTopHeight, totalHeight - minBottomHeight - splitterHeight);
+    constexpr float splitterHitHeight = 7.0f;
+    const float maxTopHeight = std::max(minTopHeight, totalHeight - minBottomHeight - splitterHitHeight);
     *topHeight = std::clamp(*topHeight, minTopHeight, maxTopHeight);
 
     ImGui::PushID(id);
-    ImGui::InvisibleButton("##splitter", ImVec2(-1.0f, splitterHeight));
+    ImGui::InvisibleButton("##splitter", ImVec2(-1.0f, splitterHitHeight));
     const bool active = ImGui::IsItemActive();
     const bool hovered = ImGui::IsItemHovered();
     if (active)
@@ -14684,27 +14684,32 @@ void DrawDebugLogWindow(float width, float height, ImGuiWindowFlags childFlags)
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     ImGui::BeginChild("Debug Log Window", ImVec2(width, height), true, childFlags);
 
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 4.0f));
-    ImGui::BeginChild("DebugAreaHeader", ImVec2(0.0f, ImGui::GetFrameHeight() + 8.0f), false, childFlags);
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("デバッグ");
-    const float closeSize = ImGui::GetFrameHeight();
-    ImGui::SameLine(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowContentRegionMax().x - closeSize));
-    if (ImGui::Button("×", ImVec2(closeSize, closeSize)))
-    {
-        g_ui.debugLogVisible = false;
-        SaveAppSettingsSilently();
-    }
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-    {
-        ImGui::SetTooltip("デバッグ領域を閉じる");
-    }
-    ImGui::EndChild();
-    ImGui::PopStyleVar();
-
     PushTabHeaderStyle(defaultTabStyle);
     if (ImGui::BeginTabBar("DebugLogTabs"))
     {
+        const float closeSize = ImGui::GetFrameHeight() - 4.0f;
+        const float closeX = std::max(ImGui::GetCursorPosX(), ImGui::GetWindowContentRegionMax().x - closeSize - 8.0f);
+        ImGui::SameLine(closeX);
+        const bool closePressed = ImGui::Button("##CloseDebugArea", ImVec2(closeSize, closeSize));
+        const char* closeText = "×";
+        const ImVec2 closeMin = ImGui::GetItemRectMin();
+        const ImVec2 closeMax = ImGui::GetItemRectMax();
+        const ImVec2 closeTextSize = ImGui::CalcTextSize(closeText);
+        ImGui::GetWindowDrawList()->AddText(
+            ImVec2(
+                closeMin.x + ((closeMax.x - closeMin.x) - closeTextSize.x) * 0.5f,
+                closeMin.y + ((closeMax.y - closeMin.y) - closeTextSize.y) * 0.5f - 1.0f),
+            ImGui::GetColorU32(ImGuiCol_Text),
+            closeText);
+        if (closePressed)
+        {
+            g_ui.debugLogVisible = false;
+            SaveAppSettingsSilently();
+        }
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+        {
+            ImGui::SetTooltip("デバッグ領域を閉じる");
+        }
         if (ImGui::BeginTabItem("ログ"))
         {
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 8.0f));
@@ -14934,7 +14939,7 @@ void DrawUi()
         }
         if (ImGui::BeginMenu("表示"))
         {
-            if (ImGui::MenuItem("デバッグログ", nullptr, g_ui.debugLogVisible))
+            if (ImGui::MenuItem("デバッグ", nullptr, g_ui.debugLogVisible))
             {
                 g_ui.debugLogVisible = !g_ui.debugLogVisible;
                 SaveAppSettingsSilently();
@@ -14968,22 +14973,22 @@ void DrawUi()
     const ImVec2 content = ImGui::GetContentRegionAvail();
     const float statusBarHeight = ImGui::GetTextLineHeight() + 16.0f;
     const float workHeight = std::max(260.0f, content.y - statusBarHeight);
-    constexpr float mainSplitterWidth = 7.0f;
+    constexpr float mainSplitterHitWidth = 7.0f;
     constexpr float paneMinWidth = 320.0f;
-    const float minMainLayoutWidth = paneMinWidth * 2.0f + mainSplitterWidth;
+    const float minMainLayoutWidth = paneMinWidth * 2.0f + mainSplitterHitWidth;
     const bool mainLayoutCanFit = content.x >= minMainLayoutWidth;
     float rightPaneWidth = g_ui.rightPaneWidth;
     if (rightPaneWidth <= 0.0f)
     {
         rightPaneWidth = std::clamp(content.x * 0.42f, 480.0f, std::min(820.0f, std::max(paneMinWidth, content.x - paneMinWidth)));
     }
-    const float maxRightWidth = std::max(paneMinWidth, content.x - paneMinWidth - mainSplitterWidth);
+    const float maxRightWidth = std::max(paneMinWidth, content.x - paneMinWidth - mainSplitterHitWidth);
     rightPaneWidth = std::clamp(rightPaneWidth, paneMinWidth, maxRightWidth);
     if (mainLayoutCanFit)
     {
         g_ui.rightPaneWidth = rightPaneWidth;
     }
-    float previewWidth = std::max(paneMinWidth, content.x - rightPaneWidth - mainSplitterWidth);
+    float previewWidth = std::max(paneMinWidth, content.x - rightPaneWidth - mainSplitterHitWidth);
 
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 0.0f);
@@ -14994,15 +14999,15 @@ void DrawUi()
     {
         ImGui::BeginChild("Left Work Column", ImVec2(previewWidth, workHeight), false, fixedPaneFlags);
         const float leftColumnWidth = ImGui::GetContentRegionAvail().x;
-        constexpr float debugLogSplitterHeight = 7.0f;
+        constexpr float debugLogSplitterHitHeight = 7.0f;
         const bool debugLogCanFit = workHeight >= 320.0f;
         if (g_ui.debugLogVisible && debugLogCanFit)
         {
-            float debugLogHeight = std::clamp(g_ui.debugLogHeight, 100.0f, std::max(100.0f, workHeight - 180.0f - debugLogSplitterHeight));
-            float viewportHeight = std::max(180.0f, workHeight - debugLogHeight - debugLogSplitterHeight);
+            float debugLogHeight = std::clamp(g_ui.debugLogHeight, 100.0f, std::max(100.0f, workHeight - 180.0f - debugLogSplitterHitHeight));
+            float viewportHeight = std::max(180.0f, workHeight - debugLogHeight - debugLogSplitterHitHeight);
             DrawViewportTabs(leftColumnWidth, viewportHeight, timeSeconds, fixedPaneFlags);
             const bool debugLogSplitterReleased = DrawHorizontalSplitter("ViewportDebugLogSplitter", &viewportHeight, workHeight, 180.0f, 100.0f);
-            debugLogHeight = std::max(100.0f, workHeight - viewportHeight - debugLogSplitterHeight);
+            debugLogHeight = std::max(100.0f, workHeight - viewportHeight - debugLogSplitterHitHeight);
             g_ui.debugLogHeight = debugLogHeight;
             if (debugLogSplitterReleased)
             {
@@ -15026,7 +15031,7 @@ void DrawUi()
             SaveAppSettingsSilently();
         }
     }
-    rightPaneWidth = std::max(paneMinWidth, content.x - previewWidth - mainSplitterWidth);
+    rightPaneWidth = std::max(paneMinWidth, content.x - previewWidth - mainSplitterHitWidth);
     if (mainLayoutCanFit)
     {
         g_ui.rightPaneWidth = rightPaneWidth;
@@ -15036,14 +15041,14 @@ void DrawUi()
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 6.0f));
     ImGui::BeginChild("Right Work Column", ImVec2(rightPaneWidth, workHeight), false, fixedPaneFlags);
     const float rightColumnHeight = ImGui::GetContentRegionAvail().y;
-    constexpr float inspectorSplitterHeight = 7.0f;
-    const bool inspectorLayoutCanFit = rightColumnHeight >= 160.0f * 2.0f + inspectorSplitterHeight;
+    constexpr float inspectorSplitterHitHeight = 7.0f;
+    const bool inspectorLayoutCanFit = rightColumnHeight >= 160.0f * 2.0f + inspectorSplitterHitHeight;
     float nodePaneHeight = g_ui.nodePaneHeight;
     if (nodePaneHeight <= 0.0f)
     {
         nodePaneHeight = std::clamp(rightColumnHeight * 0.56f, 220.0f, std::max(220.0f, rightColumnHeight - 190.0f));
     }
-    nodePaneHeight = std::clamp(nodePaneHeight, 160.0f, std::max(160.0f, rightColumnHeight - 160.0f - inspectorSplitterHeight));
+    nodePaneHeight = std::clamp(nodePaneHeight, 160.0f, std::max(160.0f, rightColumnHeight - 160.0f - inspectorSplitterHitHeight));
     if (inspectorLayoutCanFit)
     {
         g_ui.nodePaneHeight = nodePaneHeight;
@@ -15130,6 +15135,8 @@ void DrawUi()
     const auto statusBarStart = std::chrono::steady_clock::now();
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 4.0f));
     ImGui::BeginChild("Status Bar", ImVec2(0.0f, statusBarHeight), true, fixedPaneFlags);
+    const ImVec2 statusMin = ImGui::GetWindowPos();
+    const ImVec2 statusMax(statusMin.x + ImGui::GetWindowWidth(), statusMin.y + ImGui::GetWindowHeight());
     const rock::EvaluationSummary& evaluation = g_graph.Evaluation();
     const char* evaluationState = g_evaluationInFlight
         ? (g_evaluationPending ? "Pending" : "Processing")
@@ -15137,9 +15144,20 @@ void DrawUi()
     const ImVec4 stateColor = g_evaluationInFlight
         ? ImVec4(0.90f, 0.72f, 0.34f, 1.0f)
         : (evaluation.dirty ? ImVec4(0.90f, 0.64f, 0.30f, 1.0f) : ImVec4(0.54f, 0.78f, 0.58f, 1.0f));
-    ImGui::TextColored(stateColor, "%s", evaluationState);
-    ImGui::SameLine();
-    ImGui::Text("| %s | %s | %s | %s", rock::ToString(evaluation.previewStage).data(), g_lastEvaluationDuration.c_str(), g_projectStatus.c_str(), g_exportStatus.c_str());
+    const std::string statusDetail = std::format(
+        " | {} | {} | {} | {}",
+        rock::ToString(evaluation.previewStage).data(),
+        g_lastEvaluationDuration,
+        g_projectStatus,
+        g_exportStatus);
+    const float textY = statusMin.y + 2.0f;
+    const float textX = statusMin.x + 8.0f;
+    ImDrawList* statusDrawList = ImGui::GetWindowDrawList();
+    statusDrawList->AddText(ImVec2(textX, textY), ImGui::GetColorU32(stateColor), evaluationState);
+    statusDrawList->AddText(
+        ImVec2(textX + ImGui::CalcTextSize(evaluationState).x + 4.0f, textY),
+        ImGui::GetColorU32(ImGuiCol_Text),
+        statusDetail.c_str());
     ImGui::EndChild();
     ImGui::PopStyleVar();
     const auto statusBarEnd = std::chrono::steady_clock::now();
