@@ -54,28 +54,43 @@ void DrawWaterSettingsPanel(WaterPanelState state)
             {
                 SaveAppSettings(state);
             }
+            if (DrawPropertyBoolRow("Animation", "DisplayWaterAnimEnabled", &preview.waterAnimationEnabled, "Water animation toggled",
+                "波のアニメーションのオン / オフです。オフにすると波形が静止します。", rock::PreviewSettings{}.waterAnimationEnabled, true))
+            {
+                SaveAppSettings(state);
+            }
             if (DrawPropertyFloatRow("Waves Scale (m)", "DisplayWaterWavesScale", &preview.waterWavesScale, 1.0f, 500.0f, rock::PreviewSettings{}.waterWavesScale, "Water waves scale changed", false,
                 "水面法線の主波長です。20〜80m 程度では地形スケールに馴染みやすく、小さいほど細かいさざ波、大きいほど緩い波になります。", "%.1f"))
             {
                 preview.waterWavesScale = std::clamp(preview.waterWavesScale, 1.0f, 500.0f);
                 SaveAppSettings(state);
             }
+
+            ImGui::SeparatorText("反射");
+            if (DrawPropertyFloatRow("Reflection Strength", "DisplayWaterReflectionStrength", &preview.waterReflectionStrength, 0.0f, 2.0f, rock::PreviewSettings{}.waterReflectionStrength, "Water reflection strength changed", false,
+                "水面への地形・空の映り込みの強さです。0 で反射なし、1 が標準、2 で強めになります。SSR による実際の地形色の映り込みにも影響します。", "%.2f"))
+            {
+                preview.waterReflectionStrength = std::clamp(preview.waterReflectionStrength, 0.0f, 3.0f);
+                SaveAppSettings(state);
+            }
             if (DrawPropertyFloatRow("Refractive Index", "DisplayWaterRefractiveIndex", &preview.waterRefractiveIndex, 1.0f, 2.0f, rock::PreviewSettings{}.waterRefractiveIndex, "Water refractive index changed", false,
-                "フレネル反射用の屈折率です。スクリーンスペース屈折の歪み量は Refraction Strength で調整します。1.0 = 反射なし、1.33 = 水相当、2.0 = ガラス相当。", "%.2f"))
+                "フレネル反射用の屈折率です。1.0 = 反射なし、1.33 = 水相当、2.0 = ガラス相当。", "%.2f"))
             {
                 preview.waterRefractiveIndex = std::clamp(preview.waterRefractiveIndex, 1.0f, 4.0f);
                 SaveAppSettings(state);
             }
+
+            ImGui::SeparatorText("屈折 / 断面");
             if (DrawPropertyFloatRow("Refraction Strength", "DisplayWaterRefractionStrength", &preview.waterRefractionStrength, 0.0f, 2.0f, rock::PreviewSettings{}.waterRefractionStrength, "Water refraction strength changed", false,
-                "水面越しの背景をどれだけ歪ませるかです。0 で屈折なし、1 が標準、2 で強めになります。", "%.2f"))
+                "水面越しの背景をどれだけ歪ませるかです。断面の屈折効果にも影響します。0 で屈折なし、1 が標準、2 で強めになります。", "%.2f"))
             {
                 preview.waterRefractionStrength = std::clamp(preview.waterRefractionStrength, 0.0f, 2.0f);
                 SaveAppSettings(state);
             }
-            if (DrawPropertyFloatRow("Refraction Blur", "DisplayWaterRefractionBlur", &preview.waterRefractionBlur, 0.0f, 1.0f, rock::PreviewSettings{}.waterRefractionBlur, "Water refraction blur changed", false,
-                "屈折した背景のにじみ量です。主に断面側壁で効きます。0 でシャープ、1 で柔らかくぼかします。", "%.2f"))
+            if (DrawPropertyFloatRow("Refraction Blur", "DisplayWaterRefractionBlur", &preview.waterRefractionBlur, 0.0f, 2.0f, rock::PreviewSettings{}.waterRefractionBlur, "Water refraction blur changed", false,
+                "断面側壁の背景のにじみ量です。0 でシャープ、1 が標準、2 で強めにぼかします。薄い水では背後の地形色が透けて見え、厚みがあるほど水色へ戻ります。", "%.2f"))
             {
-                preview.waterRefractionBlur = std::clamp(preview.waterRefractionBlur, 0.0f, 1.0f);
+                preview.waterRefractionBlur = std::clamp(preview.waterRefractionBlur, 0.0f, 2.0f);
                 SaveAppSettings(state);
             }
         }

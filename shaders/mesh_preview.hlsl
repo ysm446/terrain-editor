@@ -56,9 +56,9 @@ cbuffer CloudShadowMeshConstants : register(b1)
     float waterRefractiveIndex;  // PSWater: 屈折率 → Schlick F0
     float waterRefractionStrength;
     float waterRefractionBlur;
-    float waterCbPad0;
-    float waterCbPad1;
-    float waterCbPad2;
+    float waterTimeSeconds;          // PSWater: アプリ起動からの経過秒数 (波アニメーション用)
+    float waterAnimEnabled;          // PSWater: アニメーション有効 (0=静止, 1=アニメ)
+    float waterReflectionStrength;   // PSWater: 反射強度スケール
 };
 
 Texture2D shadowMap : register(t0);
@@ -928,13 +928,15 @@ struct WaterWaveInfo
     float ripple;
 };
 
-void AccumulateWaterWave(float2 pos, float2 dir, float wavelength, float steepness, float phaseOffset, float specularWeight, inout float2 gradient, inout float2 specularGradient, inout float ripple)
+void AccumulateWaterWave(float2 pos, float2 dir, float wavelength, float steepness, float phaseOffset, float specularWeight, float time, inout float2 gradient, inout float2 specularGradient, inout float ripple)
 {
     float2 waveDir = normalize(dir);
     float safeWavelength = max(wavelength, 1.0);
     float waveNumber = 6.2831853 / safeWavelength;
     float amplitude = steepness / waveNumber;
-    float phase = dot(pos, waveDir) * waveNumber + phaseOffset;
+    // 深水分散関係: omega = sqrt(g * k)
+    float omega = sqrt(9.81 * waveNumber);
+    float phase = dot(pos, waveDir) * waveNumber + phaseOffset + time * omega;
     float s = sin(phase);
     float c = cos(phase);
     gradient += waveDir * (c * steepness);
@@ -942,19 +944,55 @@ void AccumulateWaterWave(float2 pos, float2 dir, float wavelength, float steepne
     ripple += s * amplitude;
 }
 
-WaterWaveInfo ComputeWaterWaves(float2 worldXZ, float waveScaleMeters)
+// バイリニア補間つきのバリューノイズ (ドットを防ぐ)
+float WaterValueNoise(float2 p)
+{
+    float2 i = floor(p);
+    float2 f = frac(p);
+    float2 u = f * f * (3.0 - 2.0 * f);  // smoothstep 補間
+    float a = frac(sin(dot(i + float2(0.0, 0.0), float2(127.1, 311.7))) * 43758.5);
+    float b = frac(sin(dot(i + float2(1.0, 0.0), float2(127.1, 311.7))) * 43758.5);
+    float c = frac(sin(dot(i + float2(0.0, 1.0), float2(127.1, 311.7))) * 43758.5);
+    float d = frac(sin(dot(i + float2(1.0, 1.0), float2(127.1, 311.7))) * 43758.5);
+    return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
+}
+
+// 正弦波の縞残留を崩す小スケールノイズ (バイリニア補間でドットなし)
+float2 WaterNormalNoise(float2 pos, float scale, float time)
+{
+    float2 p0 = pos / max(scale * 0.12, 0.1);
+    float2 p1 = pos / max(scale * 0.07, 0.1) + float2(17.3, 31.7);
+    float n0 = WaterValueNoise(p0 + float2(time * 0.41, time * 0.29)) * 2.0 - 1.0;
+    float n1 = WaterValueNoise(p1 + float2(time * 0.23, time * 0.37)) * 2.0 - 1.0;
+    return float2(n0, n1) * 0.012;
+}
+
+WaterWaveInfo ComputeWaterWaves(float2 worldXZ, float waveScaleMeters, float time)
 {
     float scale = max(waveScaleMeters, 1.0);
     float2 gradient = float2(0.0, 0.0);
     float2 specularGradient = float2(0.0, 0.0);
     float ripple = 0.0;
 
-    AccumulateWaterWave(worldXZ, float2(0.87, 0.49), scale * 1.00, 0.060, 0.10, 0.95, gradient, specularGradient, ripple);
-    AccumulateWaterWave(worldXZ, float2(-0.36, 0.93), scale * 0.58, 0.024, 1.70, 0.45, gradient, specularGradient, ripple);
-    AccumulateWaterWave(worldXZ, float2(0.16, 0.99), scale * 1.73, 0.036, 3.10, 0.85, gradient, specularGradient, ripple);
-    AccumulateWaterWave(worldXZ, float2(-0.91, 0.41), scale * 0.31, 0.010, 4.25, 0.05, gradient, specularGradient, ripple);
-    AccumulateWaterWave(worldXZ, float2(0.64, -0.77), scale * 2.45, 0.030, 5.50, 0.75, gradient, specularGradient, ripple);
-    AccumulateWaterWave(worldXZ, float2(-0.74, -0.67), scale * 0.83, 0.016, 2.35, 0.25, gradient, specularGradient, ripple);
+    AccumulateWaterWave(worldXZ, float2(0.87, 0.49),   scale * 1.00, 0.060, 0.10, 0.95, time, gradient, specularGradient, ripple);
+    AccumulateWaterWave(worldXZ, float2(-0.36, 0.93),  scale * 0.58, 0.024, 1.70, 0.45, time, gradient, specularGradient, ripple);
+    AccumulateWaterWave(worldXZ, float2(0.16, 0.99),   scale * 1.73, 0.036, 3.10, 0.85, time, gradient, specularGradient, ripple);
+    AccumulateWaterWave(worldXZ, float2(-0.91, 0.41),  scale * 0.31, 0.010, 4.25, 0.05, time, gradient, specularGradient, ripple);
+    AccumulateWaterWave(worldXZ, float2(0.64, -0.77),  scale * 2.45, 0.030, 5.50, 0.75, time, gradient, specularGradient, ripple);
+    AccumulateWaterWave(worldXZ, float2(-0.74, -0.67), scale * 0.83, 0.016, 2.35, 0.25, time, gradient, specularGradient, ripple);
+
+    gradient += WaterNormalNoise(worldXZ, scale, time);
+    // specularNormal にも細かいノイズを加えて輝点位置を不規則化する
+    // スケールを小さく (scale * 0.04) することで高周波の細かいきらめきが出る
+    float2 spNoise;
+    {
+        float2 hp0 = worldXZ / max(scale * 0.04, 0.05);
+        float2 hp1 = worldXZ / max(scale * 0.025, 0.03) + float2(5.3, 11.7);
+        float sn0 = WaterValueNoise(hp0 + float2(time * 0.55, time * 0.43)) * 2.0 - 1.0;
+        float sn1 = WaterValueNoise(hp1 + float2(time * 0.38, time * 0.61)) * 2.0 - 1.0;
+        spNoise = float2(sn0, sn1) * 0.028;
+    }
+    specularGradient += spNoise;
 
     WaterWaveInfo info;
     info.normal = normalize(float3(-gradient.x, 1.0, -gradient.y));
@@ -981,39 +1019,60 @@ float4 PSWater(VSOut i) : SV_TARGET
         float distanceFromTerrain = max(i.worldPos.y - terrainH, 0.0);
         float thicknessNorm = WaterAbsorptionAlpha(waterColumnDepth, opacity);
 
-        float3 shallowCol = albedoColor.rgb * 1.5 + float3(0.01, 0.03, 0.0);
-        float3 deepCol    = albedoColor.rgb * 0.35 + float3(0.0, 0.01, 0.09);
-        float3 wallColor  = lerp(shallowCol, deepCol, thicknessNorm) * ndl;
+        // 断面は真横から見るため、吸収は「水柱の横幅 (waterColumnDepth)」で決まる
+        // distanceFromTerrain は深さ方向のグラデーション色・地形接触フェードにのみ使う
+        float sideAbsorption = WaterAbsorptionAlpha(waterColumnDepth, opacity);
 
+        // 大気色を断面にも少量ミックス
+        float3 atmosTintSide = skyHorizonColor.rgb * 0.14 + skySunColor.rgb * 0.03;
+        float3 shallowCol = albedoColor.rgb * 1.45 + float3(0.01, 0.03, 0.0) + atmosTintSide;
+        float3 deepCol    = albedoColor.rgb * 0.32 + float3(0.0, 0.01, 0.10) + atmosTintSide * 0.5;
+        // 深さグラデーション: 吸収ではなく縦位置 (distanceFromTerrain) で色を変える
+        float verticalGrad = saturate(distanceFromTerrain / max(waterColumnDepth, 0.1));
+        float3 waterBodyColor = lerp(deepCol, shallowCol, verticalGrad) * ndl;
+
+        // ===== 屈折 + ブラー =====
         float2 sceneUv = ProjectWorldToSceneUv(i.worldPos);
         float2 sideDir = float2(dot(n, cameraRight.xyz), -dot(n, cameraUp.xyz));
+        // 断面はアニメーションさせない (上面の波とは独立した静止した歪みにする)
         float wobbleA = sin(dot(i.worldPos.xz, float2(0.037, 0.021)) + i.worldPos.y * 0.018);
         float wobbleB = sin(dot(i.worldPos.xz, float2(-0.019, 0.044)) + i.worldPos.y * 0.031 + 1.7);
         float2 wobble = float2(wobbleA, wobbleB) * 0.5 + sideDir;
-        float sideRefractionWeight = saturate((1.0 - thicknessNorm) * (1.0 - opacity * 0.25) * waterRefractionStrength);
-        float blurAmount = saturate(waterRefractionBlur);
-        float distortionRadius = (0.0015 + saturate(distanceFromTerrain / 220.0) * 0.0045) * sideRefractionWeight;
-        float blurRadius = (0.0030 + saturate(distanceFromTerrain / 220.0) * 0.0180) * sideRefractionWeight * blurAmount;
-        float2 refractUv = saturate(sceneUv + wobble * distortionRadius * 1.8);
+        float blurAmount = saturate(waterRefractionBlur * 0.55);
+        float distortionRadius = (0.005 + sideAbsorption * 0.018) * waterRefractionStrength;
+        float blurRadius = (0.008 + sideAbsorption * 0.050) * waterRefractionStrength * blurAmount;
+        float2 refractUv = saturate(sceneUv + wobble * distortionRadius);
+        // 9-tap ブラー
         float3 sideScene =
-            sceneColorTexture.Sample(linearSampler, refractUv).rgb * 0.24 +
-            sceneColorTexture.Sample(linearSampler, saturate(refractUv + float2( blurRadius, 0.0))).rgb * 0.12 +
-            sceneColorTexture.Sample(linearSampler, saturate(refractUv + float2(-blurRadius, 0.0))).rgb * 0.12 +
-            sceneColorTexture.Sample(linearSampler, saturate(refractUv + float2(0.0,  blurRadius))).rgb * 0.12 +
-            sceneColorTexture.Sample(linearSampler, saturate(refractUv + float2(0.0, -blurRadius))).rgb * 0.12 +
-            sceneColorTexture.Sample(linearSampler, saturate(refractUv + float2( blurRadius,  blurRadius))).rgb * 0.07 +
-            sceneColorTexture.Sample(linearSampler, saturate(refractUv + float2(-blurRadius,  blurRadius))).rgb * 0.07 +
-            sceneColorTexture.Sample(linearSampler, saturate(refractUv + float2( blurRadius, -blurRadius))).rgb * 0.07 +
-            sceneColorTexture.Sample(linearSampler, saturate(refractUv + float2(-blurRadius, -blurRadius))).rgb * 0.07;
-        wallColor = lerp(wallColor, lerp(sideScene, wallColor, saturate(thicknessNorm * 0.70 + opacity * 0.30)), sideRefractionWeight * 0.42);
+            sceneColorTexture.SampleLevel(linearSampler, refractUv, 0).rgb * 0.24 +
+            sceneColorTexture.SampleLevel(linearSampler, saturate(refractUv + float2( blurRadius, 0.0)), 0).rgb * 0.12 +
+            sceneColorTexture.SampleLevel(linearSampler, saturate(refractUv + float2(-blurRadius, 0.0)), 0).rgb * 0.12 +
+            sceneColorTexture.SampleLevel(linearSampler, saturate(refractUv + float2(0.0,  blurRadius)), 0).rgb * 0.12 +
+            sceneColorTexture.SampleLevel(linearSampler, saturate(refractUv + float2(0.0, -blurRadius)), 0).rgb * 0.12 +
+            sceneColorTexture.SampleLevel(linearSampler, saturate(refractUv + float2( blurRadius,  blurRadius)), 0).rgb * 0.07 +
+            sceneColorTexture.SampleLevel(linearSampler, saturate(refractUv + float2(-blurRadius,  blurRadius)), 0).rgb * 0.07 +
+            sceneColorTexture.SampleLevel(linearSampler, saturate(refractUv + float2( blurRadius, -blurRadius)), 0).rgb * 0.07 +
+            sceneColorTexture.SampleLevel(linearSampler, saturate(refractUv + float2(-blurRadius, -blurRadius)), 0).rgb * 0.07;
+
+        // ===== 上面と同じ設計: 屈折済み景色を焼き込む =====
+        // 薄い水 → ぼかした景色が主体、厚い水 → 水体色が主体
+        float3 wallColor = lerp(sideScene, waterBodyColor, sideAbsorption);
         wallColor = pow(saturate(wallColor), 1.0 / 1.18);
 
-        float alpha = WaterVisibleAlpha(WaterAbsorptionAlpha(distanceFromTerrain, opacity), opacity, 0.24);
+        // ===== アルファ =====
+        float baseAlpha = max(sideAbsorption, waterRefractionStrength * 0.72);
+        // 地形接触線フェード: 完全に 0 にせず最低 α を残して背後の明るい地形断面が透けないようにする
+        float contactFade = smoothstep(0.0, max(WaterOpacityClarityDistance(opacity) * 0.18, 0.6), distanceFromTerrain);
+        float contactFloor = 0.25 * saturate(baseAlpha);
+        // 上端フェード: 水面 (waterLevelParam) に近づくほど薄くして上面との境界線を和らげる
+        float topFade = 1.0 - smoothstep(waterLevelParam - 2.5, waterLevelParam, i.worldPos.y) * 0.55;
+        float alpha = max(baseAlpha * contactFade, contactFloor) * topFade;
         return float4(wallColor, alpha);
     }
 
     // === 水面 上面 ===
-    WaterWaveInfo wave = ComputeWaterWaves(i.worldPos.xz, waterWavesScale);
+    float waterTime = waterAnimEnabled > 0.5 ? waterTimeSeconds : 0.0;
+    WaterWaveInfo wave = ComputeWaterWaves(i.worldPos.xz, waterWavesScale, waterTime);
     float3 n = wave.normal;
     float3 specularN = wave.specularNormal;
     float3 fresnelN = normalize(lerp(n, specularN, 0.65));
@@ -1027,65 +1086,127 @@ float4 PSWater(VSOut i) : SV_TARGET
     float cosTheta = saturate(abs(dot(fresnelN, V)));
     float fresnel  = F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
 
-    // スペキュラー
-    float flatSunMirror = saturate(dot(reflect(-L, float3(0.0, 1.0, 0.0)), V));
-    float sunGlintPath = pow(smoothstep(0.82, 0.97, flatSunMirror), 1.8);
-    float sunMirror = saturate(dot(reflect(-L, specularN), V));
-    float broadSpec = pow(sunMirror, 18.0) * 0.055;
-    float sparkleSpec = pow(sunMirror, 88.0) * 0.32;
-    float spec = min((broadSpec + sparkleSpec) * sunGlintPath * sunIntensity, 0.55);
+    // ===== 太陽グリッター =====
+    // flatSunMirror のドット積は並行投影に近い状況でほぼ均一になり、水面全体が白くなる問題がある。
+    // そのため、"平坦水面で太陽が映る正反射点" をワールド座標で計算し、
+    // そこからの距離ベースのガウシアンでパスを作る。
+    float3 L_safe = normalize(sunDirection.xyz);
+    float camHeight = max(cameraPosition.y - waterLevelParam, 0.5);
+    float sunLy = max(L_safe.y, 0.01);
+    // 正反射点: カメラから水面に太陽光が鏡反射する点
+    float2 specPt = cameraPosition.xz + (camHeight / sunLy) * float2(L_safe.x, L_safe.z);
+    float2 toSpec = i.worldPos.xz - specPt;
+    // 太陽の水平方向に沿った楕円パス: 縦方向に長く、横方向に細い
+    float2 sunH = length(float2(L_safe.x, L_safe.z)) > 0.001
+                  ? normalize(float2(L_safe.x, L_safe.z))
+                  : float2(1.0, 0.0);
+    float2 sunP = float2(-sunH.y, sunH.x);
+    float dAlong = dot(toSpec, sunH);
+    float dPerp  = dot(toSpec, sunP);
+    // ガウシアンのシグマを小さく: 広すぎるとセルパターンが水面全体に見える
+    float sigma  = max(terrainSize * 0.07, 15.0);
+    float sunGlintPath = exp(-(dAlong * dAlong) / (sigma * sigma * 5.0)
+                            -(dPerp  * dPerp)  / (sigma * sigma * 0.6));
+    sunGlintPath *= saturate(fresnel * 4.0 + 0.15);
 
-    // 地形高さから鉛直水深を算出し、上面は視線方向の水中距離を主に使う
+    // 広域グロー (低周波波法線 n)
+    float sunMirrorGlow = saturate(dot(reflect(-L_safe, n), V));
+    float glowSpec = pow(sunMirrorGlow, 5.0) * 0.10;
+
+    // 中域輝き (specularN)
+    float sunMirrorMid = saturate(dot(reflect(-L_safe, specularN), V));
+    float midSpec = pow(sunMirrorMid, 22.0) * 0.35;
+
+    // 鋭い輝点: specularNormal にノイズが加わっているので自然に不規則な輝点が散らばる
+    // セルベースのきらめきは廃止 (四角いドットが見える問題があった)
+    float sharpSpec  = pow(sunMirrorMid, 120.0) * 2.2;
+    // より細かい輝点: 高指数で鋭く光る
+    float glintSpec  = pow(sunMirrorMid, 280.0) * 6.0;
+
+    float spec = min((glowSpec + midSpec + sharpSpec + glintSpec) * sunGlintPath * sunIntensity, 2.0);
+
+    // ===== 水深 =====
     float terrainH  = displacementHeights.SampleLevel(linearSampler, terrainUV, 0).r;
     float vertDepth = max(waterLevelParam - terrainH, 0.0);
-
     float viewPathLength = EstimateWaterViewPathLength(i.worldPos, -V, terrainSize);
     float shallowDepth = min(vertDepth, viewPathLength);
 
-    // 水深で色を変化: 上面は鉛直方向ではなく、カメラから見た水中距離で濁らせる
-    float depthColorFactor = WaterAbsorptionAlpha(viewPathLength, saturate(opacity + 0.18));
-    float3 shallowCol = albedoColor.rgb * 1.55 + float3(0.01, 0.04, -0.02);
-    float3 deepCol    = albedoColor.rgb * 0.55 + float3(0.0, 0.02, 0.10);
-    float3 water = lerp(shallowCol, deepCol, depthColorFactor) * (1.0 + wave.ripple * 0.035);
+    // 吸収量: 深い水ほど不透明
+    float absorption = WaterAbsorptionAlpha(viewPathLength, opacity);
 
+    // 水体の色 (吸収が大きいほど深色へ寄る)
+    float3 atmosTint = skyHorizonColor.rgb * 0.18 + skySunColor.rgb * 0.04;
+    float3 shallowCol = albedoColor.rgb * 1.40 + float3(0.01, 0.04, -0.02) + atmosTint;
+    float3 deepCol    = albedoColor.rgb * 0.50 + float3(0.0, 0.02, 0.10)   + atmosTint * 0.5;
+    float3 waterBodyColor = lerp(shallowCol, deepCol, absorption) * (1.0 + wave.ripple * 0.035);
+
+    // ===== 屈折 =====
+    // 水体色が主体。屈折は「ほんの少し透ける」表現に留め、チェック柄を防ぐ。
     float2 sceneUv = ProjectWorldToSceneUv(i.worldPos);
     float2 refractDir = float2(dot(n, cameraRight.xyz), -dot(n, cameraUp.xyz));
-    float clarity = 1.0 - WaterAbsorptionAlpha(viewPathLength, opacity);
-    float refractionWeight = saturate((1.0 - fresnel) * clarity * (1.0 - opacity * 0.35) * waterRefractionStrength);
-    float refractionOffset = (0.0025 + saturate(viewPathLength / 600.0) * 0.010) * refractionWeight;
+    float shoreDepthScale = saturate(shallowDepth / 4.0);
+    // オフセット縮小: 大きすぎると波法線の周期パターンが地形に映ってチェック柄になる
+    float refractionOffset = (0.003 + saturate(viewPathLength / 500.0) * 0.008) * waterRefractionStrength * shoreDepthScale;
     float2 refractUv = saturate(sceneUv + refractDir * refractionOffset);
-    float3 refractedScene = sceneColorTexture.Sample(linearSampler, refractUv).rgb;
-    float3 refractedWater = lerp(refractedScene, water, saturate(depthColorFactor * 0.72 + opacity * 0.25));
-    water = lerp(water, refractedWater, refractionWeight * 0.72);
+    // 屈折先が水面外ならオフセットなし UV へ戻す
+    float refractedTerrH = displacementHeights.SampleLevel(linearSampler, refractUv, 0).r;
+    float refractOutside = saturate((refractedTerrH - waterLevelParam) / 2.0);
+    refractUv = lerp(refractUv, sceneUv, refractOutside);
 
-    // 空反射 (反射方向 = V の Y 反転)
+    // ブラー半径も小さめに (大きすぎるとぼかしパターンが目立つ)
+    float topBlurRadius = (0.002 + saturate(viewPathLength / 300.0) * 0.008) * saturate(waterRefractionBlur * 0.50);
+    float3 underwaterScene =
+        sceneColorTexture.SampleLevel(linearSampler, refractUv, 0).rgb * 0.36 +
+        sceneColorTexture.SampleLevel(linearSampler, saturate(refractUv + float2( topBlurRadius, 0.0)), 0).rgb * 0.16 +
+        sceneColorTexture.SampleLevel(linearSampler, saturate(refractUv + float2(-topBlurRadius, 0.0)), 0).rgb * 0.16 +
+        sceneColorTexture.SampleLevel(linearSampler, saturate(refractUv + float2(0.0,  topBlurRadius)), 0).rgb * 0.16 +
+        sceneColorTexture.SampleLevel(linearSampler, saturate(refractUv + float2(0.0, -topBlurRadius)), 0).rgb * 0.16;
+
+    // 水体色主体 + 屈折は浅い水で最大 30% 貢献
+    float refractionContrib = (1.0 - absorption) * 0.30 * waterRefractionStrength;
+    float3 underwaterView = lerp(waterBodyColor, underwaterScene, refractionContrib);
+
+    // ===== 反射 =====
     float3 reflRay = float3(-V.x, V.y, -V.z);
+    float horizonSun = pow(saturate(1.0 - abs(reflRay.y) * 4.0), 2.0) * 0.25;
     float3 skyRefl = lerp(skyHorizonColor.rgb, skyZenithColor.rgb, saturate(reflRay.y * 1.8));
+    skyRefl = lerp(skyRefl, skySunColor.rgb, horizonSun * sunIntensity);
 
-    // 地形色反射 (高さベース近似 + 視差オフセット)
     float2 parallaxUV  = terrainUV + reflRay.xz * (vertDepth * 0.06 / terrainSize);
     float  reflTerrH   = displacementHeights.SampleLevel(linearSampler, saturate(parallaxUV), 0).r;
     float  reflHeight  = saturate(reflTerrH / 1800.0 + 0.45);
-    float3 terrainRefl = lerp(float3(0.32, 0.38, 0.32), float3(0.54, 0.52, 0.46), reflHeight);
+    float3 terrainReflApprox = lerp(float3(0.32, 0.38, 0.32), float3(0.54, 0.52, 0.46), reflHeight);
+    float3 terrainReflColor  = UseColorTexture()
+        ? colorTexture.SampleLevel(linearSampler, saturate(parallaxUV), 1).rgb * 0.72
+        : terrainReflApprox;
+    float3 terrainRefl = lerp(terrainReflApprox, terrainReflColor, 0.70);
 
-    // 辺縁部で地形近似反射だけ抑制 (輝線防止、opacity と太陽スペキュラーには影響させない)
-    float2 edgeMask   = abs(terrainUV - 0.5) * 2.0;
+    float2 edgeMask    = abs(terrainUV - 0.5) * 2.0;
     float edgeReflFade = 1.0 - smoothstep(0.92, 1.0, max(edgeMask.x, edgeMask.y));
 
-    float terrainReflWeight = saturate(1.0 - shallowDepth * 0.008) * fresnel;
+    float reflStrength = saturate(waterReflectionStrength);
+    float terrainReflWeight = saturate(1.0 - shallowDepth * 0.008) * fresnel * reflStrength;
     float3 reflection = lerp(skyRefl * fresnel, terrainRefl, terrainReflWeight) * edgeReflFade;
+
     float3 ssrColor = 0.0;
     float ssrHit = TraceWaterReflection(i.worldPos + fresnelN * 1.5, reflect(-V, fresnelN), terrainSize, ssrColor);
-    float ssrBlend = ssrHit * edgeReflFade * saturate(fresnel * 1.8 + 0.10) * saturate(1.0 - depthColorFactor * 0.32);
-    reflection = lerp(reflection, ssrColor * (0.25 + fresnel * 1.35), ssrBlend);
-    water = lerp(water, reflection, saturate(fresnel + terrainReflWeight * 0.5) * edgeReflFade);
+    float ssrFresnel = saturate(fresnel * 2.2 + 0.08) * reflStrength;
+    float ssrBlend = ssrHit * edgeReflFade * ssrFresnel * saturate(1.0 - absorption * 0.28);
+    reflection = lerp(reflection, ssrColor * saturate(0.35 + fresnel * 1.5), ssrBlend);
+
+    // ===== 最終合成 =====
+    float reflBlend = saturate(fresnel * reflStrength + terrainReflWeight * 0.5);
+    float3 water = lerp(underwaterView, reflection, reflBlend * edgeReflFade);
     water += spec * skySunColor.rgb;
 
-    float viewPathAlpha = WaterAbsorptionAlpha(viewPathLength, opacity);
-    float depthAlpha = saturate(viewPathAlpha);
-    float shoreAlpha = 1.0 - smoothstep(0.0, max(WaterOpacityClarityDistance(opacity) * 0.28, 2.0), shallowDepth);
-    float reflectionAlpha = saturate(fresnel * 0.10 + spec * 0.05);
-    float alpha = max(max(WaterVisibleAlpha(depthAlpha, opacity, 0.16), opacity * shoreAlpha * 0.18), reflectionAlpha);
+    // ===== アルファ =====
+    // 吸収量ベース: 深い水が不透明, 浅い水は自然に透明
+    // 屈折のために高αを強制するのをやめ、自然な透明度に戻す
+    // 太陽スペキュラー輝点がある場所は alpha を確保 (白い輝点として見えるように)
+    float shoreEdge = smoothstep(0.0, max(WaterOpacityClarityDistance(opacity) * 0.22, 1.2), shallowDepth);
+    float specReflAlpha = saturate(fresnel * 0.18 + min(spec, 3.0) * 0.12);
+    float baseAlpha = max(WaterVisibleAlpha(absorption, opacity, 0.12), 0.40);
+    float alpha = max(baseAlpha, specReflAlpha) * shoreEdge;
 
     water = pow(saturate(water), 1.0 / 1.18);
     return float4(water, alpha);
