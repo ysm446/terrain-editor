@@ -243,11 +243,16 @@ struct MeshPreviewPipelineContext
     DXGI_FORMAT renderTargetFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
     DXGI_FORMAT depthStencilFormat = DXGI_FORMAT_D32_FLOAT;
     UINT rootConstantDwordCount = 0;
+    UINT displacementConstantDwordCount = 0;
+    UINT64 displacementCbvByteSize = 0;
 };
 
 bool EnsureMeshPreviewPipeline(MeshPreviewPipelineResources& resources,
                                const MeshPreviewPipelineContext& context,
                                std::string* error);
+bool EnsureMeshPreviewDisplacementPipeline(MeshPreviewPipelineResources& resources,
+                                           const MeshPreviewPipelineContext& context,
+                                           std::string* error);
 void ResetMeshPreviewPipelineResources(MeshPreviewPipelineResources& resources);
 
 } // namespace terrain::rendering
