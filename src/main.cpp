@@ -4137,7 +4137,7 @@ bool EnsureMeshPreviewPipeline(std::string* error)
     if (FAILED(hr)) { if (error) *error = "Create mesh surface PSO failed"; return false; }
 
     psoDesc.PS = {psWaterBlob->GetBufferPointer(), psWaterBlob->GetBufferSize()};
-    psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_FRONT;
     psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
     psoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
     psoDesc.BlendState.RenderTarget[0].BlendEnable = TRUE;
@@ -10946,8 +10946,8 @@ void EnsureWaterPreviewBuffer(float terrainSizeMeters, const rock::HeightfieldGr
                 UINT tr = tl + 2u;
                 UINT bl = tl + 1u;
                 UINT br = tr + 1u;
-                indices.push_back(tl); indices.push_back(tr); indices.push_back(br);
-                indices.push_back(tl); indices.push_back(br); indices.push_back(bl);
+                indices.push_back(tl); indices.push_back(br); indices.push_back(tr);
+                indices.push_back(tl); indices.push_back(bl); indices.push_back(br);
             }
         }
     }

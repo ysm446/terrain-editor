@@ -1084,6 +1084,10 @@ float4 PSWater(VSOut i) : SV_TARGET
     }
 
     // === 水面 上面 ===
+    float3 flatTopNormal = normalize(i.worldNor);
+    float3 flatTopView = normalize(cameraPosition.xyz - i.worldPos);
+    clip(dot(flatTopNormal, flatTopView) - 0.001);
+
     float waterTime = waterAnimEnabled > 0.5 ? waterTimeSeconds : 0.0;
     WaterWaveInfo wave = ComputeWaterWaves(i.worldPos.xz, waterWavesScale, waterTime);
     float3 n = wave.normal;
