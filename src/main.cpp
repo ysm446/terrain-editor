@@ -589,8 +589,10 @@ struct CloudShadowMeshConstants
     float waterTimeSeconds;          // PSWater: アプリ起動からの経過秒数 (波アニメーション用)
     float waterAnimEnabled;          // PSWater: アニメーション有効 (0=静止, 1=アニメ)
     float waterReflectionStrength;   // PSWater: 反射強度スケール
+    float waterSsrEnabled;           // PSWater: SSR 有効 (0=off, 1=on)
+    float pad2[3];
 };
-static_assert(sizeof(CloudShadowMeshConstants) == 160);
+static_assert(sizeof(CloudShadowMeshConstants) == 176);
 
 struct GpuMeshPreview
 {
@@ -671,6 +673,7 @@ struct GpuMeshPreview
     float waterRefractionBlur = 0.45f;
     bool waterAnimationEnabled = true;
     float waterReflectionStrength = 1.0f;
+    bool waterSsrEnabled = false;
     int skyMode = -1;
     float skyAtmosphereDensity = 0.0f;
     float skyMieStrength = 0.0f;
@@ -2008,6 +2011,7 @@ bool SaveAppSettings(std::string* error = nullptr)
             {"waterRefractionBlur", settings.preview.waterRefractionBlur},
             {"waterAnimationEnabled", settings.preview.waterAnimationEnabled},
             {"waterReflectionStrength", settings.preview.waterReflectionStrength},
+            {"waterSsrEnabled", settings.preview.waterSsrEnabled},
             {"sunAzimuthDegrees", settings.preview.sunAzimuthDegrees},
             {"sunElevationDegrees", settings.preview.sunElevationDegrees},
             {"sunIntensity", settings.preview.sunIntensity},
@@ -2189,6 +2193,7 @@ bool LoadAppSettings(std::string* error = nullptr)
         settings.preview.waterRefractionBlur = std::clamp(visibilityJson.value("waterRefractionBlur", settings.preview.waterRefractionBlur), 0.0f, 2.0f);
         settings.preview.waterAnimationEnabled = visibilityJson.value("waterAnimationEnabled", settings.preview.waterAnimationEnabled);
         settings.preview.waterReflectionStrength = std::clamp(visibilityJson.value("waterReflectionStrength", settings.preview.waterReflectionStrength), 0.0f, 3.0f);
+        settings.preview.waterSsrEnabled = visibilityJson.value("waterSsrEnabled", settings.preview.waterSsrEnabled);
         settings.preview.sunAzimuthDegrees = std::clamp(visibilityJson.value("sunAzimuthDegrees", settings.preview.sunAzimuthDegrees), 0.0f, 360.0f);
         settings.preview.sunElevationDegrees = std::clamp(visibilityJson.value("sunElevationDegrees", settings.preview.sunElevationDegrees), -10.0f, 89.0f);
         settings.preview.sunIntensity = std::clamp(visibilityJson.value("sunIntensity", settings.preview.sunIntensity), 0.0f, 5.0f);
@@ -3284,6 +3289,7 @@ nlohmann::json MakeProjectSettingsJson()
             {"waterRefractionBlur", preview.waterRefractionBlur},
             {"waterAnimationEnabled", preview.waterAnimationEnabled},
             {"waterReflectionStrength", preview.waterReflectionStrength},
+            {"waterSsrEnabled", preview.waterSsrEnabled},
             {"depthOfFieldEnabled", preview.depthOfFieldEnabled},
             {"dofFStop", preview.dofFStop},
             {"dofFocusDistanceMeters", preview.dofFocusDistanceMeters},
@@ -3633,6 +3639,7 @@ void ReadPreviewSettingsJson(const nlohmann::json& settingsJson, rock::PreviewSe
     preview.waterRefractionBlur = std::clamp(previewJson.value("waterRefractionBlur", preview.waterRefractionBlur), 0.0f, 2.0f);
     preview.waterAnimationEnabled = previewJson.value("waterAnimationEnabled", preview.waterAnimationEnabled);
     preview.waterReflectionStrength = std::clamp(previewJson.value("waterReflectionStrength", preview.waterReflectionStrength), 0.0f, 3.0f);
+    preview.waterSsrEnabled = previewJson.value("waterSsrEnabled", preview.waterSsrEnabled);
     preview.depthOfFieldEnabled = previewJson.value("depthOfFieldEnabled", preview.depthOfFieldEnabled);
     preview.dofFStop = std::clamp(previewJson.value("dofFStop", preview.dofFStop), 0.7f, 32.0f);
     preview.dofFocusDistanceMeters = std::clamp(previewJson.value("dofFocusDistanceMeters", preview.dofFocusDistanceMeters), 0.1f, 20000.0f);
@@ -11319,6 +11326,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.waterRefractionBlur != previewSettings.waterRefractionBlur ||
         g_gpuMeshPreview.waterAnimationEnabled != previewSettings.waterAnimationEnabled ||
         g_gpuMeshPreview.waterReflectionStrength != previewSettings.waterReflectionStrength ||
+        g_gpuMeshPreview.waterSsrEnabled != previewSettings.waterSsrEnabled ||
         (g_graph.Settings().sky.mode == rock::SkyMode::Atmospheric && g_graph.Settings().clouds.enabled && g_graph.Settings().clouds.animate && g_graph.Settings().clouds.windSpeedMetersPerSec > 0.0f) ||
         (showGrid && !g_gpuMeshPreview.gridVertexBuffer) ||
         (showWater && (!g_gpuMeshPreview.waterVertexBuffer || !g_gpuMeshPreview.waterIndexBuffer)) ||
@@ -11414,6 +11422,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.waterRefractionBlur != previewSettings.waterRefractionBlur ||
         g_gpuMeshPreview.waterAnimationEnabled != previewSettings.waterAnimationEnabled ||
         g_gpuMeshPreview.waterReflectionStrength != previewSettings.waterReflectionStrength ||
+        g_gpuMeshPreview.waterSsrEnabled != previewSettings.waterSsrEnabled ||
         g_gpuMeshPreview.waterHeightfieldVersion != currentVersion)
     {
         addDirtyReason(dirtyReason, "water");
@@ -12045,6 +12054,10 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         cloudShadowCb.waterTimeSeconds = s_waterTimeSeconds;
         cloudShadowCb.waterAnimEnabled = previewSettings.waterAnimationEnabled ? 1.0f : 0.0f;
         cloudShadowCb.waterReflectionStrength = std::clamp(previewSettings.waterReflectionStrength, 0.0f, 3.0f);
+        cloudShadowCb.waterSsrEnabled = previewSettings.waterSsrEnabled ? 1.0f : 0.0f;
+        cloudShadowCb.pad2[0] = 0.0f;
+        cloudShadowCb.pad2[1] = 0.0f;
+        cloudShadowCb.pad2[2] = 0.0f;
 
         if (g_gpuClouds.meshCbMapped)
         {
@@ -12678,6 +12691,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.waterRefractionBlur = previewSettings.waterRefractionBlur;
         g_gpuMeshPreview.waterAnimationEnabled = previewSettings.waterAnimationEnabled;
         g_gpuMeshPreview.waterReflectionStrength = previewSettings.waterReflectionStrength;
+        g_gpuMeshPreview.waterSsrEnabled = previewSettings.waterSsrEnabled;
         g_gpuMeshPreview.waterHeightfieldVersion = currentVersion;
         g_gpuMeshPreview.colorState    = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         return true;

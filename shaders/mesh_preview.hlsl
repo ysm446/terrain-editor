@@ -59,6 +59,8 @@ cbuffer CloudShadowMeshConstants : register(b1)
     float waterTimeSeconds;          // PSWater: アプリ起動からの経過秒数 (波アニメーション用)
     float waterAnimEnabled;          // PSWater: アニメーション有効 (0=静止, 1=アニメ)
     float waterReflectionStrength;   // PSWater: 反射強度スケール
+    float waterSsrEnabled;           // PSWater: SSR 有効 (0=off, 1=on)
+    float3 waterPad2;
 };
 
 Texture2D shadowMap : register(t0);
@@ -828,6 +830,36 @@ float ScreenEdgeFade(float2 uv)
     return saturate(min(edge.x, edge.y) * 14.0);
 }
 
+float SceneUvInside(float2 uv)
+{
+    float2 insideMin = step(float2(0.0, 0.0), uv);
+    float2 insideMax = step(uv, float2(1.0, 1.0));
+    return insideMin.x * insideMin.y * insideMax.x * insideMax.y;
+}
+
+float3 ReconstructSceneWorldPosition(float2 uv, float viewDistance)
+{
+    float2 ndc = float2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    float cx = (ndc.x - panNdcX) * viewDistance / max(projScaleX, 0.0001);
+    float cy = (ndc.y - panNdcY) * viewDistance / max(projScaleY, 0.0001);
+    return cameraPosition.xyz
+        + cameraForward.xyz * viewDistance
+        + cameraRight.xyz * cx
+        + cameraUp.xyz * cy;
+}
+
+float SceneRefractionSampleWeight(float2 uv, float surfaceViewDistance)
+{
+    float inside = SceneUvInside(uv);
+    float sceneDepth = sceneDepthTexture.SampleLevel(shadowSampler, saturate(uv), 0).r;
+    float hasScene = 1.0 - step(0.9999, sceneDepth);
+    float sceneViewDistance = SceneDepthToViewDistance(sceneDepth);
+    float behindWater = smoothstep(0.25, 3.0, sceneViewDistance - surfaceViewDistance);
+    float3 sceneWorld = ReconstructSceneWorldPosition(uv, sceneViewDistance);
+    float belowWater = 1.0 - smoothstep(waterLevelParam - 0.25, waterLevelParam + 1.0, sceneWorld.y);
+    return inside * ScreenEdgeFade(uv) * hasScene * behindWater * belowWater;
+}
+
 float TraceWaterReflection(float3 worldPos, float3 reflectionDir, float terrainSize, out float3 hitColor)
 {
     hitColor = 0.0;
@@ -1041,18 +1073,40 @@ float4 PSWater(VSOut i) : SV_TARGET
         float blurAmount = saturate(waterRefractionBlur * 0.55);
         float distortionRadius = (0.005 + sideAbsorption * 0.018) * waterRefractionStrength;
         float blurRadius = (0.008 + sideAbsorption * 0.050) * waterRefractionStrength * blurAmount;
-        float2 refractUv = saturate(sceneUv + wobble * distortionRadius);
+        float2 refractUv = sceneUv + wobble * distortionRadius;
+        float sideViewDistance = dot(i.worldPos - cameraPosition.xyz, cameraForward.xyz);
         // 9-tap ブラー
+        float2 sideUv0 = refractUv;
+        float2 sideUv1 = refractUv + float2( blurRadius, 0.0);
+        float2 sideUv2 = refractUv + float2(-blurRadius, 0.0);
+        float2 sideUv3 = refractUv + float2(0.0,  blurRadius);
+        float2 sideUv4 = refractUv + float2(0.0, -blurRadius);
+        float2 sideUv5 = refractUv + float2( blurRadius,  blurRadius);
+        float2 sideUv6 = refractUv + float2(-blurRadius,  blurRadius);
+        float2 sideUv7 = refractUv + float2( blurRadius, -blurRadius);
+        float2 sideUv8 = refractUv + float2(-blurRadius, -blurRadius);
+        float sideW0 = 0.24 * SceneRefractionSampleWeight(sideUv0, sideViewDistance);
+        float sideW1 = 0.12 * SceneRefractionSampleWeight(sideUv1, sideViewDistance);
+        float sideW2 = 0.12 * SceneRefractionSampleWeight(sideUv2, sideViewDistance);
+        float sideW3 = 0.12 * SceneRefractionSampleWeight(sideUv3, sideViewDistance);
+        float sideW4 = 0.12 * SceneRefractionSampleWeight(sideUv4, sideViewDistance);
+        float sideW5 = 0.07 * SceneRefractionSampleWeight(sideUv5, sideViewDistance);
+        float sideW6 = 0.07 * SceneRefractionSampleWeight(sideUv6, sideViewDistance);
+        float sideW7 = 0.07 * SceneRefractionSampleWeight(sideUv7, sideViewDistance);
+        float sideW8 = 0.07 * SceneRefractionSampleWeight(sideUv8, sideViewDistance);
+        float sideWeight = sideW0 + sideW1 + sideW2 + sideW3 + sideW4 + sideW5 + sideW6 + sideW7 + sideW8;
         float3 sideScene =
-            sceneColorTexture.SampleLevel(linearSampler, refractUv, 0).rgb * 0.24 +
-            sceneColorTexture.SampleLevel(linearSampler, saturate(refractUv + float2( blurRadius, 0.0)), 0).rgb * 0.12 +
-            sceneColorTexture.SampleLevel(linearSampler, saturate(refractUv + float2(-blurRadius, 0.0)), 0).rgb * 0.12 +
-            sceneColorTexture.SampleLevel(linearSampler, saturate(refractUv + float2(0.0,  blurRadius)), 0).rgb * 0.12 +
-            sceneColorTexture.SampleLevel(linearSampler, saturate(refractUv + float2(0.0, -blurRadius)), 0).rgb * 0.12 +
-            sceneColorTexture.SampleLevel(linearSampler, saturate(refractUv + float2( blurRadius,  blurRadius)), 0).rgb * 0.07 +
-            sceneColorTexture.SampleLevel(linearSampler, saturate(refractUv + float2(-blurRadius,  blurRadius)), 0).rgb * 0.07 +
-            sceneColorTexture.SampleLevel(linearSampler, saturate(refractUv + float2( blurRadius, -blurRadius)), 0).rgb * 0.07 +
-            sceneColorTexture.SampleLevel(linearSampler, saturate(refractUv + float2(-blurRadius, -blurRadius)), 0).rgb * 0.07;
+            sceneColorTexture.SampleLevel(linearSampler, saturate(sideUv0), 0).rgb * sideW0 +
+            sceneColorTexture.SampleLevel(linearSampler, saturate(sideUv1), 0).rgb * sideW1 +
+            sceneColorTexture.SampleLevel(linearSampler, saturate(sideUv2), 0).rgb * sideW2 +
+            sceneColorTexture.SampleLevel(linearSampler, saturate(sideUv3), 0).rgb * sideW3 +
+            sceneColorTexture.SampleLevel(linearSampler, saturate(sideUv4), 0).rgb * sideW4 +
+            sceneColorTexture.SampleLevel(linearSampler, saturate(sideUv5), 0).rgb * sideW5 +
+            sceneColorTexture.SampleLevel(linearSampler, saturate(sideUv6), 0).rgb * sideW6 +
+            sceneColorTexture.SampleLevel(linearSampler, saturate(sideUv7), 0).rgb * sideW7 +
+            sceneColorTexture.SampleLevel(linearSampler, saturate(sideUv8), 0).rgb * sideW8;
+        sideScene = sideScene / max(sideWeight, 0.0001);
+        sideScene = lerp(waterBodyColor, sideScene, saturate(sideWeight));
 
         // ===== 上面と同じ設計: 屈折済み景色を焼き込む =====
         // 薄い水 → ぼかした景色が主体、厚い水 → 水体色が主体
@@ -1147,20 +1201,33 @@ float4 PSWater(VSOut i) : SV_TARGET
     float shoreDepthScale = saturate(shallowDepth / 4.0);
     // オフセット縮小: 大きすぎると波法線の周期パターンが地形に映ってチェック柄になる
     float refractionOffset = (0.003 + saturate(viewPathLength / 500.0) * 0.008) * waterRefractionStrength * shoreDepthScale;
-    float2 refractUv = saturate(sceneUv + refractDir * refractionOffset);
-    // 屈折先が水面外ならオフセットなし UV へ戻す
-    float refractedTerrH = displacementHeights.SampleLevel(linearSampler, refractUv, 0).r;
-    float refractOutside = saturate((refractedTerrH - waterLevelParam) / 2.0);
+    float2 refractUv = sceneUv + refractDir * refractionOffset;
+    // 屈折先が画面外ならオフセットなし UV へ戻す
+    float refractOutside = 1.0 - SceneUvInside(refractUv);
     refractUv = lerp(refractUv, sceneUv, refractOutside);
 
     // ブラー半径も小さめに (大きすぎるとぼかしパターンが目立つ)
     float topBlurRadius = (0.002 + saturate(viewPathLength / 300.0) * 0.008) * saturate(waterRefractionBlur * 0.50);
+    float topViewDistance = dot(i.worldPos - cameraPosition.xyz, cameraForward.xyz);
+    float2 topUv0 = refractUv;
+    float2 topUv1 = refractUv + float2( topBlurRadius, 0.0);
+    float2 topUv2 = refractUv + float2(-topBlurRadius, 0.0);
+    float2 topUv3 = refractUv + float2(0.0,  topBlurRadius);
+    float2 topUv4 = refractUv + float2(0.0, -topBlurRadius);
+    float topW0 = 0.36 * SceneRefractionSampleWeight(topUv0, topViewDistance);
+    float topW1 = 0.16 * SceneRefractionSampleWeight(topUv1, topViewDistance);
+    float topW2 = 0.16 * SceneRefractionSampleWeight(topUv2, topViewDistance);
+    float topW3 = 0.16 * SceneRefractionSampleWeight(topUv3, topViewDistance);
+    float topW4 = 0.16 * SceneRefractionSampleWeight(topUv4, topViewDistance);
+    float topWeight = topW0 + topW1 + topW2 + topW3 + topW4;
     float3 underwaterScene =
-        sceneColorTexture.SampleLevel(linearSampler, refractUv, 0).rgb * 0.36 +
-        sceneColorTexture.SampleLevel(linearSampler, saturate(refractUv + float2( topBlurRadius, 0.0)), 0).rgb * 0.16 +
-        sceneColorTexture.SampleLevel(linearSampler, saturate(refractUv + float2(-topBlurRadius, 0.0)), 0).rgb * 0.16 +
-        sceneColorTexture.SampleLevel(linearSampler, saturate(refractUv + float2(0.0,  topBlurRadius)), 0).rgb * 0.16 +
-        sceneColorTexture.SampleLevel(linearSampler, saturate(refractUv + float2(0.0, -topBlurRadius)), 0).rgb * 0.16;
+        sceneColorTexture.SampleLevel(linearSampler, saturate(topUv0), 0).rgb * topW0 +
+        sceneColorTexture.SampleLevel(linearSampler, saturate(topUv1), 0).rgb * topW1 +
+        sceneColorTexture.SampleLevel(linearSampler, saturate(topUv2), 0).rgb * topW2 +
+        sceneColorTexture.SampleLevel(linearSampler, saturate(topUv3), 0).rgb * topW3 +
+        sceneColorTexture.SampleLevel(linearSampler, saturate(topUv4), 0).rgb * topW4;
+    underwaterScene = underwaterScene / max(topWeight, 0.0001);
+    underwaterScene = lerp(waterBodyColor, underwaterScene, saturate(topWeight));
 
     // 水体色主体 + 屈折は浅い水で最大 30% 貢献
     float refractionContrib = (1.0 - absorption) * 0.30 * waterRefractionStrength;
@@ -1188,11 +1255,14 @@ float4 PSWater(VSOut i) : SV_TARGET
     float terrainReflWeight = saturate(1.0 - shallowDepth * 0.008) * fresnel * reflStrength;
     float3 reflection = lerp(skyRefl * fresnel, terrainRefl, terrainReflWeight) * edgeReflFade;
 
-    float3 ssrColor = 0.0;
-    float ssrHit = TraceWaterReflection(i.worldPos + fresnelN * 1.5, reflect(-V, fresnelN), terrainSize, ssrColor);
-    float ssrFresnel = saturate(fresnel * 2.2 + 0.08) * reflStrength;
-    float ssrBlend = ssrHit * edgeReflFade * ssrFresnel * saturate(1.0 - absorption * 0.28);
-    reflection = lerp(reflection, ssrColor * saturate(0.35 + fresnel * 1.5), ssrBlend);
+    if (waterSsrEnabled > 0.5)
+    {
+        float3 ssrColor = 0.0;
+        float ssrHit = TraceWaterReflection(i.worldPos + fresnelN * 1.5, reflect(-V, fresnelN), terrainSize, ssrColor);
+        float ssrFresnel = saturate(fresnel * 2.2 + 0.08) * reflStrength;
+        float ssrBlend = ssrHit * edgeReflFade * ssrFresnel * saturate(1.0 - absorption * 0.28);
+        reflection = lerp(reflection, ssrColor * saturate(0.35 + fresnel * 1.5), ssrBlend);
+    }
 
     // ===== 最終合成 =====
     float reflBlend = saturate(fresnel * reflStrength + terrainReflWeight * 0.5);

@@ -68,9 +68,14 @@ void DrawWaterSettingsPanel(WaterPanelState state)
 
             ImGui::SeparatorText("反射");
             if (DrawPropertyFloatRow("Reflection Strength", "DisplayWaterReflectionStrength", &preview.waterReflectionStrength, 0.0f, 2.0f, rock::PreviewSettings{}.waterReflectionStrength, "Water reflection strength changed", false,
-                "水面への地形・空の映り込みの強さです。0 で反射なし、1 が標準、2 で強めになります。SSR による実際の地形色の映り込みにも影響します。", "%.2f"))
+                "水面への空反射と反射全体の強さです。0 で反射なし、1 が標準、2 で強めになります。", "%.2f"))
             {
                 preview.waterReflectionStrength = std::clamp(preview.waterReflectionStrength, 0.0f, 3.0f);
+                SaveAppSettings(state);
+            }
+            if (DrawPropertyBoolRow("Screen Space Reflections", "DisplayWaterSsrEnabled", &preview.waterSsrEnabled, "Water SSR toggled",
+                "画面内に見えている地形を水面へ反射する追加効果です。画面外や隠れた地形は反射できないため、自然さを優先する場合はオフが安定します。", rock::PreviewSettings{}.waterSsrEnabled, true))
+            {
                 SaveAppSettings(state);
             }
             if (DrawPropertyFloatRow("Refractive Index", "DisplayWaterRefractiveIndex", &preview.waterRefractiveIndex, 1.0f, 2.0f, rock::PreviewSettings{}.waterRefractiveIndex, "Water refractive index changed", false,

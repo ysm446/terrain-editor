@@ -621,6 +621,7 @@ struct PreviewSettings
     float waterRefractionBlur = 0.45f;
     bool waterAnimationEnabled = true;
     float waterReflectionStrength = 1.0f;
+    bool waterSsrEnabled = false;
 };
 
 enum class SkyMode
