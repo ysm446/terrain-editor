@@ -260,13 +260,38 @@ void DrawCloudSettingsPanel(SkyPanelState state)
 
             ImGui::SeparatorText("ボリューム雲");
             rock::CloudSettings& clouds = settings.clouds;
-            DrawPropertyBoolRow("有効", "CloudEnabled", &clouds.enabled, "Clouds enabled toggled", "ボリューム雲のレイマーチ描画を有効化します。3D 密度テクスチャ (128³ R8 = 2MB) を生成し、雲帯 [Altitude Min, Max] とのレイ交差をフルスクリーンパスで毎フレーム積分します。", rock::CloudSettings{}.enabled, true);
+            DrawPropertyBoolRow("有効", "CloudEnabled", &clouds.enabled, "Clouds enabled toggled", "ボリューム雲のレイマーチ描画を有効化します。3D 密度テクスチャ (128³ R8 = 2MB) を生成し、指定した高度と厚みの雲帯とのレイ交差をフルスクリーンパスで毎フレーム積分します。", rock::CloudSettings{}.enabled, true);
             ImGui::BeginDisabled(!clouds.enabled);
                 DrawPropertyIntRow("Cloud Seed", "CloudSeed", &clouds.seed, 0, 999999, rock::CloudSettings{}.seed, "Cloud seed changed", false, "3D 密度ノイズのシード。変更すると雲のパターンが変わります(テクスチャを再生成)。");
                 DrawPropertyFloatRow("Coverage", "CloudCoverage", &clouds.coverage, 0.0f, 1.0f, rock::CloudSettings{}.coverage, "Cloud coverage changed", false, "空に占める雲の割合。0 で雲無し、1 で空一面が雲。");
                 DrawPropertyFloatRow("Density", "CloudDensity", &clouds.densityMultiplier, 0.0f, 4.0f, rock::CloudSettings{}.densityMultiplier, "Cloud density changed", false, "雲の濃さ倍率。大きいほど雲が不透明になります。");
-                DrawPropertyFloatRow("Altitude Min (m)", "CloudAltMin", &clouds.altitudeMin, 0.0f, 8000.0f, rock::CloudSettings{}.altitudeMin, "Cloud altitude min changed", false, "雲帯の下限高度 (m)。地形をすっぽり包むには地形最高点より低い値、上に浮かべるなら高い値を指定。", "%.0f");
-                DrawPropertyFloatRow("Altitude Max (m)", "CloudAltMax", &clouds.altitudeMax, 0.0f, 12000.0f, rock::CloudSettings{}.altitudeMax, "Cloud altitude max changed", false, "雲帯の上限高度 (m)。Max - Min が雲層の厚さです。", "%.0f");
+                clouds.altitudeMin = std::clamp(clouds.altitudeMin, -30000.0f, 30000.0f);
+                clouds.altitudeMax = std::clamp(clouds.altitudeMax, clouds.altitudeMin + 1.0f, 30000.0f);
+                const float thicknessBeforeAltitude = std::max(1.0f, clouds.altitudeMax - clouds.altitudeMin);
+                const float altitudeBeforeEdit = clouds.altitudeMin;
+                const bool altitudeEditEnded = DrawPropertyFloatRow("Altitude (m)", "CloudAltitude", &clouds.altitudeMin, -5000.0f, 12000.0f, rock::CloudSettings{}.altitudeMin, "Cloud altitude changed", false, "雲帯の下限高度です。厚みを保ったまま雲全体を上下に移動します。負の値にすると地形の基準高度より下から雲帯を始められます。", "%.0f", 0, -30000.0f, 30000.0f);
+                if (clouds.altitudeMin != altitudeBeforeEdit)
+                {
+                    clouds.altitudeMin = std::clamp(clouds.altitudeMin, -30000.0f, 30000.0f - thicknessBeforeAltitude);
+                    clouds.altitudeMax = clouds.altitudeMin + thicknessBeforeAltitude;
+                }
+                if (altitudeEditEnded)
+                {
+                    SaveAppSettings(state);
+                }
+
+                float cloudThickness = std::max(1.0f, clouds.altitudeMax - clouds.altitudeMin);
+                const float thicknessBeforeEdit = cloudThickness;
+                const bool thicknessEditEnded = DrawPropertyFloatRow("Thickness (m)", "CloudThickness", &cloudThickness, 1.0f, 8000.0f, rock::CloudSettings{}.altitudeMax - rock::CloudSettings{}.altitudeMin, "Cloud thickness changed", false, "雲帯の厚みです。上限高度は Altitude + Thickness として計算します。", "%.0f");
+                if (cloudThickness != thicknessBeforeEdit)
+                {
+                    cloudThickness = std::clamp(cloudThickness, 1.0f, 30000.0f - clouds.altitudeMin);
+                    clouds.altitudeMax = clouds.altitudeMin + cloudThickness;
+                }
+                if (thicknessEditEnded)
+                {
+                    SaveAppSettings(state);
+                }
                 DrawPropertyFloatRow("Horizontal Scale (m)", "CloudHorizScale", &clouds.horizontalScale, 200.0f, 30000.0f, rock::CloudSettings{}.horizontalScale, "Cloud scale changed", false, "雲の水平スケール。大きいほど雲塊が大きく、小さいほど細かい雲になります。", "%.0f");
                 DrawPropertyFloatRow("Field Radius (m)", "CloudFieldRadius", &clouds.fieldRadius, 200.0f, 50000.0f, rock::CloudSettings{}.fieldRadius, "Cloud field radius changed", false, "地形の中心を原点にした、雲が存在する円形フィールドの半径。大きくするとより遠くまで雲が広がります。地形と同程度にすると地形の周りだけに雲が出ます。", "%.0f");
                 DrawPropertyFloatRow("Field Falloff (m)", "CloudFieldFalloff", &clouds.fieldFalloff, 50.0f, 20000.0f, rock::CloudSettings{}.fieldFalloff, "Cloud field falloff changed", false, "フィールド端のフェードアウト幅。大きいほど雲がじわっと消え、小さいと境界がくっきりします。", "%.0f");

@@ -218,8 +218,8 @@ void ReadCloudSettingsJson(const nlohmann::json& settingsJson, rock::CloudSettin
     clouds.seed = std::clamp(cloudsJson.value("seed", clouds.seed), 0, 999999);
     clouds.coverage = std::clamp(cloudsJson.value("coverage", clouds.coverage), 0.0f, 1.0f);
     clouds.densityMultiplier = std::clamp(cloudsJson.value("densityMultiplier", clouds.densityMultiplier), 0.0f, 8.0f);
-    clouds.altitudeMin = std::clamp(cloudsJson.value("altitudeMin", clouds.altitudeMin), 0.0f, 30000.0f);
-    clouds.altitudeMax = std::clamp(cloudsJson.value("altitudeMax", clouds.altitudeMax), 0.0f, 30000.0f);
+    clouds.altitudeMin = std::clamp(cloudsJson.value("altitudeMin", clouds.altitudeMin), -30000.0f, 30000.0f);
+    clouds.altitudeMax = std::clamp(cloudsJson.value("altitudeMax", clouds.altitudeMax), -30000.0f, 30000.0f);
     clouds.horizontalScale = std::clamp(cloudsJson.value("horizontalScale", clouds.horizontalScale), 50.0f, 100000.0f);
     clouds.absorption = std::clamp(cloudsJson.value("absorption", clouds.absorption), 0.0f, 2.0f);
     ReadColor3Json(cloudsJson, "color", clouds.color, 8.0f);

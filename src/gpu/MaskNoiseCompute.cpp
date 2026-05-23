@@ -1,4 +1,4 @@
-#include "MaskNoiseCompute.h"
+﻿#include "MaskNoiseCompute.h"
 
 #include "../D3D12Utils.h"
 
@@ -66,7 +66,7 @@ bool EnsureMaskNoiseComputePipeline(std::string* error)
     {
         return true;
     }
-    if (!g_context.device)
+    if (!g_context.gpu.device)
     {
         if (error) *error = "D3D12 device is not available";
         g_status = "Mask Noise GPU Compute unavailable";
@@ -97,7 +97,7 @@ bool EnsureMaskNoiseComputePipeline(std::string* error)
     rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
     ComPtr<ID3DBlob> errBlob;
-    HRESULT hr = CreateRootSignatureFromDesc(g_context.device,
+    HRESULT hr = CreateRootSignatureFromDesc(g_context.gpu.device,
                                              rsDesc,
                                              g_rootSignature.ReleaseAndGetAddressOf(),
                                              errBlob.ReleaseAndGetAddressOf());
@@ -123,7 +123,7 @@ bool EnsureMaskNoiseComputePipeline(std::string* error)
     D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{};
     psoDesc.pRootSignature = g_rootSignature.Get();
     psoDesc.CS = {csBlob->GetBufferPointer(), csBlob->GetBufferSize()};
-    HRESULT psoHr = g_context.device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&g_pso));
+    HRESULT psoHr = g_context.gpu.device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&g_pso));
     if (FAILED(psoHr))
     {
         if (error) *error = "Create Mask Noise PSO failed";
@@ -143,7 +143,7 @@ bool RunMaskNoiseComputeImmediate(rock::MaskGrid& grid, const rock::MaskNoiseSet
     {
         return false;
     }
-    if (!g_context.commandQueue || !g_context.fence || !g_context.fenceLastSignaledValue || !g_context.waitForFenceValue)
+    if (!IsGpuComputeContextReady(g_context.gpu))
     {
         if (error) *error = "D3D12 queue or fence is not available";
         return false;
@@ -165,14 +165,14 @@ bool RunMaskNoiseComputeImmediate(rock::MaskGrid& grid, const rock::MaskNoiseSet
 
     ComPtr<ID3D12Resource> output;
     ComPtr<ID3D12Resource> readback;
-    HRESULT hr = g_context.device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &gpuDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&output));
+    HRESULT hr = g_context.gpu.device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &gpuDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&output));
     if (FAILED(hr)) { if (error) *error = "Create Mask Noise output buffer failed"; return false; }
-    hr = g_context.device->CreateCommittedResource(&readbackHeap, D3D12_HEAP_FLAG_NONE, &cpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readback));
+    hr = g_context.gpu.device->CreateCommittedResource(&readbackHeap, D3D12_HEAP_FLAG_NONE, &cpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readback));
     if (FAILED(hr)) { if (error) *error = "Create Mask Noise readback buffer failed"; return false; }
 
     D3D12_DESCRIPTOR_HEAP_DESC heapDesc = ShaderVisibleCbvSrvUavDescriptorHeapDesc(1);
     ComPtr<ID3D12DescriptorHeap> descriptorHeap;
-    hr = g_context.device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&descriptorHeap));
+    hr = g_context.gpu.device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&descriptorHeap));
     if (FAILED(hr)) { if (error) *error = "Create Mask Noise descriptor heap failed"; return false; }
 
     D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
@@ -180,12 +180,12 @@ bool RunMaskNoiseComputeImmediate(rock::MaskGrid& grid, const rock::MaskNoiseSet
     uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
     uavDesc.Buffer.NumElements = static_cast<UINT>(cellCount);
     uavDesc.Buffer.StructureByteStride = sizeof(float);
-    g_context.device->CreateUnorderedAccessView(output.Get(), nullptr, &uavDesc, descriptorHeap->GetCPUDescriptorHandleForHeapStart());
+    g_context.gpu.device->CreateUnorderedAccessView(output.Get(), nullptr, &uavDesc, descriptorHeap->GetCPUDescriptorHandleForHeapStart());
 
     ComPtr<ID3D12CommandAllocator> allocator;
     ComPtr<ID3D12GraphicsCommandList> commandList;
-    ThrowIfFailed(g_context.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)), "Create Mask Noise command allocator failed");
-    ThrowIfFailed(g_context.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&commandList)), "Create Mask Noise command list failed");
+    ThrowIfFailed(g_context.gpu.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)), "Create Mask Noise command allocator failed");
+    ThrowIfFailed(g_context.gpu.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&commandList)), "Create Mask Noise command list failed");
 
     MaskNoiseShaderConstants constants{};
     constants.resolution = resolution;
@@ -216,10 +216,10 @@ bool RunMaskNoiseComputeImmediate(rock::MaskGrid& grid, const rock::MaskNoiseSet
     ThrowIfFailed(commandList->Close(), "Close Mask Noise command list failed");
 
     ID3D12CommandList* lists[] = {commandList.Get()};
-    g_context.commandQueue->ExecuteCommandLists(1, lists);
-    const UINT64 fenceValue = ++(*g_context.fenceLastSignaledValue);
-    ThrowIfFailed(g_context.commandQueue->Signal(g_context.fence, fenceValue), "Signal Mask Noise fence failed");
-    g_context.waitForFenceValue(fenceValue);
+    g_context.gpu.commandQueue->ExecuteCommandLists(1, lists);
+    const UINT64 fenceValue = ++(*g_context.gpu.fenceLastSignaledValue);
+    ThrowIfFailed(g_context.gpu.commandQueue->Signal(g_context.gpu.fence, fenceValue), "Signal Mask Noise fence failed");
+    g_context.gpu.waitForFenceValue(fenceValue);
 
     void* mapped = nullptr;
     const D3D12_RANGE readRange{0, static_cast<SIZE_T>(bufferSize)};
@@ -254,7 +254,7 @@ const std::string& MaskNoiseComputeStatus()
 
 bool RunMaskNoiseCompute(rock::MaskGrid& grid, const rock::MaskNoiseSettings& settings, std::string* error)
 {
-    if (std::this_thread::get_id() == g_context.mainThreadId)
+    if (std::this_thread::get_id() == g_context.gpu.mainThreadId)
     {
         return RunMaskNoiseComputeImmediate(grid, settings, error);
     }
@@ -281,7 +281,7 @@ bool RunMaskNoiseCompute(rock::MaskGrid& grid, const rock::MaskNoiseSettings& se
 
 void ProcessPendingMaskNoiseGpuRequests()
 {
-    if (std::this_thread::get_id() != g_context.mainThreadId)
+    if (std::this_thread::get_id() != g_context.gpu.mainThreadId)
     {
         return;
     }

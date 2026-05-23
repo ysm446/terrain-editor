@@ -1,13 +1,9 @@
 #pragma once
 
-#include <cstdint>
 #include <filesystem>
-#include <functional>
 #include <string>
-#include <thread>
 
-#include <d3d12.h>
-
+#include "GpuComputeContext.h"
 #include "../node_graph.h"
 
 namespace terrain::gpu
@@ -15,13 +11,8 @@ namespace terrain::gpu
 
 struct MaskNoiseComputeContext
 {
-    ID3D12Device* device = nullptr;
-    ID3D12CommandQueue* commandQueue = nullptr;
-    ID3D12Fence* fence = nullptr;
-    UINT64* fenceLastSignaledValue = nullptr;
-    std::thread::id mainThreadId{};
+    GpuComputeContext gpu;
     std::filesystem::path shaderPath;
-    std::function<void(UINT64)> waitForFenceValue;
 };
 
 void SetMaskNoiseComputeContext(MaskNoiseComputeContext context);
