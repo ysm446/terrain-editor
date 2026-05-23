@@ -36,6 +36,7 @@
 #include <nlohmann/json.hpp>
 
 #include "D3D12Utils.h"
+#include "gpu/MaskNoiseCompute.h"
 #include "node_graph.h"
 #include "NodeSerialization.h"
 #include "PathUtils.h"
@@ -82,6 +83,9 @@ using terrain::d3d12::HeapProperties;
 using terrain::d3d12::ShaderVisibleCbvSrvUavDescriptorHeapDesc;
 using terrain::d3d12::Texture2DResourceDesc;
 using terrain::d3d12::ThrowIfFailed;
+using terrain::gpu::MaskNoiseComputeStatus;
+using terrain::gpu::ProcessPendingMaskNoiseGpuRequests;
+using terrain::gpu::RunMaskNoiseCompute;
 
 constexpr int kFrameCount = 2;
 constexpr int kSrvDescriptorCount = 128;
@@ -818,8 +822,6 @@ ComPtr<ID3D12RootSignature> g_mseComputeRootSignature;
 ComPtr<ID3D12PipelineState> g_mseStreamPowerPso;
 ComPtr<ID3D12PipelineState> g_mseThermalPso;
 ComPtr<ID3D12PipelineState> g_mseDepositionPso;
-ComPtr<ID3D12RootSignature> g_maskNoiseComputeRootSignature;
-ComPtr<ID3D12PipelineState> g_maskNoisePso;
 ComPtr<ID3D12RootSignature> g_sedimentComputeRootSignature;
 ComPtr<ID3D12PipelineState> g_sedimentSetupPso;
 ComPtr<ID3D12PipelineState> g_sedimentEmitPso;
@@ -911,10 +913,6 @@ std::string g_mseComputeStatus = "MSE GPU Compute not initialized";
 bool g_mseComputeReady = false;
 std::mutex g_mseComputeMutex;
 std::mutex g_mseGpuRequestMutex;
-std::string g_maskNoiseComputeStatus = "Mask Noise GPU Compute not initialized";
-bool g_maskNoiseComputeReady = false;
-std::mutex g_maskNoiseComputeMutex;
-std::mutex g_maskNoiseGpuRequestMutex;
 std::string g_sedimentComputeStatus = "Sediment GPU Compute not initialized";
 bool g_sedimentComputeReady = false;
 std::mutex g_sedimentComputeMutex;
@@ -956,13 +954,6 @@ struct MseGpuRequest
 };
 
 std::vector<std::shared_ptr<MseGpuRequest>> g_pendingMseGpuRequests;
-
-struct MaskNoiseGpuRequestResult
-{
-    bool success = false;
-    rock::MaskGrid grid;
-    std::string error;
-};
 
 struct SedimentGpuRequestResult
 {
@@ -1063,15 +1054,6 @@ struct ColorizeGpuRequest
 };
 
 std::vector<std::shared_ptr<ColorizeGpuRequest>> g_pendingColorizeGpuRequests;
-
-struct MaskNoiseGpuRequest
-{
-    rock::MaskNoiseSettings settings;
-    int resolution = 0;
-    std::promise<MaskNoiseGpuRequestResult> promise;
-};
-
-std::vector<std::shared_ptr<MaskNoiseGpuRequest>> g_pendingMaskNoiseGpuRequests;
 
 std::string MakeWindowTitleText()
 {
@@ -1427,9 +1409,7 @@ void CleanupD3D()
     g_mseDepositionPso.Reset();
     g_mseComputeRootSignature.Reset();
     g_mseComputeReady = false;
-    g_maskNoisePso.Reset();
-    g_maskNoiseComputeRootSignature.Reset();
-    g_maskNoiseComputeReady = false;
+    terrain::gpu::ResetMaskNoiseComputeResources();
     g_sedimentSetupPso.Reset();
     g_sedimentEmitPso.Reset();
     g_sedimentSweep1Pso.Reset();
@@ -1547,11 +1527,6 @@ std::filesystem::path MseComputeShaderPath()
     return ShaderPath("multi_scale_erosion_compute.hlsl");
 }
 
-std::filesystem::path MaskNoiseShaderPath()
-{
-    return ShaderPath("mask_noise_compute.hlsl");
-}
-
 std::filesystem::path SedimentComputeShaderPath()
 {
     return ShaderPath("sediment_compute.hlsl");
@@ -1619,7 +1594,6 @@ std::filesystem::path DepthOfFieldShaderPath()
 
 void EvaluateGraph();
 void ProcessPendingMseGpuRequests();
-void ProcessPendingMaskNoiseGpuRequests();
 void ProcessPendingSedimentGpuRequests();
 void ProcessPendingRockGpuRequests();
 void ProcessPendingScatterGpuRequests();
@@ -4194,240 +4168,6 @@ void ProcessPendingMseGpuRequests()
         MseGpuRequestResult result;
         result.grid = std::move(request->grid);
         result.success = RunMseComputeGridImmediate(result.grid, request->settings, &result.error);
-        request->promise.set_value(std::move(result));
-    }
-}
-
-struct MaskNoiseShaderConstants
-{
-    UINT  resolution;
-    UINT  octaves;
-    INT   seed;
-    float frequency;
-    float lacunarity;
-    float persistence;
-};
-static_assert(sizeof(MaskNoiseShaderConstants) == 6 * sizeof(UINT), "MaskNoiseShaderConstants must be 6 DWORDs");
-
-bool EnsureMaskNoiseComputePipeline(std::string* error)
-{
-    if (g_maskNoiseComputeReady && g_maskNoiseComputeRootSignature && g_maskNoisePso)
-    {
-        return true;
-    }
-    if (!g_device)
-    {
-        if (error) *error = "D3D12 device is not available";
-        g_maskNoiseComputeStatus = "Mask Noise GPU Compute unavailable";
-        return false;
-    }
-
-    // One UAV (output buffer) bound through a descriptor table, plus 6
-    // 32-bit constants for shader parameters.
-    D3D12_DESCRIPTOR_RANGE uavRange{};
-    uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-    uavRange.NumDescriptors = 1;
-    uavRange.BaseShaderRegister = 0;
-    uavRange.RegisterSpace = 0;
-    uavRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-
-    D3D12_ROOT_PARAMETER rootParams[2]{};
-    rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    rootParams[0].Constants.ShaderRegister = 0;
-    rootParams[0].Constants.RegisterSpace = 0;
-    rootParams[0].Constants.Num32BitValues = 6;
-    rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
-    rootParams[1].DescriptorTable.pDescriptorRanges = &uavRange;
-    rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-
-    D3D12_ROOT_SIGNATURE_DESC rsDesc{};
-    rsDesc.NumParameters = 2;
-    rsDesc.pParameters = rootParams;
-    rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
-
-    ComPtr<ID3DBlob> errBlob;
-    HRESULT hr = CreateRootSignatureFromDesc(g_device.Get(),
-                                             rsDesc,
-                                             g_maskNoiseComputeRootSignature.ReleaseAndGetAddressOf(),
-                                             errBlob.ReleaseAndGetAddressOf());
-    if (FAILED(hr))
-    {
-        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Create Mask Noise root sig failed";
-        g_maskNoiseComputeStatus = "Mask Noise GPU Compute root signature failed";
-        return false;
-    }
-
-    const std::filesystem::path shaderPath = MaskNoiseShaderPath();
-    const UINT compileFlags = DefaultShaderCompileFlags();
-
-    ComPtr<ID3DBlob> csBlob;
-    errBlob.Reset();
-    HRESULT compileHr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE,
-                                            "CSGenerate", "cs_5_0", compileFlags, 0, &csBlob, &errBlob);
-    if (FAILED(compileHr))
-    {
-        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile Mask Noise shader failed";
-        g_maskNoiseComputeStatus = "Mask Noise shader compile failed";
-        return false;
-    }
-
-    D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{};
-    psoDesc.pRootSignature = g_maskNoiseComputeRootSignature.Get();
-    psoDesc.CS = {csBlob->GetBufferPointer(), csBlob->GetBufferSize()};
-    HRESULT psoHr = g_device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&g_maskNoisePso));
-    if (FAILED(psoHr))
-    {
-        if (error) *error = "Create Mask Noise PSO failed";
-        g_maskNoiseComputeStatus = "Mask Noise PSO failed";
-        return false;
-    }
-
-    g_maskNoiseComputeReady = true;
-    g_maskNoiseComputeStatus = "Mask Noise GPU Compute dispatch ready";
-    return true;
-}
-
-bool RunMaskNoiseComputeImmediate(rock::MaskGrid& grid, const rock::MaskNoiseSettings& settings, std::string* error)
-{
-    std::lock_guard<std::mutex> lock(g_maskNoiseComputeMutex);
-    if (!EnsureMaskNoiseComputePipeline(error))
-    {
-        return false;
-    }
-
-    const UINT resolution = static_cast<UINT>(std::clamp(grid.resolution, 0, 4096));
-    if (resolution < 2)
-    {
-        if (error) *error = "Invalid resolution for Mask Noise GPU Compute";
-        return false;
-    }
-    const UINT64 cellCount = static_cast<UINT64>(resolution) * static_cast<UINT64>(resolution);
-    const UINT64 bufferSize = cellCount * sizeof(float);
-
-    const D3D12_HEAP_PROPERTIES defaultHeap = HeapProperties(D3D12_HEAP_TYPE_DEFAULT);
-    const D3D12_HEAP_PROPERTIES readbackHeap = HeapProperties(D3D12_HEAP_TYPE_READBACK);
-    const D3D12_RESOURCE_DESC gpuDesc = BufferResourceDesc(bufferSize, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-    const D3D12_RESOURCE_DESC cpuDesc = BufferResourceDesc(bufferSize);
-
-    ComPtr<ID3D12Resource> output;
-    ComPtr<ID3D12Resource> readback;
-    HRESULT hr = g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &gpuDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&output));
-    if (FAILED(hr)) { if (error) *error = "Create Mask Noise output buffer failed"; return false; }
-    hr = g_device->CreateCommittedResource(&readbackHeap, D3D12_HEAP_FLAG_NONE, &cpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readback));
-    if (FAILED(hr)) { if (error) *error = "Create Mask Noise readback buffer failed"; return false; }
-
-    D3D12_DESCRIPTOR_HEAP_DESC heapDesc =
-        ShaderVisibleCbvSrvUavDescriptorHeapDesc(1);
-    ComPtr<ID3D12DescriptorHeap> descriptorHeap;
-    hr = g_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&descriptorHeap));
-    if (FAILED(hr)) { if (error) *error = "Create Mask Noise descriptor heap failed"; return false; }
-
-    D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
-    uavDesc.Format = DXGI_FORMAT_UNKNOWN;
-    uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
-    uavDesc.Buffer.NumElements = static_cast<UINT>(cellCount);
-    uavDesc.Buffer.StructureByteStride = sizeof(float);
-    g_device->CreateUnorderedAccessView(output.Get(), nullptr, &uavDesc, descriptorHeap->GetCPUDescriptorHandleForHeapStart());
-
-    ComPtr<ID3D12CommandAllocator> allocator;
-    ComPtr<ID3D12GraphicsCommandList> commandList;
-    ThrowIfFailed(g_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)), "Create Mask Noise command allocator failed");
-    ThrowIfFailed(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&commandList)), "Create Mask Noise command list failed");
-
-    MaskNoiseShaderConstants constants{};
-    constants.resolution = resolution;
-    constants.octaves = static_cast<UINT>(std::clamp(settings.octaves, 1, 12));
-    constants.seed = settings.seed;
-    constants.frequency = std::max(settings.frequency, 0.0f);
-    constants.lacunarity = std::max(settings.lacunarity, 0.0f);
-    constants.persistence = std::clamp(settings.persistence, 0.0f, 1.0f);
-
-    ID3D12DescriptorHeap* heaps[] = {descriptorHeap.Get()};
-    commandList->SetDescriptorHeaps(1, heaps);
-    commandList->SetComputeRootSignature(g_maskNoiseComputeRootSignature.Get());
-    commandList->SetPipelineState(g_maskNoisePso.Get());
-    commandList->SetComputeRoot32BitConstants(0, 6, &constants, 0);
-    commandList->SetComputeRootDescriptorTable(1, descriptorHeap->GetGPUDescriptorHandleForHeapStart());
-
-    const UINT groupCount = (resolution + 7u) / 8u;
-    commandList->Dispatch(groupCount, groupCount, 1);
-
-    D3D12_RESOURCE_BARRIER toCopy{};
-    toCopy.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    toCopy.Transition.pResource = output.Get();
-    toCopy.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-    toCopy.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
-    toCopy.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    commandList->ResourceBarrier(1, &toCopy);
-    commandList->CopyBufferRegion(readback.Get(), 0, output.Get(), 0, bufferSize);
-    ThrowIfFailed(commandList->Close(), "Close Mask Noise command list failed");
-
-    ID3D12CommandList* lists[] = {commandList.Get()};
-    g_commandQueue->ExecuteCommandLists(1, lists);
-    const UINT64 fenceValue = ++g_fenceLastSignaledValue;
-    ThrowIfFailed(g_commandQueue->Signal(g_fence.Get(), fenceValue), "Signal Mask Noise fence failed");
-    WaitForFenceValue(fenceValue);
-
-    void* mapped = nullptr;
-    const D3D12_RANGE readRange{0, static_cast<SIZE_T>(bufferSize)};
-    ThrowIfFailed(readback->Map(0, &readRange, &mapped), "Map Mask Noise readback failed");
-    const float* values = static_cast<const float*>(mapped);
-    grid.values.assign(values, values + cellCount);
-    const D3D12_RANGE emptyWriteRange{0, 0};
-    readback->Unmap(0, &emptyWriteRange);
-
-    g_maskNoiseComputeStatus = "Mask Noise GPU Compute evaluated";
-    return true;
-}
-
-bool RunMaskNoiseCompute(rock::MaskGrid& grid, const rock::MaskNoiseSettings& settings, std::string* error)
-{
-    if (std::this_thread::get_id() == g_mainThreadId)
-    {
-        return RunMaskNoiseComputeImmediate(grid, settings, error);
-    }
-
-    auto request = std::make_shared<MaskNoiseGpuRequest>();
-    request->settings = settings;
-    request->resolution = grid.resolution;
-    std::future<MaskNoiseGpuRequestResult> future = request->promise.get_future();
-    {
-        std::lock_guard<std::mutex> lock(g_maskNoiseGpuRequestMutex);
-        g_pendingMaskNoiseGpuRequests.push_back(request);
-    }
-    g_maskNoiseComputeStatus = "Mask Noise GPU Compute queued on main thread";
-
-    MaskNoiseGpuRequestResult result = future.get();
-    if (!result.success)
-    {
-        if (error) *error = result.error;
-        return false;
-    }
-    grid = std::move(result.grid);
-    return true;
-}
-
-void ProcessPendingMaskNoiseGpuRequests()
-{
-    if (std::this_thread::get_id() != g_mainThreadId)
-    {
-        return;
-    }
-
-    std::vector<std::shared_ptr<MaskNoiseGpuRequest>> requests;
-    {
-        std::lock_guard<std::mutex> lock(g_maskNoiseGpuRequestMutex);
-        requests.swap(g_pendingMaskNoiseGpuRequests);
-    }
-
-    for (const std::shared_ptr<MaskNoiseGpuRequest>& request : requests)
-    {
-        MaskNoiseGpuRequestResult result;
-        result.grid.resolution = request->resolution;
-        result.grid.values.assign(static_cast<size_t>(request->resolution) * static_cast<size_t>(request->resolution), 0.0f);
-        result.success = RunMaskNoiseComputeImmediate(result.grid, request->settings, &result.error);
         request->promise.set_value(std::move(result));
     }
 }
@@ -8623,18 +8363,19 @@ void UpdateViewportInteraction(const ImVec2& min, const ImVec2& max)
 {
     ImGuiIO& io = ImGui::GetIO();
     const bool hovered = ImGui::IsMouseHoveringRect(min, max);
-    const bool focusPickShortcut = hovered && io.KeyCtrl && !io.WantCaptureMouse;
+    const bool viewportInputAvailable = hovered && !io.WantTextInput;
+    const bool focusPickShortcut = viewportInputAvailable && io.KeyCtrl;
     g_focusPickCursorActive = g_focusPickMode || focusPickShortcut;
     g_focusPickHoverPoint.reset();
 
-    if (g_focusPickCursorActive && hovered)
+    if (g_focusPickCursorActive && viewportInputAvailable)
     {
         Vec3 hitPoint;
         float focusDistance = 0.0f;
         if (TryPickViewportFocusPoint(min, max, io.MousePos, &hitPoint, &focusDistance, nullptr))
         {
             g_focusPickHoverPoint = hitPoint;
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.WantCaptureMouse)
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
             {
                 g_graph.Settings().preview.dofFocusDistanceMeters = focusDistance;
                 g_focusPickMode = false;
@@ -12914,7 +12655,7 @@ void CaptureDebugStatusLogs()
     AppendDebugLogIfChanged("Cloud", g_cloudPipelineStatus, previousCloudStatus);
     AppendDebugLogIfChanged("Depth of Field", g_dofPipelineStatus, previousDofStatus);
     AppendDebugLogIfChanged("MSE GPU", g_mseComputeStatus, previousMseStatus);
-    AppendDebugLogIfChanged("Mask Noise GPU", g_maskNoiseComputeStatus, previousMaskNoiseStatus);
+    AppendDebugLogIfChanged("Mask Noise GPU", MaskNoiseComputeStatus(), previousMaskNoiseStatus);
     AppendDebugLogIfChanged("Sediment GPU", g_sedimentComputeStatus, previousSedimentStatus);
     AppendDebugLogIfChanged("Rock GPU", g_rockComputeStatus, previousRockStatus);
     AppendDebugLogIfChanged("Scatter GPU", g_scatterComputeStatus, previousScatterStatus);
@@ -13629,6 +13370,15 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
             throw std::runtime_error("CreateWindow failed");
         }
         InitD3D(g_hwnd);
+        terrain::gpu::SetMaskNoiseComputeContext({
+            g_device.Get(),
+            g_commandQueue.Get(),
+            g_fence.Get(),
+            &g_fenceLastSignaledValue,
+            g_mainThreadId,
+            ShaderPath("mask_noise_compute.hlsl"),
+            [](UINT64 value) { WaitForFenceValue(value); },
+        });
         rock::SetMultiScaleErosionGpuEvaluator(RunMseComputeGrid);
         rock::SetMaskNoiseGpuEvaluator(RunMaskNoiseCompute);
         rock::SetSedimentGpuEvaluator(RunSedimentCompute);
