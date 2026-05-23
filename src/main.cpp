@@ -14657,15 +14657,6 @@ void DrawUi()
             ImGui::MenuItem("削除", "Delete", false, false);
             ImGui::EndMenu();
         }
-        if (ImGui::BeginMenu("表示"))
-        {
-            if (ImGui::MenuItem("Mesh", nullptr, g_ui.meshPreview))
-            {
-                g_ui.meshPreview = !g_ui.meshPreview;
-                SaveAppSettingsSilently();
-            }
-            ImGui::EndMenu();
-        }
         if (ImGui::BeginMenu("設定"))
         {
             if (ImGui::BeginMenu("UIテーマ"))
