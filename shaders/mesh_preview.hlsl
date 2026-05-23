@@ -54,12 +54,13 @@ cbuffer CloudShadowMeshConstants : register(b1)
     float waterLevelParam;       // PSWater: 水面高さ (m)
     float waterWavesScale;       // PSWater: 主波長 (m)
     float waterRefractiveIndex;  // PSWater: 屈折率 → Schlick F0
+    float waterFresnelPower;     // PSWater: フレネル反射の立ち上がり
     float waterRefractionStrength;
     float waterTimeSeconds;          // PSWater: アプリ起動からの経過秒数 (波アニメーション用)
     float waterAnimEnabled;          // PSWater: アニメーション有効 (0=静止, 1=アニメ)
     float waterReflectionStrength;   // PSWater: 反射強度スケール
     float waterSsrEnabled;           // PSWater: SSR 有効 (0=off, 1=on)
-    float4 waterPad2;
+    float3 waterPad2;
 };
 
 Texture2D shadowMap : register(t0);
@@ -1096,7 +1097,8 @@ float4 PSWater(VSOut i) : SV_TARGET
     float r   = (1.0 - waterRefractiveIndex) / (1.0 + waterRefractiveIndex);
     float F0  = r * r;
     float cosTheta = saturate(abs(dot(fresnelN, V)));
-    float fresnel  = F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
+    float fresnelPower = max(waterFresnelPower, 0.25);
+    float fresnel  = F0 + (1.0 - F0) * pow(1.0 - cosTheta, fresnelPower);
 
     // ===== 太陽グリッター =====
     // flatSunMirror のドット積は並行投影に近い状況でほぼ均一になり、水面全体が白くなる問題がある。

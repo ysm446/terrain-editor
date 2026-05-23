@@ -54,6 +54,7 @@
 - `Reflection Strength`: 空反射と反射全体の強さ。0 で反射なし、1 が標準、2 で強め。
 - `Screen Space Reflections`: 画面内に描かれている地形を追加で水面へ反射する。画面外や隠れた地形は反射できないため、自然さを優先する既定状態ではオフ。
 - `Refractive Index`: フレネル反射用の屈折率。Schlick 近似で Fresnel F0 を算出する。1.0 = 反射なし、1.33 = 水相当、2.0 = ガラス相当（デフォルト 1.33）。
+- `Fresnel Power`: フレネル反射が角度で立ち上がる鋭さ。既定値 5.0 は Schlick 近似相当。小さいほど高い角度から反射が入り、大きいほど低い角度だけで反射する。
 - `Refraction Strength`: スクリーンスペース屈折の歪み量。既定では控えめで、浅瀬の背景をわずかに歪ませる補助として使う。0 で屈折なし、1 で強め。
 
 ## 水面の構成
@@ -63,7 +64,7 @@
 水位に配置された水平メッシュを描画する。上面メッシュはハイトフィールドでクリップし、水位より地形が低い領域だけを三角形化する。
 
 - **波法線**: `Waves Scale` を主波長として、方向と波長の異なる複数の正弦波の勾配を合成した擾乱法線。地形スケールでは 20〜80 m 程度が自然に見えやすい。
-- **フレネル反射**: `Refractive Index` から `F0 = ((n-1)/(n+1))²` を導出し Schlick 近似を適用。
+- **フレネル反射**: `Refractive Index` から `F0 = ((n-1)/(n+1))²` を導出し、`Fresnel Power` で角度による立ち上がりを調整する。
 - **空反射**: 反射方向 (カメラの Y 成分を反転した方向) で地平線色と天頂色を補間。
 - **地形反射**: ハイトフィールドテクスチャから高さベースの地形色を近似し、視差オフセット付きでブレンド。浅い箇所ほど地形反射が強く、深い箇所は空反射が支配する。
 - **スクリーンスペース・リフラクション**: 水面描画前のシーン色をコピーし、水面法線でスクリーン UV をごく小さく歪ませてサンプルする。透明で浅い水の補助表現に留め、濁りや水中距離が増えるほど Beer-Lambert 型の吸収色へ戻る。
@@ -96,4 +97,4 @@ Water Level が 0 m より大きい場合、地形ボックスの 4 辺に垂直
 
 ## 保存
 
-水面設定はアプリ設定 (`data/app_settings.json`) とプロジェクトファイル (`.terrainproj`) の両方に保存される。保存対象は `waterEnabled`、`waterLevelMeters`、`waterOpacity`、`waterColor`、`waterWavesScale`、`waterReflectionStrength`、`waterSsrEnabled`、`waterRefractiveIndex`、`waterRefractionStrength`。
+水面設定はアプリ設定 (`data/app_settings.json`) とプロジェクトファイル (`.terrainproj`) の両方に保存される。保存対象は `waterEnabled`、`waterLevelMeters`、`waterOpacity`、`waterColor`、`waterWavesScale`、`waterReflectionStrength`、`waterSsrEnabled`、`waterRefractiveIndex`、`waterFresnelPower`、`waterRefractionStrength`。

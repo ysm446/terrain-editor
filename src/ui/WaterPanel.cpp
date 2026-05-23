@@ -84,6 +84,12 @@ void DrawWaterSettingsPanel(WaterPanelState state)
                 preview.waterRefractiveIndex = std::clamp(preview.waterRefractiveIndex, 1.0f, 4.0f);
                 SaveAppSettings(state);
             }
+            if (DrawPropertyFloatRow("Fresnel Power", "DisplayWaterFresnelPower", &preview.waterFresnelPower, 1.0f, 8.0f, rock::PreviewSettings{}.waterFresnelPower, "Water fresnel power changed", false,
+                "水面反射が角度で立ち上がる鋭さです。小さいほど高い角度から反射が入り、大きいほど低い角度だけで反射します。", "%.2f"))
+            {
+                preview.waterFresnelPower = std::clamp(preview.waterFresnelPower, 1.0f, 8.0f);
+                SaveAppSettings(state);
+            }
 
             ImGui::SeparatorText("屈折");
             if (DrawPropertyFloatRow("Refraction Strength", "DisplayWaterRefractionStrength", &preview.waterRefractionStrength, 0.0f, 2.0f, rock::PreviewSettings{}.waterRefractionStrength, "Water refraction strength changed", false,
