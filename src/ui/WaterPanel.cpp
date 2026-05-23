@@ -92,12 +92,6 @@ void DrawWaterSettingsPanel(WaterPanelState state)
                 preview.waterRefractionStrength = std::clamp(preview.waterRefractionStrength, 0.0f, 2.0f);
                 SaveAppSettings(state);
             }
-            if (DrawPropertyFloatRow("Refraction Blur", "DisplayWaterRefractionBlur", &preview.waterRefractionBlur, 0.0f, 2.0f, rock::PreviewSettings{}.waterRefractionBlur, "Water refraction blur changed", false,
-                "水面越しの背景のにじみ量です。0 でシャープ、1 で強めにぼかします。断面側壁は水柱の厚みだけで表示します。", "%.2f"))
-            {
-                preview.waterRefractionBlur = std::clamp(preview.waterRefractionBlur, 0.0f, 2.0f);
-                SaveAppSettings(state);
-            }
         }
         ImGui::EndTable();
     }

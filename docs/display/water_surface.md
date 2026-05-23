@@ -55,7 +55,6 @@
 - `Screen Space Reflections`: 画面内に描かれている地形を追加で水面へ反射する。画面外や隠れた地形は反射できないため、自然さを優先する既定状態ではオフ。
 - `Refractive Index`: フレネル反射用の屈折率。Schlick 近似で Fresnel F0 を算出する。1.0 = 反射なし、1.33 = 水相当、2.0 = ガラス相当（デフォルト 1.33）。
 - `Refraction Strength`: スクリーンスペース屈折の歪み量。既定では控えめで、浅瀬の背景をわずかに歪ませる補助として使う。0 で屈折なし、1 で強め。
-- `Refraction Blur`: 屈折した背景のにじみ量。上面の透過背景にだけ効き、断面側壁は水柱の厚みで表示する。
 
 ## 水面の構成
 
@@ -97,4 +96,4 @@ Water Level が 0 m より大きい場合、地形ボックスの 4 辺に垂直
 
 ## 保存
 
-水面設定はアプリ設定 (`data/app_settings.json`) とプロジェクトファイル (`.terrainproj`) の両方に保存される。保存対象は `waterEnabled`、`waterLevelMeters`、`waterOpacity`、`waterColor`、`waterWavesScale`、`waterReflectionStrength`、`waterSsrEnabled`、`waterRefractiveIndex`、`waterRefractionStrength`、`waterRefractionBlur`。
+水面設定はアプリ設定 (`data/app_settings.json`) とプロジェクトファイル (`.terrainproj`) の両方に保存される。保存対象は `waterEnabled`、`waterLevelMeters`、`waterOpacity`、`waterColor`、`waterWavesScale`、`waterReflectionStrength`、`waterSsrEnabled`、`waterRefractiveIndex`、`waterRefractionStrength`。

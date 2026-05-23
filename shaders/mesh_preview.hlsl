@@ -55,12 +55,11 @@ cbuffer CloudShadowMeshConstants : register(b1)
     float waterWavesScale;       // PSWater: 主波長 (m)
     float waterRefractiveIndex;  // PSWater: 屈折率 → Schlick F0
     float waterRefractionStrength;
-    float waterRefractionBlur;
     float waterTimeSeconds;          // PSWater: アプリ起動からの経過秒数 (波アニメーション用)
     float waterAnimEnabled;          // PSWater: アニメーション有効 (0=静止, 1=アニメ)
     float waterReflectionStrength;   // PSWater: 反射強度スケール
     float waterSsrEnabled;           // PSWater: SSR 有効 (0=off, 1=on)
-    float3 waterPad2;
+    float4 waterPad2;
 };
 
 Texture2D shadowMap : register(t0);
@@ -1073,12 +1072,13 @@ float4 PSWater(VSOut i) : SV_TARGET
 
         // ===== アルファ =====
         float baseAlpha = WaterVisibleAlpha(sideAbsorption, opacity, 0.08);
-        // 地形接触線フェード: 完全に 0 にせず最低 α を残して背後の明るい地形断面が透けないようにする
-        float contactFade = smoothstep(0.0, max(WaterOpacityClarityDistance(opacity) * 0.18, 0.6), distanceFromTerrain);
-        float contactFloor = 0.12 * saturate(baseAlpha);
+        // 地形接触線は少しだけ薄くする。強く落とすと背後の明るい地形が白い縁として透ける。
+        float contactRange = max(WaterOpacityClarityDistance(opacity) * 0.24, 1.2);
+        float contactFade = smoothstep(0.0, contactRange, distanceFromTerrain);
+        float contactAlpha = lerp(0.68, 1.0, contactFade);
         // 上端フェード: 水面 (waterLevelParam) に近づくほど薄くして上面との境界線を和らげる
         float topFade = 1.0 - smoothstep(waterLevelParam - 2.5, waterLevelParam, i.worldPos.y) * 0.55;
-        float alpha = max(baseAlpha * contactFade, contactFloor) * topFade;
+        float alpha = baseAlpha * contactAlpha * topFade;
         return float4(wallColor, alpha);
     }
 
@@ -1165,28 +1165,10 @@ float4 PSWater(VSOut i) : SV_TARGET
     float refractOutside = 1.0 - SceneUvInside(refractUv);
     refractUv = lerp(refractUv, sceneUv, refractOutside);
 
-    // ブラー半径も小さめに (大きすぎるとぼかしパターンが目立つ)
-    float topBlurRadius = (0.001 + saturate(viewPathLength / 300.0) * 0.003) * saturate(waterRefractionBlur * 0.35);
     float topViewDistance = dot(i.worldPos - cameraPosition.xyz, cameraForward.xyz);
-    float2 topUv0 = refractUv;
-    float2 topUv1 = refractUv + float2( topBlurRadius, 0.0);
-    float2 topUv2 = refractUv + float2(-topBlurRadius, 0.0);
-    float2 topUv3 = refractUv + float2(0.0,  topBlurRadius);
-    float2 topUv4 = refractUv + float2(0.0, -topBlurRadius);
-    float topW0 = 0.36 * SceneRefractionSampleWeight(topUv0, topViewDistance);
-    float topW1 = 0.16 * SceneRefractionSampleWeight(topUv1, topViewDistance);
-    float topW2 = 0.16 * SceneRefractionSampleWeight(topUv2, topViewDistance);
-    float topW3 = 0.16 * SceneRefractionSampleWeight(topUv3, topViewDistance);
-    float topW4 = 0.16 * SceneRefractionSampleWeight(topUv4, topViewDistance);
-    float topWeight = topW0 + topW1 + topW2 + topW3 + topW4;
-    float3 underwaterScene =
-        sceneColorTexture.SampleLevel(linearSampler, saturate(topUv0), 0).rgb * topW0 +
-        sceneColorTexture.SampleLevel(linearSampler, saturate(topUv1), 0).rgb * topW1 +
-        sceneColorTexture.SampleLevel(linearSampler, saturate(topUv2), 0).rgb * topW2 +
-        sceneColorTexture.SampleLevel(linearSampler, saturate(topUv3), 0).rgb * topW3 +
-        sceneColorTexture.SampleLevel(linearSampler, saturate(topUv4), 0).rgb * topW4;
-    underwaterScene = underwaterScene / max(topWeight, 0.0001);
-    underwaterScene = lerp(waterBodyColor, underwaterScene, saturate(topWeight));
+    float refractedSceneWeight = SceneRefractionSampleWeight(refractUv, topViewDistance);
+    float3 underwaterScene = sceneColorTexture.SampleLevel(linearSampler, saturate(refractUv), 0).rgb;
+    underwaterScene = lerp(waterBodyColor, underwaterScene, saturate(refractedSceneWeight));
 
     float straightSceneWeight = SceneRefractionSampleWeight(sceneUv, topViewDistance);
     float3 straightScene = sceneColorTexture.SampleLevel(linearSampler, saturate(sceneUv), 0).rgb;

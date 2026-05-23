@@ -618,7 +618,6 @@ struct PreviewSettings
     float waterWavesScale = 24.0f;
     float waterRefractiveIndex = 1.33f;
     float waterRefractionStrength = 0.25f;
-    float waterRefractionBlur = 0.20f;
     bool waterAnimationEnabled = true;
     float waterReflectionStrength = 1.0f;
     bool waterSsrEnabled = false;
