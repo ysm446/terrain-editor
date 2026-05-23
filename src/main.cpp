@@ -39,6 +39,7 @@
 #include "gpu/ColorizeCompute.h"
 #include "gpu/MaskFluvialCompute.h"
 #include "gpu/MaskNoiseCompute.h"
+#include "gpu/MseCompute.h"
 #include "gpu/RockCompute.h"
 #include "gpu/ScatterCompute.h"
 #include "gpu/SedimentCompute.h"
@@ -98,6 +99,9 @@ using terrain::gpu::RunMaskFluvialCompute;
 using terrain::gpu::MaskNoiseComputeStatus;
 using terrain::gpu::ProcessPendingMaskNoiseGpuRequests;
 using terrain::gpu::RunMaskNoiseCompute;
+using terrain::gpu::MseComputeStatus;
+using terrain::gpu::ProcessPendingMseGpuRequests;
+using terrain::gpu::RunMseComputeGrid;
 using terrain::gpu::ProcessPendingSedimentGpuRequests;
 using terrain::gpu::RunSedimentCompute;
 using terrain::gpu::SedimentComputeStatus;
@@ -842,10 +846,6 @@ ComPtr<ID3D12PipelineState> g_meshPreviewDisplacementTessWirePso;
 ComPtr<ID3D12Resource> g_meshPreviewDisplacementCbv;
 ComPtr<ID3D12PipelineState> g_meshPreviewGridPso;
 ComPtr<ID3D12PipelineState> g_meshPreviewShadowPso;
-ComPtr<ID3D12RootSignature> g_mseComputeRootSignature;
-ComPtr<ID3D12PipelineState> g_mseStreamPowerPso;
-ComPtr<ID3D12PipelineState> g_mseThermalPso;
-ComPtr<ID3D12PipelineState> g_mseDepositionPso;
 ComPtr<ID3D12RootSignature> g_aoComputeRootSignature;
 ComPtr<ID3D12PipelineState> g_aoComputePso;
 bool g_aoComputeReady = false;
@@ -903,27 +903,7 @@ GpuClouds g_gpuClouds;
 ComPtr<ID3D12DescriptorHeap> g_meshPreviewRtvHeap;
 ComPtr<ID3D12DescriptorHeap> g_meshPreviewDsvHeap;
 GpuMeshPreview g_gpuMeshPreview;
-std::string g_mseComputeStatus = "MSE GPU Compute not initialized";
-bool g_mseComputeReady = false;
-std::mutex g_mseComputeMutex;
-std::mutex g_mseGpuRequestMutex;
 std::thread::id g_mainThreadId;
-
-struct MseGpuRequestResult
-{
-    bool success = false;
-    rock::HeightfieldGrid grid;
-    std::string error;
-};
-
-struct MseGpuRequest
-{
-    rock::HeightfieldGrid grid;
-    rock::MultiScaleErosionSettings settings;
-    std::promise<MseGpuRequestResult> promise;
-};
-
-std::vector<std::shared_ptr<MseGpuRequest>> g_pendingMseGpuRequests;
 
 std::string MakeWindowTitleText()
 {
@@ -1274,11 +1254,7 @@ void CleanupD3D()
     g_gpuMeshPreview.displacementSrvAllocated = false;
     g_gpuMeshPreview.displacementTextureResolution = 0;
     g_gpuMeshPreview.displacementMeshResolution = 0;
-    g_mseStreamPowerPso.Reset();
-    g_mseThermalPso.Reset();
-    g_mseDepositionPso.Reset();
-    g_mseComputeRootSignature.Reset();
-    g_mseComputeReady = false;
+    terrain::gpu::ResetMseComputeResources();
     terrain::gpu::ResetMaskNoiseComputeResources();
     terrain::gpu::ResetSedimentComputeResources();
     terrain::gpu::ResetRockComputeResources();
@@ -1362,11 +1338,6 @@ std::filesystem::path MeshPreviewShaderPath()
     return ShaderPath("mesh_preview.hlsl");
 }
 
-std::filesystem::path MseComputeShaderPath()
-{
-    return ShaderPath("multi_scale_erosion_compute.hlsl");
-}
-
 std::filesystem::path AOComputeShaderPath()
 {
     return ShaderPath("ao_compute.hlsl");
@@ -1403,7 +1374,6 @@ std::filesystem::path DepthOfFieldShaderPath()
 }
 
 void EvaluateGraph();
-void ProcessPendingMseGpuRequests();
 int CurrentPreviewMeshResolution();
 bool IsTerrainNodeKind(rock::NodeKind kind);
 terrain::ViewportCameraState MakeViewportCameraState();
@@ -3525,456 +3495,6 @@ void UpdateMeshResourceTable(D3D12_GPU_DESCRIPTOR_HANDLE cloudShadowGpu)
     g_device->CopyDescriptorsSimple(1, OffsetCpuSrv(g_gpuMeshPreview.meshResourceTableCpu, 7), src[7], D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 }
 
-
-// =============================================================================
-// Multi-Scale Erosion GPU compute path
-// =============================================================================
-
-// Root-signature-visible constants for shaders/multi_scale_erosion_compute.hlsl.
-// Layout matches the cbuffer there exactly (HLSL scalar packing into 16-byte
-// rows). We push 21 32-bit values via ID3D12GraphicsCommandList::SetComputeRoot32BitConstants.
-struct MseShaderConstants
-{
-    UINT  resolution;
-    float terrainSizeMeters;
-    float cellSizeMeters;
-    float cellDiag;
-    float refCellArea;
-    float speStrength;
-    float streamExponent;
-    float slopeExponent;
-    float maxStreamPower;
-    float flowExponent;
-    float speTimeStep;
-    float thermalTanAngle;
-    float thermalStrength;
-    UINT  thermalNoisifyAngle;
-    float thermalNoiseMin;
-    float thermalNoiseMax;
-    float thermalNoiseWavelength;
-    float depositionStrength;
-    float rain;
-    float pad0;
-    float pad1;
-};
-static_assert(sizeof(MseShaderConstants) == 21 * sizeof(UINT), "MseShaderConstants must be 21 DWORDs");
-
-bool EnsureMseComputePipeline(std::string* error)
-{
-    if (g_mseComputeReady && g_mseComputeRootSignature && g_mseStreamPowerPso && g_mseThermalPso && g_mseDepositionPso)
-    {
-        return true;
-    }
-    if (!g_device)
-    {
-        if (error) *error = "D3D12 device is not available";
-        g_mseComputeStatus = "MSE GPU Compute unavailable";
-        return false;
-    }
-
-    // 6 UAVs (HeightIn/Out, StreamIn/Out, SedIn/Out) bound as a single
-    // descriptor table. The table base shifts between dispatches so we don't
-    // have to rewrite descriptors mid-command-list.
-    D3D12_DESCRIPTOR_RANGE uavRange{};
-    uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-    uavRange.NumDescriptors = 6;
-    uavRange.BaseShaderRegister = 0;
-    uavRange.RegisterSpace = 0;
-    uavRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-
-    D3D12_ROOT_PARAMETER rootParams[2]{};
-    rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    rootParams[0].Constants.ShaderRegister = 0;
-    rootParams[0].Constants.RegisterSpace = 0;
-    rootParams[0].Constants.Num32BitValues = 21;
-    rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
-    rootParams[1].DescriptorTable.pDescriptorRanges = &uavRange;
-    rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-
-    D3D12_ROOT_SIGNATURE_DESC rsDesc{};
-    rsDesc.NumParameters = 2;
-    rsDesc.pParameters = rootParams;
-    rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
-
-    ComPtr<ID3DBlob> errBlob;
-    HRESULT hr = CreateRootSignatureFromDesc(g_device.Get(),
-                                             rsDesc,
-                                             g_mseComputeRootSignature.ReleaseAndGetAddressOf(),
-                                             errBlob.ReleaseAndGetAddressOf());
-    if (FAILED(hr))
-    {
-        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Create MSE root sig failed";
-        g_mseComputeStatus = "MSE GPU Compute root signature failed";
-        return false;
-    }
-
-    const std::filesystem::path shaderPath = MseComputeShaderPath();
-    const UINT compileFlags = DefaultShaderCompileFlags();
-
-    auto compileEntry = [&](const char* entryPoint, ComPtr<ID3DBlob>& outBlob) -> bool {
-        errBlob.Reset();
-        const HRESULT compileHr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE,
-                                                     entryPoint, "cs_5_0", compileFlags, 0, &outBlob, &errBlob);
-        if (FAILED(compileHr))
-        {
-            if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile MSE shader failed";
-            return false;
-        }
-        return true;
-    };
-
-    ComPtr<ID3DBlob> spBlob, thBlob, depBlob;
-    if (!compileEntry("CSStreamPower", spBlob)) { g_mseComputeStatus = "MSE SPE shader compile failed"; return false; }
-    if (!compileEntry("CSThermal",     thBlob)) { g_mseComputeStatus = "MSE thermal shader compile failed"; return false; }
-    if (!compileEntry("CSDeposition",  depBlob)) { g_mseComputeStatus = "MSE deposition shader compile failed"; return false; }
-
-    auto buildPso = [&](ID3DBlob* csBlob, ComPtr<ID3D12PipelineState>& outPso) -> bool {
-        D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{};
-        psoDesc.pRootSignature = g_mseComputeRootSignature.Get();
-        psoDesc.CS = {csBlob->GetBufferPointer(), csBlob->GetBufferSize()};
-        const HRESULT psoHr = g_device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&outPso));
-        if (FAILED(psoHr))
-        {
-            if (error) *error = "Create MSE PSO failed";
-            return false;
-        }
-        return true;
-    };
-
-    if (!buildPso(spBlob.Get(),  g_mseStreamPowerPso)) { g_mseComputeStatus = "MSE SPE PSO failed"; return false; }
-    if (!buildPso(thBlob.Get(),  g_mseThermalPso))     { g_mseComputeStatus = "MSE thermal PSO failed"; return false; }
-    if (!buildPso(depBlob.Get(), g_mseDepositionPso))  { g_mseComputeStatus = "MSE deposition PSO failed"; return false; }
-
-    g_mseComputeReady = true;
-    g_mseComputeStatus = "MSE GPU Compute dispatch ready";
-    return true;
-}
-
-bool RunMseComputeGridImmediate(rock::HeightfieldGrid& grid, const rock::MultiScaleErosionSettings& settings, std::string* error)
-{
-    std::lock_guard<std::mutex> lock(g_mseComputeMutex);
-    if (!EnsureMseComputePipeline(error))
-    {
-        return false;
-    }
-
-    const UINT resolution = static_cast<UINT>(std::clamp(grid.resolution, 0, 4096));
-    const UINT64 cellCount = static_cast<UINT64>(resolution) * static_cast<UINT64>(resolution);
-    if (resolution < 3 || grid.heights.size() < cellCount)
-    {
-        if (error) *error = "Invalid heightfield for MSE GPU Compute";
-        return false;
-    }
-
-    const UINT64 bufferSize = cellCount * sizeof(float);
-    const std::vector<float> zeroData(static_cast<size_t>(cellCount), 0.0f);
-
-    const D3D12_HEAP_PROPERTIES defaultHeap = HeapProperties(D3D12_HEAP_TYPE_DEFAULT);
-    const D3D12_HEAP_PROPERTIES uploadHeap = HeapProperties(D3D12_HEAP_TYPE_UPLOAD);
-    const D3D12_HEAP_PROPERTIES readbackHeap = HeapProperties(D3D12_HEAP_TYPE_READBACK);
-    const D3D12_RESOURCE_DESC gpuDesc = BufferResourceDesc(bufferSize, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-    const D3D12_RESOURCE_DESC cpuDesc = BufferResourceDesc(bufferSize);
-
-    // Six ping-pong UAV buffers (Heights/Stream/Sed × A/B).
-    ComPtr<ID3D12Resource> heightA, heightB, streamA, streamB, sedA, sedB;
-    ComPtr<ID3D12Resource> uploadHeights, uploadZero;
-    ComPtr<ID3D12Resource> readbackHeights, readbackStream, readbackSed;
-
-    auto createDefault = [&](ComPtr<ID3D12Resource>& out, const char* name) -> bool {
-        const HRESULT hrLocal = g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &gpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&out));
-        if (FAILED(hrLocal)) { if (error) *error = std::string("Create ") + name + " failed"; return false; }
-        return true;
-    };
-    auto createUpload = [&](ComPtr<ID3D12Resource>& out, const char* name) -> bool {
-        const HRESULT hrLocal = g_device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &cpuDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&out));
-        if (FAILED(hrLocal)) { if (error) *error = std::string("Create ") + name + " failed"; return false; }
-        return true;
-    };
-    auto createReadback = [&](ComPtr<ID3D12Resource>& out, const char* name) -> bool {
-        const HRESULT hrLocal = g_device->CreateCommittedResource(&readbackHeap, D3D12_HEAP_FLAG_NONE, &cpuDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&out));
-        if (FAILED(hrLocal)) { if (error) *error = std::string("Create ") + name + " failed"; return false; }
-        return true;
-    };
-
-    if (!createDefault(heightA, "MSE heightA")) return false;
-    if (!createDefault(heightB, "MSE heightB")) return false;
-    if (!createDefault(streamA, "MSE streamA")) return false;
-    if (!createDefault(streamB, "MSE streamB")) return false;
-    if (!createDefault(sedA,    "MSE sedA"))    return false;
-    if (!createDefault(sedB,    "MSE sedB"))    return false;
-    if (!createUpload(uploadHeights, "MSE upload heights")) return false;
-    if (!createUpload(uploadZero,    "MSE upload zero"))    return false;
-    if (!createReadback(readbackHeights, "MSE readback heights")) return false;
-    if (!createReadback(readbackStream,  "MSE readback stream"))  return false;
-    if (!createReadback(readbackSed,     "MSE readback sed"))     return false;
-
-    void* mapped = nullptr;
-    const D3D12_RANGE emptyReadRange{0, 0};
-    ThrowIfFailed(uploadHeights->Map(0, &emptyReadRange, &mapped), "Map MSE height upload failed");
-    std::memcpy(mapped, grid.heights.data(), bufferSize);
-    uploadHeights->Unmap(0, nullptr);
-    ThrowIfFailed(uploadZero->Map(0, &emptyReadRange, &mapped), "Map MSE zero upload failed");
-    std::memcpy(mapped, zeroData.data(), bufferSize);
-    uploadZero->Unmap(0, nullptr);
-
-    // Descriptor heap layout: one fixed UAV per buffer (6 descriptors). The
-    // descriptor table base advances per-pass to bind the right In/Out pairs.
-    // For the 8 possible (heightCur, streamCur, sedCur) states we need 8
-    // contiguous 6-descriptor blocks = 48 descriptors total.
-    constexpr UINT kStateCount = 8;
-    constexpr UINT kDescriptorsPerState = 6;
-    constexpr UINT kHeapDescriptors = kStateCount * kDescriptorsPerState;
-    D3D12_DESCRIPTOR_HEAP_DESC heapDesc =
-        ShaderVisibleCbvSrvUavDescriptorHeapDesc(kHeapDescriptors);
-    ComPtr<ID3D12DescriptorHeap> descriptorHeap;
-    HRESULT hr = g_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&descriptorHeap));
-    if (FAILED(hr)) { if (error) *error = "Create MSE descriptor heap failed"; return false; }
-
-    D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
-    uavDesc.Format = DXGI_FORMAT_UNKNOWN;
-    uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
-    uavDesc.Buffer.NumElements = static_cast<UINT>(cellCount);
-    uavDesc.Buffer.StructureByteStride = sizeof(float);
-
-    // For each (hCur, sCur, dCur) ∈ {0,1}³ build a 6-UAV slot in the heap.
-    // u0 = HeightIn (cur), u1 = HeightOut (other), u2/u3 = stream, u4/u5 = sed.
-    auto resolveBuffer = [&](int which, ID3D12Resource* a, ID3D12Resource* b) {
-        return which == 0 ? a : b;
-    };
-    D3D12_CPU_DESCRIPTOR_HANDLE descBase = descriptorHeap->GetCPUDescriptorHandleForHeapStart();
-    for (UINT state = 0; state < kStateCount; ++state)
-    {
-        const int hCur = static_cast<int>((state >> 0) & 1u);
-        const int sCur = static_cast<int>((state >> 1) & 1u);
-        const int dCur = static_cast<int>((state >> 2) & 1u);
-        ID3D12Resource* uavs[6] = {
-            resolveBuffer(hCur, heightA.Get(), heightB.Get()),
-            resolveBuffer(1 - hCur, heightA.Get(), heightB.Get()),
-            resolveBuffer(sCur, streamA.Get(), streamB.Get()),
-            resolveBuffer(1 - sCur, streamA.Get(), streamB.Get()),
-            resolveBuffer(dCur, sedA.Get(), sedB.Get()),
-            resolveBuffer(1 - dCur, sedA.Get(), sedB.Get()),
-        };
-        D3D12_CPU_DESCRIPTOR_HANDLE handle = descBase;
-        handle.ptr += static_cast<SIZE_T>(state) * static_cast<SIZE_T>(kDescriptorsPerState) * g_srvDescriptorSize;
-        for (UINT i = 0; i < 6; ++i)
-        {
-            g_device->CreateUnorderedAccessView(uavs[i], nullptr, &uavDesc, handle);
-            handle.ptr += g_srvDescriptorSize;
-        }
-    }
-
-    ComPtr<ID3D12CommandAllocator> allocator;
-    ComPtr<ID3D12GraphicsCommandList> commandList;
-    ThrowIfFailed(g_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)), "Create MSE command allocator failed");
-    ThrowIfFailed(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&commandList)), "Create MSE command list failed");
-
-    // Initial state: HeightA/B = input heights, all stream / sed = 0.
-    commandList->CopyBufferRegion(heightA.Get(), 0, uploadHeights.Get(), 0, bufferSize);
-    commandList->CopyBufferRegion(heightB.Get(), 0, uploadHeights.Get(), 0, bufferSize);
-    commandList->CopyBufferRegion(streamA.Get(), 0, uploadZero.Get(),    0, bufferSize);
-    commandList->CopyBufferRegion(streamB.Get(), 0, uploadZero.Get(),    0, bufferSize);
-    commandList->CopyBufferRegion(sedA.Get(),    0, uploadZero.Get(),    0, bufferSize);
-    commandList->CopyBufferRegion(sedB.Get(),    0, uploadZero.Get(),    0, bufferSize);
-
-    D3D12_RESOURCE_BARRIER toUav[6]{};
-    ID3D12Resource* uavResources[6] = {heightA.Get(), heightB.Get(), streamA.Get(), streamB.Get(), sedA.Get(), sedB.Get()};
-    for (int i = 0; i < 6; ++i)
-    {
-        toUav[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        toUav[i].Transition.pResource = uavResources[i];
-        toUav[i].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-        toUav[i].Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-        toUav[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    }
-    commandList->ResourceBarrier(6, toUav);
-
-    const float cellSizeMeters = grid.terrainSizeMeters / static_cast<float>(std::max<UINT>(1, resolution - 1));
-    MseShaderConstants constants{};
-    constants.resolution = resolution;
-    constants.terrainSizeMeters = grid.terrainSizeMeters;
-    constants.cellSizeMeters = cellSizeMeters;
-    constants.cellDiag = cellSizeMeters * std::sqrt(2.0f);
-    constants.refCellArea = 16.0f;  // matches mse::kRefCellArea on the CPU side
-    constants.speStrength = settings.speStrength;
-    constants.streamExponent = settings.streamExponent;
-    constants.slopeExponent = settings.slopeExponent;
-    constants.maxStreamPower = settings.maxStreamPower;
-    constants.flowExponent = settings.flowExponent;
-    constants.speTimeStep = settings.speTimeStep;
-    constants.thermalTanAngle = std::tan(settings.thermalAngleDegrees * 3.14159265358979323846f / 180.0f);
-    constants.thermalStrength = settings.thermalStrength;
-    constants.thermalNoisifyAngle = settings.thermalNoisifyAngle ? 1u : 0u;
-    constants.thermalNoiseMin = settings.thermalNoiseMin;
-    constants.thermalNoiseMax = settings.thermalNoiseMax;
-    constants.thermalNoiseWavelength = settings.thermalNoiseWavelength;
-    constants.depositionStrength = settings.depositionStrength;
-    constants.rain = settings.rain;
-
-    ID3D12DescriptorHeap* heaps[] = {descriptorHeap.Get()};
-    commandList->SetDescriptorHeaps(1, heaps);
-    commandList->SetComputeRootSignature(g_mseComputeRootSignature.Get());
-
-    const UINT groupCount = (resolution + 7u) / 8u;
-    const int iterations = std::clamp(settings.iterations, 1, 500);
-
-    auto stateIndex = [](int hCur, int sCur, int dCur) -> UINT {
-        return static_cast<UINT>(hCur | (sCur << 1) | (dCur << 2));
-    };
-    auto bindStateAndDispatch = [&](int hCur, int sCur, int dCur, ID3D12PipelineState* pso) {
-        commandList->SetPipelineState(pso);
-        commandList->SetComputeRoot32BitConstants(0, 21, &constants, 0);
-        D3D12_GPU_DESCRIPTOR_HANDLE table = descriptorHeap->GetGPUDescriptorHandleForHeapStart();
-        table.ptr += static_cast<UINT64>(stateIndex(hCur, sCur, dCur)) * kDescriptorsPerState * g_srvDescriptorSize;
-        commandList->SetComputeRootDescriptorTable(1, table);
-        commandList->Dispatch(groupCount, groupCount, 1);
-
-        D3D12_RESOURCE_BARRIER uavBarrier{};
-        uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-        uavBarrier.UAV.pResource = nullptr;
-        commandList->ResourceBarrier(1, &uavBarrier);
-    };
-
-    int hCur = 0;
-    int sCur = 0;
-    int dCur = 0;
-    for (int it = 0; it < iterations; ++it)
-    {
-        if (settings.enableStreamPower)
-        {
-            bindStateAndDispatch(hCur, sCur, dCur, g_mseStreamPowerPso.Get());
-            hCur ^= 1;
-            sCur ^= 1;
-        }
-        if (settings.enableThermal)
-        {
-            bindStateAndDispatch(hCur, sCur, dCur, g_mseThermalPso.Get());
-            hCur ^= 1;
-        }
-        if (settings.enableDeposition)
-        {
-            bindStateAndDispatch(hCur, sCur, dCur, g_mseDepositionPso.Get());
-            hCur ^= 1;
-            sCur ^= 1;
-            dCur ^= 1;
-        }
-    }
-
-    // Read back the buffers that hold the *current* state for each field.
-    ID3D12Resource* finalHeight = (hCur == 0) ? heightA.Get() : heightB.Get();
-    ID3D12Resource* finalStream = (sCur == 0) ? streamA.Get() : streamB.Get();
-    ID3D12Resource* finalSed    = (dCur == 0) ? sedA.Get()    : sedB.Get();
-
-    D3D12_RESOURCE_BARRIER toCopy[3]{};
-    ID3D12Resource* copyResources[3] = {finalHeight, finalStream, finalSed};
-    for (int i = 0; i < 3; ++i)
-    {
-        toCopy[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        toCopy[i].Transition.pResource = copyResources[i];
-        toCopy[i].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-        toCopy[i].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
-        toCopy[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    }
-    commandList->ResourceBarrier(3, toCopy);
-    commandList->CopyBufferRegion(readbackHeights.Get(), 0, finalHeight, 0, bufferSize);
-    commandList->CopyBufferRegion(readbackStream.Get(),  0, finalStream, 0, bufferSize);
-    commandList->CopyBufferRegion(readbackSed.Get(),     0, finalSed,    0, bufferSize);
-    ThrowIfFailed(commandList->Close(), "Close MSE command list failed");
-
-    ID3D12CommandList* lists[] = {commandList.Get()};
-    g_commandQueue->ExecuteCommandLists(1, lists);
-    const UINT64 fenceValue = ++g_fenceLastSignaledValue;
-    ThrowIfFailed(g_commandQueue->Signal(g_fence.Get(), fenceValue), "Signal MSE fence failed");
-    WaitForFenceValue(fenceValue);
-
-    void* mappedHeights = nullptr;
-    void* mappedStream = nullptr;
-    void* mappedSed = nullptr;
-    const D3D12_RANGE readRange{0, static_cast<SIZE_T>(bufferSize)};
-    ThrowIfFailed(readbackHeights->Map(0, &readRange, &mappedHeights), "Map MSE height readback failed");
-    ThrowIfFailed(readbackStream->Map(0, &readRange, &mappedStream),   "Map MSE stream readback failed");
-    ThrowIfFailed(readbackSed->Map(0, &readRange, &mappedSed),         "Map MSE sed readback failed");
-    const float* heightValues = static_cast<const float*>(mappedHeights);
-    const float* streamValues = static_cast<const float*>(mappedStream);
-    const float* sedValues    = static_cast<const float*>(mappedSed);
-    grid.heights.assign(heightValues, heightValues + cellCount);
-    grid.flows.assign(streamValues, streamValues + cellCount);
-    grid.deposits.assign(sedValues, sedValues + cellCount);
-    grid.mask.assign(static_cast<size_t>(cellCount), 0.0f);
-    grid.age.assign(static_cast<size_t>(cellCount), 0.0f);
-    const D3D12_RANGE emptyWriteRange{0, 0};
-    readbackHeights->Unmap(0, &emptyWriteRange);
-    readbackStream->Unmap(0, &emptyWriteRange);
-    readbackSed->Unmap(0, &emptyWriteRange);
-
-    // Match the CPU path's final NormalizeHeightfieldFields: scale flows /
-    // deposits to [0, 1] by their max so the downstream visualization sees the
-    // same range regardless of backend.
-    auto normalize = [](std::vector<float>& field) {
-        float maxValue = 0.0f;
-        for (float v : field) { maxValue = std::max(maxValue, v); }
-        if (maxValue > 1e-6f)
-        {
-            for (float& v : field) { v = std::clamp(v / maxValue, 0.0f, 1.0f); }
-        }
-    };
-    normalize(grid.flows);
-    normalize(grid.deposits);
-
-    g_mseComputeStatus = "MSE GPU Compute evaluated heightfield";
-    return true;
-}
-
-bool RunMseComputeGrid(rock::HeightfieldGrid& grid, const rock::MultiScaleErosionSettings& settings, std::string* error)
-{
-    if (std::this_thread::get_id() == g_mainThreadId)
-    {
-        return RunMseComputeGridImmediate(grid, settings, error);
-    }
-
-    auto request = std::make_shared<MseGpuRequest>();
-    request->grid = grid;
-    request->settings = settings;
-    std::future<MseGpuRequestResult> future = request->promise.get_future();
-    {
-        std::lock_guard<std::mutex> lock(g_mseGpuRequestMutex);
-        g_pendingMseGpuRequests.push_back(request);
-    }
-    g_mseComputeStatus = "MSE GPU Compute queued on main thread";
-
-    MseGpuRequestResult result = future.get();
-    if (!result.success)
-    {
-        if (error) *error = result.error;
-        return false;
-    }
-    grid = std::move(result.grid);
-    return true;
-}
-
-void ProcessPendingMseGpuRequests()
-{
-    if (std::this_thread::get_id() != g_mainThreadId)
-    {
-        return;
-    }
-
-    std::vector<std::shared_ptr<MseGpuRequest>> requests;
-    {
-        std::lock_guard<std::mutex> lock(g_mseGpuRequestMutex);
-        requests.swap(g_pendingMseGpuRequests);
-    }
-
-    for (const std::shared_ptr<MseGpuRequest>& request : requests)
-    {
-        MseGpuRequestResult result;
-        result.grid = std::move(request->grid);
-        result.success = RunMseComputeGridImmediate(result.grid, request->settings, &result.error);
-        request->promise.set_value(std::move(result));
-    }
-}
 
 // =============================================================================
 // Horizon AO コンピュートパイプライン
@@ -10129,7 +9649,7 @@ void CaptureDebugStatusLogs()
     AppendDebugLogIfChanged("Sky", g_skyPipelineStatus, previousSkyStatus);
     AppendDebugLogIfChanged("Cloud", g_cloudPipelineStatus, previousCloudStatus);
     AppendDebugLogIfChanged("Depth of Field", g_dofPipelineStatus, previousDofStatus);
-    AppendDebugLogIfChanged("MSE GPU", g_mseComputeStatus, previousMseStatus);
+    AppendDebugLogIfChanged("MSE GPU", MseComputeStatus(), previousMseStatus);
     AppendDebugLogIfChanged("Mask Noise GPU", MaskNoiseComputeStatus(), previousMaskNoiseStatus);
     AppendDebugLogIfChanged("Sediment GPU", SedimentComputeStatus(), previousSedimentStatus);
     AppendDebugLogIfChanged("Rock GPU", RockComputeStatus(), previousRockStatus);
@@ -10880,6 +10400,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         terrain::gpu::SetSnowComputeContext({
             gpuComputeContext,
             ShaderPath("snow_compute.hlsl"),
+        });
+        terrain::gpu::SetMseComputeContext({
+            gpuComputeContext,
+            ShaderPath("multi_scale_erosion_compute.hlsl"),
         });
         rock::SetMultiScaleErosionGpuEvaluator(RunMseComputeGrid);
         rock::SetMaskNoiseGpuEvaluator(RunMaskNoiseCompute);
