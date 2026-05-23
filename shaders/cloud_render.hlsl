@@ -252,15 +252,16 @@ float4 CloudPS(VsOut input) : SV_Target
                     float3 lp = p + sunDirection.xyz * (lightStepMeters * ((float)j + 0.5));
                     lightDensity += SampleCloudDensity(lp);
                 }
-                float lightTransmittance = exp(-lightDensity * absorption * lightStepMeters);
+                float lightTransmittance = exp(-lightDensity * absorption * lightStepMeters * 2.0);
                 // Direct sun = sunlit colour × (transmittance through cloud
                 // toward the sun) × (HG phase). The phase brightens cells
                 // near the sun direction (silver lining) and dims the
                 // shadow-side without changing total cloud brightness.
                 float3 directLight = sunlitColor * lightTransmittance * phase;
                 float shadowWeight = saturate(1.0 - lightTransmittance);
+                float ambientVisibility = lerp(1.0, max(lightTransmittance, 0.25), 0.55);
                 float3 skyShadowLight = cloudColor.rgb * atmosphereSkyColor.rgb * shadowAmbientStrength * shadowWeight;
-                lit = ambientColor + directLight + skyShadowLight;
+                lit = ambientColor * ambientVisibility + directLight + skyShadowLight;
             }
             else
             {

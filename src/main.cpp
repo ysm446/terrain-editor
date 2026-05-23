@@ -714,6 +714,7 @@ struct GpuMeshPreview
     int cloudShadowSamples = 0;
     float cloudFieldRadius = 0.0f;
     float cloudFieldFalloff = 0.0f;
+    int cloudSelfShadowEnabled = -1;
     int cloudLightSamples = 0;
     float cloudLightStepMeters = 0.0f;
     float cloudPhaseEccentricity = 0.0f;
@@ -3379,6 +3380,7 @@ nlohmann::json MakeProjectSettingsJson()
             {"shadowSamples", clouds.shadowSamples},
             {"fieldRadius", clouds.fieldRadius},
             {"fieldFalloff", clouds.fieldFalloff},
+            {"selfShadowEnabled", clouds.selfShadowEnabled},
             {"lightSamples", clouds.lightSamples},
             {"lightStepMeters", clouds.lightStepMeters},
             {"phaseEccentricity", clouds.phaseEccentricity},
@@ -3618,6 +3620,7 @@ void ReadCloudSettingsJson(const nlohmann::json& settingsJson, rock::CloudSettin
     clouds.fieldRadius = std::clamp(cloudsJson.value("fieldRadius", clouds.fieldRadius), 100.0f, 200000.0f);
     clouds.fieldFalloff = std::clamp(cloudsJson.value("fieldFalloff", clouds.fieldFalloff), 1.0f, 50000.0f);
     clouds.lightSamples = std::clamp(cloudsJson.value("lightSamples", clouds.lightSamples), 0, 16);
+    clouds.selfShadowEnabled = cloudsJson.value("selfShadowEnabled", clouds.lightSamples > 0);
     clouds.lightStepMeters = std::clamp(cloudsJson.value("lightStepMeters", clouds.lightStepMeters), 1.0f, 2000.0f);
     clouds.phaseEccentricity = std::clamp(cloudsJson.value("phaseEccentricity", clouds.phaseEccentricity), -0.99f, 0.99f);
     clouds.shadowAmbientStrength = std::clamp(cloudsJson.value("shadowAmbientStrength", clouds.shadowAmbientStrength), 0.0f, 2.0f);
@@ -9525,7 +9528,7 @@ bool RenderCloudPass(ID3D12GraphicsCommandList* commandList,
     c.fieldCenterZ = fieldCenterZ;
     c.fieldRadius = std::max(clouds.fieldRadius, 1.0f);
     c.fieldFalloff = std::max(clouds.fieldFalloff, 1.0f);
-    c.lightSamples = std::clamp(clouds.lightSamples, 0, 16);
+    c.lightSamples = clouds.selfShadowEnabled ? std::clamp(clouds.lightSamples, 0, 16) : 0;
     c.lightStepMeters = std::clamp(clouds.lightStepMeters, 1.0f, 2000.0f);
     c.phaseEccentricity = std::clamp(clouds.phaseEccentricity, -0.99f, 0.99f);
     c.shadowAmbientStrength = std::clamp(clouds.shadowAmbientStrength, 0.0f, 2.0f);
@@ -11350,6 +11353,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.cloudShadowSamples != g_graph.Settings().clouds.shadowSamples ||
         g_gpuMeshPreview.cloudFieldRadius != g_graph.Settings().clouds.fieldRadius ||
         g_gpuMeshPreview.cloudFieldFalloff != g_graph.Settings().clouds.fieldFalloff ||
+        g_gpuMeshPreview.cloudSelfShadowEnabled != (g_graph.Settings().clouds.selfShadowEnabled ? 1 : 0) ||
         g_gpuMeshPreview.cloudLightSamples != g_graph.Settings().clouds.lightSamples ||
         g_gpuMeshPreview.cloudLightStepMeters != g_graph.Settings().clouds.lightStepMeters ||
         g_gpuMeshPreview.cloudPhaseEccentricity != g_graph.Settings().clouds.phaseEccentricity ||
@@ -11447,6 +11451,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.cloudShadowSamples != g_graph.Settings().clouds.shadowSamples ||
         g_gpuMeshPreview.cloudFieldRadius != g_graph.Settings().clouds.fieldRadius ||
         g_gpuMeshPreview.cloudFieldFalloff != g_graph.Settings().clouds.fieldFalloff ||
+        g_gpuMeshPreview.cloudSelfShadowEnabled != (g_graph.Settings().clouds.selfShadowEnabled ? 1 : 0) ||
         g_gpuMeshPreview.cloudLightSamples != g_graph.Settings().clouds.lightSamples ||
         g_gpuMeshPreview.cloudLightStepMeters != g_graph.Settings().clouds.lightStepMeters ||
         g_gpuMeshPreview.cloudPhaseEccentricity != g_graph.Settings().clouds.phaseEccentricity ||
@@ -12717,6 +12722,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.cloudShadowSamples = g_graph.Settings().clouds.shadowSamples;
         g_gpuMeshPreview.cloudFieldRadius = g_graph.Settings().clouds.fieldRadius;
         g_gpuMeshPreview.cloudFieldFalloff = g_graph.Settings().clouds.fieldFalloff;
+        g_gpuMeshPreview.cloudSelfShadowEnabled = g_graph.Settings().clouds.selfShadowEnabled ? 1 : 0;
         g_gpuMeshPreview.cloudLightSamples = g_graph.Settings().clouds.lightSamples;
         g_gpuMeshPreview.cloudLightStepMeters = g_graph.Settings().clouds.lightStepMeters;
         g_gpuMeshPreview.cloudPhaseEccentricity = g_graph.Settings().clouds.phaseEccentricity;

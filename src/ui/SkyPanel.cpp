@@ -286,9 +286,12 @@ void DrawCloudSettingsPanel(SkyPanelState state)
                     SaveAppSettings(state);
                 }
                 DrawPropertyIntRow("Shadow Samples", "CloudShadowSamples", &clouds.shadowSamples, 4, 64, rock::CloudSettings{}.shadowSamples, "Cloud shadow samples changed", false, "雲影テクスチャ生成時に太陽方向へ撃つレイのサンプル数。大きいほど厚い雲の影が正確になりますが生成時間も増えます。16 が標準。");
-                DrawPropertyIntRow("Light Samples", "CloudLightSamples", &clouds.lightSamples, 0, 16, rock::CloudSettings{}.lightSamples, "Cloud light samples changed", false, "雲内自己遮蔽の太陽方向レイマーチ段数。0 で無効化(従来の上下ランプのみ)、6 が標準。大きいほど雲塊の陰影がはっきりしますが負荷も増えます。");
-                DrawPropertyFloatRow("Light Step (m)", "CloudLightStep", &clouds.lightStepMeters, 1.0f, 1000.0f, rock::CloudSettings{}.lightStepMeters, "Cloud light step changed", false, "自己遮蔽レイマーチの 1 ステップあたりの距離 (m)。Light Samples × Light Step が太陽方向への投光距離になります。雲スケールに対して短すぎると深い雲の中まで届かず、長すぎるとサンプルが粗くなります。", "%.0f");
-                DrawPropertyFloatRow("Phase Eccentricity", "CloudPhaseG", &clouds.phaseEccentricity, -0.99f, 0.99f, rock::CloudSettings{}.phaseEccentricity, "Cloud phase eccentricity changed", false, "Henyey-Greenstein 位相関数の g 値。0 で等方散乱、正値で前方散乱(逆光時に太陽周りが明るくなるシルバーライニング)、負値で後方散乱。0.4 前後が雲らしい見た目。");
+                DrawPropertyBoolRow("Cloud-to-Cloud Shadows", "CloudSelfShadowEnabled", &clouds.selfShadowEnabled, "Cloud self shadow toggled", "雲の各サンプルから太陽方向へ密度を読み、手前の雲が奥や下側の雲を暗くする自己遮蔽を有効化します。", rock::CloudSettings{}.selfShadowEnabled, true);
+                ImGui::BeginDisabled(!clouds.selfShadowEnabled);
+                    DrawPropertyIntRow("Light Samples", "CloudLightSamples", &clouds.lightSamples, 1, 16, rock::CloudSettings{}.lightSamples, "Cloud light samples changed", false, "雲内自己遮蔽の太陽方向レイマーチ段数。6 が標準。大きいほど雲塊の陰影がはっきりしますが負荷も増えます。");
+                    DrawPropertyFloatRow("Light Step (m)", "CloudLightStep", &clouds.lightStepMeters, 1.0f, 1000.0f, rock::CloudSettings{}.lightStepMeters, "Cloud light step changed", false, "自己遮蔽レイマーチの 1 ステップあたりの距離 (m)。Light Samples × Light Step が太陽方向への投光距離になります。雲スケールに対して短すぎると深い雲の中まで届かず、長すぎるとサンプルが粗くなります。", "%.0f");
+                    DrawPropertyFloatRow("Phase Eccentricity", "CloudPhaseG", &clouds.phaseEccentricity, -0.99f, 0.99f, rock::CloudSettings{}.phaseEccentricity, "Cloud phase eccentricity changed", false, "Henyey-Greenstein 位相関数の g 値。0 で等方散乱、正値で前方散乱(逆光時に太陽周りが明るくなるシルバーライニング)、負値で後方散乱。0.4 前後が雲らしい見た目。");
+                ImGui::EndDisabled();
                 DrawPropertyFloatRow("Shadow Ambient", "CloudShadowAmbient", &clouds.shadowAmbientStrength, 0.0f, 2.0f, rock::CloudSettings{}.shadowAmbientStrength, "Cloud shadow ambient changed", false, "雲の影側に足す空色の環境光です。大きいほど自己遮蔽された部分が青く持ち上がります。");
             ImGui::EndDisabled();
         ImGui::EndTable();
