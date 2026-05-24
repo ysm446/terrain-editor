@@ -9032,18 +9032,26 @@ void DrawDebugLogWindow(float width, float height, ImGuiWindowFlags childFlags)
             }
 
             ImGui::Separator();
-            ImGui::BeginChild("DebugLogScroll", ImVec2(0.0f, 0.0f), false, ImGuiWindowFlags_HorizontalScrollbar);
+            std::string logText;
             for (const DebugLogEntry& entry : g_debugLogEntries)
             {
-                ImGui::TextDisabled("%s", entry.time.c_str());
-                ImGui::SameLine(74.0f);
-                ImGui::TextWrapped("%s", entry.message.c_str());
+                logText += entry.time;
+                logText += "  ";
+                logText += entry.message;
+                logText += '\n';
             }
+            std::vector<char> logTextBuffer(logText.begin(), logText.end());
+            logTextBuffer.push_back('\0');
+            ImGui::InputTextMultiline(
+                "##DebugLogText",
+                logTextBuffer.data(),
+                logTextBuffer.size(),
+                ImGui::GetContentRegionAvail(),
+                ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_NoUndoRedo);
             if (g_debugLogAutoScroll)
             {
                 ImGui::SetScrollHereY(1.0f);
             }
-            ImGui::EndChild();
             EndInspectorTabContent();
             ImGui::EndChild();
             ImGui::PopStyleVar();
