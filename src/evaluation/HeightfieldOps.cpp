@@ -129,10 +129,14 @@ void ApplyHeightmapBlur(HeightfieldGrid& grid, const HeightmapBlurSettings& sett
             }
         });
 
-        for (size_t i = 0; i < grid.heights.size(); ++i)
-        {
-            grid.heights[i] = std::lerp(source[i], blurred[i], strength);
-        }
+        ParallelForRows(n, [&](int z) {
+            const size_t row = static_cast<size_t>(z) * static_cast<size_t>(n);
+            for (int x = 0; x < n; ++x)
+            {
+                const size_t i = row + static_cast<size_t>(x);
+                grid.heights[i] = std::lerp(source[i], blurred[i], strength);
+            }
+        });
     }
 }
 

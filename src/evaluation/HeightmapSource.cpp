@@ -3,9 +3,12 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <execution>
 #include <filesystem>
 #include <format>
+#include <numeric>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <windows.h>
@@ -27,6 +30,14 @@ struct HeightmapImage
     std::string precision;
     std::vector<float> values;
 };
+
+template <typename Fn>
+inline void ParallelForRows(int n, Fn&& fn)
+{
+    std::vector<int> rows(static_cast<size_t>(n));
+    std::iota(rows.begin(), rows.end(), 0);
+    std::for_each(std::execution::par, rows.begin(), rows.end(), std::forward<Fn>(fn));
+}
 
 std::wstring Utf8ToWidePath(const std::string& value)
 {
@@ -305,15 +316,16 @@ HeightfieldGrid BuildHeightfieldFromHeightmap(const HeightmapLoadSettings& setti
     const float verticalRange = importSizeMeters * std::max(0.0f, settings.relativeVerticalScalePercent) / 100.0f;
     const float halfTerrain = grid.terrainSizeMeters * 0.5f;
     const float halfImport = importSizeMeters * 0.5f;
-    grid.heights.reserve(static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution));
-    grid.mask.assign(static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution), 0.0f);
-    grid.deposits.assign(static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution), 0.0f);
-    grid.flows.assign(static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution), 0.0f);
-    grid.age.assign(static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution), 0.0f);
-    for (int z = 0; z < grid.resolution; ++z)
-    {
+    const size_t cellCount = static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution);
+    grid.heights.assign(cellCount, 0.0f);
+    grid.mask.assign(cellCount, 0.0f);
+    grid.deposits.assign(cellCount, 0.0f);
+    grid.flows.assign(cellCount, 0.0f);
+    grid.age.assign(cellCount, 0.0f);
+    ParallelForRows(grid.resolution, [&](int z) {
         const float tz = grid.resolution > 1 ? static_cast<float>(z) / static_cast<float>(grid.resolution - 1) : 0.0f;
         const float worldZ = std::lerp(-halfTerrain, halfTerrain, tz);
+        const size_t row = static_cast<size_t>(z) * static_cast<size_t>(grid.resolution);
         for (int x = 0; x < grid.resolution; ++x)
         {
             const float tx = grid.resolution > 1 ? static_cast<float>(x) / static_cast<float>(grid.resolution - 1) : 0.0f;
@@ -325,9 +337,9 @@ HeightfieldGrid BuildHeightfieldFromHeightmap(const HeightmapLoadSettings& setti
                 const float v = 1.0f - ((worldZ + halfImport) / importSizeMeters);
                 height = settings.verticalOffsetMeters + SampleHeightmap(image, u, v) * verticalRange;
             }
-            grid.heights.push_back(height);
+            grid.heights[row + static_cast<size_t>(x)] = height;
         }
-    }
+    });
 
     if (message != nullptr)
     {

@@ -2,6 +2,10 @@
 
 ## 未リリース
 
+## 0.19.72 - 2026-05-25 07:15
+
+- `Shape`、`Heightmap Load` の出力グリッド生成、`Mask Blend` のリサンプル/合成、`Heightmap Blur` の最終合成を CPU 並列処理にしました。
+
 ## 0.19.71 - 2026-05-25 07:05
 
 - `Path` ノードに `Segment Type` を追加し、新しく作るエッジや選択中エッジを `Straight` / `Smooth` から選べるようにしました。`Smooth` はポイントを通る Catmull-Rom カーブとして Mask Path とビューポート表示へ反映します。

@@ -52,16 +52,15 @@ MaskGrid ResampleMaskGrid(const MaskGrid& source, int targetResolution)
     resampled.resolution = targetResolution;
     resampled.values.assign(static_cast<size_t>(targetResolution) * static_cast<size_t>(targetResolution), 0.0f);
     const float invDenom = targetResolution > 1 ? 1.0f / static_cast<float>(targetResolution - 1) : 0.0f;
-    for (int z = 0; z < targetResolution; ++z)
-    {
+    ParallelForRows(targetResolution, [&](int z) {
         const float v = static_cast<float>(z) * invDenom;
+        const size_t row = static_cast<size_t>(z) * static_cast<size_t>(targetResolution);
         for (int x = 0; x < targetResolution; ++x)
         {
             const float u = static_cast<float>(x) * invDenom;
-            resampled.values[static_cast<size_t>(z) * static_cast<size_t>(targetResolution) + static_cast<size_t>(x)] =
-                SampleMaskBilinear(source, u, v);
+            resampled.values[row + static_cast<size_t>(x)] = SampleMaskBilinear(source, u, v);
         }
-    }
+    });
     return resampled;
 }
 
@@ -80,28 +79,32 @@ MaskGrid BlendMaskGrids(const MaskGrid& a, const MaskGrid& b, MaskBlendMode mode
     const size_t cellCount = static_cast<size_t>(n) * static_cast<size_t>(n);
     result.values.resize(cellCount);
     const float t = std::clamp(intensity, 0.0f, 1.0f);
-    for (size_t i = 0; i < cellCount; ++i)
-    {
-        const float va = gridA.values[i];
-        const float vb = gridB.values[i];
-        float blended = va;
-        switch (mode)
+    ParallelForRows(n, [&](int z) {
+        const size_t row = static_cast<size_t>(z) * static_cast<size_t>(n);
+        for (int x = 0; x < n; ++x)
         {
-        case MaskBlendMode::Add:
-            blended = va + vb;
-            break;
-        case MaskBlendMode::Multiply:
-            blended = va * vb;
-            break;
-        case MaskBlendMode::Min:
-            blended = std::min(va, vb);
-            break;
-        case MaskBlendMode::Max:
-            blended = std::max(va, vb);
-            break;
+            const size_t i = row + static_cast<size_t>(x);
+            const float va = gridA.values[i];
+            const float vb = gridB.values[i];
+            float blended = va;
+            switch (mode)
+            {
+            case MaskBlendMode::Add:
+                blended = va + vb;
+                break;
+            case MaskBlendMode::Multiply:
+                blended = va * vb;
+                break;
+            case MaskBlendMode::Min:
+                blended = std::min(va, vb);
+                break;
+            case MaskBlendMode::Max:
+                blended = std::max(va, vb);
+                break;
+            }
+            result.values[i] = std::clamp(std::lerp(va, blended, t), 0.0f, 1.0f);
         }
-        result.values[i] = std::clamp(std::lerp(va, blended, t), 0.0f, 1.0f);
-    }
+    });
     return result;
 }
 

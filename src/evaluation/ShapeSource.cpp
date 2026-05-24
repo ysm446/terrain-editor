@@ -2,10 +2,25 @@
 
 #include <algorithm>
 #include <cmath>
+#include <execution>
 #include <format>
+#include <numeric>
+#include <utility>
+#include <vector>
 
 namespace rock
 {
+namespace
+{
+template <typename Fn>
+inline void ParallelForRows(int n, Fn&& fn)
+{
+    std::vector<int> rows(static_cast<size_t>(n));
+    std::iota(rows.begin(), rows.end(), 0);
+    std::for_each(std::execution::par, rows.begin(), rows.end(), std::forward<Fn>(fn));
+}
+} // namespace
+
 HeightfieldGrid BuildHeightfieldFromShape(const ShapeSettings& settings, int resolution, float terrainSizeMeters, std::string* message)
 {
     HeightfieldGrid grid;
@@ -16,16 +31,16 @@ HeightfieldGrid BuildHeightfieldFromShape(const ShapeSettings& settings, int res
     const float halfTerrain = grid.terrainSizeMeters * 0.5f;
     const float halfShape = shapeSizeMeters * 0.5f;
     const size_t cellCount = static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution);
-    grid.heights.reserve(cellCount);
+    grid.heights.assign(cellCount, 0.0f);
     grid.mask.assign(cellCount, 0.0f);
     grid.deposits.assign(cellCount, 0.0f);
     grid.flows.assign(cellCount, 0.0f);
     grid.age.assign(cellCount, 0.0f);
 
-    for (int z = 0; z < grid.resolution; ++z)
-    {
+    ParallelForRows(grid.resolution, [&](int z) {
         const float v = grid.resolution > 1 ? static_cast<float>(z) / static_cast<float>(grid.resolution - 1) : 0.0f;
         const float worldZ = std::lerp(-halfTerrain, halfTerrain, v);
+        const size_t row = static_cast<size_t>(z) * static_cast<size_t>(grid.resolution);
         for (int x = 0; x < grid.resolution; ++x)
         {
             const float u = grid.resolution > 1 ? static_cast<float>(x) / static_cast<float>(grid.resolution - 1) : 0.0f;
@@ -45,9 +60,9 @@ HeightfieldGrid BuildHeightfieldFromShape(const ShapeSettings& settings, int res
                     normalizedHeight = std::max(0.0f, 1.0f - std::max(std::abs(nx), std::abs(nz)));
                 }
             }
-            grid.heights.push_back(normalizedHeight * heightMeters);
+            grid.heights[row + static_cast<size_t>(x)] = normalizedHeight * heightMeters;
         }
-    }
+    });
 
     if (message != nullptr)
     {
