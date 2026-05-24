@@ -206,9 +206,13 @@ private:
     bool active = false;
 };
 
+constexpr UINT kDefaultWindowClientWidth = 1600;
+constexpr UINT kDefaultWindowClientHeight = 900;
+constexpr float kDefaultDebugLogHeight = 180.0f;
+
 HWND g_hwnd = nullptr;
-UINT g_width = 1600;
-UINT g_height = 900;
+UINT g_width = kDefaultWindowClientWidth;
+UINT g_height = kDefaultWindowClientHeight;
 bool g_running = true;
 bool g_windowActive = true;
 bool g_windowMinimized = false;
@@ -354,7 +358,7 @@ struct UiState
     bool debugLogVisible = false;
     float rightPaneWidth = 0.0f;
     float nodePaneHeight = 0.0f;
-    float debugLogHeight = 180.0f;
+    float debugLogHeight = kDefaultDebugLogHeight;
 };
 
 UiState g_ui;
@@ -1454,6 +1458,36 @@ void SaveAppSettingsSilently()
     {
         g_projectStatus = "App settings save failed: " + error;
     }
+}
+
+void ResetLayoutToDefaults()
+{
+    g_ui.rightPaneWidth = 0.0f;
+    g_ui.nodePaneHeight = 0.0f;
+    g_ui.debugLogHeight = kDefaultDebugLogHeight;
+
+    if (g_hwnd)
+    {
+        ShowWindow(g_hwnd, SW_RESTORE);
+        RECT rect{
+            0,
+            0,
+            static_cast<LONG>(kDefaultWindowClientWidth),
+            static_cast<LONG>(kDefaultWindowClientHeight),
+        };
+        AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
+        SetWindowPos(
+            g_hwnd,
+            nullptr,
+            0,
+            0,
+            rect.right - rect.left,
+            rect.bottom - rect.top,
+            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+    g_width = kDefaultWindowClientWidth;
+    g_height = kDefaultWindowClientHeight;
+    SaveAppSettingsSilently();
 }
 
 ComPtr<ID3D12Resource> CreateUploadBuffer(const void* data, UINT64 byteSize, const char* message)
@@ -9271,6 +9305,11 @@ void DrawUi()
             {
                 g_ui.debugLogVisible = !g_ui.debugLogVisible;
                 SaveAppSettingsSilently();
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("レイアウトを初期化"))
+            {
+                ResetLayoutToDefaults();
             }
             ImGui::EndMenu();
         }
