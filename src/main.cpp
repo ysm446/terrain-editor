@@ -8745,13 +8745,13 @@ void EndStyledTabItem(const TabHeaderStyle& style = {})
 
 bool DrawVerticalSplitter(const char* id, float* leftWidth, float totalWidth, float minLeftWidth, float minRightWidth, float height)
 {
-    constexpr float splitterHitWidth = 7.0f;
-    const float maxLeftWidth = std::max(minLeftWidth, totalWidth - minRightWidth - splitterHitWidth);
+    constexpr float splitterWidth = 1.0f;
+    const float maxLeftWidth = std::max(minLeftWidth, totalWidth - minRightWidth - splitterWidth);
     *leftWidth = std::clamp(*leftWidth, minLeftWidth, maxLeftWidth);
 
     ImGui::SameLine();
     ImGui::PushID(id);
-    ImGui::InvisibleButton("##splitter", ImVec2(splitterHitWidth, height));
+    ImGui::InvisibleButton("##splitter", ImVec2(splitterWidth, height));
     const bool active = ImGui::IsItemActive();
     const bool hovered = ImGui::IsItemHovered();
     if (active)
@@ -8786,12 +8786,12 @@ bool DrawVerticalSplitter(const char* id, float* leftWidth, float totalWidth, fl
 
 bool DrawHorizontalSplitter(const char* id, float* topHeight, float totalHeight, float minTopHeight, float minBottomHeight)
 {
-    constexpr float splitterHitHeight = 7.0f;
-    const float maxTopHeight = std::max(minTopHeight, totalHeight - minBottomHeight - splitterHitHeight);
+    constexpr float splitterHeight = 1.0f;
+    const float maxTopHeight = std::max(minTopHeight, totalHeight - minBottomHeight - splitterHeight);
     *topHeight = std::clamp(*topHeight, minTopHeight, maxTopHeight);
 
     ImGui::PushID(id);
-    ImGui::InvisibleButton("##splitter", ImVec2(-1.0f, splitterHitHeight));
+    ImGui::InvisibleButton("##splitter", ImVec2(-1.0f, splitterHeight));
     const bool active = ImGui::IsItemActive();
     const bool hovered = ImGui::IsItemHovered();
     if (active)
@@ -9254,22 +9254,22 @@ void DrawUi()
     const ImVec2 content = ImGui::GetContentRegionAvail();
     const float statusBarHeight = ImGui::GetTextLineHeight() + 16.0f;
     const float workHeight = std::max(260.0f, content.y - statusBarHeight);
-    constexpr float mainSplitterHitWidth = 7.0f;
+    constexpr float mainSplitterWidth = 1.0f;
     constexpr float paneMinWidth = 320.0f;
-    const float minMainLayoutWidth = paneMinWidth * 2.0f + mainSplitterHitWidth;
+    const float minMainLayoutWidth = paneMinWidth * 2.0f + mainSplitterWidth;
     const bool mainLayoutCanFit = content.x >= minMainLayoutWidth;
     float rightPaneWidth = g_ui.rightPaneWidth;
     if (rightPaneWidth <= 0.0f)
     {
         rightPaneWidth = std::clamp(content.x * 0.42f, 480.0f, std::min(820.0f, std::max(paneMinWidth, content.x - paneMinWidth)));
     }
-    const float maxRightWidth = std::max(paneMinWidth, content.x - paneMinWidth - mainSplitterHitWidth);
+    const float maxRightWidth = std::max(paneMinWidth, content.x - paneMinWidth - mainSplitterWidth);
     rightPaneWidth = std::clamp(rightPaneWidth, paneMinWidth, maxRightWidth);
     if (mainLayoutCanFit)
     {
         g_ui.rightPaneWidth = rightPaneWidth;
     }
-    float previewWidth = std::max(paneMinWidth, content.x - rightPaneWidth - mainSplitterHitWidth);
+    float previewWidth = std::max(paneMinWidth, content.x - rightPaneWidth - mainSplitterWidth);
 
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 0.0f);
@@ -9280,15 +9280,15 @@ void DrawUi()
     {
         ImGui::BeginChild("Left Work Column", ImVec2(previewWidth, workHeight), false, fixedPaneFlags);
         const float leftColumnWidth = ImGui::GetContentRegionAvail().x;
-        constexpr float debugLogSplitterHitHeight = 7.0f;
+        constexpr float debugLogSplitterHeight = 1.0f;
         const bool debugLogCanFit = workHeight >= 320.0f;
         if (g_ui.debugLogVisible && debugLogCanFit)
         {
-            float debugLogHeight = std::clamp(g_ui.debugLogHeight, 100.0f, std::max(100.0f, workHeight - 180.0f - debugLogSplitterHitHeight));
-            float viewportHeight = std::max(180.0f, workHeight - debugLogHeight - debugLogSplitterHitHeight);
+            float debugLogHeight = std::clamp(g_ui.debugLogHeight, 100.0f, std::max(100.0f, workHeight - 180.0f - debugLogSplitterHeight));
+            float viewportHeight = std::max(180.0f, workHeight - debugLogHeight - debugLogSplitterHeight);
             DrawViewportTabs(leftColumnWidth, viewportHeight, timeSeconds, fixedPaneFlags);
             const bool debugLogSplitterReleased = DrawHorizontalSplitter("ViewportDebugLogSplitter", &viewportHeight, workHeight, 180.0f, 100.0f);
-            debugLogHeight = std::max(100.0f, workHeight - viewportHeight - debugLogSplitterHitHeight);
+            debugLogHeight = std::max(100.0f, workHeight - viewportHeight - debugLogSplitterHeight);
             g_ui.debugLogHeight = debugLogHeight;
             if (debugLogSplitterReleased)
             {
@@ -9312,7 +9312,7 @@ void DrawUi()
             SaveAppSettingsSilently();
         }
     }
-    rightPaneWidth = std::max(paneMinWidth, content.x - previewWidth - mainSplitterHitWidth);
+    rightPaneWidth = std::max(paneMinWidth, content.x - previewWidth - mainSplitterWidth);
     if (mainLayoutCanFit)
     {
         g_ui.rightPaneWidth = rightPaneWidth;
@@ -9322,14 +9322,14 @@ void DrawUi()
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 6.0f));
     ImGui::BeginChild("Right Work Column", ImVec2(rightPaneWidth, workHeight), false, fixedPaneFlags);
     const float rightColumnHeight = ImGui::GetContentRegionAvail().y;
-    constexpr float inspectorSplitterHitHeight = 7.0f;
-    const bool inspectorLayoutCanFit = rightColumnHeight >= 160.0f * 2.0f + inspectorSplitterHitHeight;
+    constexpr float inspectorSplitterHeight = 1.0f;
+    const bool inspectorLayoutCanFit = rightColumnHeight >= 160.0f * 2.0f + inspectorSplitterHeight;
     float nodePaneHeight = g_ui.nodePaneHeight;
     if (nodePaneHeight <= 0.0f)
     {
         nodePaneHeight = std::clamp(rightColumnHeight * 0.56f, 220.0f, std::max(220.0f, rightColumnHeight - 190.0f));
     }
-    nodePaneHeight = std::clamp(nodePaneHeight, 160.0f, std::max(160.0f, rightColumnHeight - 160.0f - inspectorSplitterHitHeight));
+    nodePaneHeight = std::clamp(nodePaneHeight, 160.0f, std::max(160.0f, rightColumnHeight - 160.0f - inspectorSplitterHeight));
     if (inspectorLayoutCanFit)
     {
         g_ui.nodePaneHeight = nodePaneHeight;
