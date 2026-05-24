@@ -34,6 +34,7 @@ enum class NodeKind
     Scatter = 21,
     Path = 22,
     MaskPath = 23,
+    HeightmapFromMask = 24,
 };
 
 enum class PinKind
@@ -226,6 +227,7 @@ enum class PreviewStage
     Crumbling = 19,
     Scatter = 20,
     MaskPath = 21,
+    HeightmapFromMask = 22,
 };
 
 enum class HeightfieldPreviewField
@@ -331,6 +333,14 @@ struct MaskHeightSettings
 
 struct MaskPathSettings
 {
+    float gamma = 1.0f;
+    bool invert = false;
+};
+
+struct HeightmapFromMaskSettings
+{
+    float heightMeters = 100.0f;
+    float baseHeightMeters = 0.0f;
     float gamma = 1.0f;
     bool invert = false;
 };
@@ -592,6 +602,7 @@ struct Node
     MaskSlopeSettings maskSlope;
     MaskHeightSettings maskHeight;
     MaskPathSettings maskPath;
+    HeightmapFromMaskSettings heightmapFromMask;
     CrumblingSettings crumbling;
     MaskFluvialSettings maskFluvial;
     RockSettings rock;
@@ -840,6 +851,9 @@ struct HeightfieldPipeline
     bool useShape = false;
     GraphId shapeNodeId = 0;
     ShapeSettings shape;
+    bool useMaskSource = false;
+    GraphId maskSourceNodeId = 0;
+    HeightmapFromMaskSettings heightmapFromMask;
     std::vector<HeightfieldOperation> heightfieldOperations;
 };
 

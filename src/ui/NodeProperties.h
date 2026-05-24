@@ -52,6 +52,7 @@ bool DrawMaskBlendProperties(rock::Node& editableNode);
 bool DrawMaskLevelsProperties(rock::Node& editableNode);
 bool DrawMaskHeightProperties(rock::Node& editableNode);
 bool DrawMaskPathProperties(rock::Node& editableNode);
+bool DrawHeightmapFromMaskProperties(rock::Node& editableNode);
 bool DrawMaskSlopeProperties(rock::Node& editableNode);
 bool DrawMaskCurvatureProperties(rock::Node& editableNode);
 bool DrawMaskFluvialProperties(rock::Node& editableNode);

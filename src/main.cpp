@@ -4444,6 +4444,7 @@ bool IsTerrainNodeKind(rock::NodeKind kind)
 {
     return kind == rock::NodeKind::HeightmapLoad ||
         kind == rock::NodeKind::Shape ||
+        kind == rock::NodeKind::HeightmapFromMask ||
         kind == rock::NodeKind::HeightmapBlur ||
         kind == rock::NodeKind::MultiScaleErosion ||
         kind == rock::NodeKind::MaskNoise ||
@@ -8807,6 +8808,7 @@ ImVec4 NodeAccentColor(rock::NodeKind kind)
     {
     case rock::NodeKind::HeightmapLoad:
     case rock::NodeKind::Shape:
+    case rock::NodeKind::HeightmapFromMask:
     case rock::NodeKind::HeightmapBlur:
     case rock::NodeKind::MultiScaleErosion:
     case rock::NodeKind::Crumbling:
@@ -8841,6 +8843,8 @@ ImVec2 InitialNodePosition(rock::NodeKind kind)
         return ImVec2(40.0f, 240.0f);
     case rock::NodeKind::Shape:
         return ImVec2(40.0f, 360.0f);
+    case rock::NodeKind::HeightmapFromMask:
+        return ImVec2(320.0f, 800.0f);
     case rock::NodeKind::HeightmapBlur:
         return ImVec2(600.0f, 240.0f);
     case rock::NodeKind::MultiScaleErosion:
@@ -9595,6 +9599,7 @@ void DrawNodeGraph()
         {
             addNodeMenuItem(rock::NodeKind::HeightmapLoad);
             addNodeMenuItem(rock::NodeKind::Shape);
+            addNodeMenuItem(rock::NodeKind::HeightmapFromMask);
             addNodeMenuItem(rock::NodeKind::HeightmapBlur);
             addNodeMenuItem(rock::NodeKind::MultiScaleErosion);
             addNodeMenuItem(rock::NodeKind::Crumbling);

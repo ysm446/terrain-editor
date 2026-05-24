@@ -158,6 +158,18 @@ uint64_t HashMaskPathSettings(const MaskPathSettings& settings, int resolution, 
     return hash;
 }
 
+uint64_t HashHeightmapFromMaskSettings(const HeightmapFromMaskSettings& settings, int resolution, float terrainSizeMeters)
+{
+    uint64_t hash = 1469598103934665603ull;
+    HashCombine(hash, HashFloat(settings.heightMeters));
+    HashCombine(hash, HashFloat(settings.baseHeightMeters));
+    HashCombine(hash, HashFloat(settings.gamma));
+    HashCombine(hash, static_cast<uint64_t>(settings.invert ? 1 : 0));
+    HashCombine(hash, static_cast<uint64_t>(resolution));
+    HashCombine(hash, HashFloat(terrainSizeMeters));
+    return hash;
+}
+
 uint64_t HashPathSettings(const PathSettings& path)
 {
     uint64_t hash = 1099511628211ull;
@@ -537,6 +549,52 @@ MaskGrid GenerateMaskPath(const PathSettings& path, const MaskPathSettings& sett
                 value = 1.0f - value;
             }
             grid.values[static_cast<size_t>(z) * static_cast<size_t>(grid.resolution) + static_cast<size_t>(x)] = value;
+        }
+    });
+    return grid;
+}
+
+float SampleGridBilinear(const std::vector<float>& values, int n, float x, float z);
+
+HeightfieldGrid GenerateHeightmapFromMask(const MaskGrid& mask, const HeightmapFromMaskSettings& settings, int resolution, float terrainSizeMeters)
+{
+    HeightfieldGrid grid;
+    grid.resolution = std::clamp(resolution, 2, 2048);
+    grid.terrainSizeMeters = std::max(1.0f, terrainSizeMeters);
+    const size_t cellCount = static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution);
+    grid.heights.assign(cellCount, settings.baseHeightMeters);
+    grid.mask.assign(cellCount, 0.0f);
+    grid.uniqueMask.assign(cellCount, 0.0f);
+    grid.deposits.assign(cellCount, 0.0f);
+    grid.flows.assign(cellCount, 0.0f);
+    grid.age.assign(cellCount, 0.0f);
+
+    const size_t requiredSourceCells = static_cast<size_t>(mask.resolution) * static_cast<size_t>(mask.resolution);
+    if (mask.resolution <= 0 || mask.values.size() < requiredSourceCells)
+    {
+        return grid;
+    }
+
+    const int sourceResolution = mask.resolution;
+    const float gamma = std::clamp(settings.gamma, 0.05f, 8.0f);
+    const float invTarget = 1.0f / static_cast<float>(std::max(1, grid.resolution - 1));
+    const float sourceMax = static_cast<float>(std::max(0, sourceResolution - 1));
+    ParallelForRows(grid.resolution, [&](int z)
+    {
+        const float sourceZ = static_cast<float>(z) * invTarget * sourceMax;
+        for (int x = 0; x < grid.resolution; ++x)
+        {
+            const float sourceX = static_cast<float>(x) * invTarget * sourceMax;
+            float value = SampleGridBilinear(mask.values, sourceResolution, sourceX, sourceZ);
+            value = std::clamp(value, 0.0f, 1.0f);
+            if (settings.invert)
+            {
+                value = 1.0f - value;
+            }
+            value = std::pow(value, gamma);
+            const size_t idx = static_cast<size_t>(z) * static_cast<size_t>(grid.resolution) + static_cast<size_t>(x);
+            grid.mask[idx] = value;
+            grid.heights[idx] = settings.baseHeightMeters + value * settings.heightMeters;
         }
     });
     return grid;
@@ -2100,7 +2158,9 @@ HeightfieldGrid NodeGraph::EvaluateHeightPipelineCached(const HeightfieldPipelin
 {
     if (outputHash != nullptr) { *outputHash = 0; }
 
-    const GraphId sourceNodeId = pipeline.useShape ? pipeline.shapeNodeId : pipeline.heightmapNodeId;
+    const GraphId sourceNodeId = pipeline.useMaskSource
+        ? pipeline.maskSourceNodeId
+        : (pipeline.useShape ? pipeline.shapeNodeId : pipeline.heightmapNodeId);
     if (sourceNodeId == 0)
     {
         return {};
@@ -2109,9 +2169,24 @@ HeightfieldGrid NodeGraph::EvaluateHeightPipelineCached(const HeightfieldPipelin
     const int simulationResolution = std::clamp(pipeline.simulationResolution, 2, 2048);
     const float terrainSizeMeters = std::max(1.0f, pipeline.terrainSizeMeters);
     uint64_t inputHash = 0;
-    const uint64_t sourceHash = pipeline.useShape
-        ? HashShapeSettings(pipeline.shape, simulationResolution, terrainSizeMeters)
-        : HashHeightmapSettings(pipeline.heightmap, simulationResolution, terrainSizeMeters);
+    MaskGrid sourceMask;
+    if (pipeline.useMaskSource)
+    {
+        if (const Node* sourceNode = FindNode(sourceNodeId);
+            sourceNode != nullptr && !sourceNode->inputs.empty())
+        {
+            const UpstreamConnection upstream = FindUpstreamConnectionForPin(sourceNode->inputs[0].id);
+            if (upstream.node != nullptr)
+            {
+                sourceMask = EvaluateMaskGridForNodeCached(*upstream.node, 0, &inputHash, upstream.outputPin ? std::string_view(upstream.outputPin->label) : std::string_view{});
+            }
+        }
+    }
+    const uint64_t sourceHash = pipeline.useMaskSource
+        ? HashHeightmapFromMaskSettings(pipeline.heightmapFromMask, simulationResolution, terrainSizeMeters)
+        : (pipeline.useShape
+            ? HashShapeSettings(pipeline.shape, simulationResolution, terrainSizeMeters)
+            : HashHeightmapSettings(pipeline.heightmap, simulationResolution, terrainSizeMeters));
     HeightfieldNodeCache& sourceCache = heightfieldCache_[sourceNodeId];
     if (!sourceCache.valid ||
         sourceCache.resolution != simulationResolution ||
@@ -2120,15 +2195,24 @@ HeightfieldGrid NodeGraph::EvaluateHeightPipelineCached(const HeightfieldPipelin
     {
         g_currentlyEvaluatingNodeId.store(sourceNodeId, std::memory_order_relaxed);
         std::string sourceMessage;
-        sourceCache.grid = pipeline.useShape
-            ? BuildHeightfieldFromShape(pipeline.shape, simulationResolution, terrainSizeMeters, &sourceMessage)
-            : BuildHeightfieldFromHeightmap(pipeline.heightmap, simulationResolution, terrainSizeMeters, &sourceMessage);
+        if (pipeline.useMaskSource)
+        {
+            sourceCache.grid = GenerateHeightmapFromMask(sourceMask, pipeline.heightmapFromMask, simulationResolution, terrainSizeMeters);
+            sourceMessage = "Heightmap From Mask";
+        }
+        else
+        {
+            sourceCache.grid = pipeline.useShape
+                ? BuildHeightfieldFromShape(pipeline.shape, simulationResolution, terrainSizeMeters, &sourceMessage)
+                : BuildHeightfieldFromHeightmap(pipeline.heightmap, simulationResolution, terrainSizeMeters, &sourceMessage);
+        }
         sourceCache.message = sourceMessage;
         sourceCache.valid = true;
         sourceCache.resolution = simulationResolution;
         sourceCache.inputHash = inputHash;
         sourceCache.parameterHash = sourceHash;
-        sourceCache.outputHash = sourceHash;
+        sourceCache.outputHash = inputHash;
+        HashCombine(sourceCache.outputHash, sourceHash);
     }
 
     HeightfieldGrid grid = sourceCache.grid;
@@ -2234,7 +2318,9 @@ HeightfieldGrid NodeGraph::EvaluateHeightPipelineCached(const HeightfieldPipelin
 
 MeshData NodeGraph::BuildMeshFromHeightPipelineCached(const HeightfieldPipeline& pipeline, int resolution, std::string* message, HeightfieldPreviewField previewField, HeightfieldGrid* previewGrid)
 {
-    const GraphId sourceNodeId = pipeline.useShape ? pipeline.shapeNodeId : pipeline.heightmapNodeId;
+    const GraphId sourceNodeId = pipeline.useMaskSource
+        ? pipeline.maskSourceNodeId
+        : (pipeline.useShape ? pipeline.shapeNodeId : pipeline.heightmapNodeId);
     if (sourceNodeId == 0)
     {
         return BuildMeshFromHeightPipeline(pipeline, resolution, message, previewField, previewGrid);
@@ -2470,6 +2556,10 @@ GraphId NodeGraph::CreateNode(NodeKind kind)
     case NodeKind::MaskPath:
         AddPin(nodeId, PinKind::Input, ValueType::Path, "Path");
         AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
+        break;
+    case NodeKind::HeightmapFromMask:
+        AddPin(nodeId, PinKind::Input, ValueType::Mask, "Mask");
+        AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
         break;
     case NodeKind::Crumbling:
         AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
@@ -2739,6 +2829,8 @@ HeightfieldPipeline NodeGraph::PipelineFor(PreviewStage stage) const
         return PipelineTo(NodeKind::MaskSlope);
     case PreviewStage::MaskHeight:
         return PipelineTo(NodeKind::MaskHeight);
+    case PreviewStage::HeightmapFromMask:
+        return PipelineTo(NodeKind::HeightmapFromMask);
     case PreviewStage::Crumbling:
         return PipelineTo(NodeKind::Crumbling);
     case PreviewStage::MaskFluvial:
@@ -2758,6 +2850,7 @@ HeightfieldPipeline NodeGraph::PipelineFor(PreviewStage stage) const
         if (const Node* node = FindFirstNode(NodeKind::Crumbling)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::Scatter)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::Rock)) { return PipelineToNode(*node); }
+        if (const Node* node = FindFirstNode(NodeKind::HeightmapFromMask)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::MaskHeight)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::MaskSlope)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::MaskCurvature)) { return PipelineToNode(*node); }
@@ -3234,6 +3327,14 @@ HeightfieldPipeline NodeGraph::PipelineToNode(const Node& targetNode) const
             pipeline.shape = node->shape;
             break;
         }
+        else if (node->kind == NodeKind::HeightmapFromMask)
+        {
+            pipeline.hasSource = true;
+            pipeline.useMaskSource = true;
+            pipeline.maskSourceNodeId = node->id;
+            pipeline.heightmapFromMask = node->heightmapFromMask;
+            break;
+        }
 
         node = FindUpstreamNode(*node);
     }
@@ -3267,6 +3368,7 @@ const Node* NodeGraph::FindNearestHeightfieldForMaskPreview(const Node& maskNode
 
             if (upstreamNode->kind == NodeKind::HeightmapLoad ||
                 upstreamNode->kind == NodeKind::Shape ||
+                upstreamNode->kind == NodeKind::HeightmapFromMask ||
                 IsHeightfieldOperationNode(upstreamNode->kind))
             {
                 const HeightfieldPipeline pipeline = PipelineToNode(*upstreamNode);
@@ -3599,6 +3701,8 @@ std::string_view ToString(NodeKind kind)
         return "Colorize";
     case NodeKind::Path:
         return "Path";
+    case NodeKind::HeightmapFromMask:
+        return "Heightmap From Mask";
     default:
         return "Unknown";
     }
@@ -3628,6 +3732,8 @@ std::string_view ToString(PreviewStage stage)
         return "Mask Height";
     case PreviewStage::MaskPath:
         return "Mask Path";
+    case PreviewStage::HeightmapFromMask:
+        return "Heightmap From Mask";
     case PreviewStage::Crumbling:
         return "Crumbling";
     case PreviewStage::MaskCurvature:
@@ -3692,6 +3798,8 @@ PreviewStage PreviewStageFor(NodeKind kind)
         return PreviewStage::MaskHeight;
     case NodeKind::MaskPath:
         return PreviewStage::MaskPath;
+    case NodeKind::HeightmapFromMask:
+        return PreviewStage::HeightmapFromMask;
     case NodeKind::Crumbling:
         return PreviewStage::Crumbling;
     case NodeKind::MaskCurvature:

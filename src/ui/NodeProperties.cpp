@@ -259,6 +259,9 @@ void DrawNodePropertiesPanel(rock::NodeGraph& graph, rock::GraphId selectedNodeI
     case rock::NodeKind::MaskPath:
         DrawMaskPathProperties(*editableNode);
         return;
+    case rock::NodeKind::HeightmapFromMask:
+        DrawHeightmapFromMaskProperties(*editableNode);
+        return;
     default:
         return;
     }
@@ -809,6 +812,41 @@ bool DrawMaskPathProperties(rock::Node& editableNode)
 
     ImGui::EndTable();
     ImGui::TextWrapped("Mask Path uses each Path point's Width and Feather. Width is the full mask width; Feather fades outward from that width.");
+    return true;
+}
+
+bool DrawHeightmapFromMaskProperties(rock::Node& editableNode)
+{
+    if (!ImGui::BeginTable("HeightmapFromMaskRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        return false;
+    }
+
+    ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 210.0f);
+    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+    rock::HeightmapFromMaskSettings& hm = editableNode.heightmapFromMask;
+    hm.heightMeters = std::clamp(hm.heightMeters, -100000.0f, 100000.0f);
+    hm.baseHeightMeters = std::clamp(hm.baseHeightMeters, -100000.0f, 100000.0f);
+    hm.gamma = std::clamp(hm.gamma, 0.05f, 8.0f);
+
+    if (DrawPropertyFloatInputRow("Height (m)", "HeightmapFromMaskHeight", &hm.heightMeters, -100000.0f, 100000.0f, rock::HeightmapFromMaskSettings{}.heightMeters, "Heightmap from mask height changed", true, "Mask value 1 maps to this height above Base Height. Negative values carve downward.", "%.2f"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatInputRow("Base Height (m)", "HeightmapFromMaskBaseHeight", &hm.baseHeightMeters, -100000.0f, 100000.0f, rock::HeightmapFromMaskSettings{}.baseHeightMeters, "Heightmap from mask base height changed", true, "Height where mask value is 0.", "%.2f"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Gamma", "HeightmapFromMaskGamma", &hm.gamma, 0.05f, 8.0f, rock::HeightmapFromMaskSettings{}.gamma, "Heightmap from mask gamma changed", true, "Curve applied to the input mask before height conversion."))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyBoolRow("Invert", "HeightmapFromMaskInvert", &hm.invert, "Heightmap from mask invert toggled", "Invert the input mask before height conversion.", rock::HeightmapFromMaskSettings{}.invert))
+    {
+        EvaluateGraph();
+    }
+
+    ImGui::EndTable();
     return true;
 }
 
