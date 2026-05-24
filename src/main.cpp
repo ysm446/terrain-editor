@@ -9023,12 +9023,13 @@ void DrawDebugLogWindow(float width, float height, ImGuiWindowFlags childFlags)
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 8.0f));
             ImGui::BeginChild("DebugLogContent", ImVec2(0.0f, 0.0f), false);
             BeginInspectorTabContent();
+            ImGui::Checkbox("自動スクロール", &g_debugLogAutoScroll);
+            const float clearButtonWidth = ImGui::CalcTextSize("クリア").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+            ImGui::SameLine(std::max(ImGui::GetCursorPosX(), ImGui::GetContentRegionMax().x - clearButtonWidth));
             if (ImGui::SmallButton("クリア"))
             {
                 g_debugLogEntries.clear();
             }
-            ImGui::SameLine();
-            ImGui::Checkbox("自動スクロール", &g_debugLogAutoScroll);
 
             ImGui::Separator();
             ImGui::BeginChild("DebugLogScroll", ImVec2(0.0f, 0.0f), false, ImGuiWindowFlags_HorizontalScrollbar);
