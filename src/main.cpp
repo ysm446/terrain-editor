@@ -30,7 +30,6 @@
 #include <wrl/client.h>
 
 #include <imgui.h>
-#include <imgui_internal.h>
 #include <imgui_impl_dx12.h>
 #include <imgui_impl_win32.h>
 #include <imgui-node-editor/imgui_node_editor.h>
@@ -9043,8 +9042,7 @@ void DrawDebugLogWindow(float width, float height, ImGuiWindowFlags childFlags)
             }
             std::vector<char> logTextBuffer(logText.begin(), logText.end());
             logTextBuffer.push_back('\0');
-            const ImGuiID logTextId = ImGui::GetID("##DebugLogText");
-            if (g_debugLogAutoScroll && ImGui::GetActiveID() != logTextId)
+            if (g_debugLogAutoScroll)
             {
                 ImGui::SetNextWindowScroll(ImVec2(-1.0f, FLT_MAX));
             }
