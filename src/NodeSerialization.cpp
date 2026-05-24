@@ -27,37 +27,6 @@ int NearestResolutionPreset(int value)
     return NearestPreset(value, kResolutionPresets, 512);
 }
 
-bool IsSerializableNodeKind(rock::NodeKind kind)
-{
-    switch (kind)
-    {
-    case rock::NodeKind::HeightmapLoad:
-    case rock::NodeKind::HeightmapBlur:
-    case rock::NodeKind::Shape:
-    case rock::NodeKind::MultiScaleErosion:
-    case rock::NodeKind::MaskNoise:
-    case rock::NodeKind::MaskBlend:
-    case rock::NodeKind::MaskFluvial:
-    case rock::NodeKind::Rock:
-    case rock::NodeKind::Sediment:
-    case rock::NodeKind::Snow:
-    case rock::NodeKind::Colorize:
-    case rock::NodeKind::MaskCurvature:
-    case rock::NodeKind::MaskLevels:
-    case rock::NodeKind::MaskBlur:
-    case rock::NodeKind::MaskSlope:
-    case rock::NodeKind::MaskHeight:
-    case rock::NodeKind::Crumbling:
-    case rock::NodeKind::Scatter:
-    case rock::NodeKind::Path:
-    case rock::NodeKind::MaskPath:
-    case rock::NodeKind::HeightmapFromMask:
-        return true;
-    default:
-        return false;
-    }
-}
-
 } // namespace
 nlohmann::json MakeBasicHeightfieldSettingsJson(const rock::Node& node, const AssetPathForJson& assetPathForJson)
 {
@@ -424,7 +393,7 @@ std::optional<rock::NodeKind> ReadSerializedNodeKind(const nlohmann::json& nodeJ
 {
     const int kindInt = nodeJson.value("kind", 0);
     const rock::NodeKind kind = static_cast<rock::NodeKind>(kindInt);
-    if (!IsSerializableNodeKind(kind))
+    if (!rock::IsKnownNodeKind(kind))
     {
         return std::nullopt;
     }

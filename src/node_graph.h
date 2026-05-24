@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -236,6 +237,32 @@ enum class PreviewStage
     MaskPath = 21,
     HeightmapFromMask = 22,
     MaskBlur = 23,
+};
+
+enum class NodeCategory
+{
+    Heightfield,
+    Mask,
+    Color,
+    Path,
+};
+
+struct PinDefinition
+{
+    PinKind kind = PinKind::Input;
+    ValueType valueType = ValueType::HeightField;
+    std::string_view label;
+};
+
+struct NodeDefinition
+{
+    NodeKind kind = NodeKind::HeightmapLoad;
+    std::string_view title;
+    NodeCategory category = NodeCategory::Heightfield;
+    PreviewStage previewStage = PreviewStage::Graph;
+    bool maskOnly = false;
+    bool colorOnly = false;
+    std::span<const PinDefinition> pins;
 };
 
 enum class HeightfieldPreviewField
@@ -1023,7 +1050,11 @@ std::string_view ToString(MaskBlendMode mode);
 std::string_view ToString(NodeKind kind);
 std::string_view ToString(PreviewStage stage);
 std::string_view ToString(ValueType type);
+const NodeDefinition* FindNodeDefinition(NodeKind kind);
+const NodeDefinition& GetNodeDefinition(NodeKind kind);
+NodeCategory CategoryFor(NodeKind kind);
 PreviewStage PreviewStageFor(NodeKind kind);
+bool IsKnownNodeKind(NodeKind kind);
 bool IsMaskOnlyNodeKind(NodeKind kind);
 bool IsColorOnlyNodeKind(NodeKind kind);
 void SetMultiScaleErosionGpuEvaluator(MultiScaleErosionGpuEvaluator evaluator);

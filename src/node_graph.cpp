@@ -32,6 +32,116 @@ namespace rock
 {
 namespace
 {
+constexpr std::array<PinDefinition, 1> kHeightSourcePins = {{
+    {PinKind::Output, ValueType::HeightField, "Heightmap"},
+}};
+
+constexpr std::array<PinDefinition, 2> kHeightFilterPins = {{
+    {PinKind::Input, ValueType::HeightField, "Heightmap"},
+    {PinKind::Output, ValueType::HeightField, "Heightmap"},
+}};
+
+constexpr std::array<PinDefinition, 4> kMultiScaleErosionPins = {{
+    {PinKind::Input, ValueType::HeightField, "Heightmap"},
+    {PinKind::Output, ValueType::HeightField, "Heightmap"},
+    {PinKind::Output, ValueType::Mask, "Flows"},
+    {PinKind::Output, ValueType::Mask, "Deposits"},
+}};
+
+constexpr std::array<PinDefinition, 2> kHeightToMaskPins = {{
+    {PinKind::Input, ValueType::HeightField, "Heightmap"},
+    {PinKind::Output, ValueType::Mask, "Mask"},
+}};
+
+constexpr std::array<PinDefinition, 2> kMaskPathPins = {{
+    {PinKind::Input, ValueType::Path, "Path"},
+    {PinKind::Output, ValueType::Mask, "Mask"},
+}};
+
+constexpr std::array<PinDefinition, 2> kHeightmapFromMaskPins = {{
+    {PinKind::Input, ValueType::Mask, "Mask"},
+    {PinKind::Output, ValueType::HeightField, "Heightmap"},
+}};
+
+constexpr std::array<PinDefinition, 5> kHeightMaskUniquePins = {{
+    {PinKind::Input, ValueType::HeightField, "Heightmap"},
+    {PinKind::Input, ValueType::Mask, "Mask"},
+    {PinKind::Output, ValueType::HeightField, "Heightmap"},
+    {PinKind::Output, ValueType::Mask, "Mask"},
+    {PinKind::Output, ValueType::Mask, "Unique Mask"},
+}};
+
+constexpr std::array<PinDefinition, 5> kCrumblingPins = {{
+    {PinKind::Input, ValueType::HeightField, "Heightmap"},
+    {PinKind::Input, ValueType::Mask, "Emission Mask"},
+    {PinKind::Output, ValueType::HeightField, "Heightmap"},
+    {PinKind::Output, ValueType::Mask, "Mask"},
+    {PinKind::Output, ValueType::Mask, "Unique Mask"},
+}};
+
+constexpr std::array<PinDefinition, 3> kSedimentPins = {{
+    {PinKind::Input, ValueType::HeightField, "Heightmap"},
+    {PinKind::Output, ValueType::HeightField, "Heightmap"},
+    {PinKind::Output, ValueType::Mask, "Sediment"},
+}};
+
+constexpr std::array<PinDefinition, 3> kSnowPins = {{
+    {PinKind::Input, ValueType::HeightField, "Heightmap"},
+    {PinKind::Output, ValueType::HeightField, "Heightmap"},
+    {PinKind::Output, ValueType::Mask, "Snow"},
+}};
+
+constexpr std::array<PinDefinition, 1> kMaskSourcePins = {{
+    {PinKind::Output, ValueType::Mask, "Mask"},
+}};
+
+constexpr std::array<PinDefinition, 3> kMaskBlendPins = {{
+    {PinKind::Input, ValueType::Mask, "Foreground"},
+    {PinKind::Input, ValueType::Mask, "Background"},
+    {PinKind::Output, ValueType::Mask, "Mask"},
+}};
+
+constexpr std::array<PinDefinition, 2> kMaskFilterPins = {{
+    {PinKind::Input, ValueType::Mask, "Mask"},
+    {PinKind::Output, ValueType::Mask, "Mask"},
+}};
+
+constexpr std::array<PinDefinition, 5> kColorizePins = {{
+    {PinKind::Input, ValueType::HeightField, "Heightmap"},
+    {PinKind::Input, ValueType::ColorTexture, "Base Color"},
+    {PinKind::Input, ValueType::Mask, "Mask"},
+    {PinKind::Input, ValueType::Mask, "Gradient Mask"},
+    {PinKind::Output, ValueType::ColorTexture, "Color Texture"},
+}};
+
+constexpr std::array<PinDefinition, 1> kPathPins = {{
+    {PinKind::Output, ValueType::Path, "Path"},
+}};
+
+constexpr std::array<NodeDefinition, 21> kNodeDefinitions = {{
+    {NodeKind::HeightmapLoad, "Import Heightmap", NodeCategory::Heightfield, PreviewStage::Graph, false, false, kHeightSourcePins},
+    {NodeKind::HeightmapBlur, "Heightmap Blur", NodeCategory::Heightfield, PreviewStage::HeightmapBlur, false, false, kHeightFilterPins},
+    {NodeKind::Shape, "Shape", NodeCategory::Heightfield, PreviewStage::Shape, false, false, kHeightSourcePins},
+    {NodeKind::MultiScaleErosion, "Multi-Scale Erosion", NodeCategory::Heightfield, PreviewStage::MultiScaleErosion, false, false, kMultiScaleErosionPins},
+    {NodeKind::MaskNoise, "Mask Noise", NodeCategory::Mask, PreviewStage::MaskNoise, true, false, kMaskSourcePins},
+    {NodeKind::MaskBlend, "Mask Blend", NodeCategory::Mask, PreviewStage::MaskBlend, true, false, kMaskBlendPins},
+    {NodeKind::MaskFluvial, "Mask Fluvial", NodeCategory::Mask, PreviewStage::MaskFluvial, false, false, kHeightToMaskPins},
+    {NodeKind::Rock, "Rock", NodeCategory::Heightfield, PreviewStage::Rock, false, false, kHeightMaskUniquePins},
+    {NodeKind::Sediment, "Sediment", NodeCategory::Heightfield, PreviewStage::Sediment, false, false, kSedimentPins},
+    {NodeKind::Snow, "Snow", NodeCategory::Heightfield, PreviewStage::Snow, false, false, kSnowPins},
+    {NodeKind::Colorize, "Colorize", NodeCategory::Color, PreviewStage::Colorize, false, true, kColorizePins},
+    {NodeKind::MaskCurvature, "Mask Curvature", NodeCategory::Mask, PreviewStage::MaskCurvature, false, false, kHeightToMaskPins},
+    {NodeKind::MaskLevels, "Mask Levels", NodeCategory::Mask, PreviewStage::MaskLevels, true, false, kMaskFilterPins},
+    {NodeKind::MaskSlope, "Mask Slope", NodeCategory::Mask, PreviewStage::MaskSlope, false, false, kHeightToMaskPins},
+    {NodeKind::MaskHeight, "Mask Height", NodeCategory::Mask, PreviewStage::MaskHeight, false, false, kHeightToMaskPins},
+    {NodeKind::Crumbling, "Crumbling", NodeCategory::Heightfield, PreviewStage::Crumbling, false, false, kCrumblingPins},
+    {NodeKind::Scatter, "Scatter", NodeCategory::Heightfield, PreviewStage::Scatter, false, false, kHeightMaskUniquePins},
+    {NodeKind::Path, "Path", NodeCategory::Path, PreviewStage::Graph, false, false, kPathPins},
+    {NodeKind::MaskPath, "Mask Path", NodeCategory::Mask, PreviewStage::MaskPath, true, false, kMaskPathPins},
+    {NodeKind::HeightmapFromMask, "Heightmap From Mask", NodeCategory::Heightfield, PreviewStage::HeightmapFromMask, false, false, kHeightmapFromMaskPins},
+    {NodeKind::MaskBlur, "Mask Blur", NodeCategory::Mask, PreviewStage::MaskBlur, true, false, kMaskFilterPins},
+}};
+
 ScatterGpuEvaluator g_scatterGpuEvaluator = nullptr;
 MaskFluvialGpuEvaluator g_maskFluvialGpuEvaluator = nullptr;
 MaskPathGpuEvaluator g_maskPathGpuEvaluator = nullptr;
@@ -2684,105 +2794,12 @@ bool NodeGraph::DeleteNode(GraphId nodeId)
 GraphId NodeGraph::CreateNode(NodeKind kind)
 {
     const GraphId nodeId = AddNode(kind, std::string(ToString(kind)));
-    switch (kind)
+    if (const NodeDefinition* definition = FindNodeDefinition(kind))
     {
-    case NodeKind::HeightmapLoad:
-    case NodeKind::Shape:
-        AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
-        break;
-    case NodeKind::HeightmapBlur:
-        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
-        AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
-        break;
-    case NodeKind::MultiScaleErosion:
-        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
-        AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
-        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Flows");
-        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Deposits");
-        break;
-    case NodeKind::MaskFluvial:
-        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
-        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
-        break;
-    case NodeKind::MaskCurvature:
-        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
-        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
-        break;
-    case NodeKind::MaskSlope:
-        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
-        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
-        break;
-    case NodeKind::MaskHeight:
-        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
-        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
-        break;
-    case NodeKind::MaskPath:
-        AddPin(nodeId, PinKind::Input, ValueType::Path, "Path");
-        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
-        break;
-    case NodeKind::HeightmapFromMask:
-        AddPin(nodeId, PinKind::Input, ValueType::Mask, "Mask");
-        AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
-        break;
-    case NodeKind::Crumbling:
-        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
-        AddPin(nodeId, PinKind::Input, ValueType::Mask, "Emission Mask");
-        AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
-        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
-        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Unique Mask");
-        break;
-    case NodeKind::Rock:
-        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
-        AddPin(nodeId, PinKind::Input, ValueType::Mask, "Mask");
-        AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
-        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
-        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Unique Mask");
-        break;
-    case NodeKind::Scatter:
-        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
-        AddPin(nodeId, PinKind::Input, ValueType::Mask, "Mask");
-        AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
-        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
-        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Unique Mask");
-        break;
-    case NodeKind::Sediment:
-        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
-        AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
-        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Sediment");
-        break;
-    case NodeKind::Snow:
-        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
-        AddPin(nodeId, PinKind::Output, ValueType::HeightField, "Heightmap");
-        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Snow");
-        break;
-    case NodeKind::MaskNoise:
-        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
-        break;
-    case NodeKind::MaskBlend:
-        AddPin(nodeId, PinKind::Input, ValueType::Mask, "Foreground");
-        AddPin(nodeId, PinKind::Input, ValueType::Mask, "Background");
-        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
-        break;
-    case NodeKind::MaskLevels:
-        AddPin(nodeId, PinKind::Input, ValueType::Mask, "Mask");
-        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
-        break;
-    case NodeKind::MaskBlur:
-        AddPin(nodeId, PinKind::Input, ValueType::Mask, "Mask");
-        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
-        break;
-    case NodeKind::Colorize:
-        AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
-        AddPin(nodeId, PinKind::Input, ValueType::ColorTexture, "Base Color");
-        AddPin(nodeId, PinKind::Input, ValueType::Mask, "Mask");
-        AddPin(nodeId, PinKind::Input, ValueType::Mask, "Gradient Mask");
-        AddPin(nodeId, PinKind::Output, ValueType::ColorTexture, "Color Texture");
-        break;
-    case NodeKind::Path:
-        AddPin(nodeId, PinKind::Output, ValueType::Path, "Path");
-        break;
-    default:
-        break;
+        for (const PinDefinition& pin : definition->pins)
+        {
+            AddPin(nodeId, pin.kind, pin.valueType, std::string(pin.label));
+        }
     }
     MarkDirty("Node added");
     return nodeId;
@@ -3871,53 +3888,11 @@ std::string_view ToString(MaskBlendMode mode)
 
 std::string_view ToString(NodeKind kind)
 {
-    switch (kind)
+    if (const NodeDefinition* definition = FindNodeDefinition(kind))
     {
-    case NodeKind::HeightmapLoad:
-        return "Import Heightmap";
-    case NodeKind::HeightmapBlur:
-        return "Heightmap Blur";
-    case NodeKind::Shape:
-        return "Shape";
-    case NodeKind::MultiScaleErosion:
-        return "Multi-Scale Erosion";
-    case NodeKind::MaskNoise:
-        return "Mask Noise";
-    case NodeKind::MaskBlend:
-        return "Mask Blend";
-    case NodeKind::MaskLevels:
-        return "Mask Levels";
-    case NodeKind::MaskBlur:
-        return "Mask Blur";
-    case NodeKind::MaskSlope:
-        return "Mask Slope";
-    case NodeKind::MaskHeight:
-        return "Mask Height";
-    case NodeKind::MaskPath:
-        return "Mask Path";
-    case NodeKind::Crumbling:
-        return "Crumbling";
-    case NodeKind::MaskCurvature:
-        return "Mask Curvature";
-    case NodeKind::MaskFluvial:
-        return "Mask Fluvial";
-    case NodeKind::Rock:
-        return "Rock";
-    case NodeKind::Scatter:
-        return "Scatter";
-    case NodeKind::Sediment:
-        return "Sediment";
-    case NodeKind::Snow:
-        return "Snow";
-    case NodeKind::Colorize:
-        return "Colorize";
-    case NodeKind::Path:
-        return "Path";
-    case NodeKind::HeightmapFromMask:
-        return "Heightmap From Mask";
-    default:
-        return "Unknown";
+        return definition->title;
     }
+    return "Unknown";
 }
 
 std::string_view ToString(PreviewStage stage)
@@ -3990,63 +3965,60 @@ std::string_view ToString(ValueType type)
 
 PreviewStage PreviewStageFor(NodeKind kind)
 {
-    switch (kind)
+    if (const NodeDefinition* definition = FindNodeDefinition(kind))
     {
-    case NodeKind::HeightmapBlur:
-        return PreviewStage::HeightmapBlur;
-    case NodeKind::MultiScaleErosion:
-        return PreviewStage::MultiScaleErosion;
-    case NodeKind::HeightmapLoad:
-        return PreviewStage::Graph;
-    case NodeKind::Shape:
-        return PreviewStage::Shape;
-    case NodeKind::MaskNoise:
-        return PreviewStage::MaskNoise;
-    case NodeKind::MaskBlend:
-        return PreviewStage::MaskBlend;
-    case NodeKind::MaskLevels:
-        return PreviewStage::MaskLevels;
-    case NodeKind::MaskBlur:
-        return PreviewStage::MaskBlur;
-    case NodeKind::MaskSlope:
-        return PreviewStage::MaskSlope;
-    case NodeKind::MaskHeight:
-        return PreviewStage::MaskHeight;
-    case NodeKind::MaskPath:
-        return PreviewStage::MaskPath;
-    case NodeKind::HeightmapFromMask:
-        return PreviewStage::HeightmapFromMask;
-    case NodeKind::Crumbling:
-        return PreviewStage::Crumbling;
-    case NodeKind::MaskCurvature:
-        return PreviewStage::MaskCurvature;
-    case NodeKind::MaskFluvial:
-        return PreviewStage::MaskFluvial;
-    case NodeKind::Rock:
-        return PreviewStage::Rock;
-    case NodeKind::Scatter:
-        return PreviewStage::Scatter;
-    case NodeKind::Sediment:
-        return PreviewStage::Sediment;
-    case NodeKind::Snow:
-        return PreviewStage::Snow;
-    case NodeKind::Colorize:
-        return PreviewStage::Colorize;
-    case NodeKind::Path:
-        return PreviewStage::Graph;
-    default:
-        return PreviewStage::Graph;
+        return definition->previewStage;
     }
+    return PreviewStage::Graph;
+}
+
+const NodeDefinition* FindNodeDefinition(NodeKind kind)
+{
+    const auto it = std::ranges::find_if(kNodeDefinitions, [kind](const NodeDefinition& definition) {
+        return definition.kind == kind;
+    });
+    return it != kNodeDefinitions.end() ? &*it : nullptr;
+}
+
+const NodeDefinition& GetNodeDefinition(NodeKind kind)
+{
+    if (const NodeDefinition* definition = FindNodeDefinition(kind))
+    {
+        return *definition;
+    }
+    return kNodeDefinitions.front();
+}
+
+NodeCategory CategoryFor(NodeKind kind)
+{
+    if (const NodeDefinition* definition = FindNodeDefinition(kind))
+    {
+        return definition->category;
+    }
+    return NodeCategory::Heightfield;
+}
+
+bool IsKnownNodeKind(NodeKind kind)
+{
+    return FindNodeDefinition(kind) != nullptr;
 }
 
 bool IsMaskOnlyNodeKind(NodeKind kind)
 {
-    return kind == NodeKind::MaskNoise || kind == NodeKind::MaskBlend || kind == NodeKind::MaskLevels || kind == NodeKind::MaskBlur || kind == NodeKind::MaskPath;
+    if (const NodeDefinition* definition = FindNodeDefinition(kind))
+    {
+        return definition->maskOnly;
+    }
+    return false;
 }
 
 bool IsColorOnlyNodeKind(NodeKind kind)
 {
-    return kind == NodeKind::Colorize;
+    if (const NodeDefinition* definition = FindNodeDefinition(kind))
+    {
+        return definition->colorOnly;
+    }
+    return false;
 }
 
 void SetScatterGpuEvaluator(ScatterGpuEvaluator evaluator)

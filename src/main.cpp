@@ -8951,32 +8951,15 @@ ImVec4 NodeAccentColor(rock::NodeKind kind)
 {
     const ImVec4 heightfieldGreen(0.42f, 0.70f, 0.50f, 1.0f);
     const ImVec4 maskOrange(0.92f, 0.56f, 0.24f, 1.0f);
-    switch (kind)
+    switch (rock::CategoryFor(kind))
     {
-    case rock::NodeKind::HeightmapLoad:
-    case rock::NodeKind::Shape:
-    case rock::NodeKind::HeightmapFromMask:
-    case rock::NodeKind::HeightmapBlur:
-    case rock::NodeKind::MultiScaleErosion:
-    case rock::NodeKind::Crumbling:
-    case rock::NodeKind::Rock:
-    case rock::NodeKind::Scatter:
-    case rock::NodeKind::Sediment:
-    case rock::NodeKind::Snow:
+    case rock::NodeCategory::Heightfield:
         return heightfieldGreen;
-    case rock::NodeKind::MaskNoise:
-    case rock::NodeKind::MaskBlend:
-    case rock::NodeKind::MaskLevels:
-    case rock::NodeKind::MaskBlur:
-    case rock::NodeKind::MaskSlope:
-    case rock::NodeKind::MaskHeight:
-    case rock::NodeKind::MaskCurvature:
-    case rock::NodeKind::MaskFluvial:
-    case rock::NodeKind::MaskPath:
+    case rock::NodeCategory::Mask:
         return maskOrange;
-    case rock::NodeKind::Colorize:
+    case rock::NodeCategory::Color:
         return ImVec4(0.44f, 0.50f, 0.96f, 1.0f); // 青紫 (カラー系)
-    case rock::NodeKind::Path:
+    case rock::NodeCategory::Path:
         return ImVec4(0.34f, 0.68f, 1.00f, 1.0f);
     default:
         return ImVec4(0.75f, 0.75f, 0.75f, 1.0f);
