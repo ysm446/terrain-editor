@@ -1,18 +1,8 @@
 {
-  "appVersion": "0.19.36",
+  "appVersion": "0.19.73",
   "format": "terrain_editor_project",
   "formatVersion": 1,
   "links": [
-    {
-      "endPin": 100009,
-      "id": 111,
-      "startPin": 11
-    },
-    {
-      "endPin": 100005,
-      "id": 100031,
-      "startPin": 100010
-    },
     {
       "endPin": 100037,
       "id": 100040,
@@ -302,6 +292,31 @@
       "endPin": 100251,
       "id": 100289,
       "startPin": 100121
+    },
+    {
+      "endPin": 100318,
+      "id": 100320,
+      "startPin": 100291
+    },
+    {
+      "endPin": 100339,
+      "id": 100341,
+      "startPin": 100319
+    },
+    {
+      "endPin": 100322,
+      "id": 100342,
+      "startPin": 100340
+    },
+    {
+      "endPin": 100009,
+      "id": 100343,
+      "startPin": 11
+    },
+    {
+      "endPin": 100005,
+      "id": 100351,
+      "startPin": 100010
     }
   ],
   "nodePositions": {
@@ -310,8 +325,8 @@
       98.0
     ],
     "100032": [
-      1949.0,
-      -30.0
+      1985.0,
+      418.0
     ],
     "100036": [
       849.0,
@@ -322,132 +337,148 @@
       114.0
     ],
     "100046": [
-      5789.0,
-      426.0
+      5895.0,
+      162.0
     ],
     "100053": [
       1553.0,
       122.0
     ],
     "100058": [
-      5389.0,
-      282.0
+      5495.0,
+      18.0
     ],
     "100065": [
-      2685.0,
-      258.0
+      2785.0,
+      530.0
     ],
     "100074": [
-      2401.0,
-      674.0
+      2367.0,
+      1106.0
     ],
     "100091": [
-      4877.0,
-      162.0
+      4983.0,
+      -102.0
     ],
     "100108": [
-      2113.0,
-      482.0
+      2079.0,
+      914.0
     ],
     "100112": [
-      2437.0,
-      490.0
+      2403.0,
+      922.0
     ],
     "100118": [
-      2755.0,
-      554.0
+      2721.0,
+      986.0
     ],
     "100131": [
       2349.0,
-      -190.0
+      114.0
     ],
     "100142": [
-      2765.0,
-      -158.0
+      2781.0,
+      258.0
     ],
     "100146": [
       3133.0,
-      34.0
+      362.0
     ],
     "100155": [
-      3523.0,
-      642.0
+      3489.0,
+      1074.0
     ],
     "100162": [
-      3015.0,
-      1610.0
+      2981.0,
+      2042.0
     ],
     "100166": [
-      2641.0,
-      1618.0
+      2607.0,
+      2050.0
     ],
     "100169": [
-      2281.0,
-      1274.0
+      2247.0,
+      1706.0
     ],
     "100173": [
-      2621.0,
-      1274.0
+      2587.0,
+      1706.0
     ],
     "100177": [
-      2641.0,
-      1474.0
+      2607.0,
+      1906.0
     ],
     "100181": [
-      3011.0,
-      1458.0
+      2977.0,
+      1890.0
     ],
     "100187": [
-      3343.0,
-      1458.0
+      3309.0,
+      1890.0
     ],
     "100193": [
-      4493.0,
-      498.0
+      4321.0,
+      130.0
     ],
     "100206": [
-      6243.0,
-      514.0
+      6349.0,
+      250.0
     ],
     "100224": [
-      2029.0,
-      914.0
+      1995.0,
+      1346.0
     ],
     "100228": [
-      2027.0,
-      1042.0
+      1993.0,
+      1474.0
     ],
     "100232": [
-      2383.0,
-      1010.0
+      2349.0,
+      1442.0
     ],
     "100238": [
-      3773.0,
-      1466.0
+      3739.0,
+      1898.0
     ],
     "100244": [
-      2797.0,
-      1026.0
+      2763.0,
+      1458.0
     ],
     "100250": [
-      3155.0,
-      642.0
+      3121.0,
+      1074.0
     ],
     "100257": [
-      3953.0,
-      506.0
+      3809.0,
+      122.0
     ],
     "100269": [
       6241.0,
       754.0
     ],
     "100274": [
-      6989.0,
-      506.0
+      7053.0,
+      250.0
     ],
     "100283": [
       6621.0,
       802.0
+    ],
+    "100290": [
+      -911.0,
+      530.0
+    ],
+    "100317": [
+      -563.0,
+      530.0
+    ],
+    "100321": [
+      113.0,
+      530.0
+    ],
+    "100338": [
+      -227.0,
+      530.0
     ],
     "4": [
       -269.0,
@@ -493,7 +524,7 @@
         "style": 2
       },
       "heightmap": {
-        "path": "height_2km.png",
+        "path": "height_2km_604m.png",
         "relativeVerticalScalePercent": 29.5,
         "scaleMeters": 2048.0,
         "verticalOffsetMeters": 0.0
@@ -503,12 +534,25 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 1,
       "inputs": [],
       "kind": 4,
       "maskBlend": {
         "intensity": 1.0,
         "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -557,6 +601,11 @@
         "persistence": 0.5,
         "seed": 0
       },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
       "maskSlope": {
         "gamma": 1.0,
         "invert": false,
@@ -593,6 +642,15 @@
           "valueType": 2
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -702,12 +760,25 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 4,
       "inputs": [],
       "kind": 4,
       "maskBlend": {
         "intensity": 1.0,
         "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -756,6 +827,11 @@
         "persistence": 0.5,
         "seed": 0
       },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
       "maskSlope": {
         "gamma": 1.0,
         "invert": false,
@@ -792,6 +868,15 @@
           "valueType": 2
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -901,6 +986,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 8,
       "inputs": [
         {
@@ -913,6 +1005,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -961,6 +1059,11 @@
         "persistence": 0.5,
         "seed": 0
       },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
       "maskSlope": {
         "gamma": 1.0,
         "invert": false,
@@ -1007,6 +1110,15 @@
           "valueType": 3
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -1116,6 +1228,13 @@
         "radius": 10.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 9,
       "inputs": [
         {
@@ -1128,6 +1247,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -1176,6 +1301,11 @@
         "persistence": 0.5,
         "seed": 0
       },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
       "maskSlope": {
         "gamma": 1.0,
         "invert": false,
@@ -1212,6 +1342,15 @@
           "valueType": 2
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -1321,6 +1460,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100032,
       "inputs": [
         {
@@ -1333,6 +1479,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -1381,6 +1533,11 @@
         "persistence": 0.5,
         "seed": 0
       },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
       "maskSlope": {
         "gamma": 1.0,
         "invert": false,
@@ -1417,6 +1574,15 @@
           "valueType": 3
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -1526,6 +1692,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100036,
       "inputs": [
         {
@@ -1543,6 +1716,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -1591,6 +1770,11 @@
         "persistence": 0.5,
         "seed": 0
       },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
       "maskSlope": {
         "gamma": 1.0,
         "invert": false,
@@ -1637,6 +1821,15 @@
           "valueType": 3
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -1746,6 +1939,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100041,
       "inputs": [
         {
@@ -1758,6 +1958,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -1806,6 +2012,11 @@
         "persistence": 0.5,
         "seed": 0
       },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
       "maskSlope": {
         "gamma": 1.0,
         "invert": false,
@@ -1847,6 +2058,15 @@
           "valueType": 3
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -2106,6 +2326,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100046,
       "inputs": [
         {
@@ -2133,6 +2360,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -2181,6 +2414,11 @@
         "persistence": 0.5,
         "seed": 0
       },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
       "maskSlope": {
         "gamma": 1.0,
         "invert": false,
@@ -2217,6 +2455,15 @@
           "valueType": 4
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -2326,6 +2573,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100053,
       "inputs": [
         {
@@ -2338,6 +2592,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -2386,6 +2646,11 @@
         "persistence": 0.5,
         "seed": 0
       },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
       "maskSlope": {
         "gamma": 1.0,
         "invert": false,
@@ -2427,6 +2692,15 @@
           "valueType": 3
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -2692,6 +2966,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100058,
       "inputs": [
         {
@@ -2719,6 +3000,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -2767,6 +3054,11 @@
         "persistence": 0.5,
         "seed": 0
       },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
       "maskSlope": {
         "gamma": 1.0,
         "invert": false,
@@ -2803,6 +3095,15 @@
           "valueType": 4
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -2912,6 +3213,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100065,
       "inputs": [
         {
@@ -2924,6 +3232,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -2972,6 +3286,11 @@
         "persistence": 0.5,
         "seed": 0
       },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
       "maskSlope": {
         "gamma": 1.0,
         "invert": false,
@@ -3008,6 +3327,15 @@
           "valueType": 3
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -3117,6 +3445,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100074,
       "inputs": [
         {
@@ -3129,6 +3464,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -3177,6 +3518,11 @@
         "persistence": 0.5,
         "seed": 0
       },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
       "maskSlope": {
         "gamma": 1.0,
         "invert": true,
@@ -3213,6 +3559,15 @@
           "valueType": 3
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -3484,6 +3839,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100091,
       "inputs": [
         {
@@ -3511,6 +3873,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -3559,6 +3927,11 @@
         "persistence": 0.5,
         "seed": 0
       },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
       "maskSlope": {
         "gamma": 1.0,
         "invert": false,
@@ -3595,6 +3968,15 @@
           "valueType": 4
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -3704,6 +4086,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100108,
       "inputs": [
         {
@@ -3716,6 +4105,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -3764,6 +4159,11 @@
         "persistence": 0.5,
         "seed": 0
       },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
       "maskSlope": {
         "gamma": 1.0,
         "invert": false,
@@ -3800,6 +4200,15 @@
           "valueType": 3
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -3909,6 +4318,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100112,
       "inputs": [
         {
@@ -3921,6 +4337,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -3969,6 +4391,11 @@
         "persistence": 0.5,
         "seed": 0
       },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
       "maskSlope": {
         "gamma": 1.0,
         "invert": false,
@@ -4005,6 +4432,15 @@
           "valueType": 3
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -4114,6 +4550,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100118,
       "inputs": [
         {
@@ -4131,6 +4574,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 1
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -4179,6 +4628,11 @@
         "persistence": 0.5,
         "seed": 0
       },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
       "maskSlope": {
         "gamma": 1.0,
         "invert": false,
@@ -4215,6 +4669,15 @@
           "valueType": 3
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -4324,6 +4787,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100131,
       "inputs": [
         {
@@ -4341,6 +4811,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -4389,6 +4865,11 @@
         "persistence": 0.5,
         "seed": 0
       },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
       "maskSlope": {
         "gamma": 1.0,
         "invert": false,
@@ -4435,6 +4916,15 @@
           "valueType": 3
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -4544,6 +5034,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100142,
       "inputs": [
         {
@@ -4556,6 +5053,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -4604,6 +5107,11 @@
         "persistence": 0.5,
         "seed": 0
       },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
       "maskSlope": {
         "gamma": 1.0,
         "invert": false,
@@ -4640,6 +5148,15 @@
           "valueType": 3
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -4749,6 +5266,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100146,
       "inputs": [
         {
@@ -4766,6 +5290,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 1
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -4813,6 +5343,11 @@
         "octaves": 4,
         "persistence": 0.5,
         "seed": 0
+      },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
       },
       "maskSlope": {
         "gamma": 1.0,
@@ -4850,6 +5385,15 @@
           "valueType": 3
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -4959,6 +5503,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100155,
       "inputs": [
         {
@@ -4976,6 +5527,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 1
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -5024,6 +5581,11 @@
         "persistence": 0.5,
         "seed": 0
       },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
       "maskSlope": {
         "gamma": 1.0,
         "invert": false,
@@ -5060,6 +5622,15 @@
           "valueType": 3
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -5169,6 +5740,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100162,
       "inputs": [
         {
@@ -5181,6 +5759,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -5229,6 +5813,11 @@
         "persistence": 0.5,
         "seed": 0
       },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
       "maskSlope": {
         "gamma": 1.0,
         "invert": false,
@@ -5265,6 +5854,15 @@
           "valueType": 3
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -5374,12 +5972,25 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100166,
       "inputs": [],
       "kind": 9,
       "maskBlend": {
         "intensity": 1.0,
         "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -5428,6 +6039,11 @@
         "persistence": 0.5,
         "seed": 0
       },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
       "maskSlope": {
         "gamma": 1.0,
         "invert": false,
@@ -5464,6 +6080,15 @@
           "valueType": 3
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -5573,6 +6198,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100169,
       "inputs": [
         {
@@ -5585,6 +6217,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -5633,6 +6271,11 @@
         "persistence": 0.5,
         "seed": 0
       },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
       "maskSlope": {
         "gamma": 1.0,
         "invert": false,
@@ -5669,6 +6312,15 @@
           "valueType": 3
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -5778,6 +6430,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100173,
       "inputs": [
         {
@@ -5790,6 +6449,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -5838,6 +6503,11 @@
         "persistence": 0.5,
         "seed": 0
       },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
       "maskSlope": {
         "gamma": 1.0,
         "invert": false,
@@ -5874,6 +6544,15 @@
           "valueType": 3
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -5983,6 +6662,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100177,
       "inputs": [
         {
@@ -5995,6 +6681,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -6043,6 +6735,11 @@
         "persistence": 0.5,
         "seed": 0
       },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
       "maskSlope": {
         "gamma": 1.0,
         "invert": true,
@@ -6079,6 +6776,15 @@
           "valueType": 3
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -6188,6 +6894,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100181,
       "inputs": [
         {
@@ -6205,6 +6918,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 1
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -6252,6 +6971,11 @@
         "octaves": 4,
         "persistence": 0.5,
         "seed": 0
+      },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
       },
       "maskSlope": {
         "gamma": 1.0,
@@ -6289,6 +7013,15 @@
           "valueType": 3
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -6398,6 +7131,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100187,
       "inputs": [
         {
@@ -6415,6 +7155,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 1
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -6462,6 +7208,11 @@
         "octaves": 4,
         "persistence": 0.5,
         "seed": 0
+      },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
       },
       "maskSlope": {
         "gamma": 1.0,
@@ -6499,6 +7250,15 @@
           "valueType": 3
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -6608,6 +7368,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100193,
       "inputs": [
         {
@@ -6625,6 +7392,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -6672,6 +7445,11 @@
         "octaves": 4,
         "persistence": 0.5,
         "seed": 0
+      },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
       },
       "maskSlope": {
         "gamma": 1.0,
@@ -6719,6 +7497,15 @@
           "valueType": 3
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -6954,6 +7741,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100206,
       "inputs": [
         {
@@ -6981,6 +7775,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -7029,6 +7829,11 @@
         "persistence": 0.5,
         "seed": 0
       },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
       "maskSlope": {
         "gamma": 1.0,
         "invert": false,
@@ -7065,6 +7870,15 @@
           "valueType": 4
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -7174,6 +7988,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100224,
       "inputs": [
         {
@@ -7186,6 +8007,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -7234,6 +8061,11 @@
         "persistence": 0.5,
         "seed": 0
       },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
       "maskSlope": {
         "gamma": 1.0,
         "invert": false,
@@ -7270,6 +8102,15 @@
           "valueType": 3
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -7379,6 +8220,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100228,
       "inputs": [
         {
@@ -7391,6 +8239,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -7439,6 +8293,11 @@
         "persistence": 0.5,
         "seed": 0
       },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
       "maskSlope": {
         "gamma": 1.0,
         "invert": false,
@@ -7475,6 +8334,15 @@
           "valueType": 3
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -7584,6 +8452,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100232,
       "inputs": [
         {
@@ -7601,6 +8476,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 1
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -7648,6 +8529,11 @@
         "octaves": 4,
         "persistence": 0.5,
         "seed": 0
+      },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
       },
       "maskSlope": {
         "gamma": 1.0,
@@ -7685,6 +8571,15 @@
           "valueType": 3
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -7794,6 +8689,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100238,
       "inputs": [
         {
@@ -7811,6 +8713,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 1
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -7859,6 +8767,11 @@
         "persistence": 0.5,
         "seed": 0
       },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
       "maskSlope": {
         "gamma": 1.0,
         "invert": false,
@@ -7895,6 +8808,15 @@
           "valueType": 3
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -8004,6 +8926,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100244,
       "inputs": [
         {
@@ -8016,6 +8945,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -8064,6 +8999,11 @@
         "persistence": 0.5,
         "seed": 0
       },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
       "maskSlope": {
         "gamma": 1.0,
         "invert": false,
@@ -8100,6 +9040,15 @@
           "valueType": 3
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -8209,6 +9158,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100250,
       "inputs": [
         {
@@ -8226,6 +9182,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 1
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -8274,6 +9236,11 @@
         "persistence": 0.5,
         "seed": 0
       },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
       "maskSlope": {
         "gamma": 1.0,
         "invert": false,
@@ -8310,6 +9277,15 @@
           "valueType": 3
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -8419,6 +9395,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100257,
       "inputs": [
         {
@@ -8436,6 +9419,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -8484,6 +9473,11 @@
         "persistence": 0.5,
         "seed": 0
       },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
       "maskSlope": {
         "gamma": 1.0,
         "invert": false,
@@ -8530,6 +9524,15 @@
           "valueType": 3
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -8639,6 +9642,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100269,
       "inputs": [
         {
@@ -8651,6 +9661,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -8699,6 +9715,11 @@
         "persistence": 0.5,
         "seed": 0
       },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
       "maskSlope": {
         "gamma": 1.0,
         "invert": false,
@@ -8740,6 +9761,15 @@
           "valueType": 3
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -8849,6 +9879,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100274,
       "inputs": [
         {
@@ -8876,6 +9913,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -8924,6 +9967,11 @@
         "persistence": 0.5,
         "seed": 0
       },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
       "maskSlope": {
         "gamma": 1.0,
         "invert": false,
@@ -8960,6 +10008,15 @@
           "valueType": 4
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -9069,6 +10126,13 @@
         "radius": 3.0,
         "strength": 1.0
       },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
       "id": 100283,
       "inputs": [
         {
@@ -9081,6 +10145,12 @@
       "maskBlend": {
         "intensity": 1.0,
         "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
       },
       "maskCurvature": {
         "gamma": 1.0,
@@ -9129,6 +10199,11 @@
         "persistence": 0.5,
         "seed": 0
       },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
       "maskSlope": {
         "gamma": 1.0,
         "invert": false,
@@ -9165,6 +10240,15 @@
           "valueType": 3
         }
       ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
       "rock": {
         "aspectVariation": 0.30000001192092896,
         "backend": 1,
@@ -9234,6 +10318,1301 @@
         "transportRate": 0.44999998807907104
       },
       "title": "Mask Fluvial"
+    },
+    {
+      "colorize": {
+        "backend": 1,
+        "stops": [
+          {
+            "b": 0.0,
+            "g": 0.0,
+            "position": 0.0,
+            "r": 0.0
+          },
+          {
+            "b": 1.0,
+            "g": 1.0,
+            "position": 1.0,
+            "r": 1.0
+          }
+        ]
+      },
+      "crumbling": {
+        "debrisAmount": 0.6499999761581421,
+        "debrisSizeMaxM": 8.0,
+        "debrisSizeMinM": 2.0,
+        "gravity": 0.75,
+        "physicsCount": 48,
+        "seed": 0,
+        "spread": 0.3499999940395355,
+        "style": 2
+      },
+      "heightmap": {
+        "path": "",
+        "relativeVerticalScalePercent": 100.0,
+        "scaleMeters": 1024.0,
+        "verticalOffsetMeters": 0.0
+      },
+      "heightmapBlur": {
+        "iterations": 1,
+        "radius": 3.0,
+        "strength": 1.0
+      },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
+      "id": 100290,
+      "inputs": [],
+      "kind": 22,
+      "maskBlend": {
+        "intensity": 1.0,
+        "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
+      },
+      "maskCurvature": {
+        "gamma": 1.0,
+        "largestDetailLevelM": 8.0,
+        "mode": 2,
+        "radius": 3,
+        "sensitivityMeters": 1.0,
+        "threshold": 0.0
+      },
+      "maskFluvial": {
+        "accumulationThreshold": 0.0,
+        "algorithm": 1,
+        "backend": 1,
+        "gamma": 0.5,
+        "largestDetailLevelM": 8.0,
+        "mfdExponent": 4.0,
+        "outputCurve": 0,
+        "particleCount": 32768,
+        "particleInertia": 0.550000011920929,
+        "particleLifetime": 96,
+        "particleSeed": 1337,
+        "particleStepLengthM": 4.0,
+        "power": 1.600000023841858,
+        "simulationMode": 0,
+        "softness": 0.15000000596046448
+      },
+      "maskHeight": {
+        "featherMeters": 0.0,
+        "gamma": 1.0,
+        "heightMaxMeters": 1000.0,
+        "heightMinMeters": 0.0,
+        "invert": false,
+        "useFullRange": false
+      },
+      "maskLevels": {
+        "blackPoint": 0.0,
+        "gamma": 1.0,
+        "invert": false,
+        "whitePoint": 1.0
+      },
+      "maskNoise": {
+        "backend": 1,
+        "frequency": 4.0,
+        "lacunarity": 2.0,
+        "octaves": 4,
+        "persistence": 0.5,
+        "seed": 0
+      },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
+      "maskSlope": {
+        "gamma": 1.0,
+        "invert": false,
+        "largestDetailLevelM": 0.0,
+        "slopeMaxDeg": 60.0,
+        "slopeMinDeg": 25.0
+      },
+      "multiScaleErosion": {
+        "backend": 0,
+        "depositionStrength": 0.20000000298023224,
+        "enableDeposition": true,
+        "enableStreamPower": true,
+        "enableThermal": true,
+        "flowExponent": 1.2999999523162842,
+        "iterations": 50,
+        "maxStreamPower": 10000.0,
+        "rain": 2.5999999046325684,
+        "slopeExponent": 2.0,
+        "speStrength": 0.004000000189989805,
+        "speTimeStep": 1.0,
+        "streamExponent": 0.8999999761581421,
+        "thermalAngleDegrees": 30.0,
+        "thermalNoiseMax": 1.399999976158142,
+        "thermalNoiseMin": 0.8999999761581421,
+        "thermalNoiseWavelength": 0.002300000051036477,
+        "thermalNoisifyAngle": true,
+        "thermalStrength": 0.004999999888241291,
+        "useMultigrid": true
+      },
+      "outputs": [
+        {
+          "id": 100291,
+          "label": "Path",
+          "valueType": 5
+        }
+      ],
+      "path": {
+        "defaultFeatherMeters": 128.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 128.0,
+        "edges": [
+          {
+            "enabled": true,
+            "featherMeters": 32.0,
+            "fromPoint": 100292,
+            "id": 100294,
+            "segmentType": 0,
+            "toPoint": 100293,
+            "widthMeters": 64.0
+          },
+          {
+            "enabled": true,
+            "featherMeters": 32.0,
+            "fromPoint": 100293,
+            "id": 100296,
+            "segmentType": 0,
+            "toPoint": 100330,
+            "widthMeters": 64.0
+          },
+          {
+            "enabled": true,
+            "featherMeters": 32.0,
+            "fromPoint": 100295,
+            "id": 100298,
+            "segmentType": 0,
+            "toPoint": 100297,
+            "widthMeters": 64.0
+          },
+          {
+            "enabled": true,
+            "featherMeters": 32.0,
+            "fromPoint": 100297,
+            "id": 100300,
+            "segmentType": 0,
+            "toPoint": 100336,
+            "widthMeters": 64.0
+          },
+          {
+            "enabled": true,
+            "featherMeters": 32.0,
+            "fromPoint": 100297,
+            "id": 100302,
+            "segmentType": 0,
+            "toPoint": 100301,
+            "widthMeters": 64.0
+          },
+          {
+            "enabled": true,
+            "featherMeters": 32.0,
+            "fromPoint": 100301,
+            "id": 100304,
+            "segmentType": 0,
+            "toPoint": 100303,
+            "widthMeters": 64.0
+          },
+          {
+            "enabled": true,
+            "featherMeters": 32.0,
+            "fromPoint": 100303,
+            "id": 100306,
+            "segmentType": 0,
+            "toPoint": 100305,
+            "widthMeters": 64.0
+          },
+          {
+            "enabled": true,
+            "featherMeters": 32.0,
+            "fromPoint": 100295,
+            "id": 100308,
+            "segmentType": 0,
+            "toPoint": 100307,
+            "widthMeters": 64.0
+          },
+          {
+            "enabled": true,
+            "featherMeters": 32.0,
+            "fromPoint": 100307,
+            "id": 100310,
+            "segmentType": 0,
+            "toPoint": 100309,
+            "widthMeters": 64.0
+          },
+          {
+            "enabled": true,
+            "featherMeters": 32.0,
+            "fromPoint": 100309,
+            "id": 100312,
+            "segmentType": 0,
+            "toPoint": 100311,
+            "widthMeters": 64.0
+          },
+          {
+            "enabled": true,
+            "featherMeters": 128.0,
+            "fromPoint": 100301,
+            "id": 100327,
+            "segmentType": 0,
+            "toPoint": 100328,
+            "widthMeters": 128.0
+          },
+          {
+            "enabled": true,
+            "featherMeters": 128.0,
+            "fromPoint": 100328,
+            "id": 100329,
+            "segmentType": 0,
+            "toPoint": 100326,
+            "widthMeters": 128.0
+          },
+          {
+            "enabled": true,
+            "featherMeters": 32.0,
+            "fromPoint": 100330,
+            "id": 100331,
+            "segmentType": 0,
+            "toPoint": 100295,
+            "widthMeters": 64.0
+          },
+          {
+            "enabled": true,
+            "featherMeters": 128.0,
+            "fromPoint": 100301,
+            "id": 100333,
+            "segmentType": 0,
+            "toPoint": 100332,
+            "widthMeters": 128.0
+          },
+          {
+            "enabled": true,
+            "featherMeters": 128.0,
+            "fromPoint": 100332,
+            "id": 100335,
+            "segmentType": 0,
+            "toPoint": 100334,
+            "widthMeters": 128.0
+          },
+          {
+            "enabled": true,
+            "featherMeters": 32.0,
+            "fromPoint": 100336,
+            "id": 100337,
+            "segmentType": 0,
+            "toPoint": 100299,
+            "widthMeters": 64.0
+          },
+          {
+            "enabled": true,
+            "featherMeters": 128.0,
+            "fromPoint": 100307,
+            "id": 100348,
+            "segmentType": 0,
+            "toPoint": 100347,
+            "widthMeters": 128.0
+          },
+          {
+            "enabled": true,
+            "featherMeters": 128.0,
+            "fromPoint": 100347,
+            "id": 100350,
+            "segmentType": 0,
+            "toPoint": 100349,
+            "widthMeters": 128.0
+          }
+        ],
+        "points": [
+          {
+            "featherMeters": 100.0,
+            "height": 0.0,
+            "heightMode": 0,
+            "heightOffset": 0.0,
+            "id": 100292,
+            "intensity": 0.4000000059604645,
+            "widthMeters": 0.009999999776482582,
+            "x": 727.8599243164063,
+            "z": -406.1972351074219
+          },
+          {
+            "featherMeters": 500.0,
+            "height": 0.0,
+            "heightMode": 0,
+            "heightOffset": 0.0,
+            "id": 100293,
+            "intensity": 0.5,
+            "widthMeters": 0.009999999776482582,
+            "x": 380.6585693359375,
+            "z": -456.7340087890625
+          },
+          {
+            "featherMeters": 300.0,
+            "height": 0.0,
+            "heightMode": 0,
+            "heightOffset": 0.0,
+            "id": 100295,
+            "intensity": 1.0,
+            "widthMeters": 0.009999999776482582,
+            "x": -194.9697265625,
+            "z": -297.741943359375
+          },
+          {
+            "featherMeters": 300.0,
+            "height": 0.0,
+            "heightMode": 0,
+            "heightOffset": 0.5,
+            "id": 100297,
+            "intensity": 0.800000011920929,
+            "widthMeters": 0.009999999776482582,
+            "x": -430.68603515625,
+            "z": -244.1553955078125
+          },
+          {
+            "featherMeters": 200.0,
+            "height": 0.0,
+            "heightMode": 2,
+            "heightOffset": 0.0,
+            "id": 100299,
+            "intensity": 0.10000000149011612,
+            "widthMeters": 0.009999999776482582,
+            "x": -880.087646484375,
+            "z": -424.8571472167969
+          },
+          {
+            "featherMeters": 500.0,
+            "height": 0.0,
+            "heightMode": 0,
+            "heightOffset": 0.0,
+            "id": 100301,
+            "intensity": 0.699999988079071,
+            "widthMeters": 0.009999999776482582,
+            "x": -256.16729736328125,
+            "z": 24.970375061035156
+          },
+          {
+            "featherMeters": 400.0,
+            "height": 0.0,
+            "heightMode": 0,
+            "heightOffset": 0.0,
+            "id": 100303,
+            "intensity": 1.0,
+            "widthMeters": 0.009999999776482582,
+            "x": -236.37814331054688,
+            "z": 322.26611328125
+          },
+          {
+            "featherMeters": 500.0,
+            "height": 0.0,
+            "heightMode": 0,
+            "heightOffset": 0.0,
+            "id": 100305,
+            "intensity": 0.5,
+            "widthMeters": 0.009999999776482582,
+            "x": -13.06396484375,
+            "z": 696.3193359375
+          },
+          {
+            "featherMeters": 300.0,
+            "height": 0.0,
+            "heightMode": 0,
+            "heightOffset": 0.0,
+            "id": 100307,
+            "intensity": 0.800000011920929,
+            "widthMeters": 0.009999999776482582,
+            "x": -295.152587890625,
+            "z": -470.01318359375
+          },
+          {
+            "featherMeters": 200.0,
+            "height": 0.0,
+            "heightMode": 0,
+            "heightOffset": 0.0,
+            "id": 100309,
+            "intensity": 0.6000000238418579,
+            "widthMeters": 0.009999999776482582,
+            "x": -239.801025390625,
+            "z": -713.634765625
+          },
+          {
+            "featherMeters": 100.0,
+            "height": 0.0,
+            "heightMode": 0,
+            "heightOffset": 0.0,
+            "id": 100311,
+            "intensity": 0.20000000298023224,
+            "widthMeters": 0.009999999776482582,
+            "x": -412.8040771484375,
+            "z": -880.9161987304688
+          },
+          {
+            "featherMeters": 128.0,
+            "height": 102.8453369140625,
+            "heightMode": 2,
+            "heightOffset": 0.0,
+            "id": 100326,
+            "intensity": 0.20000000298023224,
+            "widthMeters": 128.0,
+            "x": 427.15386962890625,
+            "z": 291.4757995605469
+          },
+          {
+            "featherMeters": 313.48760986328125,
+            "height": 115.51821899414063,
+            "heightMode": 2,
+            "heightOffset": 0.0,
+            "id": 100328,
+            "intensity": 0.4493112862110138,
+            "widthMeters": 0.009999999776482582,
+            "x": 91.07360076904297,
+            "z": 246.42276000976563
+          },
+          {
+            "featherMeters": 340.80029296875,
+            "height": 0.0,
+            "heightMode": 0,
+            "heightOffset": 0.0,
+            "id": 100330,
+            "intensity": 0.7139780521392822,
+            "widthMeters": 0.009999999776482582,
+            "x": 43.936431884765625,
+            "z": -343.38079833984375
+          },
+          {
+            "featherMeters": 300.0,
+            "height": 0.0,
+            "heightMode": 0,
+            "heightOffset": 0.0,
+            "id": 100332,
+            "intensity": 0.5,
+            "widthMeters": 0.009999999776482582,
+            "x": -493.58221435546875,
+            "z": 199.696533203125
+          },
+          {
+            "featherMeters": 128.0,
+            "height": 0.0,
+            "heightMode": 0,
+            "heightOffset": 0.0,
+            "id": 100334,
+            "intensity": 0.0,
+            "widthMeters": 0.009999999776482582,
+            "x": -843.89013671875,
+            "z": 287.571533203125
+          },
+          {
+            "featherMeters": 300.0,
+            "height": 0.0,
+            "heightMode": 0,
+            "heightOffset": 0.23792427778244019,
+            "id": 100336,
+            "intensity": 0.43309399485588074,
+            "widthMeters": 0.009999999776482582,
+            "x": -666.2405395507813,
+            "z": -378.5960998535156
+          },
+          {
+            "featherMeters": 200.0,
+            "height": 172.93060302734375,
+            "heightMode": 0,
+            "heightOffset": 0.0,
+            "id": 100347,
+            "intensity": 0.5,
+            "widthMeters": 0.009999999776482582,
+            "x": -142.45074462890625,
+            "z": -534.5
+          },
+          {
+            "featherMeters": 128.0,
+            "height": 122.65887451171875,
+            "heightMode": 0,
+            "heightOffset": 0.0,
+            "id": 100349,
+            "intensity": 0.30000001192092896,
+            "widthMeters": 0.009999999776482582,
+            "x": 8.70697021484375,
+            "z": -695.1767578125
+          }
+        ]
+      },
+      "rock": {
+        "aspectVariation": 0.30000001192092896,
+        "backend": 1,
+        "bumpiness": 0.6000000238418579,
+        "coverage": 1.0,
+        "density": 8.0,
+        "edgeSharpness": 1.0,
+        "facetScale": 2.5,
+        "facetSharpness": 0.5,
+        "groundDetailLevelM": 0.0,
+        "heightJitter": 0.5,
+        "layerCount": 1,
+        "orientationRule": 0,
+        "rockHeight": 1.5,
+        "rockSizeMaxM": 10.0,
+        "rockSizeMinM": 5.0,
+        "rotationVariation": 1.0,
+        "seed": 0,
+        "style": 1
+      },
+      "scatter": {
+        "aspectVariation": 0.30000001192092896,
+        "backend": 1,
+        "coverage": 1.0,
+        "density": 8.0,
+        "groundDetailLevelM": 0.0,
+        "height": 0.0,
+        "heightJitter": 0.5,
+        "orientationRule": 0,
+        "rotationVariation": 1.0,
+        "seed": 0,
+        "shapeType": 0,
+        "sizeMaxM": 10.0,
+        "sizeMinM": 5.0
+      },
+      "sediment": {
+        "backend": 1,
+        "convertTerrainToSediment": true,
+        "emissionAmountM": 0.5,
+        "emissionTime": 0.0,
+        "iterations": 40,
+        "largestDetailLevelM": 8.0,
+        "maskContrast": 0.0,
+        "sedimentViscosity": 0.20000000298023224,
+        "stabilizationIterations": 2
+      },
+      "shape": {
+        "kind": 0,
+        "relativeHeightPercent": 50.0,
+        "scaleMeters": 1024.0
+      },
+      "snow": {
+        "backend": 1,
+        "emissionAmount": 1.0,
+        "emissionTime": 0.0,
+        "fillRadius": 3,
+        "iterationCount": 40,
+        "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
+        "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
+        "slopeLimitMaxDeg": 60.0,
+        "slopeLimitMinDeg": 50.0,
+        "smoothingIterations": 4,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
+      },
+      "title": "Path"
+    },
+    {
+      "colorize": {
+        "backend": 1,
+        "stops": [
+          {
+            "b": 0.0,
+            "g": 0.0,
+            "position": 0.0,
+            "r": 0.0
+          },
+          {
+            "b": 1.0,
+            "g": 1.0,
+            "position": 1.0,
+            "r": 1.0
+          }
+        ]
+      },
+      "crumbling": {
+        "debrisAmount": 0.6499999761581421,
+        "debrisSizeMaxM": 8.0,
+        "debrisSizeMinM": 2.0,
+        "gravity": 0.75,
+        "physicsCount": 48,
+        "seed": 0,
+        "spread": 0.3499999940395355,
+        "style": 2
+      },
+      "heightmap": {
+        "path": "",
+        "relativeVerticalScalePercent": 100.0,
+        "scaleMeters": 1024.0,
+        "verticalOffsetMeters": 0.0
+      },
+      "heightmapBlur": {
+        "iterations": 1,
+        "radius": 3.0,
+        "strength": 1.0
+      },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
+      "id": 100317,
+      "inputs": [
+        {
+          "id": 100318,
+          "label": "Path",
+          "valueType": 5
+        }
+      ],
+      "kind": 23,
+      "maskBlend": {
+        "intensity": 1.0,
+        "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
+      },
+      "maskCurvature": {
+        "gamma": 1.0,
+        "largestDetailLevelM": 8.0,
+        "mode": 2,
+        "radius": 3,
+        "sensitivityMeters": 1.0,
+        "threshold": 0.0
+      },
+      "maskFluvial": {
+        "accumulationThreshold": 0.0,
+        "algorithm": 1,
+        "backend": 1,
+        "gamma": 0.5,
+        "largestDetailLevelM": 8.0,
+        "mfdExponent": 4.0,
+        "outputCurve": 0,
+        "particleCount": 32768,
+        "particleInertia": 0.550000011920929,
+        "particleLifetime": 96,
+        "particleSeed": 1337,
+        "particleStepLengthM": 4.0,
+        "power": 1.600000023841858,
+        "simulationMode": 0,
+        "softness": 0.15000000596046448
+      },
+      "maskHeight": {
+        "featherMeters": 0.0,
+        "gamma": 1.0,
+        "heightMaxMeters": 1000.0,
+        "heightMinMeters": 0.0,
+        "invert": false,
+        "useFullRange": false
+      },
+      "maskLevels": {
+        "blackPoint": 0.0,
+        "gamma": 1.0,
+        "invert": false,
+        "whitePoint": 1.0
+      },
+      "maskNoise": {
+        "backend": 1,
+        "frequency": 4.0,
+        "lacunarity": 2.0,
+        "octaves": 4,
+        "persistence": 0.5,
+        "seed": 0
+      },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
+      "maskSlope": {
+        "gamma": 1.0,
+        "invert": false,
+        "largestDetailLevelM": 0.0,
+        "slopeMaxDeg": 60.0,
+        "slopeMinDeg": 25.0
+      },
+      "multiScaleErosion": {
+        "backend": 0,
+        "depositionStrength": 0.20000000298023224,
+        "enableDeposition": true,
+        "enableStreamPower": true,
+        "enableThermal": true,
+        "flowExponent": 1.2999999523162842,
+        "iterations": 50,
+        "maxStreamPower": 10000.0,
+        "rain": 2.5999999046325684,
+        "slopeExponent": 2.0,
+        "speStrength": 0.004000000189989805,
+        "speTimeStep": 1.0,
+        "streamExponent": 0.8999999761581421,
+        "thermalAngleDegrees": 30.0,
+        "thermalNoiseMax": 1.399999976158142,
+        "thermalNoiseMin": 0.8999999761581421,
+        "thermalNoiseWavelength": 0.002300000051036477,
+        "thermalNoisifyAngle": true,
+        "thermalStrength": 0.004999999888241291,
+        "useMultigrid": true
+      },
+      "outputs": [
+        {
+          "id": 100319,
+          "label": "Mask",
+          "valueType": 3
+        }
+      ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
+      "rock": {
+        "aspectVariation": 0.30000001192092896,
+        "backend": 1,
+        "bumpiness": 0.6000000238418579,
+        "coverage": 1.0,
+        "density": 8.0,
+        "edgeSharpness": 1.0,
+        "facetScale": 2.5,
+        "facetSharpness": 0.5,
+        "groundDetailLevelM": 0.0,
+        "heightJitter": 0.5,
+        "layerCount": 1,
+        "orientationRule": 0,
+        "rockHeight": 1.5,
+        "rockSizeMaxM": 10.0,
+        "rockSizeMinM": 5.0,
+        "rotationVariation": 1.0,
+        "seed": 0,
+        "style": 1
+      },
+      "scatter": {
+        "aspectVariation": 0.30000001192092896,
+        "backend": 1,
+        "coverage": 1.0,
+        "density": 8.0,
+        "groundDetailLevelM": 0.0,
+        "height": 0.0,
+        "heightJitter": 0.5,
+        "orientationRule": 0,
+        "rotationVariation": 1.0,
+        "seed": 0,
+        "shapeType": 0,
+        "sizeMaxM": 10.0,
+        "sizeMinM": 5.0
+      },
+      "sediment": {
+        "backend": 1,
+        "convertTerrainToSediment": true,
+        "emissionAmountM": 0.5,
+        "emissionTime": 0.0,
+        "iterations": 40,
+        "largestDetailLevelM": 8.0,
+        "maskContrast": 0.0,
+        "sedimentViscosity": 0.20000000298023224,
+        "stabilizationIterations": 2
+      },
+      "shape": {
+        "kind": 0,
+        "relativeHeightPercent": 50.0,
+        "scaleMeters": 1024.0
+      },
+      "snow": {
+        "backend": 1,
+        "emissionAmount": 1.0,
+        "emissionTime": 0.0,
+        "fillRadius": 3,
+        "iterationCount": 40,
+        "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
+        "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
+        "slopeLimitMaxDeg": 60.0,
+        "slopeLimitMinDeg": 50.0,
+        "smoothingIterations": 4,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
+      },
+      "title": "Mask Path"
+    },
+    {
+      "colorize": {
+        "backend": 1,
+        "stops": [
+          {
+            "b": 0.0,
+            "g": 0.0,
+            "position": 0.0,
+            "r": 0.0
+          },
+          {
+            "b": 1.0,
+            "g": 1.0,
+            "position": 1.0,
+            "r": 1.0
+          }
+        ]
+      },
+      "crumbling": {
+        "debrisAmount": 0.6499999761581421,
+        "debrisSizeMaxM": 8.0,
+        "debrisSizeMinM": 2.0,
+        "gravity": 0.75,
+        "physicsCount": 48,
+        "seed": 0,
+        "spread": 0.3499999940395355,
+        "style": 2
+      },
+      "heightmap": {
+        "path": "",
+        "relativeVerticalScalePercent": 100.0,
+        "scaleMeters": 1024.0,
+        "verticalOffsetMeters": 0.0
+      },
+      "heightmapBlur": {
+        "iterations": 1,
+        "radius": 3.0,
+        "strength": 1.0
+      },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 100.0,
+        "gamma": 1.0,
+        "heightMeters": 300.0,
+        "invert": false
+      },
+      "id": 100321,
+      "inputs": [
+        {
+          "id": 100322,
+          "label": "Mask",
+          "valueType": 3
+        }
+      ],
+      "kind": 24,
+      "maskBlend": {
+        "intensity": 1.0,
+        "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 1,
+        "radiusMeters": 8.0,
+        "strength": 1.0
+      },
+      "maskCurvature": {
+        "gamma": 1.0,
+        "largestDetailLevelM": 8.0,
+        "mode": 2,
+        "radius": 3,
+        "sensitivityMeters": 1.0,
+        "threshold": 0.0
+      },
+      "maskFluvial": {
+        "accumulationThreshold": 0.0,
+        "algorithm": 1,
+        "backend": 1,
+        "gamma": 0.5,
+        "largestDetailLevelM": 8.0,
+        "mfdExponent": 4.0,
+        "outputCurve": 0,
+        "particleCount": 32768,
+        "particleInertia": 0.550000011920929,
+        "particleLifetime": 96,
+        "particleSeed": 1337,
+        "particleStepLengthM": 4.0,
+        "power": 1.600000023841858,
+        "simulationMode": 0,
+        "softness": 0.15000000596046448
+      },
+      "maskHeight": {
+        "featherMeters": 0.0,
+        "gamma": 1.0,
+        "heightMaxMeters": 1000.0,
+        "heightMinMeters": 0.0,
+        "invert": false,
+        "useFullRange": false
+      },
+      "maskLevels": {
+        "blackPoint": 0.0,
+        "gamma": 1.0,
+        "invert": false,
+        "whitePoint": 1.0
+      },
+      "maskNoise": {
+        "backend": 1,
+        "frequency": 4.0,
+        "lacunarity": 2.0,
+        "octaves": 4,
+        "persistence": 0.5,
+        "seed": 0
+      },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
+      "maskSlope": {
+        "gamma": 1.0,
+        "invert": false,
+        "largestDetailLevelM": 0.0,
+        "slopeMaxDeg": 60.0,
+        "slopeMinDeg": 25.0
+      },
+      "multiScaleErosion": {
+        "backend": 0,
+        "depositionStrength": 0.20000000298023224,
+        "enableDeposition": true,
+        "enableStreamPower": true,
+        "enableThermal": true,
+        "flowExponent": 1.2999999523162842,
+        "iterations": 50,
+        "maxStreamPower": 10000.0,
+        "rain": 2.5999999046325684,
+        "slopeExponent": 2.0,
+        "speStrength": 0.004000000189989805,
+        "speTimeStep": 1.0,
+        "streamExponent": 0.8999999761581421,
+        "thermalAngleDegrees": 30.0,
+        "thermalNoiseMax": 1.399999976158142,
+        "thermalNoiseMin": 0.8999999761581421,
+        "thermalNoiseWavelength": 0.002300000051036477,
+        "thermalNoisifyAngle": true,
+        "thermalStrength": 0.004999999888241291,
+        "useMultigrid": true
+      },
+      "outputs": [
+        {
+          "id": 100323,
+          "label": "Heightmap",
+          "valueType": 2
+        }
+      ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
+      "rock": {
+        "aspectVariation": 0.30000001192092896,
+        "backend": 1,
+        "bumpiness": 0.6000000238418579,
+        "coverage": 1.0,
+        "density": 8.0,
+        "edgeSharpness": 1.0,
+        "facetScale": 2.5,
+        "facetSharpness": 0.5,
+        "groundDetailLevelM": 0.0,
+        "heightJitter": 0.5,
+        "layerCount": 1,
+        "orientationRule": 0,
+        "rockHeight": 1.5,
+        "rockSizeMaxM": 10.0,
+        "rockSizeMinM": 5.0,
+        "rotationVariation": 1.0,
+        "seed": 0,
+        "style": 1
+      },
+      "scatter": {
+        "aspectVariation": 0.30000001192092896,
+        "backend": 1,
+        "coverage": 1.0,
+        "density": 8.0,
+        "groundDetailLevelM": 0.0,
+        "height": 0.0,
+        "heightJitter": 0.5,
+        "orientationRule": 0,
+        "rotationVariation": 1.0,
+        "seed": 0,
+        "shapeType": 0,
+        "sizeMaxM": 10.0,
+        "sizeMinM": 5.0
+      },
+      "sediment": {
+        "backend": 1,
+        "convertTerrainToSediment": true,
+        "emissionAmountM": 0.5,
+        "emissionTime": 0.0,
+        "iterations": 40,
+        "largestDetailLevelM": 8.0,
+        "maskContrast": 0.0,
+        "sedimentViscosity": 0.20000000298023224,
+        "stabilizationIterations": 2
+      },
+      "shape": {
+        "kind": 0,
+        "relativeHeightPercent": 50.0,
+        "scaleMeters": 1024.0
+      },
+      "snow": {
+        "backend": 1,
+        "emissionAmount": 1.0,
+        "emissionTime": 0.0,
+        "fillRadius": 3,
+        "iterationCount": 40,
+        "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
+        "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
+        "slopeLimitMaxDeg": 60.0,
+        "slopeLimitMinDeg": 50.0,
+        "smoothingIterations": 4,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
+      },
+      "title": "Heightmap From Mask"
+    },
+    {
+      "colorize": {
+        "backend": 1,
+        "stops": [
+          {
+            "b": 0.0,
+            "g": 0.0,
+            "position": 0.0,
+            "r": 0.0
+          },
+          {
+            "b": 1.0,
+            "g": 1.0,
+            "position": 1.0,
+            "r": 1.0
+          }
+        ]
+      },
+      "crumbling": {
+        "debrisAmount": 0.6499999761581421,
+        "debrisSizeMaxM": 8.0,
+        "debrisSizeMinM": 2.0,
+        "gravity": 0.75,
+        "physicsCount": 48,
+        "seed": 0,
+        "spread": 0.3499999940395355,
+        "style": 2
+      },
+      "heightmap": {
+        "path": "",
+        "relativeVerticalScalePercent": 100.0,
+        "scaleMeters": 1024.0,
+        "verticalOffsetMeters": 0.0
+      },
+      "heightmapBlur": {
+        "iterations": 1,
+        "radius": 3.0,
+        "strength": 1.0
+      },
+      "heightmapFromMask": {
+        "backend": 1,
+        "baseHeightMeters": 0.0,
+        "gamma": 1.0,
+        "heightMeters": 100.0,
+        "invert": false
+      },
+      "id": 100338,
+      "inputs": [
+        {
+          "id": 100339,
+          "label": "Mask",
+          "valueType": 3
+        }
+      ],
+      "kind": 25,
+      "maskBlend": {
+        "intensity": 1.0,
+        "mode": 0
+      },
+      "maskBlur": {
+        "backend": 1,
+        "iterations": 8,
+        "radiusMeters": 20.0,
+        "strength": 1.0
+      },
+      "maskCurvature": {
+        "gamma": 1.0,
+        "largestDetailLevelM": 8.0,
+        "mode": 2,
+        "radius": 3,
+        "sensitivityMeters": 1.0,
+        "threshold": 0.0
+      },
+      "maskFluvial": {
+        "accumulationThreshold": 0.0,
+        "algorithm": 1,
+        "backend": 1,
+        "gamma": 0.5,
+        "largestDetailLevelM": 8.0,
+        "mfdExponent": 4.0,
+        "outputCurve": 0,
+        "particleCount": 32768,
+        "particleInertia": 0.550000011920929,
+        "particleLifetime": 96,
+        "particleSeed": 1337,
+        "particleStepLengthM": 4.0,
+        "power": 1.600000023841858,
+        "simulationMode": 0,
+        "softness": 0.15000000596046448
+      },
+      "maskHeight": {
+        "featherMeters": 0.0,
+        "gamma": 1.0,
+        "heightMaxMeters": 1000.0,
+        "heightMinMeters": 0.0,
+        "invert": false,
+        "useFullRange": false
+      },
+      "maskLevels": {
+        "blackPoint": 0.0,
+        "gamma": 1.0,
+        "invert": false,
+        "whitePoint": 1.0
+      },
+      "maskNoise": {
+        "backend": 1,
+        "frequency": 4.0,
+        "lacunarity": 2.0,
+        "octaves": 4,
+        "persistence": 0.5,
+        "seed": 0
+      },
+      "maskPath": {
+        "backend": 1,
+        "gamma": 1.0,
+        "invert": false
+      },
+      "maskSlope": {
+        "gamma": 1.0,
+        "invert": false,
+        "largestDetailLevelM": 0.0,
+        "slopeMaxDeg": 60.0,
+        "slopeMinDeg": 25.0
+      },
+      "multiScaleErosion": {
+        "backend": 0,
+        "depositionStrength": 0.20000000298023224,
+        "enableDeposition": true,
+        "enableStreamPower": true,
+        "enableThermal": true,
+        "flowExponent": 1.2999999523162842,
+        "iterations": 50,
+        "maxStreamPower": 10000.0,
+        "rain": 2.5999999046325684,
+        "slopeExponent": 2.0,
+        "speStrength": 0.004000000189989805,
+        "speTimeStep": 1.0,
+        "streamExponent": 0.8999999761581421,
+        "thermalAngleDegrees": 30.0,
+        "thermalNoiseMax": 1.399999976158142,
+        "thermalNoiseMin": 0.8999999761581421,
+        "thermalNoiseWavelength": 0.002300000051036477,
+        "thermalNoisifyAngle": true,
+        "thermalStrength": 0.004999999888241291,
+        "useMultigrid": true
+      },
+      "outputs": [
+        {
+          "id": 100340,
+          "label": "Mask",
+          "valueType": 3
+        }
+      ],
+      "path": {
+        "defaultFeatherMeters": 32.0,
+        "defaultHeightMode": 0,
+        "defaultHeightOffset": 0.0,
+        "defaultSegmentType": 0,
+        "defaultWidthMeters": 64.0,
+        "edges": [],
+        "points": []
+      },
+      "rock": {
+        "aspectVariation": 0.30000001192092896,
+        "backend": 1,
+        "bumpiness": 0.6000000238418579,
+        "coverage": 1.0,
+        "density": 8.0,
+        "edgeSharpness": 1.0,
+        "facetScale": 2.5,
+        "facetSharpness": 0.5,
+        "groundDetailLevelM": 0.0,
+        "heightJitter": 0.5,
+        "layerCount": 1,
+        "orientationRule": 0,
+        "rockHeight": 1.5,
+        "rockSizeMaxM": 10.0,
+        "rockSizeMinM": 5.0,
+        "rotationVariation": 1.0,
+        "seed": 0,
+        "style": 1
+      },
+      "scatter": {
+        "aspectVariation": 0.30000001192092896,
+        "backend": 1,
+        "coverage": 1.0,
+        "density": 8.0,
+        "groundDetailLevelM": 0.0,
+        "height": 0.0,
+        "heightJitter": 0.5,
+        "orientationRule": 0,
+        "rotationVariation": 1.0,
+        "seed": 0,
+        "shapeType": 0,
+        "sizeMaxM": 10.0,
+        "sizeMinM": 5.0
+      },
+      "sediment": {
+        "backend": 1,
+        "convertTerrainToSediment": true,
+        "emissionAmountM": 0.5,
+        "emissionTime": 0.0,
+        "iterations": 40,
+        "largestDetailLevelM": 8.0,
+        "maskContrast": 0.0,
+        "sedimentViscosity": 0.20000000298023224,
+        "stabilizationIterations": 2
+      },
+      "shape": {
+        "kind": 0,
+        "relativeHeightPercent": 50.0,
+        "scaleMeters": 1024.0
+      },
+      "snow": {
+        "backend": 1,
+        "emissionAmount": 1.0,
+        "emissionTime": 0.0,
+        "fillRadius": 3,
+        "iterationCount": 40,
+        "largestDetailLevelM": 8.0,
+        "maskFeatherM": 0.014999999664723873,
+        "maskMaxSnow": 1.0,
+        "maskThresholdM": 0.019999999552965164,
+        "motionSlopeLimitDeg": 35.0,
+        "slopeLimitMaxDeg": 60.0,
+        "slopeLimitMinDeg": 50.0,
+        "smoothingIterations": 4,
+        "surfaceSmoothing": 0.25,
+        "transportRate": 0.44999998807907104
+      },
+      "title": "Mask Blur"
     }
   ],
   "previewPinId": 100211,
@@ -9259,12 +11638,12 @@
       "horizontalScale": 4000.0,
       "lightSamples": 6,
       "lightStepMeters": 80.0,
-      "loopPhase": 0.01965000107884407,
+      "loopPhase": 0.7213799953460693,
       "phaseEccentricity": 0.0,
       "qualitySamples": 32,
       "seed": 6098,
       "selfShadowEnabled": true,
-      "shadowAmbientStrength": 2.0,
+      "shadowAmbientStrength": 1.5,
       "shadowResolution": 1024,
       "shadowSamples": 16,
       "shadowStrength": 0.699999988079071,
@@ -9286,7 +11665,7 @@
       "dofApertureRotationDegrees": 0.0,
       "dofApertureShape": 0,
       "dofFStop": 4.0,
-      "dofFocusDistanceMeters": 5526.75732421875,
+      "dofFocusDistanceMeters": 5477.71435546875,
       "dofHighlightBoost": 0.0,
       "dofMaxBlurPixels": 6.199999809265137,
       "dofMiniatureEnabled": true,
@@ -9357,12 +11736,12 @@
   },
   "viewport": {
     "fovDegrees": 45.0,
-    "orbitDistance": 6194.2333984375,
+    "orbitDistance": 6194.2294921875,
     "pan": [
-      41.0,
-      62.0
+      -29.0,
+      99.0
     ],
-    "pitch": 0.4300000071525574,
-    "yaw": 5.013566970825195
+    "pitch": 0.430000901222229,
+    "yaw": -14.326552391052246
   }
 }
