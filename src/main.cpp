@@ -9461,6 +9461,11 @@ void DrawUi()
     const float textY = statusMin.y + 2.0f;
     const float textX = statusMin.x + 8.0f;
     ImDrawList* statusDrawList = ImGui::GetWindowDrawList();
+    statusDrawList->AddLine(
+        statusMin,
+        ImVec2(statusMax.x, statusMin.y),
+        ColorToU32(g_themeManager.AppColor("border", ImVec4(0.22f, 0.24f, 0.23f, 1.0f))),
+        1.0f);
     statusDrawList->AddText(ImVec2(textX, textY), ImGui::GetColorU32(stateColor), evaluationState);
     statusDrawList->AddText(
         ImVec2(textX + ImGui::CalcTextSize(evaluationState).x + 4.0f, textY),
