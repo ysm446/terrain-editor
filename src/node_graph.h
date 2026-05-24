@@ -32,6 +32,7 @@ enum class NodeKind
     MaskHeight = 19,
     Crumbling = 20,
     Scatter = 21,
+    Path = 22,
 };
 
 enum class PinKind
@@ -46,6 +47,7 @@ enum class ValueType
     HeightField = 2,
     Mask = 3,
     ColorTexture = 4,
+    Path = 5,
 };
 
 enum class MultiScaleErosionBackend
@@ -459,6 +461,41 @@ struct ColorizeSettings
     ColorizeBackend backend = ColorizeBackend::GpuCompute;
 };
 
+enum class PathPointHeightMode
+{
+    ProjectToTerrain,
+    TerrainOffset,
+    Absolute,
+};
+
+struct PathPoint
+{
+    GraphId id = 0;
+    float x = 0.0f;
+    float z = 0.0f;
+    float height = 0.0f;
+    float heightOffset = 0.0f;
+    PathPointHeightMode heightMode = PathPointHeightMode::ProjectToTerrain;
+};
+
+struct PathEdge
+{
+    GraphId id = 0;
+    GraphId fromPoint = 0;
+    GraphId toPoint = 0;
+    float widthMeters = 64.0f;
+    float featherMeters = 32.0f;
+    bool enabled = true;
+};
+
+struct PathSettings
+{
+    std::vector<PathPoint> points;
+    std::vector<PathEdge> edges;
+    float defaultWidthMeters = 64.0f;
+    float defaultFeatherMeters = 32.0f;
+};
+
 // Heightfield -> mask. Performs MFD flow accumulation on the
 // input heights and emits a mask. The default Log curve produces the
 // classic continuous dendritic drainage tree (every cell visible, fine
@@ -550,6 +587,7 @@ struct Node
     SedimentSettings sediment;
     SnowSettings snow;
     ColorizeSettings colorize;
+    PathSettings path;
 };
 
 struct Link
@@ -833,6 +871,7 @@ public:
     bool CreateLink(GraphId startPin, GraphId endPin);
     bool DeleteLink(GraphId linkId);
     GraphId CreateNode(NodeKind kind);
+    GraphId AllocatePathElementId();
     bool DeleteNode(GraphId nodeId);
     void ReplaceNodes(std::vector<Node> nodes);
     void ReplaceLinks(std::vector<Link> links);

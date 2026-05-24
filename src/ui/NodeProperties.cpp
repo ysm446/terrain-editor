@@ -37,6 +37,101 @@ bool IsCtrlDown()
 {
     return g_callbacks.isCtrlDown && g_callbacks.isCtrlDown();
 }
+
+rock::GraphId SelectedPathPointId(rock::GraphId nodeId)
+{
+    return g_callbacks.selectedPathPointId ? g_callbacks.selectedPathPointId(nodeId) : 0;
+}
+
+rock::PathPoint* FindMutablePathPoint(rock::PathSettings& path, rock::GraphId pointId)
+{
+    const auto it = std::ranges::find_if(path.points, [pointId](const rock::PathPoint& point) {
+        return point.id == pointId;
+    });
+    return it != path.points.end() ? &*it : nullptr;
+}
+
+const char* PathHeightModeItems()
+{
+    return "Project To Terrain\0Terrain Offset\0Absolute\0";
+}
+
+int PathHeightModeToIndex(rock::PathPointHeightMode mode)
+{
+    switch (mode)
+    {
+    case rock::PathPointHeightMode::TerrainOffset:
+        return 1;
+    case rock::PathPointHeightMode::Absolute:
+        return 2;
+    case rock::PathPointHeightMode::ProjectToTerrain:
+    default:
+        return 0;
+    }
+}
+
+rock::PathPointHeightMode PathHeightModeFromIndex(int index)
+{
+    switch (index)
+    {
+    case 1:
+        return rock::PathPointHeightMode::TerrainOffset;
+    case 2:
+        return rock::PathPointHeightMode::Absolute;
+    case 0:
+    default:
+        return rock::PathPointHeightMode::ProjectToTerrain;
+    }
+}
+
+bool DrawPathPointPositionRow(rock::PathPoint& point)
+{
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    DrawPropertyLabel("Position (Vector3)", "X, Y, Z の順にポイント座標を編集します。Y を編集すると高さモードは Absolute になります。", false);
+    ImGui::TableSetColumnIndex(1);
+
+    float position[3] = {point.x, point.height, point.z};
+    ImGui::PushID("PathSelectedPointPosition");
+    ImGui::SetNextItemWidth(std::min(260.0f, ImGui::GetContentRegionAvail().x));
+    const bool changed = ImGui::InputFloat3("##value", position, "%.3f");
+    ImGui::PopID();
+    if (!changed)
+    {
+        return false;
+    }
+
+    point.x = std::clamp(position[0], -1000000.0f, 1000000.0f);
+    point.height = std::clamp(position[1], -1000000.0f, 1000000.0f);
+    point.z = std::clamp(position[2], -1000000.0f, 1000000.0f);
+    point.heightMode = rock::PathPointHeightMode::Absolute;
+    return true;
+}
+
+bool DrawPathHeightOffsetRow(rock::PathPoint& point)
+{
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    DrawPropertyLabel("Height Offset (m)", "Height Mode が Terrain Offset のとき、地形高さから上下にずらす量です。", FloatDiffersFromDefault(point.heightOffset, 0.0f));
+    ImGui::TableSetColumnIndex(1);
+
+    bool changed = false;
+    ImGui::PushID("PathSelectedPointHeightOffset");
+    ImGui::SetNextItemWidth(std::min(120.0f, ImGui::GetContentRegionAvail().x));
+    if (DrawEnterCommitFloatInput("##number", &point.heightOffset, "%.3f"))
+    {
+        point.heightOffset = std::clamp(point.heightOffset, -1000000.0f, 1000000.0f);
+        changed = true;
+    }
+    ImGui::SameLine();
+    if (DrawResetToDefaultButton("reset", !FloatDiffersFromDefault(point.heightOffset, 0.0f), "0.000"))
+    {
+        point.heightOffset = 0.0f;
+        changed = true;
+    }
+    ImGui::PopID();
+    return changed;
+}
 } // namespace
 
 void SetNodePropertyCallbacks(NodePropertyCallbacks callbacks)
@@ -122,6 +217,9 @@ void DrawNodePropertiesPanel(rock::NodeGraph& graph, rock::GraphId selectedNodeI
         return;
     case rock::NodeKind::Colorize:
         DrawColorizeProperties(*editableNode);
+        return;
+    case rock::NodeKind::Path:
+        DrawPathProperties(*editableNode);
         return;
     default:
         return;
@@ -1629,6 +1727,58 @@ bool DrawColorizeProperties(rock::Node& editableNode)
     ImGui::Unindent(8.0f);
     ImGui::Spacing();
     return true;
+}
+
+bool DrawPathProperties(rock::Node& editableNode)
+{
+    bool changed = false;
+    if (ImGui::BeginTable("PathPropertyRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        changed |= DrawPropertyFloatRow("Default Width (m)", "PathDefaultWidth", &editableNode.path.defaultWidthMeters, 0.01f, 100000.0f, rock::PathSettings{}.defaultWidthMeters, "Path default width changed", false, "新しく作るエッジの幅です。", "%.1f");
+        changed |= DrawPropertyFloatRow("Default Feather (m)", "PathDefaultFeather", &editableNode.path.defaultFeatherMeters, 0.0f, 100000.0f, rock::PathSettings{}.defaultFeatherMeters, "Path default feather changed", false, "新しく作るエッジのフェザー幅です。", "%.1f");
+        ImGui::EndTable();
+    }
+
+    ImGui::SeparatorText("Path");
+    ImGui::Text("Points: %d", static_cast<int>(editableNode.path.points.size()));
+    ImGui::Text("Edges: %d", static_cast<int>(editableNode.path.edges.size()));
+    ImGui::TextWrapped("Path ノードを選択した状態で 2D/3D ビューをクリックするとポイントを追加します。ポイントクリックで選択、W キーで移動ギズモ表示、中心ドラッグでカメラ平面移動、エッジクリックでポイント挿入、Del キーで選択ポイント削除、Enter キーで現在の連続線を確定します。");
+    const rock::GraphId selectedPointId = SelectedPathPointId(editableNode.id);
+    rock::PathPoint* selectedPoint = selectedPointId != 0 ? FindMutablePathPoint(editableNode.path, selectedPointId) : nullptr;
+    ImGui::SeparatorText("Selected Point");
+    if (selectedPoint == nullptr)
+    {
+        ImGui::TextDisabled("No point selected");
+    }
+    else
+    {
+        ImGui::Text("ID: %llu", static_cast<unsigned long long>(selectedPoint->id));
+        if (ImGui::BeginTable("PathSelectedPointRows", 2, ImGuiTableFlags_SizingStretchProp))
+        {
+            changed |= DrawPathPointPositionRow(*selectedPoint);
+            changed |= DrawPathHeightOffsetRow(*selectedPoint);
+
+            int heightMode = PathHeightModeToIndex(selectedPoint->heightMode);
+            if (DrawPropertyComboRow("Height Mode", "PathSelectedPointHeightMode", &heightMode, PathHeightModeItems(), nullptr, 0))
+            {
+                selectedPoint->heightMode = PathHeightModeFromIndex(heightMode);
+                changed = true;
+            }
+            ImGui::EndTable();
+        }
+    }
+
+    if (ImGui::Button("Clear Path"))
+    {
+        editableNode.path.points.clear();
+        editableNode.path.edges.clear();
+        changed = true;
+    }
+    if (changed)
+    {
+        MarkGraphChanged("Path changed");
+    }
+    return changed;
 }
 
 

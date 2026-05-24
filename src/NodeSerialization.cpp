@@ -48,6 +48,7 @@ bool IsSerializableNodeKind(rock::NodeKind kind)
     case rock::NodeKind::MaskHeight:
     case rock::NodeKind::Crumbling:
     case rock::NodeKind::Scatter:
+    case rock::NodeKind::Path:
         return true;
     default:
         return false;
@@ -205,6 +206,42 @@ nlohmann::json MakeColorizeSettingsJson(const rock::Node& node)
     }}};
 }
 
+nlohmann::json MakePathSettingsJson(const rock::Node& node)
+{
+    nlohmann::json pointsJson = nlohmann::json::array();
+    for (const rock::PathPoint& point : node.path.points)
+    {
+        pointsJson.push_back({
+            {"id", point.id},
+            {"x", point.x},
+            {"z", point.z},
+            {"height", point.height},
+            {"heightOffset", point.heightOffset},
+            {"heightMode", static_cast<int>(point.heightMode)},
+        });
+    }
+
+    nlohmann::json edgesJson = nlohmann::json::array();
+    for (const rock::PathEdge& edge : node.path.edges)
+    {
+        edgesJson.push_back({
+            {"id", edge.id},
+            {"fromPoint", edge.fromPoint},
+            {"toPoint", edge.toPoint},
+            {"widthMeters", edge.widthMeters},
+            {"featherMeters", edge.featherMeters},
+            {"enabled", edge.enabled},
+        });
+    }
+
+    return {{"path", {
+        {"defaultWidthMeters", node.path.defaultWidthMeters},
+        {"defaultFeatherMeters", node.path.defaultFeatherMeters},
+        {"points", pointsJson},
+        {"edges", edgesJson},
+    }}};
+}
+
 nlohmann::json MakeRockSettingsJson(const rock::Node& node)
 {
     return {
@@ -297,6 +334,7 @@ nlohmann::json MakeNodeSettingsJson(const rock::Node& node, const AssetPathForJs
     nodeJson.update(MakeSedimentSettingsJson(node));
     nodeJson.update(MakeSnowSettingsJson(node));
     nodeJson.update(MakeColorizeSettingsJson(node));
+    nodeJson.update(MakePathSettingsJson(node));
     return nodeJson;
 }
 
@@ -751,6 +789,54 @@ void ReadColorizeSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     }
 }
 
+void ReadPathSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
+{
+    const nlohmann::json pathJson = nodeJson.value("path", nlohmann::json::object());
+    node.path.defaultWidthMeters = std::clamp(pathJson.value("defaultWidthMeters", node.path.defaultWidthMeters), 0.01f, 100000.0f);
+    node.path.defaultFeatherMeters = std::clamp(pathJson.value("defaultFeatherMeters", node.path.defaultFeatherMeters), 0.0f, 100000.0f);
+
+    node.path.points.clear();
+    if (pathJson.contains("points") && pathJson["points"].is_array())
+    {
+        for (const nlohmann::json& pointJson : pathJson["points"])
+        {
+            rock::PathPoint point;
+            point.id = pointJson.value("id", 0);
+            point.x = std::clamp(pointJson.value("x", 0.0f), -1000000.0f, 1000000.0f);
+            point.z = std::clamp(pointJson.value("z", 0.0f), -1000000.0f, 1000000.0f);
+            point.height = std::clamp(pointJson.value("height", 0.0f), -1000000.0f, 1000000.0f);
+            point.heightOffset = std::clamp(pointJson.value("heightOffset", 0.0f), -1000000.0f, 1000000.0f);
+            const int modeInt = std::clamp(pointJson.value("heightMode", static_cast<int>(point.heightMode)),
+                static_cast<int>(rock::PathPointHeightMode::ProjectToTerrain),
+                static_cast<int>(rock::PathPointHeightMode::Absolute));
+            point.heightMode = static_cast<rock::PathPointHeightMode>(modeInt);
+            if (point.id > 0)
+            {
+                node.path.points.push_back(point);
+            }
+        }
+    }
+
+    node.path.edges.clear();
+    if (pathJson.contains("edges") && pathJson["edges"].is_array())
+    {
+        for (const nlohmann::json& edgeJson : pathJson["edges"])
+        {
+            rock::PathEdge edge;
+            edge.id = edgeJson.value("id", 0);
+            edge.fromPoint = edgeJson.value("fromPoint", 0);
+            edge.toPoint = edgeJson.value("toPoint", 0);
+            edge.widthMeters = std::clamp(edgeJson.value("widthMeters", node.path.defaultWidthMeters), 0.01f, 100000.0f);
+            edge.featherMeters = std::clamp(edgeJson.value("featherMeters", node.path.defaultFeatherMeters), 0.0f, 100000.0f);
+            edge.enabled = edgeJson.value("enabled", true);
+            if (edge.id > 0 && edge.fromPoint > 0 && edge.toPoint > 0 && edge.fromPoint != edge.toPoint)
+            {
+                node.path.edges.push_back(edge);
+            }
+        }
+    }
+}
+
 void ReadNodeSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
 {
     ReadBasicHeightfieldSettingsJson(nodeJson, node);
@@ -762,6 +848,7 @@ void ReadNodeSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     ReadSedimentSettingsJson(nodeJson, node);
     ReadSnowSettingsJson(nodeJson, node);
     ReadColorizeSettingsJson(nodeJson, node);
+    ReadPathSettingsJson(nodeJson, node);
 }
 
 
@@ -786,6 +873,8 @@ void ReadSerializedPinsJson(const nlohmann::json& pinsJson,
             pin.valueType = rock::ValueType::Mask;
         else if (serializedValueType == static_cast<int>(rock::ValueType::ColorTexture))
             pin.valueType = rock::ValueType::ColorTexture;
+        else if (serializedValueType == static_cast<int>(rock::ValueType::Path))
+            pin.valueType = rock::ValueType::Path;
         else
             pin.valueType = rock::ValueType::HeightField;
         pin.label = pinJson.value("label", std::string(rock::ToString(pin.valueType)));

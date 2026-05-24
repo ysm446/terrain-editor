@@ -2325,11 +2325,19 @@ GraphId NodeGraph::CreateNode(NodeKind kind)
         AddPin(nodeId, PinKind::Input, ValueType::Mask, "Gradient Mask");
         AddPin(nodeId, PinKind::Output, ValueType::ColorTexture, "Color Texture");
         break;
+    case NodeKind::Path:
+        AddPin(nodeId, PinKind::Output, ValueType::Path, "Path");
+        break;
     default:
         break;
     }
     MarkDirty("Node added");
     return nodeId;
+}
+
+GraphId NodeGraph::AllocatePathElementId()
+{
+    return AllocateGraphId();
 }
 
 void NodeGraph::ReplaceNodes(std::vector<Node> nodes)
@@ -3272,6 +3280,14 @@ void NodeGraph::RebuildNextGraphId()
         {
             maxId = std::max(maxId, pin.id);
         }
+        for (const PathPoint& point : node.path.points)
+        {
+            maxId = std::max(maxId, point.id);
+        }
+        for (const PathEdge& edge : node.path.edges)
+        {
+            maxId = std::max(maxId, edge.id);
+        }
     }
     for (const Link& link : links_)
     {
@@ -3348,6 +3364,8 @@ std::string_view ToString(NodeKind kind)
         return "Snow";
     case NodeKind::Colorize:
         return "Colorize";
+    case NodeKind::Path:
+        return "Path";
     default:
         return "Unknown";
     }
@@ -3408,6 +3426,8 @@ std::string_view ToString(ValueType type)
         return "Mask";
     case ValueType::ColorTexture:
         return "Color Texture";
+    case ValueType::Path:
+        return "Path";
     default:
         return "Unknown";
     }
@@ -3451,6 +3471,8 @@ PreviewStage PreviewStageFor(NodeKind kind)
         return PreviewStage::Snow;
     case NodeKind::Colorize:
         return PreviewStage::Colorize;
+    case NodeKind::Path:
+        return PreviewStage::Graph;
     default:
         return PreviewStage::Graph;
     }

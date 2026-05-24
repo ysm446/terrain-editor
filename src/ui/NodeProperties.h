@@ -34,6 +34,7 @@ struct NodePropertyCallbacks
     std::function<bool()> isEscapeDown;
     std::function<void(float&, float&, float&)> sampleScreenPixel;
     std::function<void()> requestForeground;
+    std::function<rock::GraphId(rock::GraphId)> selectedPathPointId;
 };
 
 void SetNodePropertyCallbacks(NodePropertyCallbacks callbacks);
@@ -59,4 +60,5 @@ bool DrawCrumblingProperties(rock::Node& editableNode);
 bool DrawSedimentProperties(rock::Node& editableNode);
 bool DrawSnowProperties(rock::Node& editableNode);
 bool DrawColorizeProperties(rock::Node& editableNode);
+bool DrawPathProperties(rock::Node& editableNode);
 } // namespace terrain::ui

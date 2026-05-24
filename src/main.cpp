@@ -4679,14 +4679,767 @@ float CameraFovYDegreesFromFocalLengthMm(float focalLengthMm)
 }
 
 bool TryPickViewportFocusPoint(const ImVec2& min, const ImVec2& max, const ImVec2& mouse, Vec3* outPoint, float* outFocusDistance, ImVec2* outScreenPoint);
+const rock::PathPoint* FindPathPoint(const rock::PathSettings& path, rock::GraphId pointId);
+float PathPointDisplayHeight(const rock::PathPoint& point);
+ProjectedPoint ProjectWorldToScreen(float x, float y, float z, const ImVec2& center, float scale);
+
+rock::GraphId g_pathEditNodeId = 0;
+rock::GraphId g_pathActiveTailPointId = 0;
+enum class PathSelectionKind
+{
+    None,
+    Point,
+    Edge,
+};
+
+enum class PathMoveGizmoAxis
+{
+    None,
+    Center,
+    X,
+    Y,
+    Z,
+};
+
+PathSelectionKind g_pathSelectionKind = PathSelectionKind::None;
+rock::GraphId g_pathSelectedElementId = 0;
+bool g_pathMoveGizmoVisible = false;
+PathMoveGizmoAxis g_pathActiveMoveGizmoAxis = PathMoveGizmoAxis::None;
+rock::GraphId g_pathMoveGizmoDragPointId = 0;
+rock::PathPoint g_pathMoveGizmoDragStartPoint;
+ImVec2 g_pathMoveGizmoDragStartMouse;
+
+struct PathHitResult
+{
+    PathSelectionKind kind = PathSelectionKind::None;
+    rock::GraphId elementId = 0;
+    float t = 0.0f;
+};
+
+const rock::Node* SelectedPathNode()
+{
+    const rock::Node* node = g_graph.FindNode(g_selectedNodeId);
+    return node != nullptr && node->kind == rock::NodeKind::Path ? node : nullptr;
+}
+
+rock::Node* SelectedMutablePathNode()
+{
+    rock::Node* node = g_graph.FindMutableNode(g_selectedNodeId);
+    return node != nullptr && node->kind == rock::NodeKind::Path ? node : nullptr;
+}
+
+bool PathContainsPoint(const rock::Node& node, rock::GraphId pointId)
+{
+    return std::ranges::any_of(node.path.points, [pointId](const rock::PathPoint& point) {
+        return point.id == pointId;
+    });
+}
+
+void ResetPathActiveTail()
+{
+    g_pathEditNodeId = g_selectedNodeId;
+    g_pathActiveTailPointId = 0;
+}
+
+void ClearPathSelection()
+{
+    g_pathSelectionKind = PathSelectionKind::None;
+    g_pathSelectedElementId = 0;
+    g_pathMoveGizmoVisible = false;
+    g_pathActiveMoveGizmoAxis = PathMoveGizmoAxis::None;
+    g_pathMoveGizmoDragPointId = 0;
+}
+
+bool FinishPathSegmentFromShortcut()
+{
+    if (!ImGui::IsKeyPressed(ImGuiKey_Enter) && !ImGui::IsKeyPressed(ImGuiKey_KeypadEnter))
+    {
+        return false;
+    }
+    ResetPathActiveTail();
+    g_projectStatus = "Path segment finished";
+    return true;
+}
+
+float DistanceSquared(ImVec2 a, ImVec2 b)
+{
+    const float dx = a.x - b.x;
+    const float dy = a.y - b.y;
+    return dx * dx + dy * dy;
+}
+
+float DistanceToSegmentSquared(ImVec2 point, ImVec2 a, ImVec2 b, float* outT)
+{
+    const float dx = b.x - a.x;
+    const float dy = b.y - a.y;
+    const float lengthSq = dx * dx + dy * dy;
+    float t = 0.0f;
+    if (lengthSq > 0.000001f)
+    {
+        t = std::clamp(((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSq, 0.0f, 1.0f);
+    }
+    if (outT)
+    {
+        *outT = t;
+    }
+    return DistanceSquared(point, ImVec2(a.x + dx * t, a.y + dy * t));
+}
+
+Vec3 PathMoveGizmoAxisDirection(PathMoveGizmoAxis axis)
+{
+    switch (axis)
+    {
+    case PathMoveGizmoAxis::Center:
+        return Vec3(0.0f, 0.0f, 0.0f);
+    case PathMoveGizmoAxis::X:
+        return Vec3(1.0f, 0.0f, 0.0f);
+    case PathMoveGizmoAxis::Y:
+        return Vec3(0.0f, 1.0f, 0.0f);
+    case PathMoveGizmoAxis::Z:
+        return Vec3(0.0f, 0.0f, 1.0f);
+    default:
+        return Vec3(0.0f, 0.0f, 0.0f);
+    }
+}
+
+rock::PathPoint* FindMutablePathPoint(rock::PathSettings& path, rock::GraphId pointId)
+{
+    const auto it = std::ranges::find_if(path.points, [pointId](const rock::PathPoint& point) {
+        return point.id == pointId;
+    });
+    return it != path.points.end() ? &*it : nullptr;
+}
+
+bool SelectedPathPointPosition(Vec3* outPosition)
+{
+    const rock::Node* node = SelectedPathNode();
+    if (node == nullptr || g_pathSelectionKind != PathSelectionKind::Point)
+    {
+        return false;
+    }
+    const rock::PathPoint* point = FindPathPoint(node->path, g_pathSelectedElementId);
+    if (point == nullptr)
+    {
+        return false;
+    }
+    if (outPosition)
+    {
+        *outPosition = Vec3(point->x, PathPointDisplayHeight(*point), point->z);
+    }
+    return true;
+}
+
+float PathMoveGizmoAxisLength(const Vec3& pivot, const ImVec2& center, float scale)
+{
+    constexpr float kTargetPixels = 72.0f;
+    const ProjectedPoint pivotScreen = ProjectWorldToScreen(pivot.x, pivot.y, pivot.z, center, scale);
+    if (pivotScreen.depth <= 0.05f)
+    {
+        return 1.0f;
+    }
+
+    const Vec3 offsets[] = {
+        Vec3(1.0f, 0.0f, 0.0f),
+        Vec3(0.0f, 1.0f, 0.0f),
+        Vec3(0.0f, 0.0f, 1.0f),
+    };
+    float pixelsPerUnit = 0.0f;
+    int sampleCount = 0;
+    for (const Vec3& offset : offsets)
+    {
+        const ProjectedPoint sample = ProjectWorldToScreen(pivot.x + offset.x, pivot.y + offset.y, pivot.z + offset.z, center, scale);
+        if (sample.depth <= 0.05f)
+        {
+            continue;
+        }
+        const float distance = std::sqrt(DistanceSquared(pivotScreen.screen, sample.screen));
+        if (distance <= 0.001f)
+        {
+            continue;
+        }
+        pixelsPerUnit += distance;
+        ++sampleCount;
+    }
+    if (sampleCount <= 0)
+    {
+        return 1.0f;
+    }
+    pixelsPerUnit /= static_cast<float>(sampleCount);
+    const float terrainSize = std::max(1.0f, g_graph.Settings().preview.terrainSizeMeters);
+    return std::clamp(kTargetPixels / pixelsPerUnit, terrainSize * 0.002f, terrainSize * 0.25f);
+}
+
+PathMoveGizmoAxis HitTestPathMoveGizmo(const Vec3& pivot, const ImVec2& min, const ImVec2& max, const ImVec2& mouse)
+{
+    const float viewportSize = std::min(max.x - min.x, max.y - min.y);
+    const float scale = viewportSize * 1.20f;
+    const ImVec2 center((min.x + max.x) * 0.5f + g_viewport.pan.x, (min.y + max.y) * 0.5f + g_viewport.pan.y);
+    const ProjectedPoint pivotScreen = ProjectWorldToScreen(pivot.x, pivot.y, pivot.z, center, scale);
+    if (pivotScreen.depth <= 0.05f)
+    {
+        return PathMoveGizmoAxis::None;
+    }
+
+    constexpr float kCenterRadius = 10.0f;
+    if (DistanceSquared(mouse, pivotScreen.screen) <= kCenterRadius * kCenterRadius)
+    {
+        return PathMoveGizmoAxis::Center;
+    }
+
+    const float axisLength = PathMoveGizmoAxisLength(pivot, center, scale);
+    constexpr float kAxisHitRadius = 10.0f;
+    float bestDistanceSq = kAxisHitRadius * kAxisHitRadius;
+    PathMoveGizmoAxis bestAxis = PathMoveGizmoAxis::None;
+    for (PathMoveGizmoAxis axis : {PathMoveGizmoAxis::X, PathMoveGizmoAxis::Y, PathMoveGizmoAxis::Z})
+    {
+        const Vec3 dir = PathMoveGizmoAxisDirection(axis);
+        const ProjectedPoint end = ProjectWorldToScreen(
+            pivot.x + dir.x * axisLength,
+            pivot.y + dir.y * axisLength,
+            pivot.z + dir.z * axisLength,
+            center,
+            scale);
+        if (end.depth <= 0.05f)
+        {
+            continue;
+        }
+        float axisT = 0.0f;
+        const float distanceSq = DistanceToSegmentSquared(mouse, pivotScreen.screen, end.screen, &axisT);
+        const float axisScreenLength = std::sqrt(DistanceSquared(pivotScreen.screen, end.screen));
+        if (axisScreenLength * axisT < kCenterRadius)
+        {
+            continue;
+        }
+        if (distanceSq < bestDistanceSq)
+        {
+            bestDistanceSq = distanceSq;
+            bestAxis = axis;
+        }
+    }
+    return bestAxis;
+}
+
+rock::GraphId AppendPathPoint(rock::Node& node, float x, float z, float height, rock::PathPointHeightMode heightMode, rock::GraphId connectFromPointId)
+{
+    rock::PathPoint point;
+    point.id = g_graph.AllocatePathElementId();
+    point.x = x;
+    point.z = z;
+    point.height = height;
+    point.heightMode = heightMode;
+
+    const rock::GraphId pointId = point.id;
+    node.path.points.push_back(point);
+    if (connectFromPointId != 0)
+    {
+        rock::PathEdge edge;
+        edge.id = g_graph.AllocatePathElementId();
+        edge.fromPoint = connectFromPointId;
+        edge.toPoint = pointId;
+        edge.widthMeters = node.path.defaultWidthMeters;
+        edge.featherMeters = node.path.defaultFeatherMeters;
+        node.path.edges.push_back(edge);
+    }
+    return pointId;
+}
+
+void AddPathPointFromViewport(float x, float z, float height, rock::PathPointHeightMode heightMode)
+{
+    rock::Node* node = SelectedMutablePathNode();
+    if (node == nullptr)
+    {
+        return;
+    }
+    if (g_pathEditNodeId != node->id)
+    {
+        ResetPathActiveTail();
+    }
+    const rock::GraphId connectFromPointId = PathContainsPoint(*node, g_pathActiveTailPointId) ? g_pathActiveTailPointId : 0;
+    PushUndoSnapshot();
+    g_pathActiveTailPointId = AppendPathPoint(*node, x, z, height, heightMode, connectFromPointId);
+    g_pathEditNodeId = node->id;
+    MarkGraphChanged("Path point added");
+    g_projectStatus = "Path point added";
+}
+
+void SelectPathPoint(rock::GraphId pointId)
+{
+    g_pathSelectionKind = PathSelectionKind::Point;
+    g_pathSelectedElementId = pointId;
+    g_pathActiveTailPointId = pointId;
+    g_pathEditNodeId = g_selectedNodeId;
+    g_projectStatus = "Path point selected";
+}
+
+void SelectPathEdge(rock::GraphId edgeId)
+{
+    g_pathSelectionKind = PathSelectionKind::Edge;
+    g_pathSelectedElementId = edgeId;
+    g_pathActiveTailPointId = 0;
+    g_pathEditNodeId = g_selectedNodeId;
+    g_projectStatus = "Path edge selected";
+}
+
+void DeleteSelectedPathElement()
+{
+    rock::Node* node = SelectedMutablePathNode();
+    if (node == nullptr || g_pathSelectedElementId == 0)
+    {
+        return;
+    }
+
+    if (g_pathSelectionKind == PathSelectionKind::Point)
+    {
+        const rock::GraphId pointId = g_pathSelectedElementId;
+        const auto pointIt = std::ranges::find_if(node->path.points, [pointId](const rock::PathPoint& point) {
+            return point.id == pointId;
+        });
+        if (pointIt == node->path.points.end())
+        {
+            ClearPathSelection();
+            return;
+        }
+        PushUndoSnapshot();
+        node->path.points.erase(pointIt);
+        std::erase_if(node->path.edges, [pointId](const rock::PathEdge& edge) {
+            return edge.fromPoint == pointId || edge.toPoint == pointId;
+        });
+        if (g_pathActiveTailPointId == pointId)
+        {
+            g_pathActiveTailPointId = 0;
+        }
+        ClearPathSelection();
+        MarkGraphChanged("Path point deleted");
+        g_projectStatus = "Path point deleted";
+        return;
+    }
+
+    if (g_pathSelectionKind == PathSelectionKind::Edge)
+    {
+        const rock::GraphId edgeId = g_pathSelectedElementId;
+        const auto edgeIt = std::ranges::find_if(node->path.edges, [edgeId](const rock::PathEdge& edge) {
+            return edge.id == edgeId;
+        });
+        if (edgeIt == node->path.edges.end())
+        {
+            ClearPathSelection();
+            return;
+        }
+        PushUndoSnapshot();
+        node->path.edges.erase(edgeIt);
+        ClearPathSelection();
+        MarkGraphChanged("Path edge deleted");
+        g_projectStatus = "Path edge deleted";
+    }
+}
+
+void EnablePathMoveGizmo()
+{
+    if (g_pathSelectionKind == PathSelectionKind::Point && g_pathSelectedElementId != 0)
+    {
+        g_pathMoveGizmoVisible = true;
+        g_projectStatus = "Path move gizmo";
+    }
+}
+
+bool StartPathMoveGizmoDrag(const ImVec2& min, const ImVec2& max)
+{
+    if (!g_pathMoveGizmoVisible || g_pathSelectionKind != PathSelectionKind::Point)
+    {
+        return false;
+    }
+    Vec3 pivot;
+    if (!SelectedPathPointPosition(&pivot))
+    {
+        return false;
+    }
+    ImGuiIO& io = ImGui::GetIO();
+    const PathMoveGizmoAxis axis = HitTestPathMoveGizmo(pivot, min, max, io.MousePos);
+    if (axis == PathMoveGizmoAxis::None)
+    {
+        return false;
+    }
+
+    rock::Node* node = SelectedMutablePathNode();
+    if (node == nullptr)
+    {
+        return false;
+    }
+    const rock::PathPoint* point = FindPathPoint(node->path, g_pathSelectedElementId);
+    if (point == nullptr)
+    {
+        return false;
+    }
+
+    PushUndoSnapshot();
+    g_pathActiveMoveGizmoAxis = axis;
+    g_pathMoveGizmoDragPointId = point->id;
+    g_pathMoveGizmoDragStartPoint = *point;
+    g_pathMoveGizmoDragStartMouse = io.MousePos;
+    return true;
+}
+
+bool UpdatePathMoveGizmoDrag(const ImVec2& min, const ImVec2& max)
+{
+    if (g_pathActiveMoveGizmoAxis == PathMoveGizmoAxis::None || g_pathMoveGizmoDragPointId == 0)
+    {
+        return false;
+    }
+
+    rock::Node* node = SelectedMutablePathNode();
+    if (node == nullptr)
+    {
+        g_pathActiveMoveGizmoAxis = PathMoveGizmoAxis::None;
+        g_pathMoveGizmoDragPointId = 0;
+        return false;
+    }
+    rock::PathPoint* point = FindMutablePathPoint(node->path, g_pathMoveGizmoDragPointId);
+    if (point == nullptr)
+    {
+        g_pathActiveMoveGizmoAxis = PathMoveGizmoAxis::None;
+        g_pathMoveGizmoDragPointId = 0;
+        return false;
+    }
+
+    ImGuiIO& io = ImGui::GetIO();
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+    {
+        g_pathActiveMoveGizmoAxis = PathMoveGizmoAxis::None;
+        g_pathMoveGizmoDragPointId = 0;
+        MarkGraphChanged("Path point moved");
+        g_projectStatus = "Path point moved";
+        return true;
+    }
+
+    const float viewportSize = std::min(max.x - min.x, max.y - min.y);
+    const float scale = viewportSize * 1.20f;
+    const ImVec2 center((min.x + max.x) * 0.5f + g_viewport.pan.x, (min.y + max.y) * 0.5f + g_viewport.pan.y);
+    const Vec3 startPivot(g_pathMoveGizmoDragStartPoint.x, PathPointDisplayHeight(g_pathMoveGizmoDragStartPoint), g_pathMoveGizmoDragStartPoint.z);
+    const ImVec2 mouseDelta(io.MousePos.x - g_pathMoveGizmoDragStartMouse.x, io.MousePos.y - g_pathMoveGizmoDragStartMouse.y);
+    if (g_pathActiveMoveGizmoAxis == PathMoveGizmoAxis::Center)
+    {
+        const ProjectedPoint startScreen = ProjectWorldToScreen(startPivot.x, startPivot.y, startPivot.z, center, scale);
+        if (startScreen.depth <= 0.05f)
+        {
+            return true;
+        }
+        const float fovRadians = std::clamp(g_viewport.fovDegrees, 15.0f, 90.0f) * kDegreesToRadians;
+        const float focalLength = 1.0f / std::tan(fovRadians * 0.5f);
+        const float worldUnitsPerPixel = startScreen.depth / (focalLength * scale);
+        const CameraBasis basis = terrain::BuildCameraBasis(MakeViewportCameraState());
+        const Vec3 deltaWorld = terrain::Add(
+            terrain::Scale(basis.right, mouseDelta.x * worldUnitsPerPixel),
+            terrain::Scale(basis.up, -mouseDelta.y * worldUnitsPerPixel));
+
+        *point = g_pathMoveGizmoDragStartPoint;
+        point->x += deltaWorld.x;
+        point->height = startPivot.y + deltaWorld.y;
+        point->z += deltaWorld.z;
+        point->heightMode = rock::PathPointHeightMode::Absolute;
+        MarkProjectDirty();
+        return true;
+    }
+
+    const Vec3 axisDir = PathMoveGizmoAxisDirection(g_pathActiveMoveGizmoAxis);
+    const float axisLength = PathMoveGizmoAxisLength(startPivot, center, scale);
+    const ProjectedPoint startScreen = ProjectWorldToScreen(startPivot.x, startPivot.y, startPivot.z, center, scale);
+    const ProjectedPoint endScreen = ProjectWorldToScreen(
+        startPivot.x + axisDir.x * axisLength,
+        startPivot.y + axisDir.y * axisLength,
+        startPivot.z + axisDir.z * axisLength,
+        center,
+        scale);
+    const float axisScreenLength = std::sqrt(DistanceSquared(startScreen.screen, endScreen.screen));
+    if (startScreen.depth <= 0.05f || endScreen.depth <= 0.05f || axisScreenLength <= 0.001f)
+    {
+        return true;
+    }
+
+    const ImVec2 axisScreenDir(
+        (endScreen.screen.x - startScreen.screen.x) / axisScreenLength,
+        (endScreen.screen.y - startScreen.screen.y) / axisScreenLength);
+    const float deltaPixels = mouseDelta.x * axisScreenDir.x + mouseDelta.y * axisScreenDir.y;
+    const float deltaWorld = (deltaPixels / axisScreenLength) * axisLength;
+
+    *point = g_pathMoveGizmoDragStartPoint;
+    point->x += axisDir.x * deltaWorld;
+    point->height += axisDir.y * deltaWorld;
+    point->z += axisDir.z * deltaWorld;
+    if (g_pathActiveMoveGizmoAxis == PathMoveGizmoAxis::Y)
+    {
+        point->heightMode = rock::PathPointHeightMode::Absolute;
+    }
+    MarkProjectDirty();
+    return true;
+}
+
+void InsertPathPointOnEdge(rock::Node& node, rock::GraphId edgeId, float t)
+{
+    const auto edgeIt = std::ranges::find_if(node.path.edges, [edgeId](const rock::PathEdge& edge) {
+        return edge.id == edgeId;
+    });
+    if (edgeIt == node.path.edges.end())
+    {
+        return;
+    }
+    const rock::PathPoint* fromPoint = FindPathPoint(node.path, edgeIt->fromPoint);
+    const rock::PathPoint* toPoint = FindPathPoint(node.path, edgeIt->toPoint);
+    if (fromPoint == nullptr || toPoint == nullptr)
+    {
+        return;
+    }
+
+    t = std::clamp(t, 0.02f, 0.98f);
+    PushUndoSnapshot();
+    rock::PathPoint point;
+    point.id = g_graph.AllocatePathElementId();
+    point.x = std::lerp(fromPoint->x, toPoint->x, t);
+    point.z = std::lerp(fromPoint->z, toPoint->z, t);
+    point.height = std::lerp(fromPoint->height, toPoint->height, t);
+    point.heightOffset = std::lerp(fromPoint->heightOffset, toPoint->heightOffset, t);
+    point.heightMode = fromPoint->heightMode == toPoint->heightMode ? fromPoint->heightMode : rock::PathPointHeightMode::ProjectToTerrain;
+
+    const rock::PathEdge originalEdge = *edgeIt;
+    edgeIt->toPoint = point.id;
+
+    rock::PathEdge secondEdge = originalEdge;
+    secondEdge.id = g_graph.AllocatePathElementId();
+    secondEdge.fromPoint = point.id;
+    node.path.points.push_back(point);
+    node.path.edges.push_back(secondEdge);
+
+    SelectPathPoint(point.id);
+    MarkGraphChanged("Path edge split");
+    g_projectStatus = "Path point inserted";
+}
+
+PathHitResult HitTestPathViewport(const rock::Node& node, const ImVec2& min, const ImVec2& max, const ImVec2& mouse)
+{
+    constexpr float kPointHitRadius = 8.0f;
+    constexpr float kEdgeHitRadius = 7.0f;
+    PathHitResult result;
+    float bestPointDistanceSq = kPointHitRadius * kPointHitRadius;
+    float bestEdgeDistanceSq = kEdgeHitRadius * kEdgeHitRadius;
+
+    const float viewportSize = std::min(max.x - min.x, max.y - min.y);
+    const float scale = viewportSize * 1.20f;
+    const ImVec2 center((min.x + max.x) * 0.5f + g_viewport.pan.x, (min.y + max.y) * 0.5f + g_viewport.pan.y);
+
+    for (const rock::PathPoint& point : node.path.points)
+    {
+        const ProjectedPoint projected = ProjectWorldToScreen(point.x, PathPointDisplayHeight(point), point.z, center, scale);
+        if (projected.depth <= 0.05f)
+        {
+            continue;
+        }
+        const float distanceSq = DistanceSquared(mouse, projected.screen);
+        if (distanceSq <= bestPointDistanceSq)
+        {
+            bestPointDistanceSq = distanceSq;
+            result.kind = PathSelectionKind::Point;
+            result.elementId = point.id;
+            result.t = 0.0f;
+        }
+    }
+    if (result.kind == PathSelectionKind::Point)
+    {
+        return result;
+    }
+
+    for (const rock::PathEdge& edge : node.path.edges)
+    {
+        if (!edge.enabled)
+        {
+            continue;
+        }
+        const rock::PathPoint* a = FindPathPoint(node.path, edge.fromPoint);
+        const rock::PathPoint* b = FindPathPoint(node.path, edge.toPoint);
+        if (a == nullptr || b == nullptr)
+        {
+            continue;
+        }
+        const ProjectedPoint pa = ProjectWorldToScreen(a->x, PathPointDisplayHeight(*a), a->z, center, scale);
+        const ProjectedPoint pb = ProjectWorldToScreen(b->x, PathPointDisplayHeight(*b), b->z, center, scale);
+        if (pa.depth <= 0.05f || pb.depth <= 0.05f)
+        {
+            continue;
+        }
+        float t = 0.0f;
+        const float distanceSq = DistanceToSegmentSquared(mouse, pa.screen, pb.screen, &t);
+        if (distanceSq <= bestEdgeDistanceSq)
+        {
+            bestEdgeDistanceSq = distanceSq;
+            result.kind = PathSelectionKind::Edge;
+            result.elementId = edge.id;
+            result.t = t;
+        }
+    }
+    return result;
+}
+
+bool TryPickViewportGroundPlanePoint(const ImVec2& min, const ImVec2& max, const ImVec2& mouse, Vec3* outPoint)
+{
+    const float viewportWidth = std::max(1.0f, max.x - min.x);
+    const float viewportHeight = std::max(1.0f, max.y - min.y);
+    const float viewportSize = std::min(viewportWidth, viewportHeight);
+    const float scale = viewportSize * 1.20f;
+    const ImVec2 center((min.x + max.x) * 0.5f + g_viewport.pan.x, (min.y + max.y) * 0.5f + g_viewport.pan.y);
+    const float fovRadians = std::clamp(g_viewport.fovDegrees, 15.0f, 90.0f) * kDegreesToRadians;
+    const float focalLength = 1.0f / std::tan(fovRadians * 0.5f);
+    const float cameraX = (mouse.x - center.x) / (focalLength * scale);
+    const float cameraY = -(mouse.y - center.y) / (focalLength * scale);
+
+    const CameraBasis basis = terrain::BuildCameraBasis(MakeViewportCameraState());
+    const Vec3 rayDir = terrain::Normalize(
+        terrain::Add(terrain::Add(basis.forward, terrain::Scale(basis.right, cameraX)), terrain::Scale(basis.up, cameraY)),
+        basis.forward);
+    if (std::abs(rayDir.y) <= 0.000001f)
+    {
+        return false;
+    }
+
+    const float t = -basis.position.y / rayDir.y;
+    if (t <= 0.0f)
+    {
+        return false;
+    }
+
+    Vec3 hitPoint = terrain::Add(basis.position, terrain::Scale(rayDir, t));
+    const float halfSize = std::max(1.0f, g_graph.Settings().preview.terrainSizeMeters) * 0.5f;
+    hitPoint.x = std::clamp(hitPoint.x, -halfSize, halfSize);
+    hitPoint.y = 0.0f;
+    hitPoint.z = std::clamp(hitPoint.z, -halfSize, halfSize);
+    if (outPoint)
+    {
+        *outPoint = hitPoint;
+    }
+    return true;
+}
+
+bool IsMouseOverViewportDisplayUi(const ImVec2& viewportMin)
+{
+    const ImVec2 mouse = ImGui::GetIO().MousePos;
+    const ImVec2 buttonMin(viewportMin.x + 14.0f, viewportMin.y + 12.0f);
+    const ImVec2 buttonMax(buttonMin.x + 54.0f, buttonMin.y + 28.0f);
+    if (mouse.x >= buttonMin.x && mouse.x <= buttonMax.x && mouse.y >= buttonMin.y && mouse.y <= buttonMax.y)
+    {
+        return true;
+    }
+
+    if (ImGuiWindow* popup = ImGui::FindWindowByName("ViewportDisplayMenu"))
+    {
+        if (popup->WasActive)
+        {
+            const ImVec2 popupMin = popup->Pos;
+            const ImVec2 popupMax(popup->Pos.x + popup->Size.x, popup->Pos.y + popup->Size.y);
+            if (mouse.x >= popupMin.x && mouse.x <= popupMax.x && mouse.y >= popupMin.y && mouse.y <= popupMax.y)
+            {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool UpdatePathViewportInteraction(const ImVec2& min, const ImVec2& max)
+{
+    const rock::Node* pathNode = SelectedPathNode();
+    if (pathNode == nullptr)
+    {
+        return false;
+    }
+
+    ImGuiIO& io = ImGui::GetIO();
+    const bool hovered = ImGui::IsMouseHoveringRect(min, max);
+    if (!hovered || io.WantTextInput)
+    {
+        return false;
+    }
+
+    if (FinishPathSegmentFromShortcut())
+    {
+        return true;
+    }
+
+    if (UpdatePathMoveGizmoDrag(min, max))
+    {
+        return true;
+    }
+
+    if (ImGui::IsKeyPressed(ImGuiKey_W) && !io.KeyCtrl && !io.KeyShift && !io.KeyAlt)
+    {
+        EnablePathMoveGizmo();
+        return true;
+    }
+
+    if (ImGui::IsKeyPressed(ImGuiKey_Delete))
+    {
+        DeleteSelectedPathElement();
+        return true;
+    }
+
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyShift && !io.KeyAlt)
+    {
+        if (IsMouseOverViewportDisplayUi(min))
+        {
+            return false;
+        }
+
+        if (!io.KeyCtrl && StartPathMoveGizmoDrag(min, max))
+        {
+            return true;
+        }
+
+        const PathHitResult hit = HitTestPathViewport(*pathNode, min, max, io.MousePos);
+        if (!io.KeyCtrl && hit.kind == PathSelectionKind::Point)
+        {
+            SelectPathPoint(hit.elementId);
+            return true;
+        }
+        if (hit.kind == PathSelectionKind::Edge)
+        {
+            if (io.KeyCtrl)
+            {
+                rock::Node* mutablePathNode = SelectedMutablePathNode();
+                if (mutablePathNode != nullptr)
+                {
+                    InsertPathPointOnEdge(*mutablePathNode, hit.elementId, hit.t);
+                }
+                return true;
+            }
+            SelectPathEdge(hit.elementId);
+            return true;
+        }
+
+        if (io.KeyCtrl)
+        {
+            return false;
+        }
+
+        Vec3 hitPoint;
+        if (TryPickViewportFocusPoint(min, max, io.MousePos, &hitPoint, nullptr, nullptr) ||
+            TryPickViewportGroundPlanePoint(min, max, io.MousePos, &hitPoint))
+        {
+            AddPathPointFromViewport(hitPoint.x, hitPoint.z, hitPoint.y, rock::PathPointHeightMode::ProjectToTerrain);
+            return true;
+        }
+    }
+    return false;
+}
 
 void UpdateViewportInteraction(const ImVec2& min, const ImVec2& max)
 {
     ImGuiIO& io = ImGui::GetIO();
     const bool hovered = ImGui::IsMouseHoveringRect(min, max);
     const bool viewportInputAvailable = hovered && !io.WantTextInput;
-    const bool focusPickShortcut = viewportInputAvailable && io.KeyCtrl;
-    g_focusPickCursorActive = g_focusPickMode || focusPickShortcut;
+    const bool pathEditMode = SelectedPathNode() != nullptr;
+    const bool focusPickAvailable = g_graph.Settings().preview.depthOfFieldEnabled && !pathEditMode;
+    if (!focusPickAvailable)
+    {
+        g_focusPickMode = false;
+    }
+    const bool focusPickShortcut = focusPickAvailable && viewportInputAvailable && io.KeyCtrl;
+    g_focusPickCursorActive = focusPickAvailable && (g_focusPickMode || focusPickShortcut);
     g_focusPickHoverPoint.reset();
 
     if (g_focusPickCursorActive && viewportInputAvailable)
@@ -4717,25 +5470,31 @@ void UpdateViewportInteraction(const ImVec2& min, const ImVec2& max)
         return;
     }
 
+    if (UpdatePathViewportInteraction(min, max))
+    {
+        return;
+    }
+
     if (!hovered)
     {
         return;
     }
 
-    if (io.MouseWheel != 0.0f)
+    const bool altNavigation = io.KeyAlt;
+    if (altNavigation && io.MouseWheel != 0.0f)
     {
         const float zoomFactor = std::pow(0.86f, io.MouseWheel);
         g_viewport.orbitDistance = std::clamp(g_viewport.orbitDistance * zoomFactor, 1.0f, kMaxViewportOrbitDistance);
     }
 
-    if (ImGui::IsMouseDragging(ImGuiMouseButton_Left) && !io.KeyCtrl)
+    if (altNavigation && ImGui::IsMouseDragging(ImGuiMouseButton_Left) && !io.KeyCtrl)
     {
         g_viewport.yaw -= io.MouseDelta.x * 0.01f;
         g_viewport.pitch += io.MouseDelta.y * 0.01f;
         g_viewport.pitch = std::clamp(g_viewport.pitch, -1.25f, 1.25f);
     }
 
-    if ((ImGui::IsMouseDragging(ImGuiMouseButton_Right) || ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) && hovered)
+    if (altNavigation && (ImGui::IsMouseDragging(ImGuiMouseButton_Right) || ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) && hovered)
     {
         g_viewport.pan.x += io.MouseDelta.x;
         g_viewport.pan.y += io.MouseDelta.y;
@@ -4870,6 +5629,165 @@ void DrawFocusPickOverlay(ImDrawList* drawList, const ImVec2& min, const ImVec2&
         drawList->AddText(ImVec2(textMin.x + padding.x, textMin.y + padding.y), IM_COL32(232, 235, 233, 255), text);
     }
 
+    drawList->PopClipRect();
+}
+
+const rock::PathPoint* FindPathPoint(const rock::PathSettings& path, rock::GraphId pointId)
+{
+    const auto it = std::ranges::find_if(path.points, [pointId](const rock::PathPoint& point) {
+        return point.id == pointId;
+    });
+    return it != path.points.end() ? &*it : nullptr;
+}
+
+float PathPointDisplayHeight(const rock::PathPoint& point)
+{
+    switch (point.heightMode)
+    {
+    case rock::PathPointHeightMode::Absolute:
+        return point.height;
+    case rock::PathPointHeightMode::TerrainOffset:
+        return terrain::SampleHeightAtWorld(g_graph.Evaluation().previewHeightfield, point.x, point.z) + point.heightOffset;
+    case rock::PathPointHeightMode::ProjectToTerrain:
+    default:
+        return terrain::SampleHeightAtWorld(g_graph.Evaluation().previewHeightfield, point.x, point.z);
+    }
+}
+
+void DrawPathMoveGizmo(ImDrawList* drawList, const ImVec2& min, const ImVec2& max)
+{
+    if (!g_pathMoveGizmoVisible || g_pathSelectionKind != PathSelectionKind::Point)
+    {
+        return;
+    }
+    Vec3 pivot;
+    if (!SelectedPathPointPosition(&pivot))
+    {
+        return;
+    }
+
+    const float viewportSize = std::min(max.x - min.x, max.y - min.y);
+    const float scale = viewportSize * 1.20f;
+    const ImVec2 center((min.x + max.x) * 0.5f + g_viewport.pan.x, (min.y + max.y) * 0.5f + g_viewport.pan.y);
+    const ProjectedPoint pivotScreen = ProjectWorldToScreen(pivot.x, pivot.y, pivot.z, center, scale);
+    if (pivotScreen.depth <= 0.05f)
+    {
+        return;
+    }
+
+    const float axisLength = PathMoveGizmoAxisLength(pivot, center, scale);
+    const ImU32 axisXColor = IM_COL32(255, 76, 76, 255);
+    const ImU32 axisYColor = IM_COL32(92, 230, 92, 255);
+    const ImU32 axisZColor = IM_COL32(82, 156, 255, 255);
+    const ImU32 pivotColor = IM_COL32(255, 255, 255, 235);
+    const bool centerActive = g_pathActiveMoveGizmoAxis == PathMoveGizmoAxis::Center;
+    drawList->AddCircleFilled(pivotScreen.screen, centerActive ? 7.0f : 5.5f, pivotColor, 16);
+    drawList->AddCircle(pivotScreen.screen, centerActive ? 9.0f : 7.5f, IM_COL32(30, 34, 38, 255), 16, centerActive ? 2.5f : 1.5f);
+
+    struct AxisDrawInfo
+    {
+        PathMoveGizmoAxis axis;
+        ImU32 color;
+    };
+    const AxisDrawInfo axes[] = {
+        {PathMoveGizmoAxis::X, axisXColor},
+        {PathMoveGizmoAxis::Y, axisYColor},
+        {PathMoveGizmoAxis::Z, axisZColor},
+    };
+
+    for (const AxisDrawInfo& axisInfo : axes)
+    {
+        const Vec3 dir = PathMoveGizmoAxisDirection(axisInfo.axis);
+        const ProjectedPoint end = ProjectWorldToScreen(
+            pivot.x + dir.x * axisLength,
+            pivot.y + dir.y * axisLength,
+            pivot.z + dir.z * axisLength,
+            center,
+            scale);
+        if (end.depth <= 0.05f)
+        {
+            continue;
+        }
+        const bool active = g_pathActiveMoveGizmoAxis == axisInfo.axis;
+        const float thickness = active ? 4.0f : 2.6f;
+        drawList->AddLine(pivotScreen.screen, end.screen, axisInfo.color, thickness);
+
+        ImVec2 screenDir(end.screen.x - pivotScreen.screen.x, end.screen.y - pivotScreen.screen.y);
+        const float screenLen = std::sqrt(screenDir.x * screenDir.x + screenDir.y * screenDir.y);
+        if (screenLen > 0.001f)
+        {
+            screenDir.x /= screenLen;
+            screenDir.y /= screenLen;
+            const ImVec2 side(-screenDir.y, screenDir.x);
+            const float headLength = active ? 14.0f : 12.0f;
+            const float headHalfWidth = active ? 6.0f : 5.0f;
+            const ImVec2 base(end.screen.x - screenDir.x * headLength, end.screen.y - screenDir.y * headLength);
+            drawList->AddTriangleFilled(
+                end.screen,
+                ImVec2(base.x + side.x * headHalfWidth, base.y + side.y * headHalfWidth),
+                ImVec2(base.x - side.x * headHalfWidth, base.y - side.y * headHalfWidth),
+                axisInfo.color);
+        }
+    }
+}
+
+void DrawPathViewportOverlay(ImDrawList* drawList, const ImVec2& min, const ImVec2& max)
+{
+    const rock::Node* node = SelectedPathNode();
+    if (node == nullptr)
+    {
+        return;
+    }
+
+    const float viewportSize = std::min(max.x - min.x, max.y - min.y);
+    const float scale = viewportSize * 1.20f;
+    const ImVec2 center((min.x + max.x) * 0.5f + g_viewport.pan.x, (min.y + max.y) * 0.5f + g_viewport.pan.y);
+    const ImU32 edgeColor = IM_COL32(90, 182, 255, 230);
+    const ImU32 selectedEdgeColor = IM_COL32(255, 210, 92, 255);
+    const ImU32 pointColor = IM_COL32(250, 247, 224, 255);
+    const ImU32 selectedPointColor = IM_COL32(255, 210, 92, 255);
+    const ImU32 pointBorderColor = IM_COL32(31, 35, 38, 255);
+
+    drawList->PushClipRect(min, max, true);
+    for (const rock::PathEdge& edge : node->path.edges)
+    {
+        if (!edge.enabled)
+        {
+            continue;
+        }
+        const rock::PathPoint* a = FindPathPoint(node->path, edge.fromPoint);
+        const rock::PathPoint* b = FindPathPoint(node->path, edge.toPoint);
+        if (a == nullptr || b == nullptr)
+        {
+            continue;
+        }
+        const ProjectedPoint pa = ProjectWorldToScreen(a->x, PathPointDisplayHeight(*a), a->z, center, scale);
+        const ProjectedPoint pb = ProjectWorldToScreen(b->x, PathPointDisplayHeight(*b), b->z, center, scale);
+        if (pa.depth > 0.05f && pb.depth > 0.05f)
+        {
+            const bool selected = g_pathSelectionKind == PathSelectionKind::Edge && g_pathSelectedElementId == edge.id;
+            drawList->AddLine(pa.screen, pb.screen, selected ? selectedEdgeColor : edgeColor, selected ? 4.0f : 2.5f);
+        }
+    }
+    for (const rock::PathPoint& point : node->path.points)
+    {
+        const ProjectedPoint projected = ProjectWorldToScreen(point.x, PathPointDisplayHeight(point), point.z, center, scale);
+        if (projected.depth <= 0.05f)
+        {
+            continue;
+        }
+        const bool selected = g_pathSelectionKind == PathSelectionKind::Point && g_pathSelectedElementId == point.id;
+        drawList->AddCircleFilled(projected.screen, selected ? 6.5f : 5.0f, selected ? selectedPointColor : pointColor, 16);
+        drawList->AddCircle(projected.screen, selected ? 6.5f : 5.0f, pointBorderColor, 16, 1.5f);
+    }
+    DrawPathMoveGizmo(drawList, min, max);
+    const char* modeText = "Path mode: click/select, Ctrl+edge inserts, Del deletes, Enter finishes";
+    const ImVec2 textSize = ImGui::CalcTextSize(modeText);
+    const ImVec2 padding(9.0f, 6.0f);
+    const ImVec2 textMin(min.x + 14.0f, max.y - textSize.y - padding.y * 2.0f - 14.0f);
+    const ImVec2 textMax(textMin.x + textSize.x + padding.x * 2.0f, textMin.y + textSize.y + padding.y * 2.0f);
+    drawList->AddRectFilled(textMin, textMax, IM_COL32(8, 10, 10, 190), 4.0f);
+    drawList->AddText(ImVec2(textMin.x + padding.x, textMin.y + padding.y), IM_COL32(232, 235, 233, 255), modeText);
     drawList->PopClipRect();
 }
 
@@ -7372,6 +8290,7 @@ void DrawViewportCube(const ImVec2& min, const ImVec2& max, float timeSeconds)
                            drawMeshSurface && preview.showSurface,
                            drawMeshSurface && preview.showWireframe);
     }
+    DrawPathViewportOverlay(drawList, min, max);
     DrawFocusPickOverlay(drawList, min, max);
     DrawViewportDisplayMenu(min);
     float overlayTop = min.y + 14.0f;
@@ -7521,6 +8440,184 @@ ImU32 MapPreviewColor(float value, bool mask, rock::MaskShadingMode mode, int ce
     return IM_COL32(c, c, c, 255);
 }
 
+ImVec2 PathWorldToMapScreen(float x, float z, const ImVec2& mapMin, const ImVec2& mapMax)
+{
+    const float terrainSize = std::max(1.0f, g_graph.Settings().preview.terrainSizeMeters);
+    const float halfSize = terrainSize * 0.5f;
+    const float u = std::clamp((x + halfSize) / terrainSize, 0.0f, 1.0f);
+    const float v = std::clamp((halfSize - z) / terrainSize, 0.0f, 1.0f);
+    return ImVec2(std::lerp(mapMin.x, mapMax.x, u), std::lerp(mapMin.y, mapMax.y, v));
+}
+
+bool MapScreenToPathWorld(const ImVec2& screen, const ImVec2& mapMin, const ImVec2& mapMax, float* outX, float* outZ)
+{
+    if (screen.x < mapMin.x || screen.x > mapMax.x || screen.y < mapMin.y || screen.y > mapMax.y)
+    {
+        return false;
+    }
+    const float terrainSize = std::max(1.0f, g_graph.Settings().preview.terrainSizeMeters);
+    const float halfSize = terrainSize * 0.5f;
+    const float u = (screen.x - mapMin.x) / std::max(1.0f, mapMax.x - mapMin.x);
+    const float v = (screen.y - mapMin.y) / std::max(1.0f, mapMax.y - mapMin.y);
+    *outX = u * terrainSize - halfSize;
+    *outZ = halfSize - v * terrainSize;
+    return true;
+}
+
+void DrawPathMapOverlay(ImDrawList* drawList, const ImVec2& mapMin, const ImVec2& mapMax)
+{
+    const rock::Node* node = SelectedPathNode();
+    if (node == nullptr)
+    {
+        return;
+    }
+
+    const ImU32 edgeColor = IM_COL32(90, 182, 255, 235);
+    const ImU32 selectedEdgeColor = IM_COL32(255, 210, 92, 255);
+    const ImU32 pointColor = IM_COL32(250, 247, 224, 255);
+    const ImU32 selectedPointColor = IM_COL32(255, 210, 92, 255);
+    const ImU32 pointBorderColor = IM_COL32(31, 35, 38, 255);
+    drawList->PushClipRect(mapMin, mapMax, true);
+    for (const rock::PathEdge& edge : node->path.edges)
+    {
+        if (!edge.enabled)
+        {
+            continue;
+        }
+        const rock::PathPoint* a = FindPathPoint(node->path, edge.fromPoint);
+        const rock::PathPoint* b = FindPathPoint(node->path, edge.toPoint);
+        if (a == nullptr || b == nullptr)
+        {
+            continue;
+        }
+        const bool selected = g_pathSelectionKind == PathSelectionKind::Edge && g_pathSelectedElementId == edge.id;
+        drawList->AddLine(PathWorldToMapScreen(a->x, a->z, mapMin, mapMax), PathWorldToMapScreen(b->x, b->z, mapMin, mapMax), selected ? selectedEdgeColor : edgeColor, selected ? 4.0f : 2.5f);
+    }
+    for (const rock::PathPoint& point : node->path.points)
+    {
+        const ImVec2 p = PathWorldToMapScreen(point.x, point.z, mapMin, mapMax);
+        const bool selected = g_pathSelectionKind == PathSelectionKind::Point && g_pathSelectedElementId == point.id;
+        drawList->AddCircleFilled(p, selected ? 6.5f : 5.0f, selected ? selectedPointColor : pointColor, 16);
+        drawList->AddCircle(p, selected ? 6.5f : 5.0f, pointBorderColor, 16, 1.5f);
+    }
+    drawList->PopClipRect();
+    drawList->AddText(ImVec2(mapMin.x, mapMax.y + 8.0f), ThemeColor("mutedText", ImVec4(0.54f, 0.59f, 0.56f, 1.0f)), "Path mode: click/select, Ctrl+edge inserts, Del deletes, Enter finishes");
+}
+
+PathHitResult HitTestPathMap(const rock::Node& node, const ImVec2& mapMin, const ImVec2& mapMax, const ImVec2& mouse)
+{
+    constexpr float kPointHitRadius = 8.0f;
+    constexpr float kEdgeHitRadius = 7.0f;
+    PathHitResult result;
+    float bestPointDistanceSq = kPointHitRadius * kPointHitRadius;
+    float bestEdgeDistanceSq = kEdgeHitRadius * kEdgeHitRadius;
+
+    for (const rock::PathPoint& point : node.path.points)
+    {
+        const ImVec2 p = PathWorldToMapScreen(point.x, point.z, mapMin, mapMax);
+        const float distanceSq = DistanceSquared(mouse, p);
+        if (distanceSq <= bestPointDistanceSq)
+        {
+            bestPointDistanceSq = distanceSq;
+            result.kind = PathSelectionKind::Point;
+            result.elementId = point.id;
+            result.t = 0.0f;
+        }
+    }
+    if (result.kind == PathSelectionKind::Point)
+    {
+        return result;
+    }
+
+    for (const rock::PathEdge& edge : node.path.edges)
+    {
+        if (!edge.enabled)
+        {
+            continue;
+        }
+        const rock::PathPoint* a = FindPathPoint(node.path, edge.fromPoint);
+        const rock::PathPoint* b = FindPathPoint(node.path, edge.toPoint);
+        if (a == nullptr || b == nullptr)
+        {
+            continue;
+        }
+        float t = 0.0f;
+        const float distanceSq = DistanceToSegmentSquared(
+            mouse,
+            PathWorldToMapScreen(a->x, a->z, mapMin, mapMax),
+            PathWorldToMapScreen(b->x, b->z, mapMin, mapMax),
+            &t);
+        if (distanceSq <= bestEdgeDistanceSq)
+        {
+            bestEdgeDistanceSq = distanceSq;
+            result.kind = PathSelectionKind::Edge;
+            result.elementId = edge.id;
+            result.t = t;
+        }
+    }
+    return result;
+}
+
+void HandlePathMapInput(const ImVec2& mapMin, const ImVec2& mapMax)
+{
+    const rock::Node* pathNode = SelectedPathNode();
+    if (pathNode == nullptr)
+    {
+        return;
+    }
+
+    ImGuiIO& io = ImGui::GetIO();
+    const bool hovered = ImGui::IsMouseHoveringRect(mapMin, mapMax);
+    if (hovered && !io.WantTextInput && FinishPathSegmentFromShortcut())
+    {
+        return;
+    }
+    if (hovered && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Delete))
+    {
+        DeleteSelectedPathElement();
+        return;
+    }
+    if (io.WantTextInput || !ImGui::IsMouseClicked(ImGuiMouseButton_Left) || io.KeyShift || io.KeyAlt)
+    {
+        return;
+    }
+    if (hovered)
+    {
+        const PathHitResult hit = HitTestPathMap(*pathNode, mapMin, mapMax, io.MousePos);
+        if (!io.KeyCtrl && hit.kind == PathSelectionKind::Point)
+        {
+            SelectPathPoint(hit.elementId);
+            return;
+        }
+        if (hit.kind == PathSelectionKind::Edge)
+        {
+            if (io.KeyCtrl)
+            {
+                rock::Node* mutablePathNode = SelectedMutablePathNode();
+                if (mutablePathNode != nullptr)
+                {
+                    InsertPathPointOnEdge(*mutablePathNode, hit.elementId, hit.t);
+                }
+                return;
+            }
+            SelectPathEdge(hit.elementId);
+            return;
+        }
+    }
+
+    if (io.KeyCtrl)
+    {
+        return;
+    }
+
+    float x = 0.0f;
+    float z = 0.0f;
+    if (MapScreenToPathWorld(io.MousePos, mapMin, mapMax, &x, &z))
+    {
+        AddPathPointFromViewport(x, z, 0.0f, rock::PathPointHeightMode::ProjectToTerrain);
+    }
+}
+
 void DrawHeightfieldMapPreview(const ImVec2& min, const ImVec2& max)
 {
     constexpr int kMaxMapPreviewSamples = 1024;
@@ -7597,6 +8694,8 @@ void DrawHeightfieldMapPreview(const ImVec2& min, const ImVec2& max)
         }
         drawList->AddRect(mapMin, mapMax, ThemeColor("border", ImVec4(0.20f, 0.23f, 0.22f, 0.85f)));
         drawList->PopClipRect();
+        DrawPathMapOverlay(drawList, mapMin, mapMax);
+        HandlePathMapInput(mapMin, mapMax);
         char info[128]{};
         const bool downsampled = samples != res;
         if (downsampled)
@@ -7658,6 +8757,8 @@ void DrawHeightfieldMapPreview(const ImVec2& min, const ImVec2& max)
     }
     drawList->AddRect(mapMin, mapMax, ThemeColor("border", ImVec4(0.20f, 0.23f, 0.22f, 0.85f)));
     drawList->PopClipRect();
+    DrawPathMapOverlay(drawList, mapMin, mapMax);
+    HandlePathMapInput(mapMin, mapMax);
 
     char info[192]{};
     const bool downsampled = samples != gridResolution;
@@ -7712,6 +8813,8 @@ ImVec4 NodeAccentColor(rock::NodeKind kind)
         return maskOrange;
     case rock::NodeKind::Colorize:
         return ImVec4(0.44f, 0.50f, 0.96f, 1.0f); // 青紫 (カラー系)
+    case rock::NodeKind::Path:
+        return ImVec4(0.34f, 0.68f, 1.00f, 1.0f);
     default:
         return ImVec4(0.75f, 0.75f, 0.75f, 1.0f);
     }
@@ -7755,6 +8858,8 @@ ImVec2 InitialNodePosition(rock::NodeKind kind)
         return ImVec2(880.0f, 660.0f);
     case rock::NodeKind::Colorize:
         return ImVec2(1160.0f, 380.0f);
+    case rock::NodeKind::Path:
+        return ImVec2(40.0f, 720.0f);
     default:
         return ImVec2(40.0f, 64.0f);
     }
@@ -7803,7 +8908,8 @@ void UpdateMapViewportInteraction(const ImVec2& min, const ImVec2& max)
         return;
     }
 
-    if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+    const bool altNavigation = io.KeyAlt;
+    if (altNavigation && hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
     {
         ResetMapViewport();
         SaveAppSettingsSilently();
@@ -7811,7 +8917,7 @@ void UpdateMapViewportInteraction(const ImVec2& min, const ImVec2& max)
     }
 
     bool changed = false;
-    if (hovered && io.MouseWheel != 0.0f)
+    if (altNavigation && hovered && io.MouseWheel != 0.0f)
     {
         const float oldZoom = g_mapViewport.zoom;
         const ImVec2 mouse = io.MousePos;
@@ -7824,7 +8930,7 @@ void UpdateMapViewportInteraction(const ImVec2& min, const ImVec2& max)
         changed = true;
     }
 
-    if ((ImGui::IsMouseDragging(ImGuiMouseButton_Left) || ImGui::IsMouseDragging(ImGuiMouseButton_Right) || ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) && hovered)
+    if (altNavigation && (ImGui::IsMouseDragging(ImGuiMouseButton_Left) || ImGui::IsMouseDragging(ImGuiMouseButton_Right) || ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) && hovered)
     {
         g_mapViewport.pan.x += io.MouseDelta.x;
         g_mapViewport.pan.y += io.MouseDelta.y;
@@ -8440,7 +9546,7 @@ void DrawNodeGraph()
 
     if (ed::ShowBackgroundContextMenu())
     {
-        addNodePosition = CurrentNodeViewCenter(canvasMin, canvasMax);
+        addNodePosition = ed::ScreenToCanvas(ImGui::GetMousePos());
         ed::Suspend();
         ImGui::OpenPopup("AddNodeContextMenu");
         ed::Resume();
@@ -8496,6 +9602,11 @@ void DrawNodeGraph()
         if (ImGui::BeginMenu("カラー"))
         {
             addNodeMenuItem(rock::NodeKind::Colorize);
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("パス"))
+        {
+            addNodeMenuItem(rock::NodeKind::Path);
             ImGui::EndMenu();
         }
         ImGui::EndPopup();
@@ -9820,6 +10931,17 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
             []() { return (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0; },
             [](float& r, float& g, float& b) { SampleScreenPixel(r, g, b); },
             []() { SetForegroundWindow(g_hwnd); },
+            [](rock::GraphId nodeId) -> rock::GraphId {
+                const rock::Node* node = g_graph.FindNode(nodeId);
+                if (node != nullptr &&
+                    nodeId == g_selectedNodeId &&
+                    g_pathSelectionKind == PathSelectionKind::Point &&
+                    PathContainsPoint(*node, g_pathSelectedElementId))
+                {
+                    return g_pathSelectedElementId;
+                }
+                return 0;
+            },
         });
 
         ShowWindow(g_hwnd, showCommand);
