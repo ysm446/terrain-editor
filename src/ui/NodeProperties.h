@@ -35,6 +35,7 @@ struct NodePropertyCallbacks
     std::function<void(float&, float&, float&)> sampleScreenPixel;
     std::function<void()> requestForeground;
     std::function<rock::GraphId(rock::GraphId)> selectedPathPointId;
+    std::function<rock::GraphId(rock::GraphId)> selectedPathEdgeId;
 };
 
 void SetNodePropertyCallbacks(NodePropertyCallbacks callbacks);

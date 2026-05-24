@@ -192,6 +192,7 @@ uint64_t HashPathSettings(const PathSettings& path)
     HashCombine(hash, HashFloat(path.defaultFeatherMeters));
     HashCombine(hash, HashFloat(path.defaultHeightOffset));
     HashCombine(hash, static_cast<uint64_t>(path.defaultHeightMode));
+    HashCombine(hash, static_cast<uint64_t>(path.defaultSegmentType));
     for (const PathPoint& point : path.points)
     {
         HashCombine(hash, static_cast<uint64_t>(point.id));
@@ -210,6 +211,7 @@ uint64_t HashPathSettings(const PathSettings& path)
         HashCombine(hash, static_cast<uint64_t>(edge.fromPoint));
         HashCombine(hash, static_cast<uint64_t>(edge.toPoint));
         HashCombine(hash, static_cast<uint64_t>(edge.enabled ? 1 : 0));
+        HashCombine(hash, static_cast<uint64_t>(edge.segmentType));
     }
     return hash;
 }
@@ -252,6 +254,26 @@ const PathPoint* FindPathPoint(const PathSettings& path, GraphId pointId)
         return point.id == pointId;
     });
     return it != path.points.end() ? &*it : nullptr;
+}
+
+const PathPoint* FindConnectedPathPoint(const PathSettings& path, GraphId pointId, GraphId excludePointId)
+{
+    for (const PathEdge& edge : path.edges)
+    {
+        if (!edge.enabled)
+        {
+            continue;
+        }
+        if (edge.fromPoint == pointId && edge.toPoint != excludePointId)
+        {
+            return FindPathPoint(path, edge.toPoint);
+        }
+        if (edge.toPoint == pointId && edge.fromPoint != excludePointId)
+        {
+            return FindPathPoint(path, edge.fromPoint);
+        }
+    }
+    return nullptr;
 }
 
 uint64_t HashCrumblingSettings(const CrumblingSettings& settings, int resolution)
@@ -482,6 +504,35 @@ MaskGrid GenerateMaskPath(const PathSettings& path, const MaskPathSettings& sett
         float intensityB = 1.0f;
     };
 
+    const auto addLinearSegment = [](std::vector<SegmentSample>& samples,
+                                     float ax,
+                                     float az,
+                                     float bx,
+                                     float bz,
+                                     float widthA,
+                                     float widthB,
+                                     float featherA,
+                                     float featherB,
+                                     float intensityA,
+                                     float intensityB)
+    {
+        const float abX = bx - ax;
+        const float abZ = bz - az;
+        const float lenSq = abX * abX + abZ * abZ;
+        if (lenSq <= 0.000001f)
+        {
+            return;
+        }
+        samples.push_back({ax, az, abX, abZ, lenSq, widthA, widthB, featherA, featherB, intensityA, intensityB});
+    };
+
+    const auto catmull = [](float p0, float p1, float p2, float p3, float t)
+    {
+        const float t2 = t * t;
+        const float t3 = t2 * t;
+        return 0.5f * ((2.0f * p1) + (-p0 + p2) * t + (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * t2 + (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * t3);
+    };
+
     MaskGrid grid;
     grid.resolution = std::clamp(resolution, 2, 2048);
     const size_t cellCount = static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution);
@@ -518,26 +569,52 @@ MaskGrid GenerateMaskPath(const PathSettings& path, const MaskPathSettings& sett
         {
             continue;
         }
-        const float abX = b->x - a->x;
-        const float abZ = b->z - a->z;
-        const float lenSq = abX * abX + abZ * abZ;
-        if (lenSq <= 0.000001f)
+        if (edge.segmentType == PathSegmentType::CatmullRom)
         {
+            const PathPoint* p0 = FindConnectedPathPoint(path, a->id, b->id);
+            const PathPoint* p3 = FindConnectedPathPoint(path, b->id, a->id);
+            if (p0 == nullptr)
+            {
+                p0 = a;
+            }
+            if (p3 == nullptr)
+            {
+                p3 = b;
+            }
+
+            constexpr int kSmoothSteps = 16;
+            float prevX = a->x;
+            float prevZ = a->z;
+            for (int step = 1; step <= kSmoothSteps; ++step)
+            {
+                const float t0 = static_cast<float>(step - 1) / static_cast<float>(kSmoothSteps);
+                const float t1 = static_cast<float>(step) / static_cast<float>(kSmoothSteps);
+                const float nextX = catmull(p0->x, a->x, b->x, p3->x, t1);
+                const float nextZ = catmull(p0->z, a->z, b->z, p3->z, t1);
+                addLinearSegment(segmentSamples, prevX, prevZ, nextX, nextZ,
+                    std::lerp(PathPointMaskWidth(*a), PathPointMaskWidth(*b), t0),
+                    std::lerp(PathPointMaskWidth(*a), PathPointMaskWidth(*b), t1),
+                    std::lerp(PathPointMaskFeather(*a), PathPointMaskFeather(*b), t0),
+                    std::lerp(PathPointMaskFeather(*a), PathPointMaskFeather(*b), t1),
+                    std::lerp(PathPointMaskIntensity(*a), PathPointMaskIntensity(*b), t0),
+                    std::lerp(PathPointMaskIntensity(*a), PathPointMaskIntensity(*b), t1));
+                prevX = nextX;
+                prevZ = nextZ;
+            }
             continue;
         }
-        segmentSamples.push_back({
+
+        addLinearSegment(segmentSamples,
             a->x,
             a->z,
-            abX,
-            abZ,
-            lenSq,
+            b->x,
+            b->z,
             PathPointMaskWidth(*a),
             PathPointMaskWidth(*b),
             PathPointMaskFeather(*a),
             PathPointMaskFeather(*b),
             PathPointMaskIntensity(*a),
-            PathPointMaskIntensity(*b),
-        });
+            PathPointMaskIntensity(*b));
     }
 
     const float terrainSize = std::max(1.0f, terrainSizeMeters);

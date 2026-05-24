@@ -10,6 +10,7 @@
 - `Mask Path` は `Mask` 出力を返します。
 - 各ポイントの `Width`、`Feather`、`Intensity` がマスクに使われます。
 - エッジ上では、両端ポイントの `Width`、`Feather`、`Intensity` を補間します。
+- Path の `Segment Type` が `Smooth` のエッジは、ポイントを通る Catmull-Rom カーブとして近似してマスク化します。Smooth エッジを含む場合、Mask Path の GPU backend は現在 CPU 評価へフォールバックします。
 - 複数のエッジやポイントが重なる場所は、最も強い値を使います。
 
 ## マスクの形

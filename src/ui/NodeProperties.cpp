@@ -43,12 +43,25 @@ rock::GraphId SelectedPathPointId(rock::GraphId nodeId)
     return g_callbacks.selectedPathPointId ? g_callbacks.selectedPathPointId(nodeId) : 0;
 }
 
+rock::GraphId SelectedPathEdgeId(rock::GraphId nodeId)
+{
+    return g_callbacks.selectedPathEdgeId ? g_callbacks.selectedPathEdgeId(nodeId) : 0;
+}
+
 rock::PathPoint* FindMutablePathPoint(rock::PathSettings& path, rock::GraphId pointId)
 {
     const auto it = std::ranges::find_if(path.points, [pointId](const rock::PathPoint& point) {
         return point.id == pointId;
     });
     return it != path.points.end() ? &*it : nullptr;
+}
+
+rock::PathEdge* FindMutablePathEdge(rock::PathSettings& path, rock::GraphId edgeId)
+{
+    const auto it = std::ranges::find_if(path.edges, [edgeId](const rock::PathEdge& edge) {
+        return edge.id == edgeId;
+    });
+    return it != path.edges.end() ? &*it : nullptr;
 }
 
 const char* PathHeightModeItems()
@@ -81,6 +94,35 @@ rock::PathPointHeightMode PathHeightModeFromIndex(int index)
     case 0:
     default:
         return rock::PathPointHeightMode::ProjectToTerrain;
+    }
+}
+
+const char* PathSegmentTypeItems()
+{
+    return "Straight\0Smooth\0";
+}
+
+int PathSegmentTypeToIndex(rock::PathSegmentType type)
+{
+    switch (type)
+    {
+    case rock::PathSegmentType::CatmullRom:
+        return 1;
+    case rock::PathSegmentType::Line:
+    default:
+        return 0;
+    }
+}
+
+rock::PathSegmentType PathSegmentTypeFromIndex(int index)
+{
+    switch (index)
+    {
+    case 1:
+        return rock::PathSegmentType::CatmullRom;
+    case 0:
+    default:
+        return rock::PathSegmentType::Line;
     }
 }
 
@@ -1927,6 +1969,13 @@ bool DrawPathProperties(rock::Node& editableNode)
             ApplyPathDefaultHeightSettings(editableNode.path);
             changed = true;
         }
+
+        int defaultSegmentType = PathSegmentTypeToIndex(editableNode.path.defaultSegmentType);
+        if (DrawPropertyComboRow("Segment Type", "PathDefaultSegmentType", &defaultSegmentType, PathSegmentTypeItems(), "新しく作るエッジの形状です。Smooth は打ったポイントを通る Catmull-Rom カーブとして扱います。", PathSegmentTypeToIndex(rock::PathSettings{}.defaultSegmentType)))
+        {
+            editableNode.path.defaultSegmentType = PathSegmentTypeFromIndex(defaultSegmentType);
+            changed = true;
+        }
         ImGui::EndTable();
     }
 
@@ -1936,6 +1985,8 @@ bool DrawPathProperties(rock::Node& editableNode)
     ImGui::TextWrapped("Path ノードを選択した状態で 2D/3D ビューをクリックするとポイントを追加します。ポイントクリックで選択、W キーで移動ギズモ表示、中心ドラッグでカメラ平面移動、エッジクリックでポイント挿入、Del キーで選択ポイント削除、Enter キーで現在の連続線を確定します。");
     const rock::GraphId selectedPointId = SelectedPathPointId(editableNode.id);
     rock::PathPoint* selectedPoint = selectedPointId != 0 ? FindMutablePathPoint(editableNode.path, selectedPointId) : nullptr;
+    const rock::GraphId selectedEdgeId = SelectedPathEdgeId(editableNode.id);
+    rock::PathEdge* selectedEdge = selectedEdgeId != 0 ? FindMutablePathEdge(editableNode.path, selectedEdgeId) : nullptr;
     ImGui::SeparatorText("Selected Point");
     if (selectedPoint == nullptr)
     {
@@ -1954,6 +2005,25 @@ bool DrawPathProperties(rock::Node& editableNode)
         }
     }
 
+    ImGui::SeparatorText("Selected Edge");
+    if (selectedEdge == nullptr)
+    {
+        ImGui::TextDisabled("No edge selected");
+    }
+    else
+    {
+        ImGui::Text("ID: %llu", static_cast<unsigned long long>(selectedEdge->id));
+        if (ImGui::BeginTable("PathSelectedEdgeRows", 2, ImGuiTableFlags_SizingStretchProp))
+        {
+            int segmentType = PathSegmentTypeToIndex(selectedEdge->segmentType);
+            if (DrawPropertyComboRow("Segment Type", "PathSelectedEdgeSegmentType", &segmentType, PathSegmentTypeItems(), "Shape for this edge. Smooth uses a Catmull-Rom curve through the path points.", PathSegmentTypeToIndex(editableNode.path.defaultSegmentType)))
+            {
+                selectedEdge->segmentType = PathSegmentTypeFromIndex(segmentType);
+                changed = true;
+            }
+            ImGui::EndTable();
+        }
+    }
     if (ImGui::Button("Clear Path"))
     {
         editableNode.path.points.clear();

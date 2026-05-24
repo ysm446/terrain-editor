@@ -2,6 +2,10 @@
 
 ## 未リリース
 
+## 0.19.71 - 2026-05-25 07:05
+
+- `Path` ノードに `Segment Type` を追加し、新しく作るエッジや選択中エッジを `Straight` / `Smooth` から選べるようにしました。`Smooth` はポイントを通る Catmull-Rom カーブとして Mask Path とビューポート表示へ反映します。
+
 ## 0.19.70 - 2026-05-25 06:55
 
 - `Mask Path`、`Mask Blur`、`Heightmap From Mask` に GPU backend を追加しました。各ノードの `Backend` から `CPU` / `GPU` を切り替えられ、GPU 実行に失敗した場合は CPU 実装へフォールバックします。

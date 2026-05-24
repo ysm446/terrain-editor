@@ -4692,6 +4692,8 @@ float CameraFovYDegreesFromFocalLengthMm(float focalLengthMm)
 bool TryPickViewportFocusPoint(const ImVec2& min, const ImVec2& max, const ImVec2& mouse, Vec3* outPoint, float* outFocusDistance, ImVec2* outScreenPoint);
 const rock::PathPoint* FindPathPoint(const rock::PathSettings& path, rock::GraphId pointId);
 float PathPointDisplayHeight(const rock::PathPoint& point);
+bool PathEdgePositionAt(const rock::PathSettings& path, const rock::PathEdge& edge, float t, Vec3* outPosition);
+int PathEdgeDisplayStepCount(const rock::PathEdge& edge);
 ProjectedPoint ProjectWorldToScreen(float x, float y, float z, const ImVec2& center, float scale);
 
 rock::GraphId g_pathEditNodeId = 0;
@@ -4953,6 +4955,7 @@ rock::GraphId AppendPathPoint(rock::Node& node, float x, float z, float height, 
         edge.toPoint = pointId;
         edge.widthMeters = node.path.defaultWidthMeters;
         edge.featherMeters = node.path.defaultFeatherMeters;
+        edge.segmentType = node.path.defaultSegmentType;
         node.path.edges.push_back(edge);
     }
     return pointId;
@@ -5210,11 +5213,19 @@ void InsertPathPointOnEdge(rock::Node& node, rock::GraphId edgeId, float t)
 
     t = std::clamp(t, 0.02f, 0.98f);
     PushUndoSnapshot();
+    Vec3 splitPosition;
+    if (!PathEdgePositionAt(node.path, *edgeIt, t, &splitPosition))
+    {
+        splitPosition = Vec3(
+            std::lerp(fromPoint->x, toPoint->x, t),
+            std::lerp(PathPointDisplayHeight(*fromPoint), PathPointDisplayHeight(*toPoint), t),
+            std::lerp(fromPoint->z, toPoint->z, t));
+    }
     rock::PathPoint point;
     point.id = g_graph.AllocatePathElementId();
-    point.x = std::lerp(fromPoint->x, toPoint->x, t);
-    point.z = std::lerp(fromPoint->z, toPoint->z, t);
-    point.height = std::lerp(fromPoint->height, toPoint->height, t);
+    point.x = splitPosition.x;
+    point.z = splitPosition.z;
+    point.height = splitPosition.y;
     point.heightOffset = node.path.defaultHeightOffset;
     point.widthMeters = std::lerp(fromPoint->widthMeters, toPoint->widthMeters, t);
     point.featherMeters = std::lerp(fromPoint->featherMeters, toPoint->featherMeters, t);
@@ -5275,26 +5286,36 @@ PathHitResult HitTestPathViewport(const rock::Node& node, const ImVec2& min, con
         {
             continue;
         }
-        const rock::PathPoint* a = FindPathPoint(node.path, edge.fromPoint);
-        const rock::PathPoint* b = FindPathPoint(node.path, edge.toPoint);
-        if (a == nullptr || b == nullptr)
+        Vec3 prev;
+        if (!PathEdgePositionAt(node.path, edge, 0.0f, &prev))
         {
             continue;
         }
-        const ProjectedPoint pa = ProjectWorldToScreen(a->x, PathPointDisplayHeight(*a), a->z, center, scale);
-        const ProjectedPoint pb = ProjectWorldToScreen(b->x, PathPointDisplayHeight(*b), b->z, center, scale);
-        if (pa.depth <= 0.05f || pb.depth <= 0.05f)
+        ProjectedPoint prevProjected = ProjectWorldToScreen(prev.x, prev.y, prev.z, center, scale);
+        const int steps = PathEdgeDisplayStepCount(edge);
+        for (int step = 1; step <= steps; ++step)
         {
-            continue;
-        }
-        float t = 0.0f;
-        const float distanceSq = DistanceToSegmentSquared(mouse, pa.screen, pb.screen, &t);
-        if (distanceSq <= bestEdgeDistanceSq)
-        {
-            bestEdgeDistanceSq = distanceSq;
-            result.kind = PathSelectionKind::Edge;
-            result.elementId = edge.id;
-            result.t = t;
+            const float edgeT0 = static_cast<float>(step - 1) / static_cast<float>(steps);
+            const float edgeT1 = static_cast<float>(step) / static_cast<float>(steps);
+            Vec3 next;
+            if (!PathEdgePositionAt(node.path, edge, edgeT1, &next))
+            {
+                break;
+            }
+            const ProjectedPoint nextProjected = ProjectWorldToScreen(next.x, next.y, next.z, center, scale);
+            if (prevProjected.depth > 0.05f && nextProjected.depth > 0.05f)
+            {
+                float segmentT = 0.0f;
+                const float distanceSq = DistanceToSegmentSquared(mouse, prevProjected.screen, nextProjected.screen, &segmentT);
+                if (distanceSq <= bestEdgeDistanceSq)
+                {
+                    bestEdgeDistanceSq = distanceSq;
+                    result.kind = PathSelectionKind::Edge;
+                    result.elementId = edge.id;
+                    result.t = std::lerp(edgeT0, edgeT1, segmentT);
+                }
+            }
+            prevProjected = nextProjected;
         }
     }
     return result;
@@ -5677,6 +5698,74 @@ float PathPointDisplayHeight(const rock::PathPoint& point)
     }
 }
 
+const rock::PathPoint* FindConnectedPathPoint(const rock::PathSettings& path, rock::GraphId pointId, rock::GraphId excludePointId)
+{
+    for (const rock::PathEdge& edge : path.edges)
+    {
+        if (!edge.enabled)
+        {
+            continue;
+        }
+        if (edge.fromPoint == pointId && edge.toPoint != excludePointId)
+        {
+            return FindPathPoint(path, edge.toPoint);
+        }
+        if (edge.toPoint == pointId && edge.fromPoint != excludePointId)
+        {
+            return FindPathPoint(path, edge.fromPoint);
+        }
+    }
+    return nullptr;
+}
+
+float CatmullRom(float p0, float p1, float p2, float p3, float t)
+{
+    const float t2 = t * t;
+    const float t3 = t2 * t;
+    return 0.5f * ((2.0f * p1) + (-p0 + p2) * t + (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * t2 + (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * t3);
+}
+
+int PathEdgeDisplayStepCount(const rock::PathEdge& edge)
+{
+    return edge.segmentType == rock::PathSegmentType::CatmullRom ? 16 : 1;
+}
+
+bool PathEdgePositionAt(const rock::PathSettings& path, const rock::PathEdge& edge, float t, Vec3* outPosition)
+{
+    const rock::PathPoint* a = FindPathPoint(path, edge.fromPoint);
+    const rock::PathPoint* b = FindPathPoint(path, edge.toPoint);
+    if (a == nullptr || b == nullptr || outPosition == nullptr)
+    {
+        return false;
+    }
+
+    t = std::clamp(t, 0.0f, 1.0f);
+    if (edge.segmentType != rock::PathSegmentType::CatmullRom)
+    {
+        *outPosition = Vec3(
+            std::lerp(a->x, b->x, t),
+            std::lerp(PathPointDisplayHeight(*a), PathPointDisplayHeight(*b), t),
+            std::lerp(a->z, b->z, t));
+        return true;
+    }
+
+    const rock::PathPoint* p0 = FindConnectedPathPoint(path, a->id, b->id);
+    const rock::PathPoint* p3 = FindConnectedPathPoint(path, b->id, a->id);
+    if (p0 == nullptr)
+    {
+        p0 = a;
+    }
+    if (p3 == nullptr)
+    {
+        p3 = b;
+    }
+    *outPosition = Vec3(
+        CatmullRom(p0->x, a->x, b->x, p3->x, t),
+        CatmullRom(PathPointDisplayHeight(*p0), PathPointDisplayHeight(*a), PathPointDisplayHeight(*b), PathPointDisplayHeight(*p3), t),
+        CatmullRom(p0->z, a->z, b->z, p3->z, t));
+    return true;
+}
+
 void DrawPathMoveGizmo(ImDrawList* drawList, const ImVec2& min, const ImVec2& max)
 {
     if (!g_pathMoveGizmoVisible || g_pathSelectionKind != PathSelectionKind::Point)
@@ -5797,18 +5886,27 @@ void DrawPathViewportOverlay(ImDrawList* drawList, const ImVec2& min, const ImVe
         {
             continue;
         }
-        const rock::PathPoint* a = FindPathPoint(node->path, edge.fromPoint);
-        const rock::PathPoint* b = FindPathPoint(node->path, edge.toPoint);
-        if (a == nullptr || b == nullptr)
+        Vec3 prev;
+        if (!PathEdgePositionAt(node->path, edge, 0.0f, &prev))
         {
             continue;
         }
-        const ProjectedPoint pa = ProjectWorldToScreen(a->x, PathPointDisplayHeight(*a), a->z, center, scale);
-        const ProjectedPoint pb = ProjectWorldToScreen(b->x, PathPointDisplayHeight(*b), b->z, center, scale);
-        if (pa.depth > 0.05f && pb.depth > 0.05f)
+        ProjectedPoint prevProjected = ProjectWorldToScreen(prev.x, prev.y, prev.z, center, scale);
+        const int steps = PathEdgeDisplayStepCount(edge);
+        for (int step = 1; step <= steps; ++step)
         {
-            const bool selected = g_pathSelectionKind == PathSelectionKind::Edge && g_pathSelectedElementId == edge.id;
-            drawList->AddLine(pa.screen, pb.screen, selected ? selectedEdgeColor : edgeColor, selected ? 4.0f : 2.5f);
+            Vec3 next;
+            if (!PathEdgePositionAt(node->path, edge, static_cast<float>(step) / static_cast<float>(steps), &next))
+            {
+                break;
+            }
+            const ProjectedPoint nextProjected = ProjectWorldToScreen(next.x, next.y, next.z, center, scale);
+            if (prevProjected.depth > 0.05f && nextProjected.depth > 0.05f)
+            {
+                const bool selected = g_pathSelectionKind == PathSelectionKind::Edge && g_pathSelectedElementId == edge.id;
+                drawList->AddLine(prevProjected.screen, nextProjected.screen, selected ? selectedEdgeColor : edgeColor, selected ? 4.0f : 2.5f);
+            }
+            prevProjected = nextProjected;
         }
     }
     for (const rock::PathPoint& point : node->path.points)
@@ -8526,14 +8624,25 @@ void DrawPathMapOverlay(ImDrawList* drawList, const ImVec2& mapMin, const ImVec2
         {
             continue;
         }
-        const rock::PathPoint* a = FindPathPoint(node->path, edge.fromPoint);
-        const rock::PathPoint* b = FindPathPoint(node->path, edge.toPoint);
-        if (a == nullptr || b == nullptr)
+        Vec3 prev;
+        if (!PathEdgePositionAt(node->path, edge, 0.0f, &prev))
         {
             continue;
         }
         const bool selected = g_pathSelectionKind == PathSelectionKind::Edge && g_pathSelectedElementId == edge.id;
-        drawList->AddLine(PathWorldToMapScreen(a->x, a->z, mapMin, mapMax), PathWorldToMapScreen(b->x, b->z, mapMin, mapMax), selected ? selectedEdgeColor : edgeColor, selected ? 4.0f : 2.5f);
+        ImVec2 prevScreen = PathWorldToMapScreen(prev.x, prev.z, mapMin, mapMax);
+        const int steps = PathEdgeDisplayStepCount(edge);
+        for (int step = 1; step <= steps; ++step)
+        {
+            Vec3 next;
+            if (!PathEdgePositionAt(node->path, edge, static_cast<float>(step) / static_cast<float>(steps), &next))
+            {
+                break;
+            }
+            const ImVec2 nextScreen = PathWorldToMapScreen(next.x, next.z, mapMin, mapMax);
+            drawList->AddLine(prevScreen, nextScreen, selected ? selectedEdgeColor : edgeColor, selected ? 4.0f : 2.5f);
+            prevScreen = nextScreen;
+        }
     }
     for (const rock::PathPoint& point : node->path.points)
     {
@@ -8577,24 +8686,33 @@ PathHitResult HitTestPathMap(const rock::Node& node, const ImVec2& mapMin, const
         {
             continue;
         }
-        const rock::PathPoint* a = FindPathPoint(node.path, edge.fromPoint);
-        const rock::PathPoint* b = FindPathPoint(node.path, edge.toPoint);
-        if (a == nullptr || b == nullptr)
+        Vec3 prev;
+        if (!PathEdgePositionAt(node.path, edge, 0.0f, &prev))
         {
             continue;
         }
-        float t = 0.0f;
-        const float distanceSq = DistanceToSegmentSquared(
-            mouse,
-            PathWorldToMapScreen(a->x, a->z, mapMin, mapMax),
-            PathWorldToMapScreen(b->x, b->z, mapMin, mapMax),
-            &t);
-        if (distanceSq <= bestEdgeDistanceSq)
+        ImVec2 prevScreen = PathWorldToMapScreen(prev.x, prev.z, mapMin, mapMax);
+        const int steps = PathEdgeDisplayStepCount(edge);
+        for (int step = 1; step <= steps; ++step)
         {
-            bestEdgeDistanceSq = distanceSq;
-            result.kind = PathSelectionKind::Edge;
-            result.elementId = edge.id;
-            result.t = t;
+            const float edgeT0 = static_cast<float>(step - 1) / static_cast<float>(steps);
+            const float edgeT1 = static_cast<float>(step) / static_cast<float>(steps);
+            Vec3 next;
+            if (!PathEdgePositionAt(node.path, edge, edgeT1, &next))
+            {
+                break;
+            }
+            const ImVec2 nextScreen = PathWorldToMapScreen(next.x, next.z, mapMin, mapMax);
+            float segmentT = 0.0f;
+            const float distanceSq = DistanceToSegmentSquared(mouse, prevScreen, nextScreen, &segmentT);
+            if (distanceSq <= bestEdgeDistanceSq)
+            {
+                bestEdgeDistanceSq = distanceSq;
+                result.kind = PathSelectionKind::Edge;
+                result.elementId = edge.id;
+                result.t = std::lerp(edgeT0, edgeT1, segmentT);
+            }
+            prevScreen = nextScreen;
         }
     }
     return result;
@@ -11004,6 +11122,19 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
                     PathContainsPoint(*node, g_pathSelectedElementId))
                 {
                     return g_pathSelectedElementId;
+                }
+                return 0;
+            },
+            [](rock::GraphId nodeId) -> rock::GraphId {
+                const rock::Node* node = g_graph.FindNode(nodeId);
+                if (node != nullptr &&
+                    nodeId == g_selectedNodeId &&
+                    g_pathSelectionKind == PathSelectionKind::Edge)
+                {
+                    const auto it = std::ranges::find_if(node->path.edges, [](const rock::PathEdge& edge) {
+                        return edge.id == g_pathSelectedElementId;
+                    });
+                    return it != node->path.edges.end() ? g_pathSelectedElementId : 0;
                 }
                 return 0;
             },

@@ -504,6 +504,12 @@ enum class PathPointHeightMode
     Absolute,
 };
 
+enum class PathSegmentType
+{
+    Line,
+    CatmullRom,
+};
+
 struct PathPoint
 {
     GraphId id = 0;
@@ -525,6 +531,7 @@ struct PathEdge
     float widthMeters = 64.0f;
     float featherMeters = 32.0f;
     bool enabled = true;
+    PathSegmentType segmentType = PathSegmentType::Line;
 };
 
 struct PathSettings
@@ -535,6 +542,7 @@ struct PathSettings
     float defaultFeatherMeters = 32.0f;
     float defaultHeightOffset = 0.0f;
     PathPointHeightMode defaultHeightMode = PathPointHeightMode::ProjectToTerrain;
+    PathSegmentType defaultSegmentType = PathSegmentType::Line;
 };
 
 // Heightfield -> mask. Performs MFD flow accumulation on the

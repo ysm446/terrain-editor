@@ -255,6 +255,7 @@ nlohmann::json MakePathSettingsJson(const rock::Node& node)
             {"widthMeters", edge.widthMeters},
             {"featherMeters", edge.featherMeters},
             {"enabled", edge.enabled},
+            {"segmentType", static_cast<int>(edge.segmentType)},
         });
     }
 
@@ -263,6 +264,7 @@ nlohmann::json MakePathSettingsJson(const rock::Node& node)
         {"defaultFeatherMeters", node.path.defaultFeatherMeters},
         {"defaultHeightOffset", node.path.defaultHeightOffset},
         {"defaultHeightMode", static_cast<int>(node.path.defaultHeightMode)},
+        {"defaultSegmentType", static_cast<int>(node.path.defaultSegmentType)},
         {"points", pointsJson},
         {"edges", edgesJson},
     }}};
@@ -852,6 +854,10 @@ void ReadPathSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
         static_cast<int>(rock::PathPointHeightMode::ProjectToTerrain),
         static_cast<int>(rock::PathPointHeightMode::Absolute));
     node.path.defaultHeightMode = static_cast<rock::PathPointHeightMode>(defaultHeightModeInt);
+    const int defaultSegmentTypeInt = std::clamp(pathJson.value("defaultSegmentType", static_cast<int>(node.path.defaultSegmentType)),
+        static_cast<int>(rock::PathSegmentType::Line),
+        static_cast<int>(rock::PathSegmentType::CatmullRom));
+    node.path.defaultSegmentType = static_cast<rock::PathSegmentType>(defaultSegmentTypeInt);
 
     node.path.points.clear();
     if (pathJson.contains("points") && pathJson["points"].is_array())
@@ -890,6 +896,10 @@ void ReadPathSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
             edge.widthMeters = std::clamp(edgeJson.value("widthMeters", node.path.defaultWidthMeters), 0.01f, 100000.0f);
             edge.featherMeters = std::clamp(edgeJson.value("featherMeters", node.path.defaultFeatherMeters), 0.0f, 100000.0f);
             edge.enabled = edgeJson.value("enabled", true);
+            const int segmentTypeInt = std::clamp(edgeJson.value("segmentType", static_cast<int>(node.path.defaultSegmentType)),
+                static_cast<int>(rock::PathSegmentType::Line),
+                static_cast<int>(rock::PathSegmentType::CatmullRom));
+            edge.segmentType = static_cast<rock::PathSegmentType>(segmentTypeInt);
             if (edge.id > 0 && edge.fromPoint > 0 && edge.toPoint > 0 && edge.fromPoint != edge.toPoint)
             {
                 node.path.edges.push_back(edge);

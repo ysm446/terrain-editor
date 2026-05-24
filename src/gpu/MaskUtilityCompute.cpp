@@ -284,6 +284,15 @@ const std::string& MaskUtilityComputeStatus()
 
 bool RunMaskPathCompute(rock::MaskGrid& grid, const rock::PathSettings& path, const rock::MaskPathSettings& settings, float terrainSizeMeters, std::string* error)
 {
+    const bool hasSmoothSegments = std::ranges::any_of(path.edges, [](const rock::PathEdge& edge) {
+        return edge.enabled && edge.segmentType != rock::PathSegmentType::Line;
+    });
+    if (hasSmoothSegments)
+    {
+        if (error) *error = "Mask Path GPU currently supports straight path segments only";
+        return false;
+    }
+
     if (std::this_thread::get_id() != g_context.gpu.mainThreadId)
     {
         auto request = std::make_shared<Request>();
