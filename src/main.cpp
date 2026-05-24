@@ -30,6 +30,7 @@
 #include <wrl/client.h>
 
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <imgui_impl_dx12.h>
 #include <imgui_impl_win32.h>
 #include <imgui-node-editor/imgui_node_editor.h>
@@ -9042,16 +9043,26 @@ void DrawDebugLogWindow(float width, float height, ImGuiWindowFlags childFlags)
             }
             std::vector<char> logTextBuffer(logText.begin(), logText.end());
             logTextBuffer.push_back('\0');
-            if (g_debugLogAutoScroll)
-            {
-                ImGui::SetNextWindowScroll(ImVec2(-1.0f, FLT_MAX));
-            }
+            const ImGuiID logTextId = ImGui::GetID("##DebugLogText");
+            ImGuiWindow* debugLogContentWindow = ImGui::GetCurrentWindow();
             ImGui::InputTextMultiline(
                 "##DebugLogText",
                 logTextBuffer.data(),
                 logTextBuffer.size(),
                 ImGui::GetContentRegionAvail(),
                 ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_NoUndoRedo);
+            if (g_debugLogAutoScroll && debugLogContentWindow)
+            {
+                for (ImGuiWindow* childWindow : debugLogContentWindow->DC.ChildWindows)
+                {
+                    if (childWindow && childWindow->ChildId == logTextId)
+                    {
+                        childWindow->Scroll.y = childWindow->ScrollMax.y;
+                        childWindow->ScrollTarget.y = FLT_MAX;
+                        break;
+                    }
+                }
+            }
             EndInspectorTabContent();
             ImGui::EndChild();
             ImGui::PopStyleVar();
