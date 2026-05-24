@@ -367,8 +367,6 @@ struct DebugLogEntry
 
 std::vector<DebugLogEntry> g_debugLogEntries;
 bool g_debugLogAutoScroll = true;
-uint64_t g_debugLogVersion = 0;
-uint64_t g_debugLogAutoScrollVersion = 0;
 
 struct FrameTimingStats
 {
@@ -8935,7 +8933,6 @@ void AppendDebugLog(std::string message)
     {
         g_debugLogEntries.erase(g_debugLogEntries.begin(), g_debugLogEntries.begin() + static_cast<std::ptrdiff_t>(g_debugLogEntries.size() - kMaxDebugLogEntries));
     }
-    ++g_debugLogVersion;
 }
 
 void AppendDebugLogIfChanged(const char* label, const std::string& value, std::string& previous)
@@ -9033,7 +9030,6 @@ void DrawDebugLogWindow(float width, float height, ImGuiWindowFlags childFlags)
             if (ImGui::SmallButton("クリア"))
             {
                 g_debugLogEntries.clear();
-                ++g_debugLogVersion;
             }
 
             ImGui::Separator();
@@ -9048,21 +9044,16 @@ void DrawDebugLogWindow(float width, float height, ImGuiWindowFlags childFlags)
             std::vector<char> logTextBuffer(logText.begin(), logText.end());
             logTextBuffer.push_back('\0');
             const ImGuiID logTextId = ImGui::GetID("##DebugLogText");
+            if (g_debugLogAutoScroll && ImGui::GetActiveID() != logTextId)
+            {
+                ImGui::SetNextWindowScroll(ImVec2(-1.0f, FLT_MAX));
+            }
             ImGui::InputTextMultiline(
                 "##DebugLogText",
                 logTextBuffer.data(),
                 logTextBuffer.size(),
                 ImGui::GetContentRegionAvail(),
                 ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_NoUndoRedo);
-            const bool logTextActive = ImGui::IsItemActive();
-            if (g_debugLogAutoScroll && !logTextActive && g_debugLogAutoScrollVersion != g_debugLogVersion)
-            {
-                if (ImGuiWindow* logTextWindow = ImGui::FindWindowByID(logTextId))
-                {
-                    ImGui::SetScrollY(logTextWindow, logTextWindow->ScrollMax.y);
-                    g_debugLogAutoScrollVersion = g_debugLogVersion;
-                }
-            }
             EndInspectorTabContent();
             ImGui::EndChild();
             ImGui::PopStyleVar();
