@@ -7340,6 +7340,10 @@ void DrawViewportCube(const ImVec2& min, const ImVec2& max, float timeSeconds)
     DrawFocusPickOverlay(drawList, min, max);
     DrawViewportDisplayMenu(min);
     float overlayTop = min.y + 14.0f;
+    const ImU32 overlayBgColor = IM_COL32(12, 12, 13, 176);
+    const ImU32 overlayBorderColor = IM_COL32(74, 74, 76, 190);
+    const ImU32 overlayLabelColor = IM_COL32(222, 222, 220, 255);
+    const ImU32 overlayValueColor = IM_COL32(196, 196, 194, 255);
     if (g_ui.showFps)
     {
         char fpsText[32]{};
@@ -7350,9 +7354,9 @@ void DrawViewportCube(const ImVec2& min, const ImVec2& max, float timeSeconds)
         const ImVec2 fpsPadding(9.0f, 5.0f);
         const ImVec2 fpsMax(max.x - 14.0f, overlayTop + fpsSize.y + fpsPadding.y * 2.0f);
         const ImVec2 fpsMin(fpsMax.x - fpsSize.x - fpsPadding.x * 2.0f, overlayTop);
-        drawList->AddRectFilled(fpsMin, fpsMax, IM_COL32(8, 10, 10, 168), 4.0f);
-        drawList->AddRect(fpsMin, fpsMax, ThemeColor("border", ImVec4(0.20f, 0.23f, 0.22f, 0.70f)), 4.0f);
-        drawList->AddText(ImVec2(fpsMin.x + fpsPadding.x, fpsMin.y + fpsPadding.y), ThemeColor("accentText", ImVec4(0.86f, 0.88f, 0.85f, 1.0f)), fpsText);
+        drawList->AddRectFilled(fpsMin, fpsMax, overlayBgColor, 4.0f);
+        drawList->AddRect(fpsMin, fpsMax, overlayBorderColor, 4.0f);
+        drawList->AddText(ImVec2(fpsMin.x + fpsPadding.x, fpsMin.y + fpsPadding.y), overlayLabelColor, fpsText);
         overlayTop = fpsMax.y + 6.0f;
     }
     if (g_ui.showFrameStats)
@@ -7368,8 +7372,6 @@ void DrawViewportCube(const ImVec2& min, const ImVec2& max, float timeSeconds)
             const char* label;
             std::string value;
         };
-        const ImU32 labelColor = ThemeColor("accentText", ImVec4(0.86f, 0.88f, 0.85f, 1.0f));
-        const ImU32 valueColor = IM_COL32(204, 222, 207, 255);
         std::vector<OverlayStatLine> lines = {
             {"Frame:", formatMs(g_lastFrameTiming.frameMs)},
             {"Message Pump:", formatMs(g_lastFrameTiming.messagePumpMs)},
@@ -7413,17 +7415,17 @@ void DrawViewportCube(const ImVec2& min, const ImVec2& max, float timeSeconds)
                                lineHeight * static_cast<float>(lines.size()) + padding.y * 2.0f);
         const ImVec2 statsMax(max.x - 14.0f, overlayTop + statsSize.y);
         const ImVec2 statsMin(statsMax.x - statsSize.x, overlayTop);
-        drawList->AddRectFilled(statsMin, statsMax, IM_COL32(8, 10, 10, 168), 4.0f);
-        drawList->AddRect(statsMin, statsMax, ThemeColor("border", ImVec4(0.20f, 0.23f, 0.22f, 0.70f)), 4.0f);
+        drawList->AddRectFilled(statsMin, statsMax, overlayBgColor, 4.0f);
+        drawList->AddRect(statsMin, statsMax, overlayBorderColor, 4.0f);
         const float valueX = statsMin.x + padding.x + labelWidth + gap;
         const float valueClipMaxX = statsMax.x - padding.x;
         for (size_t i = 0; i < lines.size(); ++i)
         {
             const OverlayStatLine& line = lines[i];
             const float y = statsMin.y + padding.y + lineHeight * static_cast<float>(i);
-            drawList->AddText(ImVec2(statsMin.x + padding.x, y), labelColor, line.label);
+            drawList->AddText(ImVec2(statsMin.x + padding.x, y), overlayLabelColor, line.label);
             drawList->PushClipRect(ImVec2(valueX, statsMin.y), ImVec2(valueClipMaxX, statsMax.y), true);
-            drawList->AddText(ImVec2(valueX, y), valueColor, line.value.c_str());
+            drawList->AddText(ImVec2(valueX, y), overlayValueColor, line.value.c_str());
             drawList->PopClipRect();
         }
         overlayTop = statsMax.y + 6.0f;
@@ -7442,9 +7444,9 @@ void DrawViewportCube(const ImVec2& min, const ImVec2& max, float timeSeconds)
         const ImVec2 statsPadding(9.0f, 6.0f);
         const ImVec2 statsMax(max.x - 14.0f, overlayTop + statsSize.y + statsPadding.y * 2.0f);
         const ImVec2 statsMin(statsMax.x - statsSize.x - statsPadding.x * 2.0f, overlayTop);
-        drawList->AddRectFilled(statsMin, statsMax, IM_COL32(8, 10, 10, 168), 4.0f);
-        drawList->AddRect(statsMin, statsMax, ThemeColor("border", ImVec4(0.20f, 0.23f, 0.22f, 0.70f)), 4.0f);
-        drawList->AddText(ImVec2(statsMin.x + statsPadding.x, statsMin.y + statsPadding.y), ThemeColor("accentText", ImVec4(0.86f, 0.88f, 0.85f, 1.0f)), statsText.c_str());
+        drawList->AddRectFilled(statsMin, statsMax, overlayBgColor, 4.0f);
+        drawList->AddRect(statsMin, statsMax, overlayBorderColor, 4.0f);
+        drawList->AddText(ImVec2(statsMin.x + statsPadding.x, statsMin.y + statsPadding.y), overlayLabelColor, statsText.c_str());
         overlayTop = statsMax.y + 6.0f;
     }
     DrawViewportAxisGizmo(drawList, min, max);
