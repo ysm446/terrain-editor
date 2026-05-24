@@ -235,6 +235,7 @@ bool g_skipNodeMoveUndoThisFrame = false;
 bool g_nodePositionsInitialized = false;
 bool g_nodeGraphNavigatedToContent = false;
 bool g_layoutSplitterActive = false;
+ImGuiID g_activeLayoutSplitterId = 0;
 rock::NodeGraph g_graph = rock::NodeGraph::CreateDefaultTerrainGraph();
 std::string g_exportStatus = "No export yet";
 std::string g_projectStatus = "No project file";
@@ -8746,20 +8747,35 @@ void EndStyledTabItem(const TabHeaderStyle& style = {})
 bool DrawVerticalSplitter(const char* id, float* leftWidth, float totalWidth, float minLeftWidth, float minRightWidth, float height)
 {
     constexpr float splitterWidth = 1.0f;
+    constexpr float splitterHitWidth = 9.0f;
     const float maxLeftWidth = std::max(minLeftWidth, totalWidth - minRightWidth - splitterWidth);
     *leftWidth = std::clamp(*leftWidth, minLeftWidth, maxLeftWidth);
 
     ImGui::SameLine();
     ImGui::PushID(id);
+    const ImGuiID splitterId = ImGui::GetID("##splitter");
     ImGui::InvisibleButton("##splitter", ImVec2(splitterWidth, height));
-    const bool active = ImGui::IsItemActive();
-    const bool hovered = ImGui::IsItemHovered();
-    if (active)
+    const ImVec2 min = ImGui::GetItemRectMin();
+    const ImVec2 max = ImGui::GetItemRectMax();
+    const float hitPadding = (splitterHitWidth - splitterWidth) * 0.5f;
+    const bool hovered = ImGui::IsMouseHoveringRect(
+        ImVec2(min.x - hitPadding, min.y),
+        ImVec2(max.x + hitPadding, max.y),
+        true);
+    if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
     {
-        g_layoutSplitterActive = true;
+        g_activeLayoutSplitterId = splitterId;
+    }
+    bool active = g_activeLayoutSplitterId == splitterId && ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    const bool released = g_activeLayoutSplitterId == splitterId && ImGui::IsMouseReleased(ImGuiMouseButton_Left);
+    if (released)
+    {
+        g_activeLayoutSplitterId = 0;
+        active = false;
     }
     if (active)
     {
+        g_layoutSplitterActive = true;
         *leftWidth = std::clamp(*leftWidth + ImGui::GetIO().MouseDelta.x, minLeftWidth, maxLeftWidth);
     }
     if (hovered || active)
@@ -8767,8 +8783,6 @@ bool DrawVerticalSplitter(const char* id, float* leftWidth, float totalWidth, fl
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
     }
 
-    const ImVec2 min = ImGui::GetItemRectMin();
-    const ImVec2 max = ImGui::GetItemRectMax();
     const ImVec4 color = active
         ? g_themeManager.AppColor("accent", ImVec4(0.52f, 0.70f, 0.59f, 1.0f))
         : g_themeManager.AppColor("border", ImVec4(0.22f, 0.24f, 0.23f, 1.0f));
@@ -8778,7 +8792,6 @@ bool DrawVerticalSplitter(const char* id, float* leftWidth, float totalWidth, fl
         ImVec2(lineX, max.y),
         ColorToU32(color),
         active ? 2.0f : 1.0f);
-    const bool released = ImGui::IsItemDeactivated();
     ImGui::PopID();
     ImGui::SameLine();
     return released;
@@ -8787,19 +8800,34 @@ bool DrawVerticalSplitter(const char* id, float* leftWidth, float totalWidth, fl
 bool DrawHorizontalSplitter(const char* id, float* topHeight, float totalHeight, float minTopHeight, float minBottomHeight)
 {
     constexpr float splitterHeight = 1.0f;
+    constexpr float splitterHitHeight = 9.0f;
     const float maxTopHeight = std::max(minTopHeight, totalHeight - minBottomHeight - splitterHeight);
     *topHeight = std::clamp(*topHeight, minTopHeight, maxTopHeight);
 
     ImGui::PushID(id);
+    const ImGuiID splitterId = ImGui::GetID("##splitter");
     ImGui::InvisibleButton("##splitter", ImVec2(-1.0f, splitterHeight));
-    const bool active = ImGui::IsItemActive();
-    const bool hovered = ImGui::IsItemHovered();
-    if (active)
+    const ImVec2 min = ImGui::GetItemRectMin();
+    const ImVec2 max = ImGui::GetItemRectMax();
+    const float hitPadding = (splitterHitHeight - splitterHeight) * 0.5f;
+    const bool hovered = ImGui::IsMouseHoveringRect(
+        ImVec2(min.x, min.y - hitPadding),
+        ImVec2(max.x, max.y + hitPadding),
+        true);
+    if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
     {
-        g_layoutSplitterActive = true;
+        g_activeLayoutSplitterId = splitterId;
+    }
+    bool active = g_activeLayoutSplitterId == splitterId && ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    const bool released = g_activeLayoutSplitterId == splitterId && ImGui::IsMouseReleased(ImGuiMouseButton_Left);
+    if (released)
+    {
+        g_activeLayoutSplitterId = 0;
+        active = false;
     }
     if (active)
     {
+        g_layoutSplitterActive = true;
         *topHeight = std::clamp(*topHeight + ImGui::GetIO().MouseDelta.y, minTopHeight, maxTopHeight);
     }
     if (hovered || active)
@@ -8807,8 +8835,6 @@ bool DrawHorizontalSplitter(const char* id, float* topHeight, float totalHeight,
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
     }
 
-    const ImVec2 min = ImGui::GetItemRectMin();
-    const ImVec2 max = ImGui::GetItemRectMax();
     const ImVec4 color = active
         ? g_themeManager.AppColor("accent", ImVec4(0.52f, 0.70f, 0.59f, 1.0f))
         : g_themeManager.AppColor("border", ImVec4(0.22f, 0.24f, 0.23f, 1.0f));
@@ -8818,7 +8844,6 @@ bool DrawHorizontalSplitter(const char* id, float* topHeight, float totalHeight,
         ImVec2(max.x, lineY),
         ColorToU32(color),
         active ? 2.0f : 1.0f);
-    const bool released = ImGui::IsItemDeactivated();
     ImGui::PopID();
     return released;
 }
