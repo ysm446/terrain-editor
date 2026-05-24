@@ -827,67 +827,111 @@ void ApplyMaskFluvialParticles(HeightfieldGrid& grid, const MaskFluvialSettings&
     const float inertia = std::clamp(settings.particleInertia, 0.0f, 0.98f);
     const float stepCells = std::clamp(settings.particleStepLengthM / std::max(cellSize, 1e-6f), 0.25f, 8.0f);
 
-    std::mt19937 rng(static_cast<uint32_t>(settings.particleSeed));
-    std::uniform_real_distribution<float> spawnDist(1.0f, static_cast<float>(std::max(1, n - 2)));
-    std::uniform_real_distribution<float> unitDist(0.0f, 1.0f);
+    const unsigned hardwareThreads = std::max(1u, std::thread::hardware_concurrency());
+    const int threadCount = std::clamp(static_cast<int>(hardwareThreads), 1, std::min(particleCount, 8));
+    std::vector<std::vector<float>> threadHits(static_cast<size_t>(threadCount), std::vector<float>(cellCount, 0.0f));
 
-    for (int particle = 0; particle < particleCount; ++particle)
-    {
-        float x = spawnDist(rng);
-        float z = spawnDist(rng);
-        float vx = 0.0f;
-        float vz = 0.0f;
-        for (int age = 0; age < lifetime; ++age)
+    const auto particleSeed = [baseSeed = static_cast<uint32_t>(settings.particleSeed)](int particle) {
+        uint32_t h = static_cast<uint32_t>(particle) * 0x9e3779b9u + baseSeed * 0x85ebca6bu + 0x27d4eb2du;
+        h ^= h >> 16;
+        h *= 0x7feb352du;
+        h ^= h >> 15;
+        h *= 0x846ca68bu;
+        h ^= h >> 16;
+        return h;
+    };
+
+    auto simulateRange = [&](int threadIndex, int firstParticle, int lastParticle) {
+        std::vector<float>& localHits = threadHits[static_cast<size_t>(threadIndex)];
+        std::uniform_real_distribution<float> spawnDist(1.0f, static_cast<float>(std::max(1, n - 2)));
+        std::uniform_real_distribution<float> unitDist(0.0f, 1.0f);
+
+        for (int particle = firstParticle; particle < lastParticle; ++particle)
         {
-            if (x < 1.0f || z < 1.0f || x > static_cast<float>(n - 2) || z > static_cast<float>(n - 2))
+            std::mt19937 rng(particleSeed(particle));
+            float x = spawnDist(rng);
+            float z = spawnDist(rng);
+            float vx = 0.0f;
+            float vz = 0.0f;
+            for (int age = 0; age < lifetime; ++age)
             {
-                break;
-            }
+                if (x < 1.0f || z < 1.0f || x > static_cast<float>(n - 2) || z > static_cast<float>(n - 2))
+                {
+                    break;
+                }
 
-            const float gx = 0.5f * (SampleGridBilinear(heights, n, x + 1.0f, z) - SampleGridBilinear(heights, n, x - 1.0f, z));
-            const float gz = 0.5f * (SampleGridBilinear(heights, n, x, z + 1.0f) - SampleGridBilinear(heights, n, x, z - 1.0f));
-            float dx = -gx;
-            float dz = -gz;
-            float len = std::sqrt(dx * dx + dz * dz);
-            if (len <= 1e-8f)
-            {
-                const float angle = unitDist(rng) * 6.28318530718f;
-                dx = std::cos(angle);
-                dz = std::sin(angle);
-            }
-            else
-            {
-                dx /= len;
-                dz /= len;
-                const float jitterAngle = (unitDist(rng) * 2.0f - 1.0f) * (1.0f - inertia) * 0.35f;
-                const float cs = std::cos(jitterAngle);
-                const float sn = std::sin(jitterAngle);
-                const float jx = dx * cs - dz * sn;
-                const float jz = dx * sn + dz * cs;
-                dx = jx;
-                dz = jz;
-            }
+                const float gx = 0.5f * (SampleGridBilinear(heights, n, x + 1.0f, z) - SampleGridBilinear(heights, n, x - 1.0f, z));
+                const float gz = 0.5f * (SampleGridBilinear(heights, n, x, z + 1.0f) - SampleGridBilinear(heights, n, x, z - 1.0f));
+                float dx = -gx;
+                float dz = -gz;
+                float len = std::sqrt(dx * dx + dz * dz);
+                if (len <= 1e-8f)
+                {
+                    const float angle = unitDist(rng) * 6.28318530718f;
+                    dx = std::cos(angle);
+                    dz = std::sin(angle);
+                }
+                else
+                {
+                    dx /= len;
+                    dz /= len;
+                    const float jitterAngle = (unitDist(rng) * 2.0f - 1.0f) * (1.0f - inertia) * 0.35f;
+                    const float cs = std::cos(jitterAngle);
+                    const float sn = std::sin(jitterAngle);
+                    const float jx = dx * cs - dz * sn;
+                    const float jz = dx * sn + dz * cs;
+                    dx = jx;
+                    dz = jz;
+                }
 
-            vx = vx * inertia + dx * (1.0f - inertia);
-            vz = vz * inertia + dz * (1.0f - inertia);
-            len = std::sqrt(vx * vx + vz * vz);
-            if (len <= 1e-8f)
-            {
-                vx = dx;
-                vz = dz;
-            }
-            else
-            {
-                vx /= len;
-                vz /= len;
-            }
+                vx = vx * inertia + dx * (1.0f - inertia);
+                vz = vz * inertia + dz * (1.0f - inertia);
+                len = std::sqrt(vx * vx + vz * vz);
+                if (len <= 1e-8f)
+                {
+                    vx = dx;
+                    vz = dz;
+                }
+                else
+                {
+                    vx /= len;
+                    vz /= len;
+                }
 
-            const float ageWeight = 1.0f - 0.35f * (static_cast<float>(age) / static_cast<float>(std::max(1, lifetime - 1)));
-            SplatGridBilinear(hits, n, x, z, ageWeight);
-            x += vx * stepCells;
-            z += vz * stepCells;
+                const float ageWeight = 1.0f - 0.35f * (static_cast<float>(age) / static_cast<float>(std::max(1, lifetime - 1)));
+                SplatGridBilinear(localHits, n, x, z, ageWeight);
+                x += vx * stepCells;
+                z += vz * stepCells;
+            }
         }
+    };
+
+    std::vector<std::thread> workers;
+    workers.reserve(static_cast<size_t>(threadCount));
+    for (int threadIndex = 0; threadIndex < threadCount; ++threadIndex)
+    {
+        const int firstParticle = (particleCount * threadIndex) / threadCount;
+        const int lastParticle = (particleCount * (threadIndex + 1)) / threadCount;
+        workers.emplace_back(simulateRange, threadIndex, firstParticle, lastParticle);
     }
+    for (std::thread& worker : workers)
+    {
+        worker.join();
+    }
+
+    ParallelForRows(n, [&](int z) {
+        const size_t rowBase = static_cast<size_t>(z) * static_cast<size_t>(n);
+        for (int x = 0; x < n; ++x)
+        {
+            const size_t idx = rowBase + static_cast<size_t>(x);
+            float value = 0.0f;
+            for (const std::vector<float>& localHits : threadHits)
+            {
+                value += localHits[idx];
+            }
+            hits[idx] = value;
+        }
+    });
 
     const float maxHit = std::max(1e-6f, *std::max_element(hits.begin(), hits.end()));
     const float threshold = std::clamp(settings.accumulationThreshold, 0.0f, 1.0f) * maxHit;
