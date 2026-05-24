@@ -1,5 +1,7 @@
 # Mask Path
 
+`Backend` can switch the node between CPU parallel evaluation and D3D12 GPU compute. GPU failures fall back to the CPU implementation.
+
 `Mask Path` は、`Path` ノードで作ったポイントとエッジから `Mask` 画像を生成するノードです。
 
 ## 使い方

@@ -84,6 +84,15 @@ rock::PathPointHeightMode PathHeightModeFromIndex(int index)
     }
 }
 
+void ApplyPathDefaultHeightSettings(rock::PathSettings& path)
+{
+    for (rock::PathPoint& point : path.points)
+    {
+        point.heightOffset = path.defaultHeightOffset;
+        point.heightMode = path.defaultHeightMode;
+    }
+}
+
 bool DrawPathPointPositionRow(rock::PathPoint& point)
 {
     ImGui::TableNextRow();
@@ -493,7 +502,18 @@ bool DrawMaskBlurProperties(rock::Node& editableNode)
     mb.radiusMeters = std::clamp(mb.radiusMeters, 0.0f, 100000.0f);
     mb.iterations = std::clamp(mb.iterations, 1, 16);
     mb.strength = std::clamp(mb.strength, 0.0f, 1.0f);
+    mb.backend = static_cast<rock::MaskUtilityBackend>(std::clamp(static_cast<int>(mb.backend),
+        static_cast<int>(rock::MaskUtilityBackend::CpuParallel),
+        static_cast<int>(rock::MaskUtilityBackend::GpuCompute)));
 
+    int backendInt = static_cast<int>(mb.backend);
+    if (DrawPropertyComboRow("Backend", "MaskBlurBackend", &backendInt, "CPU\0GPU\0\0", "CPU 並列実装と GPU (D3D12 compute) を切り替えます。GPU が失敗した場合は CPU にフォールバックします。", static_cast<int>(rock::MaskBlurSettings{}.backend)))
+    {
+        mb.backend = static_cast<rock::MaskUtilityBackend>(std::clamp(backendInt,
+            static_cast<int>(rock::MaskUtilityBackend::CpuParallel),
+            static_cast<int>(rock::MaskUtilityBackend::GpuCompute)));
+        EvaluateGraph();
+    }
     if (DrawPropertyFloatInputRow("Radius (m)", "MaskBlurRadiusMeters", &mb.radiusMeters, 0.0f, 100000.0f, rock::MaskBlurSettings{}.radiusMeters, "Mask blur radius changed", true, "Mask をぼかす半径です。地形サイズに対するメートル単位で扱います。", "%.2f"))
     {
         EvaluateGraph();
@@ -834,7 +854,18 @@ bool DrawMaskPathProperties(rock::Node& editableNode)
     ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
     rock::MaskPathSettings& pm = editableNode.maskPath;
     pm.gamma = std::clamp(pm.gamma, 0.05f, 8.0f);
+    pm.backend = static_cast<rock::MaskUtilityBackend>(std::clamp(static_cast<int>(pm.backend),
+        static_cast<int>(rock::MaskUtilityBackend::CpuParallel),
+        static_cast<int>(rock::MaskUtilityBackend::GpuCompute)));
 
+    int backendInt = static_cast<int>(pm.backend);
+    if (DrawPropertyComboRow("Backend", "MaskPathBackend", &backendInt, "CPU\0GPU\0\0", "CPU 並列実装と GPU (D3D12 compute) を切り替えます。GPU が失敗した場合は CPU にフォールバックします。", static_cast<int>(rock::MaskPathSettings{}.backend)))
+    {
+        pm.backend = static_cast<rock::MaskUtilityBackend>(std::clamp(backendInt,
+            static_cast<int>(rock::MaskUtilityBackend::CpuParallel),
+            static_cast<int>(rock::MaskUtilityBackend::GpuCompute)));
+        EvaluateGraph();
+    }
     if (DrawPropertyFloatRow("Gamma", "MaskPathGamma", &pm.gamma, 0.05f, 8.0f, rock::MaskPathSettings{}.gamma, "Mask path gamma changed", true, "Output mask curve. Lower values brighten the feather; higher values emphasize the center."))
     {
         EvaluateGraph();
@@ -862,7 +893,18 @@ bool DrawHeightmapFromMaskProperties(rock::Node& editableNode)
     hm.heightMeters = std::clamp(hm.heightMeters, -100000.0f, 100000.0f);
     hm.baseHeightMeters = std::clamp(hm.baseHeightMeters, -100000.0f, 100000.0f);
     hm.gamma = std::clamp(hm.gamma, 0.05f, 8.0f);
+    hm.backend = static_cast<rock::MaskUtilityBackend>(std::clamp(static_cast<int>(hm.backend),
+        static_cast<int>(rock::MaskUtilityBackend::CpuParallel),
+        static_cast<int>(rock::MaskUtilityBackend::GpuCompute)));
 
+    int backendInt = static_cast<int>(hm.backend);
+    if (DrawPropertyComboRow("Backend", "HeightmapFromMaskBackend", &backendInt, "CPU\0GPU\0\0", "CPU 並列実装と GPU (D3D12 compute) を切り替えます。GPU が失敗した場合は CPU にフォールバックします。", static_cast<int>(rock::HeightmapFromMaskSettings{}.backend)))
+    {
+        hm.backend = static_cast<rock::MaskUtilityBackend>(std::clamp(backendInt,
+            static_cast<int>(rock::MaskUtilityBackend::CpuParallel),
+            static_cast<int>(rock::MaskUtilityBackend::GpuCompute)));
+        EvaluateGraph();
+    }
     if (DrawPropertyFloatInputRow("Height (m)", "HeightmapFromMaskHeight", &hm.heightMeters, -100000.0f, 100000.0f, rock::HeightmapFromMaskSettings{}.heightMeters, "Heightmap from mask height changed", true, "Mask value 1 maps to this height above Base Height. Negative values carve downward.", "%.2f"))
     {
         EvaluateGraph();
@@ -1872,6 +1914,19 @@ bool DrawPathProperties(rock::Node& editableNode)
     {
         changed |= DrawPropertyFloatRow("Default Width (m)", "PathDefaultWidth", &editableNode.path.defaultWidthMeters, 0.01f, 100000.0f, rock::PathSettings{}.defaultWidthMeters, "Path default width changed", false, "新しく作るエッジの幅です。", "%.1f");
         changed |= DrawPropertyFloatRow("Default Feather (m)", "PathDefaultFeather", &editableNode.path.defaultFeatherMeters, 0.0f, 100000.0f, rock::PathSettings{}.defaultFeatherMeters, "Path default feather changed", false, "新しく作るエッジのフェザー幅です。", "%.1f");
+        if (DrawPropertyFloatRow("Default Height Offset (m)", "PathDefaultHeightOffset", &editableNode.path.defaultHeightOffset, -1000000.0f, 1000000.0f, rock::PathSettings{}.defaultHeightOffset, "Path default height offset changed", false, "Terrain Offset のときに、地形高さから上下へずらす既定値です。", "%.3f"))
+        {
+            ApplyPathDefaultHeightSettings(editableNode.path);
+            changed = true;
+        }
+
+        int defaultHeightMode = PathHeightModeToIndex(editableNode.path.defaultHeightMode);
+        if (DrawPropertyComboRow("Height Mode", "PathDefaultHeightMode", &defaultHeightMode, PathHeightModeItems(), "Path 全体に適用する高さモードです。新規ポイントと既存ポイントへ反映します。", PathHeightModeToIndex(rock::PathSettings{}.defaultHeightMode)))
+        {
+            editableNode.path.defaultHeightMode = PathHeightModeFromIndex(defaultHeightMode);
+            ApplyPathDefaultHeightSettings(editableNode.path);
+            changed = true;
+        }
         ImGui::EndTable();
     }
 
@@ -1895,14 +1950,6 @@ bool DrawPathProperties(rock::Node& editableNode)
             changed |= DrawPathPointCompactFloatRow("Width (m)", "PathSelectedPointWidth", &selectedPoint->widthMeters, 0.01f, 100000.0f, editableNode.path.defaultWidthMeters, "Mask Path width around this point.", "%.1f");
             changed |= DrawPathPointCompactFloatRow("Feather (m)", "PathSelectedPointFeather", &selectedPoint->featherMeters, 0.0f, 100000.0f, editableNode.path.defaultFeatherMeters, "Mask Path feather around this point.", "%.1f");
             changed |= DrawPathPointCompactFloatRow("Intensity", "PathSelectedPointIntensity", &selectedPoint->intensity, 0.0f, 1.0f, 1.0f, "Mask Path strength around this point.", "%.3f");
-            changed |= DrawPathHeightOffsetRow(*selectedPoint);
-
-            int heightMode = PathHeightModeToIndex(selectedPoint->heightMode);
-            if (DrawPropertyComboRow("Height Mode", "PathSelectedPointHeightMode", &heightMode, PathHeightModeItems(), nullptr, 0))
-            {
-                selectedPoint->heightMode = PathHeightModeFromIndex(heightMode);
-                changed = true;
-            }
             ImGui::EndTable();
         }
     }

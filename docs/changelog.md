@@ -2,6 +2,13 @@
 
 ## 未リリース
 
+## 0.19.70 - 2026-05-25 06:55
+
+- `Mask Path`、`Mask Blur`、`Heightmap From Mask` に GPU backend を追加しました。各ノードの `Backend` から `CPU` / `GPU` を切り替えられ、GPU 実行に失敗した場合は CPU 実装へフォールバックします。
+- `mask_utility_compute.hlsl` と GPU compute 経路を追加し、Path からのマスク生成、マスクぼかし、マスクから HeightField への変換を D3D12 compute で実行できるようにしました。
+- `Path` ノード選択中の 3D ビューポートに、Heightmap の外枠を薄いグレーの矩形で表示するようにしました。
+- `Path` ノードの `Height Mode` と `Default Height Offset` をパス全体の既定設定として編集できるようにし、新規ポイント、分割ポイント、既存ポイントへ反映するようにしました。
+
 ## 0.19.69 - 2026-05-25 06:25
 
 - `Mask Blur` ノードを追加しました。`Mask` 入力を並列 CPU の横/縦 separable blur でぼかし、`Radius (m)`、`Iterations`、`Strength (%)` で調整できます。

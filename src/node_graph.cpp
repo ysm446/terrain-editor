@@ -34,6 +34,8 @@ namespace
 {
 ScatterGpuEvaluator g_scatterGpuEvaluator = nullptr;
 MaskFluvialGpuEvaluator g_maskFluvialGpuEvaluator = nullptr;
+MaskPathGpuEvaluator g_maskPathGpuEvaluator = nullptr;
+HeightmapFromMaskGpuEvaluator g_heightmapFromMaskGpuEvaluator = nullptr;
 std::atomic<GraphId> g_currentlyEvaluatingNodeId{0};
 
 void HashCombine(uint64_t& seed, uint64_t value)
@@ -129,6 +131,7 @@ uint64_t HashMaskBlurSettings(const MaskBlurSettings& settings, float terrainSiz
     HashCombine(hash, HashFloat(settings.radiusMeters));
     HashCombine(hash, static_cast<uint64_t>(settings.iterations));
     HashCombine(hash, HashFloat(settings.strength));
+    HashCombine(hash, static_cast<uint64_t>(settings.backend));
     HashCombine(hash, HashFloat(terrainSizeMeters));
     return hash;
 }
@@ -163,6 +166,7 @@ uint64_t HashMaskPathSettings(const MaskPathSettings& settings, int resolution, 
     uint64_t hash = 1469598103934665603ull;
     HashCombine(hash, HashFloat(settings.gamma));
     HashCombine(hash, static_cast<uint64_t>(settings.invert ? 1 : 0));
+    HashCombine(hash, static_cast<uint64_t>(settings.backend));
     HashCombine(hash, static_cast<uint64_t>(resolution));
     HashCombine(hash, HashFloat(terrainSizeMeters));
     return hash;
@@ -175,6 +179,7 @@ uint64_t HashHeightmapFromMaskSettings(const HeightmapFromMaskSettings& settings
     HashCombine(hash, HashFloat(settings.baseHeightMeters));
     HashCombine(hash, HashFloat(settings.gamma));
     HashCombine(hash, static_cast<uint64_t>(settings.invert ? 1 : 0));
+    HashCombine(hash, static_cast<uint64_t>(settings.backend));
     HashCombine(hash, static_cast<uint64_t>(resolution));
     HashCombine(hash, HashFloat(terrainSizeMeters));
     return hash;
@@ -185,14 +190,19 @@ uint64_t HashPathSettings(const PathSettings& path)
     uint64_t hash = 1099511628211ull;
     HashCombine(hash, HashFloat(path.defaultWidthMeters));
     HashCombine(hash, HashFloat(path.defaultFeatherMeters));
+    HashCombine(hash, HashFloat(path.defaultHeightOffset));
+    HashCombine(hash, static_cast<uint64_t>(path.defaultHeightMode));
     for (const PathPoint& point : path.points)
     {
         HashCombine(hash, static_cast<uint64_t>(point.id));
         HashCombine(hash, HashFloat(point.x));
         HashCombine(hash, HashFloat(point.z));
+        HashCombine(hash, HashFloat(point.height));
+        HashCombine(hash, HashFloat(point.heightOffset));
         HashCombine(hash, HashFloat(point.widthMeters));
         HashCombine(hash, HashFloat(point.featherMeters));
         HashCombine(hash, HashFloat(point.intensity));
+        HashCombine(hash, static_cast<uint64_t>(point.heightMode));
     }
     for (const PathEdge& edge : path.edges)
     {
@@ -474,7 +484,18 @@ MaskGrid GenerateMaskPath(const PathSettings& path, const MaskPathSettings& sett
 
     MaskGrid grid;
     grid.resolution = std::clamp(resolution, 2, 2048);
-    grid.values.assign(static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution), 0.0f);
+    const size_t cellCount = static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution);
+    grid.values.assign(cellCount, 0.0f);
+
+    if (settings.backend == MaskUtilityBackend::GpuCompute && g_maskPathGpuEvaluator != nullptr)
+    {
+        std::string ignoredError;
+        if (g_maskPathGpuEvaluator(grid, path, settings, terrainSizeMeters, &ignoredError))
+        {
+            return grid;
+        }
+        grid.values.assign(cellCount, 0.0f);
+    }
 
     std::vector<PointSample> pointSamples;
     pointSamples.reserve(path.points.size());
@@ -583,6 +604,17 @@ HeightfieldGrid GenerateHeightmapFromMask(const MaskGrid& mask, const HeightmapF
     if (mask.resolution <= 0 || mask.values.size() < requiredSourceCells)
     {
         return grid;
+    }
+
+    if (settings.backend == MaskUtilityBackend::GpuCompute && g_heightmapFromMaskGpuEvaluator != nullptr)
+    {
+        std::string ignoredError;
+        if (g_heightmapFromMaskGpuEvaluator(grid, mask, settings, resolution, terrainSizeMeters, &ignoredError))
+        {
+            return grid;
+        }
+        grid.heights.assign(cellCount, settings.baseHeightMeters);
+        grid.mask.assign(cellCount, 0.0f);
     }
 
     const int sourceResolution = mask.resolution;
@@ -3904,6 +3936,16 @@ void SetScatterGpuEvaluator(ScatterGpuEvaluator evaluator)
 void SetMaskFluvialGpuEvaluator(MaskFluvialGpuEvaluator evaluator)
 {
     g_maskFluvialGpuEvaluator = evaluator;
+}
+
+void SetMaskPathGpuEvaluator(MaskPathGpuEvaluator evaluator)
+{
+    g_maskPathGpuEvaluator = evaluator;
+}
+
+void SetHeightmapFromMaskGpuEvaluator(HeightmapFromMaskGpuEvaluator evaluator)
+{
+    g_heightmapFromMaskGpuEvaluator = evaluator;
 }
 
 std::atomic<GraphId>& CurrentlyEvaluatingNodeId()

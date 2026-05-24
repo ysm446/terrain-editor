@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(TerrainEditor VERSION 0.19.69 LANGUAGES CXX RC)
+project(TerrainEditor VERSION 0.19.70 LANGUAGES CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -32,6 +32,7 @@ add_executable(terrain_editor WIN32
     src/gpu/ColorizeCompute.cpp
     src/gpu/MaskFluvialCompute.cpp
     src/gpu/MaskNoiseCompute.cpp
+    src/gpu/MaskUtilityCompute.cpp
     src/gpu/MseCompute.cpp
     src/gpu/RockCompute.cpp
     src/gpu/ScatterCompute.cpp

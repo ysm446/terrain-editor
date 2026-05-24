@@ -155,6 +155,7 @@ nlohmann::json MakeMaskSettingsJson(const rock::Node& node)
             {"radiusMeters", node.maskBlur.radiusMeters},
             {"iterations", node.maskBlur.iterations},
             {"strength", node.maskBlur.strength},
+            {"backend", static_cast<int>(node.maskBlur.backend)},
         }},
         {"maskSlope", {
             {"largestDetailLevelM", node.maskSlope.largestDetailLevelM},
@@ -174,12 +175,14 @@ nlohmann::json MakeMaskSettingsJson(const rock::Node& node)
         {"maskPath", {
             {"gamma", node.maskPath.gamma},
             {"invert", node.maskPath.invert},
+            {"backend", static_cast<int>(node.maskPath.backend)},
         }},
         {"heightmapFromMask", {
             {"heightMeters", node.heightmapFromMask.heightMeters},
             {"baseHeightMeters", node.heightmapFromMask.baseHeightMeters},
             {"gamma", node.heightmapFromMask.gamma},
             {"invert", node.heightmapFromMask.invert},
+            {"backend", static_cast<int>(node.heightmapFromMask.backend)},
         }},
         {"maskBlend", {
             {"mode", static_cast<int>(node.maskBlend.mode)},
@@ -258,6 +261,8 @@ nlohmann::json MakePathSettingsJson(const rock::Node& node)
     return {{"path", {
         {"defaultWidthMeters", node.path.defaultWidthMeters},
         {"defaultFeatherMeters", node.path.defaultFeatherMeters},
+        {"defaultHeightOffset", node.path.defaultHeightOffset},
+        {"defaultHeightMode", static_cast<int>(node.path.defaultHeightMode)},
         {"points", pointsJson},
         {"edges", edgesJson},
     }}};
@@ -559,6 +564,10 @@ void ReadMaskSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     node.maskBlur.radiusMeters = std::clamp(nodeMaskBlurJson.value("radiusMeters", node.maskBlur.radiusMeters), 0.0f, 100000.0f);
     node.maskBlur.iterations = std::clamp(nodeMaskBlurJson.value("iterations", node.maskBlur.iterations), 1, 16);
     node.maskBlur.strength = std::clamp(nodeMaskBlurJson.value("strength", node.maskBlur.strength), 0.0f, 1.0f);
+    node.maskBlur.backend = static_cast<rock::MaskUtilityBackend>(std::clamp(
+        nodeMaskBlurJson.value("backend", static_cast<int>(node.maskBlur.backend)),
+        static_cast<int>(rock::MaskUtilityBackend::CpuParallel),
+        static_cast<int>(rock::MaskUtilityBackend::GpuCompute)));
     node.maskSlope.largestDetailLevelM = std::clamp(nodeMaskSlopeJson.value("largestDetailLevelM", node.maskSlope.largestDetailLevelM), 0.0f, 1024.0f);
     node.maskSlope.slopeMinDeg = std::clamp(nodeMaskSlopeJson.value("slopeMinDeg", node.maskSlope.slopeMinDeg), 0.0f, 89.9f);
     node.maskSlope.slopeMaxDeg = std::clamp(nodeMaskSlopeJson.value("slopeMaxDeg", node.maskSlope.slopeMaxDeg), 0.0f, 89.9f);
@@ -580,10 +589,18 @@ void ReadMaskSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     node.maskHeight.invert = nodeMaskHeightJson.value("invert", node.maskHeight.invert);
     node.maskPath.gamma = std::clamp(nodeMaskPathJson.value("gamma", node.maskPath.gamma), 0.05f, 8.0f);
     node.maskPath.invert = nodeMaskPathJson.value("invert", node.maskPath.invert);
+    node.maskPath.backend = static_cast<rock::MaskUtilityBackend>(std::clamp(
+        nodeMaskPathJson.value("backend", static_cast<int>(node.maskPath.backend)),
+        static_cast<int>(rock::MaskUtilityBackend::CpuParallel),
+        static_cast<int>(rock::MaskUtilityBackend::GpuCompute)));
     node.heightmapFromMask.heightMeters = std::clamp(nodeHeightmapFromMaskJson.value("heightMeters", node.heightmapFromMask.heightMeters), -100000.0f, 100000.0f);
     node.heightmapFromMask.baseHeightMeters = std::clamp(nodeHeightmapFromMaskJson.value("baseHeightMeters", node.heightmapFromMask.baseHeightMeters), -100000.0f, 100000.0f);
     node.heightmapFromMask.gamma = std::clamp(nodeHeightmapFromMaskJson.value("gamma", node.heightmapFromMask.gamma), 0.05f, 8.0f);
     node.heightmapFromMask.invert = nodeHeightmapFromMaskJson.value("invert", node.heightmapFromMask.invert);
+    node.heightmapFromMask.backend = static_cast<rock::MaskUtilityBackend>(std::clamp(
+        nodeHeightmapFromMaskJson.value("backend", static_cast<int>(node.heightmapFromMask.backend)),
+        static_cast<int>(rock::MaskUtilityBackend::CpuParallel),
+        static_cast<int>(rock::MaskUtilityBackend::GpuCompute)));
     {
         const int modeInt = std::clamp(nodeMaskFluvialJson.value("simulationMode", static_cast<int>(node.maskFluvial.simulationMode)),
                                        static_cast<int>(rock::MaskFluvialSimulationMode::FlowAccumulation),
@@ -830,6 +847,11 @@ void ReadPathSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     const nlohmann::json pathJson = nodeJson.value("path", nlohmann::json::object());
     node.path.defaultWidthMeters = std::clamp(pathJson.value("defaultWidthMeters", node.path.defaultWidthMeters), 0.01f, 100000.0f);
     node.path.defaultFeatherMeters = std::clamp(pathJson.value("defaultFeatherMeters", node.path.defaultFeatherMeters), 0.0f, 100000.0f);
+    node.path.defaultHeightOffset = std::clamp(pathJson.value("defaultHeightOffset", node.path.defaultHeightOffset), -1000000.0f, 1000000.0f);
+    const int defaultHeightModeInt = std::clamp(pathJson.value("defaultHeightMode", static_cast<int>(node.path.defaultHeightMode)),
+        static_cast<int>(rock::PathPointHeightMode::ProjectToTerrain),
+        static_cast<int>(rock::PathPointHeightMode::Absolute));
+    node.path.defaultHeightMode = static_cast<rock::PathPointHeightMode>(defaultHeightModeInt);
 
     node.path.points.clear();
     if (pathJson.contains("points") && pathJson["points"].is_array())

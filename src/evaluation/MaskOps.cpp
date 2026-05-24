@@ -10,6 +10,8 @@ namespace rock
 {
 namespace
 {
+MaskBlurGpuEvaluator g_maskBlurGpuEvaluator = nullptr;
+
 template <typename Fn>
 inline void ParallelForRows(int n, Fn&& fn)
 {
@@ -174,6 +176,15 @@ MaskGrid ApplyMaskBlur(const MaskGrid& source, const MaskBlurSettings& settings,
         return result;
     }
 
+    if (settings.backend == MaskUtilityBackend::GpuCompute && g_maskBlurGpuEvaluator != nullptr)
+    {
+        std::string ignoredError;
+        if (g_maskBlurGpuEvaluator(result, settings, terrainSize, &ignoredError))
+        {
+            return result;
+        }
+    }
+
     std::vector<float> scratch(cellCount, 0.0f);
     std::vector<float> blurred(cellCount, 0.0f);
     for (int iteration = 0; iteration < iterations; ++iteration)
@@ -221,5 +232,10 @@ MaskGrid ApplyMaskBlur(const MaskGrid& source, const MaskBlurSettings& settings,
     }
 
     return result;
+}
+
+void SetMaskBlurGpuEvaluator(MaskBlurGpuEvaluator evaluator)
+{
+    g_maskBlurGpuEvaluator = evaluator;
 }
 } // namespace rock

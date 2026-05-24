@@ -40,6 +40,7 @@
 #include "gpu/ColorizeCompute.h"
 #include "gpu/MaskFluvialCompute.h"
 #include "gpu/MaskNoiseCompute.h"
+#include "gpu/MaskUtilityCompute.h"
 #include "gpu/MseCompute.h"
 #include "gpu/RockCompute.h"
 #include "gpu/ScatterCompute.h"
@@ -101,6 +102,11 @@ using terrain::gpu::RunMaskFluvialCompute;
 using terrain::gpu::MaskNoiseComputeStatus;
 using terrain::gpu::ProcessPendingMaskNoiseGpuRequests;
 using terrain::gpu::RunMaskNoiseCompute;
+using terrain::gpu::MaskUtilityComputeStatus;
+using terrain::gpu::ProcessPendingMaskUtilityGpuRequests;
+using terrain::gpu::RunHeightmapFromMaskCompute;
+using terrain::gpu::RunMaskBlurCompute;
+using terrain::gpu::RunMaskPathCompute;
 using terrain::gpu::MseComputeStatus;
 using terrain::gpu::ProcessPendingMseGpuRequests;
 using terrain::gpu::RunMseComputeGrid;
@@ -1031,6 +1037,7 @@ void CleanupD3D()
     g_gpuMeshPreview.displacementMeshResolution = 0;
     terrain::gpu::ResetMseComputeResources();
     terrain::gpu::ResetMaskNoiseComputeResources();
+    terrain::gpu::ResetMaskUtilityComputeResources();
     terrain::gpu::ResetSedimentComputeResources();
     terrain::gpu::ResetRockComputeResources();
     terrain::gpu::ResetScatterComputeResources();
@@ -4601,6 +4608,7 @@ void WaitForAsyncEvaluationForShutdown()
     {
         ProcessPendingMseGpuRequests();
         ProcessPendingMaskNoiseGpuRequests();
+        ProcessPendingMaskUtilityGpuRequests();
         ProcessPendingSedimentGpuRequests();
         ProcessPendingRockGpuRequests();
         ProcessPendingMaskFluvialGpuRequests();
@@ -4922,14 +4930,15 @@ PathMoveGizmoAxis HitTestPathMoveGizmo(const Vec3& pivot, const ImVec2& min, con
     return bestAxis;
 }
 
-rock::GraphId AppendPathPoint(rock::Node& node, float x, float z, float height, rock::PathPointHeightMode heightMode, rock::GraphId connectFromPointId)
+rock::GraphId AppendPathPoint(rock::Node& node, float x, float z, float height, rock::GraphId connectFromPointId)
 {
     rock::PathPoint point;
     point.id = g_graph.AllocatePathElementId();
     point.x = x;
     point.z = z;
     point.height = height;
-    point.heightMode = heightMode;
+    point.heightOffset = node.path.defaultHeightOffset;
+    point.heightMode = node.path.defaultHeightMode;
     point.widthMeters = node.path.defaultWidthMeters;
     point.featherMeters = node.path.defaultFeatherMeters;
     point.intensity = 1.0f;
@@ -4949,7 +4958,7 @@ rock::GraphId AppendPathPoint(rock::Node& node, float x, float z, float height, 
     return pointId;
 }
 
-void AddPathPointFromViewport(float x, float z, float height, rock::PathPointHeightMode heightMode)
+void AddPathPointFromViewport(float x, float z, float height)
 {
     rock::Node* node = SelectedMutablePathNode();
     if (node == nullptr)
@@ -4962,7 +4971,7 @@ void AddPathPointFromViewport(float x, float z, float height, rock::PathPointHei
     }
     const rock::GraphId connectFromPointId = PathContainsPoint(*node, g_pathActiveTailPointId) ? g_pathActiveTailPointId : 0;
     PushUndoSnapshot();
-    g_pathActiveTailPointId = AppendPathPoint(*node, x, z, height, heightMode, connectFromPointId);
+    g_pathActiveTailPointId = AppendPathPoint(*node, x, z, height, connectFromPointId);
     g_pathEditNodeId = node->id;
     MarkGraphChanged("Path point added");
     EvaluateGraph();
@@ -5206,11 +5215,11 @@ void InsertPathPointOnEdge(rock::Node& node, rock::GraphId edgeId, float t)
     point.x = std::lerp(fromPoint->x, toPoint->x, t);
     point.z = std::lerp(fromPoint->z, toPoint->z, t);
     point.height = std::lerp(fromPoint->height, toPoint->height, t);
-    point.heightOffset = std::lerp(fromPoint->heightOffset, toPoint->heightOffset, t);
+    point.heightOffset = node.path.defaultHeightOffset;
     point.widthMeters = std::lerp(fromPoint->widthMeters, toPoint->widthMeters, t);
     point.featherMeters = std::lerp(fromPoint->featherMeters, toPoint->featherMeters, t);
     point.intensity = std::lerp(fromPoint->intensity, toPoint->intensity, t);
-    point.heightMode = fromPoint->heightMode == toPoint->heightMode ? fromPoint->heightMode : rock::PathPointHeightMode::ProjectToTerrain;
+    point.heightMode = node.path.defaultHeightMode;
 
     const rock::PathEdge originalEdge = *edgeIt;
     edgeIt->toPoint = point.id;
@@ -5434,7 +5443,7 @@ bool UpdatePathViewportInteraction(const ImVec2& min, const ImVec2& max)
         if (TryPickViewportFocusPoint(min, max, io.MousePos, &hitPoint, nullptr, nullptr) ||
             TryPickViewportGroundPlanePoint(min, max, io.MousePos, &hitPoint))
         {
-            AddPathPointFromViewport(hitPoint.x, hitPoint.z, hitPoint.y, rock::PathPointHeightMode::ProjectToTerrain);
+            AddPathPointFromViewport(hitPoint.x, hitPoint.z, hitPoint.y);
             return true;
         }
     }
@@ -5761,8 +5770,27 @@ void DrawPathViewportOverlay(ImDrawList* drawList, const ImVec2& min, const ImVe
     const ImU32 pointColor = IM_COL32(250, 247, 224, 255);
     const ImU32 selectedPointColor = IM_COL32(255, 210, 92, 255);
     const ImU32 pointBorderColor = IM_COL32(31, 35, 38, 255);
+    const ImU32 terrainBoundsColor = IM_COL32(150, 156, 158, 135);
 
     drawList->PushClipRect(min, max, true);
+    {
+        const float halfSize = std::max(1.0f, g_graph.Settings().preview.terrainSizeMeters) * 0.5f;
+        const ProjectedPoint corners[] = {
+            ProjectWorldToScreen(-halfSize, 0.0f, -halfSize, center, scale),
+            ProjectWorldToScreen( halfSize, 0.0f, -halfSize, center, scale),
+            ProjectWorldToScreen( halfSize, 0.0f,  halfSize, center, scale),
+            ProjectWorldToScreen(-halfSize, 0.0f,  halfSize, center, scale),
+        };
+        for (int i = 0; i < 4; ++i)
+        {
+            const ProjectedPoint& a = corners[i];
+            const ProjectedPoint& b = corners[(i + 1) % 4];
+            if (a.depth > 0.05f && b.depth > 0.05f)
+            {
+                drawList->AddLine(a.screen, b.screen, terrainBoundsColor, 1.5f);
+            }
+        }
+    }
     for (const rock::PathEdge& edge : node->path.edges)
     {
         if (!edge.enabled)
@@ -8628,7 +8656,7 @@ void HandlePathMapInput(const ImVec2& mapMin, const ImVec2& mapMax)
     float z = 0.0f;
     if (MapScreenToPathWorld(io.MousePos, mapMin, mapMax, &x, &z))
     {
-        AddPathPointFromViewport(x, z, 0.0f, rock::PathPointHeightMode::ProjectToTerrain);
+        AddPathPointFromViewport(x, z, 0.0f);
     }
 }
 
@@ -10132,6 +10160,7 @@ void CaptureDebugStatusLogs()
     static std::string previousDofStatus;
     static std::string previousMseStatus;
     static std::string previousMaskNoiseStatus;
+    static std::string previousMaskUtilityStatus;
     static std::string previousSedimentStatus;
     static std::string previousRockStatus;
     static std::string previousScatterStatus;
@@ -10150,6 +10179,7 @@ void CaptureDebugStatusLogs()
     AppendDebugLogIfChanged("Depth of Field", g_dofPipelineStatus, previousDofStatus);
     AppendDebugLogIfChanged("MSE GPU", MseComputeStatus(), previousMseStatus);
     AppendDebugLogIfChanged("Mask Noise GPU", MaskNoiseComputeStatus(), previousMaskNoiseStatus);
+    AppendDebugLogIfChanged("Mask Utility GPU", MaskUtilityComputeStatus(), previousMaskUtilityStatus);
     AppendDebugLogIfChanged("Sediment GPU", SedimentComputeStatus(), previousSedimentStatus);
     AppendDebugLogIfChanged("Rock GPU", RockComputeStatus(), previousRockStatus);
     AppendDebugLogIfChanged("Scatter GPU", ScatterComputeStatus(), previousScatterStatus);
@@ -10775,6 +10805,7 @@ void ProcessMainThreadEvaluationWork()
 {
     ProcessPendingMseGpuRequests();
     ProcessPendingMaskNoiseGpuRequests();
+    ProcessPendingMaskUtilityGpuRequests();
     ProcessPendingSedimentGpuRequests();
     ProcessPendingRockGpuRequests();
     ProcessPendingScatterGpuRequests();
@@ -10905,6 +10936,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
             gpuComputeContext,
             ShaderPath("mask_noise_compute.hlsl"),
         });
+        terrain::gpu::SetMaskUtilityComputeContext({
+            gpuComputeContext,
+            ShaderPath("mask_utility_compute.hlsl"),
+        });
         terrain::gpu::SetColorizeComputeContext({
             gpuComputeContext,
             ShaderPath("colorize_compute.hlsl"),
@@ -10935,6 +10970,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         });
         rock::SetMultiScaleErosionGpuEvaluator(RunMseComputeGrid);
         rock::SetMaskNoiseGpuEvaluator(RunMaskNoiseCompute);
+        rock::SetMaskPathGpuEvaluator(RunMaskPathCompute);
+        rock::SetMaskBlurGpuEvaluator(RunMaskBlurCompute);
+        rock::SetHeightmapFromMaskGpuEvaluator(RunHeightmapFromMaskCompute);
         rock::SetSedimentGpuEvaluator(RunSedimentCompute);
         rock::SetRockGpuEvaluator(RunRockCompute);
         rock::SetScatterGpuEvaluator(RunScatterCompute);
@@ -11090,6 +11128,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         ImGui::DestroyContext();
         rock::SetMultiScaleErosionGpuEvaluator(nullptr);
         rock::SetMaskNoiseGpuEvaluator(nullptr);
+        rock::SetMaskPathGpuEvaluator(nullptr);
+        rock::SetMaskBlurGpuEvaluator(nullptr);
+        rock::SetHeightmapFromMaskGpuEvaluator(nullptr);
         rock::SetSedimentGpuEvaluator(nullptr);
         rock::SetRockGpuEvaluator(nullptr);
         rock::SetScatterGpuEvaluator(nullptr);

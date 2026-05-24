@@ -121,6 +121,12 @@ enum class MaskNoiseBackend
     GpuCompute,
 };
 
+enum class MaskUtilityBackend
+{
+    CpuParallel,
+    GpuCompute,
+};
+
 enum class ColorizeBackend
 {
     CpuParallel,
@@ -319,6 +325,7 @@ struct MaskBlurSettings
     float radiusMeters = 8.0f;
     int iterations = 1;
     float strength = 1.0f;
+    MaskUtilityBackend backend = MaskUtilityBackend::GpuCompute;
 };
 
 struct MaskSlopeSettings
@@ -344,6 +351,7 @@ struct MaskPathSettings
 {
     float gamma = 1.0f;
     bool invert = false;
+    MaskUtilityBackend backend = MaskUtilityBackend::GpuCompute;
 };
 
 struct HeightmapFromMaskSettings
@@ -352,6 +360,7 @@ struct HeightmapFromMaskSettings
     float baseHeightMeters = 0.0f;
     float gamma = 1.0f;
     bool invert = false;
+    MaskUtilityBackend backend = MaskUtilityBackend::GpuCompute;
 };
 
 struct CrumblingSettings
@@ -524,6 +533,8 @@ struct PathSettings
     std::vector<PathEdge> edges;
     float defaultWidthMeters = 64.0f;
     float defaultFeatherMeters = 32.0f;
+    float defaultHeightOffset = 0.0f;
+    PathPointHeightMode defaultHeightMode = PathPointHeightMode::ProjectToTerrain;
 };
 
 // Heightfield -> mask. Performs MFD flow accumulation on the
@@ -817,6 +828,9 @@ using ScatterGpuEvaluator = bool (*)(HeightfieldGrid& grid, const ScatterSetting
 using MaskFluvialGpuEvaluator = bool (*)(HeightfieldGrid& grid, const MaskFluvialSettings& settings, std::string* error);
 using SnowGpuEvaluator = bool (*)(HeightfieldGrid& grid, const SnowSettings& settings, std::string* error);
 using ColorizeGpuEvaluator = bool (*)(ColorGrid& grid, const ColorizeSettings& settings, const MaskGrid& gradientMask, const MaskGrid* mask, const ColorGrid* baseColor, std::string* error);
+using MaskPathGpuEvaluator = bool (*)(MaskGrid& grid, const PathSettings& path, const MaskPathSettings& settings, float terrainSizeMeters, std::string* error);
+using MaskBlurGpuEvaluator = bool (*)(MaskGrid& grid, const MaskBlurSettings& settings, float terrainSizeMeters, std::string* error);
+using HeightmapFromMaskGpuEvaluator = bool (*)(HeightfieldGrid& grid, const MaskGrid& mask, const HeightmapFromMaskSettings& settings, int resolution, float terrainSizeMeters, std::string* error);
 using AssetPathResolver = std::string (*)(std::string_view path);
 
 struct HeightfieldPipeline
@@ -1012,6 +1026,9 @@ void SetScatterGpuEvaluator(ScatterGpuEvaluator evaluator);
 void SetMaskFluvialGpuEvaluator(MaskFluvialGpuEvaluator evaluator);
 void SetSnowGpuEvaluator(SnowGpuEvaluator evaluator);
 void SetColorizeGpuEvaluator(ColorizeGpuEvaluator evaluator);
+void SetMaskPathGpuEvaluator(MaskPathGpuEvaluator evaluator);
+void SetMaskBlurGpuEvaluator(MaskBlurGpuEvaluator evaluator);
+void SetHeightmapFromMaskGpuEvaluator(HeightmapFromMaskGpuEvaluator evaluator);
 void SetAssetPathResolver(AssetPathResolver resolver);
 
 // Thread-safe progress signal: holds the GraphId of the node whose
