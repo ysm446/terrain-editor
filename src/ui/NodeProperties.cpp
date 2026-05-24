@@ -132,6 +132,41 @@ bool DrawPathHeightOffsetRow(rock::PathPoint& point)
     ImGui::PopID();
     return changed;
 }
+
+bool DrawPathPointCompactFloatRow(
+    const char* label,
+    const char* id,
+    float* value,
+    float minValue,
+    float maxValue,
+    float defaultValue,
+    const char* tooltip,
+    const char* format = "%.3f")
+{
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    DrawPropertyLabel(label, tooltip, FloatDiffersFromDefault(*value, defaultValue));
+    ImGui::TableSetColumnIndex(1);
+
+    bool changed = false;
+    ImGui::PushID(id);
+    ImGui::SetNextItemWidth(std::min(120.0f, ImGui::GetContentRegionAvail().x));
+    if (DrawEnterCommitFloatInput("##number", value, format))
+    {
+        *value = std::clamp(*value, minValue, maxValue);
+        changed = true;
+    }
+    ImGui::SameLine();
+    const bool isDefaultValue = !FloatDiffersFromDefault(*value, defaultValue);
+    const std::string defaultValueText = FormatDefaultFloat(defaultValue, format);
+    if (DrawResetToDefaultButton("reset", isDefaultValue, defaultValueText.c_str()))
+    {
+        *value = std::clamp(defaultValue, minValue, maxValue);
+        changed = true;
+    }
+    ImGui::PopID();
+    return changed;
+}
 } // namespace
 
 void SetNodePropertyCallbacks(NodePropertyCallbacks callbacks)
@@ -220,6 +255,9 @@ void DrawNodePropertiesPanel(rock::NodeGraph& graph, rock::GraphId selectedNodeI
         return;
     case rock::NodeKind::Path:
         DrawPathProperties(*editableNode);
+        return;
+    case rock::NodeKind::MaskPath:
+        DrawMaskPathProperties(*editableNode);
         return;
     default:
         return;
@@ -745,6 +783,32 @@ bool DrawMaskFluvialProperties(rock::Node& editableNode)
     }
 
     ImGui::EndTable();
+    return true;
+}
+
+bool DrawMaskPathProperties(rock::Node& editableNode)
+{
+    if (!ImGui::BeginTable("MaskPathRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        return false;
+    }
+
+    ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 210.0f);
+    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+    rock::MaskPathSettings& pm = editableNode.maskPath;
+    pm.gamma = std::clamp(pm.gamma, 0.05f, 8.0f);
+
+    if (DrawPropertyFloatRow("Gamma", "MaskPathGamma", &pm.gamma, 0.05f, 8.0f, rock::MaskPathSettings{}.gamma, "Mask path gamma changed", true, "Output mask curve. Lower values brighten the feather; higher values emphasize the center."))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyBoolRow("Invert", "MaskPathInvert", &pm.invert, "Mask path invert toggled", "Invert the output mask.", rock::MaskPathSettings{}.invert))
+    {
+        EvaluateGraph();
+    }
+
+    ImGui::EndTable();
+    ImGui::TextWrapped("Mask Path uses each Path point's Width and Feather. Width is the full mask width; Feather fades outward from that width.");
     return true;
 }
 
@@ -1756,6 +1820,9 @@ bool DrawPathProperties(rock::Node& editableNode)
         if (ImGui::BeginTable("PathSelectedPointRows", 2, ImGuiTableFlags_SizingStretchProp))
         {
             changed |= DrawPathPointPositionRow(*selectedPoint);
+            changed |= DrawPathPointCompactFloatRow("Width (m)", "PathSelectedPointWidth", &selectedPoint->widthMeters, 0.01f, 100000.0f, editableNode.path.defaultWidthMeters, "Mask Path width around this point.", "%.1f");
+            changed |= DrawPathPointCompactFloatRow("Feather (m)", "PathSelectedPointFeather", &selectedPoint->featherMeters, 0.0f, 100000.0f, editableNode.path.defaultFeatherMeters, "Mask Path feather around this point.", "%.1f");
+            changed |= DrawPathPointCompactFloatRow("Intensity", "PathSelectedPointIntensity", &selectedPoint->intensity, 0.0f, 1.0f, 1.0f, "Mask Path strength around this point.", "%.3f");
             changed |= DrawPathHeightOffsetRow(*selectedPoint);
 
             int heightMode = PathHeightModeToIndex(selectedPoint->heightMode);
@@ -1777,6 +1844,7 @@ bool DrawPathProperties(rock::Node& editableNode)
     if (changed)
     {
         MarkGraphChanged("Path changed");
+        EvaluateGraph();
     }
     return changed;
 }

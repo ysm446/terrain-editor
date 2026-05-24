@@ -148,6 +148,80 @@ uint64_t HashMaskHeightSettings(const MaskHeightSettings& settings, int resoluti
     return hash;
 }
 
+uint64_t HashMaskPathSettings(const MaskPathSettings& settings, int resolution, float terrainSizeMeters)
+{
+    uint64_t hash = 1469598103934665603ull;
+    HashCombine(hash, HashFloat(settings.gamma));
+    HashCombine(hash, static_cast<uint64_t>(settings.invert ? 1 : 0));
+    HashCombine(hash, static_cast<uint64_t>(resolution));
+    HashCombine(hash, HashFloat(terrainSizeMeters));
+    return hash;
+}
+
+uint64_t HashPathSettings(const PathSettings& path)
+{
+    uint64_t hash = 1099511628211ull;
+    HashCombine(hash, HashFloat(path.defaultWidthMeters));
+    HashCombine(hash, HashFloat(path.defaultFeatherMeters));
+    for (const PathPoint& point : path.points)
+    {
+        HashCombine(hash, static_cast<uint64_t>(point.id));
+        HashCombine(hash, HashFloat(point.x));
+        HashCombine(hash, HashFloat(point.z));
+        HashCombine(hash, HashFloat(point.widthMeters));
+        HashCombine(hash, HashFloat(point.featherMeters));
+        HashCombine(hash, HashFloat(point.intensity));
+    }
+    for (const PathEdge& edge : path.edges)
+    {
+        HashCombine(hash, static_cast<uint64_t>(edge.id));
+        HashCombine(hash, static_cast<uint64_t>(edge.fromPoint));
+        HashCombine(hash, static_cast<uint64_t>(edge.toPoint));
+        HashCombine(hash, static_cast<uint64_t>(edge.enabled ? 1 : 0));
+    }
+    return hash;
+}
+
+float MaskPathDistanceValue(float distance, float widthMeters, float featherMeters)
+{
+    const float halfWidth = std::max(0.0f, widthMeters) * 0.5f;
+    const float feather = std::max(0.0f, featherMeters);
+    if (distance <= halfWidth)
+    {
+        return 1.0f;
+    }
+    if (feather <= 0.0001f || distance >= halfWidth + feather)
+    {
+        return 0.0f;
+    }
+    const float t = std::clamp((distance - halfWidth) / feather, 0.0f, 1.0f);
+    const float smooth = t * t * (3.0f - 2.0f * t);
+    return 1.0f - smooth;
+}
+
+float PathPointMaskWidth(const PathPoint& point)
+{
+    return std::clamp(point.widthMeters, 0.01f, 100000.0f);
+}
+
+float PathPointMaskFeather(const PathPoint& point)
+{
+    return std::clamp(point.featherMeters, 0.0f, 100000.0f);
+}
+
+float PathPointMaskIntensity(const PathPoint& point)
+{
+    return std::clamp(point.intensity, 0.0f, 1.0f);
+}
+
+const PathPoint* FindPathPoint(const PathSettings& path, GraphId pointId)
+{
+    const auto it = std::ranges::find_if(path.points, [pointId](const PathPoint& point) {
+        return point.id == pointId;
+    });
+    return it != path.points.end() ? &*it : nullptr;
+}
+
 uint64_t HashCrumblingSettings(const CrumblingSettings& settings, int resolution)
 {
     uint64_t hash = 1493897469210471337ull;
@@ -348,6 +422,124 @@ inline void ParallelForRows(int n, Fn&& fn)
     std::vector<int> rows(static_cast<size_t>(n));
     std::iota(rows.begin(), rows.end(), 0);
     std::for_each(std::execution::par, rows.begin(), rows.end(), std::forward<Fn>(fn));
+}
+
+MaskGrid GenerateMaskPath(const PathSettings& path, const MaskPathSettings& settings, int resolution, float terrainSizeMeters)
+{
+    struct PointSample
+    {
+        float x = 0.0f;
+        float z = 0.0f;
+        float width = 0.0f;
+        float feather = 0.0f;
+        float intensity = 1.0f;
+    };
+
+    struct SegmentSample
+    {
+        float ax = 0.0f;
+        float az = 0.0f;
+        float abX = 0.0f;
+        float abZ = 0.0f;
+        float lenSq = 0.0f;
+        float widthA = 0.0f;
+        float widthB = 0.0f;
+        float featherA = 0.0f;
+        float featherB = 0.0f;
+        float intensityA = 1.0f;
+        float intensityB = 1.0f;
+    };
+
+    MaskGrid grid;
+    grid.resolution = std::clamp(resolution, 2, 2048);
+    grid.values.assign(static_cast<size_t>(grid.resolution) * static_cast<size_t>(grid.resolution), 0.0f);
+
+    std::vector<PointSample> pointSamples;
+    pointSamples.reserve(path.points.size());
+    for (const PathPoint& point : path.points)
+    {
+        pointSamples.push_back({point.x, point.z, PathPointMaskWidth(point), PathPointMaskFeather(point), PathPointMaskIntensity(point)});
+    }
+
+    std::vector<SegmentSample> segmentSamples;
+    segmentSamples.reserve(path.edges.size());
+    for (const PathEdge& edge : path.edges)
+    {
+        if (!edge.enabled)
+        {
+            continue;
+        }
+        const PathPoint* a = FindPathPoint(path, edge.fromPoint);
+        const PathPoint* b = FindPathPoint(path, edge.toPoint);
+        if (a == nullptr || b == nullptr)
+        {
+            continue;
+        }
+        const float abX = b->x - a->x;
+        const float abZ = b->z - a->z;
+        const float lenSq = abX * abX + abZ * abZ;
+        if (lenSq <= 0.000001f)
+        {
+            continue;
+        }
+        segmentSamples.push_back({
+            a->x,
+            a->z,
+            abX,
+            abZ,
+            lenSq,
+            PathPointMaskWidth(*a),
+            PathPointMaskWidth(*b),
+            PathPointMaskFeather(*a),
+            PathPointMaskFeather(*b),
+            PathPointMaskIntensity(*a),
+            PathPointMaskIntensity(*b),
+        });
+    }
+
+    const float terrainSize = std::max(1.0f, terrainSizeMeters);
+    const float halfSize = terrainSize * 0.5f;
+    const float invStep = 1.0f / static_cast<float>(std::max(1, grid.resolution - 1));
+    const float gamma = std::clamp(settings.gamma, 0.05f, 8.0f);
+    ParallelForRows(grid.resolution, [&](int z)
+    {
+        const float worldZ = halfSize - static_cast<float>(z) * invStep * terrainSize;
+        for (int x = 0; x < grid.resolution; ++x)
+        {
+            const float worldX = -halfSize + static_cast<float>(x) * invStep * terrainSize;
+            float value = 0.0f;
+
+            for (const PointSample& point : pointSamples)
+            {
+                const float dx = worldX - point.x;
+                const float dz = worldZ - point.z;
+                const float distance = std::sqrt(dx * dx + dz * dz);
+                value = std::max(value, MaskPathDistanceValue(distance, point.width, point.feather) * point.intensity);
+            }
+
+            for (const SegmentSample& segment : segmentSamples)
+            {
+                const float t = std::clamp(((worldX - segment.ax) * segment.abX + (worldZ - segment.az) * segment.abZ) / segment.lenSq, 0.0f, 1.0f);
+                const float closestX = segment.ax + segment.abX * t;
+                const float closestZ = segment.az + segment.abZ * t;
+                const float dx = worldX - closestX;
+                const float dz = worldZ - closestZ;
+                const float distance = std::sqrt(dx * dx + dz * dz);
+                const float width = std::lerp(segment.widthA, segment.widthB, t);
+                const float feather = std::lerp(segment.featherA, segment.featherB, t);
+                const float intensity = std::lerp(segment.intensityA, segment.intensityB, t);
+                value = std::max(value, MaskPathDistanceValue(distance, width, feather) * intensity);
+            }
+
+            value = std::pow(std::clamp(value, 0.0f, 1.0f), gamma);
+            if (settings.invert)
+            {
+                value = 1.0f - value;
+            }
+            grid.values[static_cast<size_t>(z) * static_cast<size_t>(grid.resolution) + static_cast<size_t>(x)] = value;
+        }
+    });
+    return grid;
 }
 
 float SampleGridBilinear(const std::vector<float>& values, int n, float x, float z)
@@ -2275,6 +2467,10 @@ GraphId NodeGraph::CreateNode(NodeKind kind)
         AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
         AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
         break;
+    case NodeKind::MaskPath:
+        AddPin(nodeId, PinKind::Input, ValueType::Path, "Path");
+        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
+        break;
     case NodeKind::Crumbling:
         AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
         AddPin(nodeId, PinKind::Input, ValueType::Mask, "Emission Mask");
@@ -2743,6 +2939,41 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
         }
         if (outputHash != nullptr) { *outputHash = hash; }
         return mask;
+    }
+    if (node.kind == NodeKind::MaskPath)
+    {
+        uint64_t inputHash = 0;
+        const Node* pathNode = nullptr;
+        if (!node.inputs.empty())
+        {
+            const UpstreamConnection upstream = FindUpstreamConnectionForPin(node.inputs[0].id);
+            if (upstream.node != nullptr && upstream.node->kind == NodeKind::Path)
+            {
+                pathNode = upstream.node;
+                inputHash = HashPathSettings(upstream.node->path);
+                HashCombine(inputHash, static_cast<uint64_t>(upstream.node->id));
+            }
+        }
+
+        const int resolution = std::clamp(settings_.preview.simulationResolution, 2, 2048);
+        const float terrainSize = std::max(1.0f, settings_.preview.terrainSizeMeters);
+        const uint64_t parameterHash = HashMaskPathSettings(node.maskPath, resolution, terrainSize);
+        MaskNodeCache& cache = maskCache_[node.id];
+        if (!cache.valid || cache.inputHash != inputHash || cache.parameterHash != parameterHash)
+        {
+            g_currentlyEvaluatingNodeId.store(node.id, std::memory_order_relaxed);
+            cache.grid = pathNode != nullptr
+                ? GenerateMaskPath(pathNode->path, node.maskPath, resolution, terrainSize)
+                : MaskGrid{};
+            cache.valid = true;
+            cache.inputHash = inputHash;
+            cache.parameterHash = parameterHash;
+            cache.outputHash = inputHash;
+            HashCombine(cache.outputHash, parameterHash);
+            HashCombine(cache.outputHash, static_cast<uint64_t>(node.id));
+        }
+        if (outputHash != nullptr) { *outputHash = cache.outputHash; }
+        return cache.grid;
     }
     if (node.kind == NodeKind::MaskBlend)
     {
@@ -3348,6 +3579,8 @@ std::string_view ToString(NodeKind kind)
         return "Mask Slope";
     case NodeKind::MaskHeight:
         return "Mask Height";
+    case NodeKind::MaskPath:
+        return "Mask Path";
     case NodeKind::Crumbling:
         return "Crumbling";
     case NodeKind::MaskCurvature:
@@ -3393,6 +3626,8 @@ std::string_view ToString(PreviewStage stage)
         return "Mask Slope";
     case PreviewStage::MaskHeight:
         return "Mask Height";
+    case PreviewStage::MaskPath:
+        return "Mask Path";
     case PreviewStage::Crumbling:
         return "Crumbling";
     case PreviewStage::MaskCurvature:
@@ -3455,6 +3690,8 @@ PreviewStage PreviewStageFor(NodeKind kind)
         return PreviewStage::MaskSlope;
     case NodeKind::MaskHeight:
         return PreviewStage::MaskHeight;
+    case NodeKind::MaskPath:
+        return PreviewStage::MaskPath;
     case NodeKind::Crumbling:
         return PreviewStage::Crumbling;
     case NodeKind::MaskCurvature:
@@ -3480,7 +3717,7 @@ PreviewStage PreviewStageFor(NodeKind kind)
 
 bool IsMaskOnlyNodeKind(NodeKind kind)
 {
-    return kind == NodeKind::MaskNoise || kind == NodeKind::MaskBlend || kind == NodeKind::MaskLevels;
+    return kind == NodeKind::MaskNoise || kind == NodeKind::MaskBlend || kind == NodeKind::MaskLevels || kind == NodeKind::MaskPath;
 }
 
 bool IsColorOnlyNodeKind(NodeKind kind)

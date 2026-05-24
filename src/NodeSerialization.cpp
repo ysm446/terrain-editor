@@ -49,6 +49,7 @@ bool IsSerializableNodeKind(rock::NodeKind kind)
     case rock::NodeKind::Crumbling:
     case rock::NodeKind::Scatter:
     case rock::NodeKind::Path:
+    case rock::NodeKind::MaskPath:
         return true;
     default:
         return false;
@@ -163,6 +164,10 @@ nlohmann::json MakeMaskSettingsJson(const rock::Node& node)
             {"gamma", node.maskHeight.gamma},
             {"invert", node.maskHeight.invert},
         }},
+        {"maskPath", {
+            {"gamma", node.maskPath.gamma},
+            {"invert", node.maskPath.invert},
+        }},
         {"maskBlend", {
             {"mode", static_cast<int>(node.maskBlend.mode)},
             {"intensity", node.maskBlend.intensity},
@@ -217,6 +222,9 @@ nlohmann::json MakePathSettingsJson(const rock::Node& node)
             {"z", point.z},
             {"height", point.height},
             {"heightOffset", point.heightOffset},
+            {"widthMeters", point.widthMeters},
+            {"featherMeters", point.featherMeters},
+            {"intensity", point.intensity},
             {"heightMode", static_cast<int>(point.heightMode)},
         });
     }
@@ -418,6 +426,7 @@ std::optional<rock::PreviewStage> ReadSerializedPreviewStage(const nlohmann::jso
     case rock::PreviewStage::MaskLevels:
     case rock::PreviewStage::MaskSlope:
     case rock::PreviewStage::MaskHeight:
+    case rock::PreviewStage::MaskPath:
     case rock::PreviewStage::Crumbling:
     case rock::PreviewStage::MaskCurvature:
     case rock::PreviewStage::MaskFluvial:
@@ -491,6 +500,7 @@ void ReadMaskSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     const nlohmann::json nodeMaskLevelsJson = nodeJson.value("maskLevels", nlohmann::json::object());
     const nlohmann::json nodeMaskSlopeJson = nodeJson.value("maskSlope", nlohmann::json::object());
     const nlohmann::json nodeMaskHeightJson = nodeJson.value("maskHeight", nlohmann::json::object());
+    const nlohmann::json nodeMaskPathJson = nodeJson.value("maskPath", nodeJson.value("pathMask", nlohmann::json::object()));
 
     node.maskNoise.seed = std::clamp(nodeMaskNoiseJson.value("seed", node.maskNoise.seed), 0, 999999);
     node.maskNoise.octaves = std::clamp(nodeMaskNoiseJson.value("octaves", node.maskNoise.octaves), 1, 12);
@@ -548,6 +558,8 @@ void ReadMaskSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     node.maskHeight.featherMeters = std::clamp(nodeMaskHeightJson.value("featherMeters", node.maskHeight.featherMeters), 0.0f, 100000.0f);
     node.maskHeight.gamma = std::clamp(nodeMaskHeightJson.value("gamma", node.maskHeight.gamma), 0.05f, 8.0f);
     node.maskHeight.invert = nodeMaskHeightJson.value("invert", node.maskHeight.invert);
+    node.maskPath.gamma = std::clamp(nodeMaskPathJson.value("gamma", node.maskPath.gamma), 0.05f, 8.0f);
+    node.maskPath.invert = nodeMaskPathJson.value("invert", node.maskPath.invert);
     {
         const int modeInt = std::clamp(nodeMaskFluvialJson.value("simulationMode", static_cast<int>(node.maskFluvial.simulationMode)),
                                        static_cast<int>(rock::MaskFluvialSimulationMode::FlowAccumulation),
@@ -806,6 +818,9 @@ void ReadPathSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
             point.z = std::clamp(pointJson.value("z", 0.0f), -1000000.0f, 1000000.0f);
             point.height = std::clamp(pointJson.value("height", 0.0f), -1000000.0f, 1000000.0f);
             point.heightOffset = std::clamp(pointJson.value("heightOffset", 0.0f), -1000000.0f, 1000000.0f);
+            point.widthMeters = std::clamp(pointJson.value("widthMeters", node.path.defaultWidthMeters), 0.01f, 100000.0f);
+            point.featherMeters = std::clamp(pointJson.value("featherMeters", node.path.defaultFeatherMeters), 0.0f, 100000.0f);
+            point.intensity = std::clamp(pointJson.value("intensity", point.intensity), 0.0f, 1.0f);
             const int modeInt = std::clamp(pointJson.value("heightMode", static_cast<int>(point.heightMode)),
                 static_cast<int>(rock::PathPointHeightMode::ProjectToTerrain),
                 static_cast<int>(rock::PathPointHeightMode::Absolute));
@@ -902,6 +917,10 @@ std::optional<rock::Node> ReadSerializedNodeJson(const nlohmann::json& nodeJson)
     node.kind = *nodeKind;
     node.title = nodeJson.value("title", std::string(rock::ToString(node.kind)));
     if (node.kind == rock::NodeKind::HeightmapLoad && node.title == "Load Heightmap")
+    {
+        node.title = std::string(rock::ToString(node.kind));
+    }
+    if (node.kind == rock::NodeKind::MaskPath && node.title == "Path Mask")
     {
         node.title = std::string(rock::ToString(node.kind));
     }

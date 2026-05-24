@@ -4451,6 +4451,7 @@ bool IsTerrainNodeKind(rock::NodeKind kind)
         kind == rock::NodeKind::MaskLevels ||
         kind == rock::NodeKind::MaskSlope ||
         kind == rock::NodeKind::MaskHeight ||
+        kind == rock::NodeKind::MaskPath ||
         kind == rock::NodeKind::Crumbling ||
         kind == rock::NodeKind::MaskCurvature ||
         kind == rock::NodeKind::MaskFluvial ||
@@ -4927,6 +4928,9 @@ rock::GraphId AppendPathPoint(rock::Node& node, float x, float z, float height, 
     point.z = z;
     point.height = height;
     point.heightMode = heightMode;
+    point.widthMeters = node.path.defaultWidthMeters;
+    point.featherMeters = node.path.defaultFeatherMeters;
+    point.intensity = 1.0f;
 
     const rock::GraphId pointId = point.id;
     node.path.points.push_back(point);
@@ -4959,6 +4963,7 @@ void AddPathPointFromViewport(float x, float z, float height, rock::PathPointHei
     g_pathActiveTailPointId = AppendPathPoint(*node, x, z, height, heightMode, connectFromPointId);
     g_pathEditNodeId = node->id;
     MarkGraphChanged("Path point added");
+    EvaluateGraph();
     g_projectStatus = "Path point added";
 }
 
@@ -5010,6 +5015,7 @@ void DeleteSelectedPathElement()
         }
         ClearPathSelection();
         MarkGraphChanged("Path point deleted");
+        EvaluateGraph();
         g_projectStatus = "Path point deleted";
         return;
     }
@@ -5029,6 +5035,7 @@ void DeleteSelectedPathElement()
         node->path.edges.erase(edgeIt);
         ClearPathSelection();
         MarkGraphChanged("Path edge deleted");
+        EvaluateGraph();
         g_projectStatus = "Path edge deleted";
     }
 }
@@ -5107,6 +5114,7 @@ bool UpdatePathMoveGizmoDrag(const ImVec2& min, const ImVec2& max)
         g_pathActiveMoveGizmoAxis = PathMoveGizmoAxis::None;
         g_pathMoveGizmoDragPointId = 0;
         MarkGraphChanged("Path point moved");
+        EvaluateGraph();
         g_projectStatus = "Path point moved";
         return true;
     }
@@ -5197,6 +5205,9 @@ void InsertPathPointOnEdge(rock::Node& node, rock::GraphId edgeId, float t)
     point.z = std::lerp(fromPoint->z, toPoint->z, t);
     point.height = std::lerp(fromPoint->height, toPoint->height, t);
     point.heightOffset = std::lerp(fromPoint->heightOffset, toPoint->heightOffset, t);
+    point.widthMeters = std::lerp(fromPoint->widthMeters, toPoint->widthMeters, t);
+    point.featherMeters = std::lerp(fromPoint->featherMeters, toPoint->featherMeters, t);
+    point.intensity = std::lerp(fromPoint->intensity, toPoint->intensity, t);
     point.heightMode = fromPoint->heightMode == toPoint->heightMode ? fromPoint->heightMode : rock::PathPointHeightMode::ProjectToTerrain;
 
     const rock::PathEdge originalEdge = *edgeIt;
@@ -5210,6 +5221,7 @@ void InsertPathPointOnEdge(rock::Node& node, rock::GraphId edgeId, float t)
 
     SelectPathPoint(point.id);
     MarkGraphChanged("Path edge split");
+    EvaluateGraph();
     g_projectStatus = "Path point inserted";
 }
 
@@ -8810,6 +8822,7 @@ ImVec4 NodeAccentColor(rock::NodeKind kind)
     case rock::NodeKind::MaskHeight:
     case rock::NodeKind::MaskCurvature:
     case rock::NodeKind::MaskFluvial:
+    case rock::NodeKind::MaskPath:
         return maskOrange;
     case rock::NodeKind::Colorize:
         return ImVec4(0.44f, 0.50f, 0.96f, 1.0f); // 青紫 (カラー系)
@@ -8846,6 +8859,8 @@ ImVec2 InitialNodePosition(rock::NodeKind kind)
         return ImVec2(600.0f, 800.0f);
     case rock::NodeKind::MaskFluvial:
         return ImVec2(880.0f, 240.0f);
+    case rock::NodeKind::MaskPath:
+        return ImVec2(320.0f, 720.0f);
     case rock::NodeKind::Crumbling:
         return ImVec2(880.0f, 380.0f);
     case rock::NodeKind::Rock:
@@ -9112,7 +9127,8 @@ void DrawRockNode(const rock::Node& node, const ImVec2& editorScreenMin, const I
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 1.0f);
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.88f, 0.88f, 0.88f, 1.0f));
     ImGui::SetWindowFontScale(1.10f);
-    ImGui::TextUnformatted(node.title.c_str());
+    const std::string_view displayTitle = node.kind == rock::NodeKind::MaskPath ? rock::ToString(node.kind) : std::string_view(node.title);
+    ImGui::TextUnformatted(displayTitle.data(), displayTitle.data() + displayTitle.size());
     ImGui::SetWindowFontScale(1.0f);
     ImGui::PopStyleColor();
 
@@ -9546,7 +9562,7 @@ void DrawNodeGraph()
 
     if (ed::ShowBackgroundContextMenu())
     {
-        addNodePosition = ed::ScreenToCanvas(ImGui::GetMousePos());
+        addNodePosition = ImGui::GetMousePos();
         ed::Suspend();
         ImGui::OpenPopup("AddNodeContextMenu");
         ed::Resume();
@@ -9597,6 +9613,7 @@ void DrawNodeGraph()
             addNodeMenuItem(rock::NodeKind::MaskSlope);
             addNodeMenuItem(rock::NodeKind::MaskCurvature);
             addNodeMenuItem(rock::NodeKind::MaskFluvial);
+            addNodeMenuItem(rock::NodeKind::MaskPath);
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("カラー"))

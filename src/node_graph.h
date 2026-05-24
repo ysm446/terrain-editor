@@ -33,6 +33,7 @@ enum class NodeKind
     Crumbling = 20,
     Scatter = 21,
     Path = 22,
+    MaskPath = 23,
 };
 
 enum class PinKind
@@ -224,6 +225,7 @@ enum class PreviewStage
     MaskHeight = 18,
     Crumbling = 19,
     Scatter = 20,
+    MaskPath = 21,
 };
 
 enum class HeightfieldPreviewField
@@ -323,6 +325,12 @@ struct MaskHeightSettings
     float heightMinMeters = 0.0f;
     float heightMaxMeters = 1000.0f;
     float featherMeters = 0.0f;
+    float gamma = 1.0f;
+    bool invert = false;
+};
+
+struct MaskPathSettings
+{
     float gamma = 1.0f;
     bool invert = false;
 };
@@ -475,6 +483,9 @@ struct PathPoint
     float z = 0.0f;
     float height = 0.0f;
     float heightOffset = 0.0f;
+    float widthMeters = 64.0f;
+    float featherMeters = 32.0f;
+    float intensity = 1.0f;
     PathPointHeightMode heightMode = PathPointHeightMode::ProjectToTerrain;
 };
 
@@ -580,6 +591,7 @@ struct Node
     MaskLevelsSettings maskLevels;
     MaskSlopeSettings maskSlope;
     MaskHeightSettings maskHeight;
+    MaskPathSettings maskPath;
     CrumblingSettings crumbling;
     MaskFluvialSettings maskFluvial;
     RockSettings rock;
