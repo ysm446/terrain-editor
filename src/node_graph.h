@@ -35,6 +35,7 @@ enum class NodeKind
     Path = 22,
     MaskPath = 23,
     HeightmapFromMask = 24,
+    MaskBlur = 25,
 };
 
 enum class PinKind
@@ -228,6 +229,7 @@ enum class PreviewStage
     Scatter = 20,
     MaskPath = 21,
     HeightmapFromMask = 22,
+    MaskBlur = 23,
 };
 
 enum class HeightfieldPreviewField
@@ -310,6 +312,13 @@ struct MaskLevelsSettings
     float whitePoint = 1.0f;
     float gamma = 1.0f;
     bool invert = false;
+};
+
+struct MaskBlurSettings
+{
+    float radiusMeters = 8.0f;
+    int iterations = 1;
+    float strength = 1.0f;
 };
 
 struct MaskSlopeSettings
@@ -599,6 +608,7 @@ struct Node
     MaskBlendSettings maskBlend;
     MaskCurvatureSettings maskCurvature;
     MaskLevelsSettings maskLevels;
+    MaskBlurSettings maskBlur;
     MaskSlopeSettings maskSlope;
     MaskHeightSettings maskHeight;
     MaskPathSettings maskPath;

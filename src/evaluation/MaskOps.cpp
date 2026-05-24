@@ -148,4 +148,78 @@ MaskGrid ApplyMaskLevels(const MaskGrid& source, const MaskLevelsSettings& setti
 
     return result;
 }
+
+MaskGrid ApplyMaskBlur(const MaskGrid& source, const MaskBlurSettings& settings, float terrainSizeMeters)
+{
+    if (source.resolution <= 0 || source.values.empty())
+    {
+        return {};
+    }
+
+    const int n = source.resolution;
+    const size_t cellCount = static_cast<size_t>(n) * static_cast<size_t>(n);
+    const size_t sourceCount = std::min(cellCount, source.values.size());
+    MaskGrid result;
+    result.resolution = n;
+    result.values.assign(cellCount, 0.0f);
+    std::copy_n(source.values.begin(), sourceCount, result.values.begin());
+
+    const float terrainSize = std::max(1.0f, terrainSizeMeters);
+    const float cellSize = n > 1 ? terrainSize / static_cast<float>(n - 1) : terrainSize;
+    const int radius = std::clamp(static_cast<int>(std::ceil(std::max(0.0f, settings.radiusMeters) / std::max(cellSize, 0.0001f))), 0, n - 1);
+    const int iterations = std::clamp(settings.iterations, 1, 16);
+    const float strength = std::clamp(settings.strength, 0.0f, 1.0f);
+    if (radius <= 0 || strength <= 0.0f)
+    {
+        return result;
+    }
+
+    std::vector<float> scratch(cellCount, 0.0f);
+    std::vector<float> blurred(cellCount, 0.0f);
+    for (int iteration = 0; iteration < iterations; ++iteration)
+    {
+        ParallelForRows(n, [&](int z) {
+            const size_t row = static_cast<size_t>(z) * static_cast<size_t>(n);
+            for (int x = 0; x < n; ++x)
+            {
+                float sum = 0.0f;
+                int samples = 0;
+                for (int dx = -radius; dx <= radius; ++dx)
+                {
+                    const int sx = std::clamp(x + dx, 0, n - 1);
+                    sum += result.values[row + static_cast<size_t>(sx)];
+                    ++samples;
+                }
+                scratch[row + static_cast<size_t>(x)] = sum / static_cast<float>(samples);
+            }
+        });
+
+        ParallelForRows(n, [&](int z) {
+            const size_t row = static_cast<size_t>(z) * static_cast<size_t>(n);
+            for (int x = 0; x < n; ++x)
+            {
+                float sum = 0.0f;
+                int samples = 0;
+                for (int dz = -radius; dz <= radius; ++dz)
+                {
+                    const int sz = std::clamp(z + dz, 0, n - 1);
+                    sum += scratch[static_cast<size_t>(sz) * static_cast<size_t>(n) + static_cast<size_t>(x)];
+                    ++samples;
+                }
+                blurred[row + static_cast<size_t>(x)] = std::clamp(sum / static_cast<float>(samples), 0.0f, 1.0f);
+            }
+        });
+
+        ParallelForRows(n, [&](int z) {
+            const size_t row = static_cast<size_t>(z) * static_cast<size_t>(n);
+            for (int x = 0; x < n; ++x)
+            {
+                const size_t i = row + static_cast<size_t>(x);
+                result.values[i] = std::clamp(std::lerp(result.values[i], blurred[i], strength), 0.0f, 1.0f);
+            }
+        });
+    }
+
+    return result;
+}
 } // namespace rock

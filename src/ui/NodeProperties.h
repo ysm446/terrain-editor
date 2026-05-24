@@ -50,6 +50,7 @@ bool DrawMultiScaleErosionProperties(rock::Node& editableNode);
 bool DrawMaskNoiseProperties(rock::Node& editableNode);
 bool DrawMaskBlendProperties(rock::Node& editableNode);
 bool DrawMaskLevelsProperties(rock::Node& editableNode);
+bool DrawMaskBlurProperties(rock::Node& editableNode);
 bool DrawMaskHeightProperties(rock::Node& editableNode);
 bool DrawMaskPathProperties(rock::Node& editableNode);
 bool DrawHeightmapFromMaskProperties(rock::Node& editableNode);

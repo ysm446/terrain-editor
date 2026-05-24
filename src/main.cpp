@@ -4450,6 +4450,7 @@ bool IsTerrainNodeKind(rock::NodeKind kind)
         kind == rock::NodeKind::MaskNoise ||
         kind == rock::NodeKind::MaskBlend ||
         kind == rock::NodeKind::MaskLevels ||
+        kind == rock::NodeKind::MaskBlur ||
         kind == rock::NodeKind::MaskSlope ||
         kind == rock::NodeKind::MaskHeight ||
         kind == rock::NodeKind::MaskPath ||
@@ -8820,6 +8821,7 @@ ImVec4 NodeAccentColor(rock::NodeKind kind)
     case rock::NodeKind::MaskNoise:
     case rock::NodeKind::MaskBlend:
     case rock::NodeKind::MaskLevels:
+    case rock::NodeKind::MaskBlur:
     case rock::NodeKind::MaskSlope:
     case rock::NodeKind::MaskHeight:
     case rock::NodeKind::MaskCurvature:
@@ -8865,6 +8867,8 @@ ImVec2 InitialNodePosition(rock::NodeKind kind)
         return ImVec2(880.0f, 240.0f);
     case rock::NodeKind::MaskPath:
         return ImVec2(320.0f, 720.0f);
+    case rock::NodeKind::MaskBlur:
+        return ImVec2(600.0f, 720.0f);
     case rock::NodeKind::Crumbling:
         return ImVec2(880.0f, 380.0f);
     case rock::NodeKind::Rock:
@@ -9614,6 +9618,7 @@ void DrawNodeGraph()
             addNodeMenuItem(rock::NodeKind::MaskNoise);
             addNodeMenuItem(rock::NodeKind::MaskBlend);
             addNodeMenuItem(rock::NodeKind::MaskLevels);
+            addNodeMenuItem(rock::NodeKind::MaskBlur);
             addNodeMenuItem(rock::NodeKind::MaskHeight);
             addNodeMenuItem(rock::NodeKind::MaskSlope);
             addNodeMenuItem(rock::NodeKind::MaskCurvature);

@@ -2,6 +2,12 @@
 
 ## 未リリース
 
+## 0.19.69 - 2026-05-25 06:25
+
+- `Mask Blur` ノードを追加しました。`Mask` 入力を並列 CPU の横/縦 separable blur でぼかし、`Radius (m)`、`Iterations`、`Strength (%)` で調整できます。
+- `Mask Blur` をノード作成メニュー、プロパティ、保存/読み込み、マスクプレビュー評価に対応しました。
+- `Path` 型のピンとノードグラフ上のリンク色を、Path ノードのアクセントに合わせた青系にしました。
+
 ## 0.19.68 - 2026-05-25 06:15
 
 - `Heightmap From Mask` ノードを追加しました。`Mask` 入力を `HeightField` に変換し、`Height (m)`、`Base Height (m)`、`Gamma`、`Invert` で高さ化の挙動を調整できます。

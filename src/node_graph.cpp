@@ -123,6 +123,16 @@ uint64_t HashMaskLevelsSettings(const MaskLevelsSettings& settings)
     return hash;
 }
 
+uint64_t HashMaskBlurSettings(const MaskBlurSettings& settings, float terrainSizeMeters)
+{
+    uint64_t hash = 1469598103934665603ull;
+    HashCombine(hash, HashFloat(settings.radiusMeters));
+    HashCombine(hash, static_cast<uint64_t>(settings.iterations));
+    HashCombine(hash, HashFloat(settings.strength));
+    HashCombine(hash, HashFloat(terrainSizeMeters));
+    return hash;
+}
+
 uint64_t HashMaskSlopeSettings(const MaskSlopeSettings& settings, int resolution)
 {
     uint64_t hash = 7809847782465536322ull;
@@ -2604,6 +2614,10 @@ GraphId NodeGraph::CreateNode(NodeKind kind)
         AddPin(nodeId, PinKind::Input, ValueType::Mask, "Mask");
         AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
         break;
+    case NodeKind::MaskBlur:
+        AddPin(nodeId, PinKind::Input, ValueType::Mask, "Mask");
+        AddPin(nodeId, PinKind::Output, ValueType::Mask, "Mask");
+        break;
     case NodeKind::Colorize:
         AddPin(nodeId, PinKind::Input, ValueType::HeightField, "Heightmap");
         AddPin(nodeId, PinKind::Input, ValueType::ColorTexture, "Base Color");
@@ -3173,6 +3187,49 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
         if (outputHash != nullptr) { *outputHash = cache.outputHash; }
         return cache.grid;
     }
+    if (node.kind == NodeKind::MaskBlur)
+    {
+        uint64_t inputHash = 0;
+        MaskGrid input;
+        if (!node.inputs.empty())
+        {
+            const auto isMaskProducer = [](NodeKind kind) {
+                return IsMaskOnlyNodeKind(kind) ||
+                    kind == NodeKind::MaskCurvature ||
+                    kind == NodeKind::MaskSlope ||
+                    kind == NodeKind::MaskHeight ||
+                    kind == NodeKind::Crumbling ||
+                    kind == NodeKind::MaskFluvial ||
+                    kind == NodeKind::Rock ||
+                    kind == NodeKind::Scatter ||
+                    kind == NodeKind::Sediment ||
+                    kind == NodeKind::Snow ||
+                    kind == NodeKind::MultiScaleErosion;
+            };
+            const UpstreamConnection upstreamConnection = FindUpstreamConnectionForPin(node.inputs[0].id);
+            if (upstreamConnection.node != nullptr && isMaskProducer(upstreamConnection.node->kind))
+            {
+                input = EvaluateMaskGridForNodeCached(*upstreamConnection.node, depth + 1, &inputHash, upstreamConnection.outputPin ? std::string_view(upstreamConnection.outputPin->label) : std::string_view{});
+            }
+        }
+
+        const float terrainSize = std::max(1.0f, settings_.preview.terrainSizeMeters);
+        const uint64_t parameterHash = HashMaskBlurSettings(node.maskBlur, terrainSize);
+        MaskNodeCache& cache = maskCache_[node.id];
+        if (!cache.valid || cache.inputHash != inputHash || cache.parameterHash != parameterHash)
+        {
+            g_currentlyEvaluatingNodeId.store(node.id, std::memory_order_relaxed);
+            cache.grid = ApplyMaskBlur(input, node.maskBlur, terrainSize);
+            cache.valid = true;
+            cache.inputHash = inputHash;
+            cache.parameterHash = parameterHash;
+            cache.outputHash = inputHash;
+            HashCombine(cache.outputHash, parameterHash);
+            HashCombine(cache.outputHash, static_cast<uint64_t>(node.id));
+        }
+        if (outputHash != nullptr) { *outputHash = cache.outputHash; }
+        return cache.grid;
+    }
     if (outputHash != nullptr) { *outputHash = 0; }
     return {};
 }
@@ -3677,6 +3734,8 @@ std::string_view ToString(NodeKind kind)
         return "Mask Blend";
     case NodeKind::MaskLevels:
         return "Mask Levels";
+    case NodeKind::MaskBlur:
+        return "Mask Blur";
     case NodeKind::MaskSlope:
         return "Mask Slope";
     case NodeKind::MaskHeight:
@@ -3726,6 +3785,8 @@ std::string_view ToString(PreviewStage stage)
         return "Mask Blend";
     case PreviewStage::MaskLevels:
         return "Mask Levels";
+    case PreviewStage::MaskBlur:
+        return "Mask Blur";
     case PreviewStage::MaskSlope:
         return "Mask Slope";
     case PreviewStage::MaskHeight:
@@ -3792,6 +3853,8 @@ PreviewStage PreviewStageFor(NodeKind kind)
         return PreviewStage::MaskBlend;
     case NodeKind::MaskLevels:
         return PreviewStage::MaskLevels;
+    case NodeKind::MaskBlur:
+        return PreviewStage::MaskBlur;
     case NodeKind::MaskSlope:
         return PreviewStage::MaskSlope;
     case NodeKind::MaskHeight:
@@ -3825,7 +3888,7 @@ PreviewStage PreviewStageFor(NodeKind kind)
 
 bool IsMaskOnlyNodeKind(NodeKind kind)
 {
-    return kind == NodeKind::MaskNoise || kind == NodeKind::MaskBlend || kind == NodeKind::MaskLevels || kind == NodeKind::MaskPath;
+    return kind == NodeKind::MaskNoise || kind == NodeKind::MaskBlend || kind == NodeKind::MaskLevels || kind == NodeKind::MaskBlur || kind == NodeKind::MaskPath;
 }
 
 bool IsColorOnlyNodeKind(NodeKind kind)

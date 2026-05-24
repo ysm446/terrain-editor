@@ -223,6 +223,9 @@ void DrawNodePropertiesPanel(rock::NodeGraph& graph, rock::GraphId selectedNodeI
     case rock::NodeKind::MaskLevels:
         DrawMaskLevelsProperties(*editableNode);
         return;
+    case rock::NodeKind::MaskBlur:
+        DrawMaskBlurProperties(*editableNode);
+        return;
     case rock::NodeKind::MaskHeight:
         DrawMaskHeightProperties(*editableNode);
         return;
@@ -469,6 +472,37 @@ bool DrawMaskLevelsProperties(rock::Node& editableNode)
         EvaluateGraph();
     }
     if (DrawPropertyBoolRow("Invert", "MaskLevelsInvert", &ml.invert, "Mask levels invert toggled", "出力マスクを反転します。", rock::MaskLevelsSettings{}.invert))
+    {
+        EvaluateGraph();
+    }
+
+    ImGui::EndTable();
+    return true;
+}
+
+bool DrawMaskBlurProperties(rock::Node& editableNode)
+{
+    if (!ImGui::BeginTable("MaskBlurRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        return false;
+    }
+
+    ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 210.0f);
+    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+    rock::MaskBlurSettings& mb = editableNode.maskBlur;
+    mb.radiusMeters = std::clamp(mb.radiusMeters, 0.0f, 100000.0f);
+    mb.iterations = std::clamp(mb.iterations, 1, 16);
+    mb.strength = std::clamp(mb.strength, 0.0f, 1.0f);
+
+    if (DrawPropertyFloatInputRow("Radius (m)", "MaskBlurRadiusMeters", &mb.radiusMeters, 0.0f, 100000.0f, rock::MaskBlurSettings{}.radiusMeters, "Mask blur radius changed", true, "Mask をぼかす半径です。地形サイズに対するメートル単位で扱います。", "%.2f"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyIntRow("Iterations", "MaskBlurIterations", &mb.iterations, 1, 16, rock::MaskBlurSettings{}.iterations, "Mask blur iterations changed", true, "ぼかし処理を繰り返す回数です。増やすほど滑らかになりますが計算時間も増えます。"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyPercentRow("Strength (%)", "MaskBlurStrength", &mb.strength, 0.0f, 1.0f, rock::MaskBlurSettings{}.strength, "Mask blur strength changed", "元のマスクとぼかし後のマスクを混ぜる量です。低いほど元の形を残します。"))
     {
         EvaluateGraph();
     }

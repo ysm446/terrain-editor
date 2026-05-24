@@ -44,6 +44,7 @@ bool IsSerializableNodeKind(rock::NodeKind kind)
     case rock::NodeKind::Colorize:
     case rock::NodeKind::MaskCurvature:
     case rock::NodeKind::MaskLevels:
+    case rock::NodeKind::MaskBlur:
     case rock::NodeKind::MaskSlope:
     case rock::NodeKind::MaskHeight:
     case rock::NodeKind::Crumbling:
@@ -149,6 +150,11 @@ nlohmann::json MakeMaskSettingsJson(const rock::Node& node)
             {"whitePoint", node.maskLevels.whitePoint},
             {"gamma", node.maskLevels.gamma},
             {"invert", node.maskLevels.invert},
+        }},
+        {"maskBlur", {
+            {"radiusMeters", node.maskBlur.radiusMeters},
+            {"iterations", node.maskBlur.iterations},
+            {"strength", node.maskBlur.strength},
         }},
         {"maskSlope", {
             {"largestDetailLevelM", node.maskSlope.largestDetailLevelM},
@@ -431,6 +437,7 @@ std::optional<rock::PreviewStage> ReadSerializedPreviewStage(const nlohmann::jso
     case rock::PreviewStage::MaskNoise:
     case rock::PreviewStage::MaskBlend:
     case rock::PreviewStage::MaskLevels:
+    case rock::PreviewStage::MaskBlur:
     case rock::PreviewStage::MaskSlope:
     case rock::PreviewStage::MaskHeight:
     case rock::PreviewStage::MaskPath:
@@ -506,6 +513,7 @@ void ReadMaskSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     const nlohmann::json nodeMaskFluvialJson = nodeJson.value("maskFluvial", nlohmann::json::object());
     const nlohmann::json nodeMaskCurvatureJson = nodeJson.value("maskCurvature", nlohmann::json::object());
     const nlohmann::json nodeMaskLevelsJson = nodeJson.value("maskLevels", nlohmann::json::object());
+    const nlohmann::json nodeMaskBlurJson = nodeJson.value("maskBlur", nlohmann::json::object());
     const nlohmann::json nodeMaskSlopeJson = nodeJson.value("maskSlope", nlohmann::json::object());
     const nlohmann::json nodeMaskHeightJson = nodeJson.value("maskHeight", nlohmann::json::object());
     const nlohmann::json nodeMaskPathJson = nodeJson.value("maskPath", nodeJson.value("pathMask", nlohmann::json::object()));
@@ -548,6 +556,9 @@ void ReadMaskSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     node.maskLevels.whitePoint = std::clamp(nodeMaskLevelsJson.value("whitePoint", node.maskLevels.whitePoint), 0.0f, 1.0f);
     node.maskLevels.gamma = std::clamp(nodeMaskLevelsJson.value("gamma", node.maskLevels.gamma), 0.05f, 8.0f);
     node.maskLevels.invert = nodeMaskLevelsJson.value("invert", node.maskLevels.invert);
+    node.maskBlur.radiusMeters = std::clamp(nodeMaskBlurJson.value("radiusMeters", node.maskBlur.radiusMeters), 0.0f, 100000.0f);
+    node.maskBlur.iterations = std::clamp(nodeMaskBlurJson.value("iterations", node.maskBlur.iterations), 1, 16);
+    node.maskBlur.strength = std::clamp(nodeMaskBlurJson.value("strength", node.maskBlur.strength), 0.0f, 1.0f);
     node.maskSlope.largestDetailLevelM = std::clamp(nodeMaskSlopeJson.value("largestDetailLevelM", node.maskSlope.largestDetailLevelM), 0.0f, 1024.0f);
     node.maskSlope.slopeMinDeg = std::clamp(nodeMaskSlopeJson.value("slopeMinDeg", node.maskSlope.slopeMinDeg), 0.0f, 89.9f);
     node.maskSlope.slopeMaxDeg = std::clamp(nodeMaskSlopeJson.value("slopeMaxDeg", node.maskSlope.slopeMaxDeg), 0.0f, 89.9f);
