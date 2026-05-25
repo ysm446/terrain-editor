@@ -11,6 +11,8 @@
 #include <unordered_map>
 #include <utility>
 
+#include "Localization.h"
+
 namespace terrain::ui
 {
 namespace
@@ -200,11 +202,11 @@ bool DrawResetToDefaultButton(const char* id, bool isDefaultValue, const char* d
     {
         if (defaultValueText != nullptr && defaultValueText[0] != '\0')
         {
-            ImGui::SetTooltip("既定値に戻す\n既定値: %s", defaultValueText);
+            ImGui::SetTooltip(Tr("Reset to default\nDefault: %s", "既定値に戻す\n既定値: %s"), defaultValueText);
         }
         else
         {
-            ImGui::SetTooltip("既定値に戻す");
+            ImGui::SetTooltip("%s", Tr("Reset to default", "既定値に戻す"));
         }
     }
     ImGui::PopID();
@@ -634,7 +636,7 @@ bool DrawPropertyPathRow(const char* label, const char* id, std::string* value, 
     editEnded = editEnded || ImGui::IsItemDeactivatedAfterEdit();
 
     ImGui::SameLine();
-    if (ImGui::Button("参照", ImVec2(buttonWidth, 0.0f)))
+    if (ImGui::Button(Tr("Browse", "参照"), ImVec2(buttonWidth, 0.0f)))
     {
         if (g_callbacks.showHeightmapFileDialog && g_callbacks.pathToUtf8 && g_callbacks.makeProjectAssetPathForJson)
         {

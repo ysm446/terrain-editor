@@ -140,7 +140,7 @@ bool DrawPathPointPositionRow(rock::PathPoint& point)
 {
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
-    DrawPropertyLabel("Position (Vector3)", "X, Y, Z の順にポイント座標を編集します。Y を編集すると高さモードは Absolute になります。", false);
+    DrawPropertyLabel("Position (Vector3)", Tr("Edit the point coordinates in X, Y, Z order. Editing Y switches the height mode to Absolute.", "X, Y, Z の順にポイント座標を編集します。Y を編集すると高さモードは Absolute になります。"), false);
     ImGui::TableSetColumnIndex(1);
 
     float position[3] = {point.x, point.height, point.z};
@@ -164,7 +164,7 @@ bool DrawPathHeightOffsetRow(rock::PathPoint& point)
 {
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
-    DrawPropertyLabel("Height Offset (m)", "Height Mode が Terrain Offset のとき、地形高さから上下にずらす量です。", FloatDiffersFromDefault(point.heightOffset, 0.0f));
+    DrawPropertyLabel("Height Offset (m)", Tr("Offset from the terrain height when Height Mode is Terrain Offset.", "Height Mode が Terrain Offset のとき、地形高さから上下にずらす量です。"), FloatDiffersFromDefault(point.heightOffset, 0.0f));
     ImGui::TableSetColumnIndex(1);
 
     bool changed = false;
@@ -335,19 +335,19 @@ bool DrawHeightmapLoadProperties(rock::Node& editableNode)
     editableNode.heightmap.relativeVerticalScalePercent = std::clamp(editableNode.heightmap.relativeVerticalScalePercent, 0.0f, 100.0f);
     editableNode.heightmap.verticalOffsetMeters = std::clamp(editableNode.heightmap.verticalOffsetMeters, -4096.0f, 4096.0f);
 
-    if (DrawPropertyPathRow("File", "HeightmapFile", &editableNode.heightmap.path, "Heightmap file changed", "読み込むハイトマップ画像です。明るいピクセルほど高い地形として扱います。"))
+    if (DrawPropertyPathRow("File", "HeightmapFile", &editableNode.heightmap.path, "Heightmap file changed", Tr("Heightmap image to load. Brighter pixels are treated as higher terrain.", "読み込むハイトマップ画像です。明るいピクセルほど高い地形として扱います。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Scale (m)", "HeightmapScaleMeters", &editableNode.heightmap.scaleMeters, 1.0f, 8096.0f, rock::HeightmapLoadSettings{}.scaleMeters, "Heightmap scale changed", true, "読み込むハイトマップ画像がグローバル Terrain Size 内で占める幅と奥行きです。Terrain Size より大きい場合は中央でクロップし、小さい場合は外側を高さ 0 にします。", "%.2f"))
+    if (DrawPropertyFloatRow("Scale (m)", "HeightmapScaleMeters", &editableNode.heightmap.scaleMeters, 1.0f, 8096.0f, rock::HeightmapLoadSettings{}.scaleMeters, "Heightmap scale changed", true, Tr("Width and depth the loaded heightmap occupies within the global Terrain Size. If it is larger than Terrain Size it is cropped from the center; if smaller, the outside area is height 0.", "読み込むハイトマップ画像がグローバル Terrain Size 内で占める幅と奥行きです。Terrain Size より大きい場合は中央でクロップし、小さい場合は外側を高さ 0 にします。"), "%.2f"))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Relative Vertical (%)", "HeightmapRelativeVerticalScale", &editableNode.heightmap.relativeVerticalScalePercent, 0.0f, 100.0f, rock::HeightmapLoadSettings{}.relativeVerticalScalePercent, "Heightmap vertical scale changed", true, "高さ方向の相対倍率です。実際の高さ範囲は Scale (m) x この値 / 100 になります。"))
+    if (DrawPropertyFloatRow("Relative Vertical (%)", "HeightmapRelativeVerticalScale", &editableNode.heightmap.relativeVerticalScalePercent, 0.0f, 100.0f, rock::HeightmapLoadSettings{}.relativeVerticalScalePercent, "Heightmap vertical scale changed", true, Tr("Relative vertical scale. The actual height range is Scale (m) x this value / 100.", "高さ方向の相対倍率です。実際の高さ範囲は Scale (m) x この値 / 100 になります。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Offset (m)", "HeightmapVerticalOffset", &editableNode.heightmap.verticalOffsetMeters, -4096.0f, 4096.0f, rock::HeightmapLoadSettings{}.verticalOffsetMeters, "Heightmap vertical offset changed", true, "地形全体を上下に移動する高さオフセットです。"))
+    if (DrawPropertyFloatRow("Offset (m)", "HeightmapVerticalOffset", &editableNode.heightmap.verticalOffsetMeters, -4096.0f, 4096.0f, rock::HeightmapLoadSettings{}.verticalOffsetMeters, "Heightmap vertical offset changed", true, Tr("Vertical offset applied to the whole terrain.", "地形全体を上下に移動する高さオフセットです。")))
     {
         EvaluateGraph();
     }
@@ -369,17 +369,17 @@ bool DrawShapeProperties(rock::Node& editableNode)
     shape.relativeHeightPercent = std::clamp(shape.relativeHeightPercent, 0.0f, 100.0f);
 
     int shapeKind = static_cast<int>(shape.kind);
-    if (DrawPropertyComboRow("Shape Type", "ShapeType", &shapeKind, "Hemisphere\0Pyramid\0", "デバッグ用の基本ハイトフィールド形状です。", static_cast<int>(rock::ShapeSettings{}.kind)))
+    if (DrawPropertyComboRow("Shape Type", "ShapeType", &shapeKind, "Hemisphere\0Pyramid\0", Tr("Basic debug heightfield shape.", "デバッグ用の基本ハイトフィールド形状です。"), static_cast<int>(rock::ShapeSettings{}.kind)))
     {
         shape.kind = static_cast<rock::ShapeKind>(std::clamp(shapeKind, 0, 1));
         MarkGraphChanged("Shape type changed");
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Scale (m)", "ShapeScaleMeters", &shape.scaleMeters, 1.0f, 8096.0f, rock::ShapeSettings{}.scaleMeters, "Shape scale changed", true, "グローバル Terrain Size 内でシェープが占める幅と奥行きです。Terrain Size より小さい場合は中央に配置され、外側は高さ 0 になります。"))
+    if (DrawPropertyFloatRow("Scale (m)", "ShapeScaleMeters", &shape.scaleMeters, 1.0f, 8096.0f, rock::ShapeSettings{}.scaleMeters, "Shape scale changed", true, Tr("Width and depth the shape occupies within the global Terrain Size. If smaller than Terrain Size, it is centered and the outside area is height 0.", "グローバル Terrain Size 内でシェープが占める幅と奥行きです。Terrain Size より小さい場合は中央に配置され、外側は高さ 0 になります。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Relative Height (%)", "ShapeRelativeHeight", &shape.relativeHeightPercent, 0.0f, 100.0f, rock::ShapeSettings{}.relativeHeightPercent, "Shape height changed", true, "最大高さです。実際の高さは Scale (m) x この値 / 100 になります。"))
+    if (DrawPropertyFloatRow("Relative Height (%)", "ShapeRelativeHeight", &shape.relativeHeightPercent, 0.0f, 100.0f, rock::ShapeSettings{}.relativeHeightPercent, "Shape height changed", true, Tr("Maximum height. The actual height is Scale (m) x this value / 100.", "最大高さです。実際の高さは Scale (m) x この値 / 100 になります。")))
     {
         EvaluateGraph();
     }
@@ -401,15 +401,15 @@ bool DrawHeightmapBlurProperties(rock::Node& editableNode)
     blur.strength = std::clamp(blur.strength, 0.0f, 1.0f);
     blur.iterations = std::clamp(blur.iterations, 0, 64);
 
-    if (DrawPropertyFloatRow("Radius (cells)", "HeightmapBlurRadius", &blur.radius, 0.0f, 128.0f, rock::HeightmapBlurSettings{}.radius, "Heightmap blur radius changed", true, "ぼかしに使うセル半径です。大きいほど広い範囲の起伏をならします。"))
+    if (DrawPropertyFloatRow("Radius (cells)", "HeightmapBlurRadius", &blur.radius, 0.0f, 128.0f, rock::HeightmapBlurSettings{}.radius, "Heightmap blur radius changed", true, Tr("Cell radius used for blurring. Larger values smooth terrain over a wider area.", "ぼかしに使うセル半径です。大きいほど広い範囲の起伏をならします。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyPercentRow("Strength (%)", "HeightmapBlurStrength", &blur.strength, 0.0f, 1.0f, rock::HeightmapBlurSettings{}.strength, "Heightmap blur strength changed", "元の高さとぼかし後の高さを混ぜる量です。低いほど元の形を残します。"))
+    if (DrawPropertyPercentRow("Strength (%)", "HeightmapBlurStrength", &blur.strength, 0.0f, 1.0f, rock::HeightmapBlurSettings{}.strength, "Heightmap blur strength changed", Tr("Blend amount between the original height and blurred height. Lower values preserve more of the original shape.", "元の高さとぼかし後の高さを混ぜる量です。低いほど元の形を残します。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyIntRow("Iterations", "HeightmapBlurIterations", &blur.iterations, 0, 64, rock::HeightmapBlurSettings{}.iterations, "Heightmap blur iterations changed", true, "ぼかし処理を繰り返す回数です。増やすほど滑らかになりますが計算時間も増えます。"))
+    if (DrawPropertyIntRow("Iterations", "HeightmapBlurIterations", &blur.iterations, 0, 64, rock::HeightmapBlurSettings{}.iterations, "Heightmap blur iterations changed", true, Tr("Number of blur passes. More passes are smoother but take longer to evaluate.", "ぼかし処理を繰り返す回数です。増やすほど滑らかになりますが計算時間も増えます。")))
     {
         EvaluateGraph();
     }
@@ -436,7 +436,7 @@ bool DrawMaskNoiseProperties(rock::Node& editableNode)
 
     {
         int backendInt = static_cast<int>(mn.backend);
-        if (DrawPropertyComboRow("Backend", "MaskNoiseBackend", &backendInt, "CPU\0GPU\0\0", "CPU 並列実装と GPU (D3D12 compute) を切り替えます。GPU は解像度が高いほど速くなります (1024² 以上で顕著)。\nGPU が初期化に失敗したり実行時エラーになると自動的に CPU 版にフォールバックします。", static_cast<int>(rock::MaskNoiseSettings{}.backend)))
+        if (DrawPropertyComboRow("Backend", "MaskNoiseBackend", &backendInt, "CPU\0GPU\0\0", Tr("Switches between the CPU parallel implementation and GPU (D3D12 compute). GPU gets faster at higher resolutions, especially 1024^2 and above.\nIf GPU initialization or dispatch fails, it automatically falls back to CPU.", "CPU 並列実装と GPU (D3D12 compute) を切り替えます。GPU は解像度が高いほど速くなります (1024² 以上で顕著)。\nGPU が初期化に失敗したり実行時エラーになると自動的に CPU 版にフォールバックします。"), static_cast<int>(rock::MaskNoiseSettings{}.backend)))
         {
             mn.backend = static_cast<rock::MaskNoiseBackend>(std::clamp(backendInt,
                 static_cast<int>(rock::MaskNoiseBackend::CpuParallel),
@@ -444,23 +444,23 @@ bool DrawMaskNoiseProperties(rock::Node& editableNode)
             EvaluateGraph();
         }
     }
-    if (DrawPropertyIntRow("Seed", "MaskNoiseSeed", &mn.seed, 0, 999999, rock::MaskNoiseSettings{}.seed, "Mask noise seed changed", true, "ハッシュのオフセットです。同じパラメータでも異なるパターンを得るために使います。"))
+    if (DrawPropertyIntRow("Seed", "MaskNoiseSeed", &mn.seed, 0, 999999, rock::MaskNoiseSettings{}.seed, "Mask noise seed changed", true, Tr("Hash offset used to get different patterns from the same parameters.", "ハッシュのオフセットです。同じパラメータでも異なるパターンを得るために使います。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyIntRow("Octaves", "MaskNoiseOctaves", &mn.octaves, 1, 12, rock::MaskNoiseSettings{}.octaves, "Mask noise octaves changed", true, "重ねる Perlin ノイズのオクターブ数です。多いほど細かい階層が増えますが計算時間も増えます。"))
+    if (DrawPropertyIntRow("Octaves", "MaskNoiseOctaves", &mn.octaves, 1, 12, rock::MaskNoiseSettings{}.octaves, "Mask noise octaves changed", true, Tr("Number of Perlin noise octaves. More octaves add finer layers but increase evaluation time.", "重ねる Perlin ノイズのオクターブ数です。多いほど細かい階層が増えますが計算時間も増えます。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Frequency", "MaskNoiseFrequency", &mn.frequency, 0.0f, 256.0f, rock::MaskNoiseSettings{}.frequency, "Mask noise frequency changed", true, "地形範囲に対する基本周波数です。大きいほど細かい模様になります。"))
+    if (DrawPropertyFloatRow("Frequency", "MaskNoiseFrequency", &mn.frequency, 0.0f, 256.0f, rock::MaskNoiseSettings{}.frequency, "Mask noise frequency changed", true, Tr("Base frequency relative to the terrain area. Higher values create finer patterns.", "地形範囲に対する基本周波数です。大きいほど細かい模様になります。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Lacunarity", "MaskNoiseLacunarity", &mn.lacunarity, 0.0f, 8.0f, rock::MaskNoiseSettings{}.lacunarity, "Mask noise lacunarity changed", true, "オクターブごとに周波数を何倍にするかです。標準は 2.0。"))
+    if (DrawPropertyFloatRow("Lacunarity", "MaskNoiseLacunarity", &mn.lacunarity, 0.0f, 8.0f, rock::MaskNoiseSettings{}.lacunarity, "Mask noise lacunarity changed", true, Tr("Frequency multiplier per octave. The standard value is 2.0.", "オクターブごとに周波数を何倍にするかです。標準は 2.0。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Persistence", "MaskNoisePersistence", &mn.persistence, 0.0f, 1.0f, rock::MaskNoiseSettings{}.persistence, "Mask noise persistence changed", true, "オクターブごとに振幅を何倍にするかです。標準は 0.5。大きいほど高オクターブが目立ちます。"))
+    if (DrawPropertyFloatRow("Persistence", "MaskNoisePersistence", &mn.persistence, 0.0f, 1.0f, rock::MaskNoiseSettings{}.persistence, "Mask noise persistence changed", true, Tr("Amplitude multiplier per octave. The standard value is 0.5. Higher values make high octaves more visible.", "オクターブごとに振幅を何倍にするかです。標準は 0.5。大きいほど高オクターブが目立ちます。")))
     {
         EvaluateGraph();
     }
@@ -481,14 +481,14 @@ bool DrawMaskBlendProperties(rock::Node& editableNode)
     mb.intensity = std::clamp(mb.intensity, 0.0f, 1.0f);
 
     int modeInt = static_cast<int>(mb.mode);
-    if (DrawPropertyComboRow("Blend Mode", "MaskBlendMode", &modeInt, "Add\0Multiply\0Min\0Max\0\0", "A と B を合成する方式です。Add は加算、Multiply は乗算、Min / Max はチャンネルごとの最小値・最大値です。", static_cast<int>(rock::MaskBlendSettings{}.mode)))
+    if (DrawPropertyComboRow("Blend Mode", "MaskBlendMode", &modeInt, "Add\0Multiply\0Min\0Max\0\0", Tr("How A and B are combined. Add adds, Multiply multiplies, and Min / Max take the per-channel minimum or maximum.", "A と B を合成する方式です。Add は加算、Multiply は乗算、Min / Max はチャンネルごとの最小値・最大値です。"), static_cast<int>(rock::MaskBlendSettings{}.mode)))
     {
         mb.mode = static_cast<rock::MaskBlendMode>(std::clamp(modeInt,
             static_cast<int>(rock::MaskBlendMode::Add),
             static_cast<int>(rock::MaskBlendMode::Max)));
         EvaluateGraph();
     }
-    if (DrawPropertyPercentRow("Blend Intensity (%)", "MaskBlendIntensity", &mb.intensity, 0.0f, 1.0f, rock::MaskBlendSettings{}.intensity, "Mask blend intensity changed", "A をベースに、A と Blend(A, B) の間を補間する強さです。0 で A のみ、1 で完全に合成結果を使います。"))
+    if (DrawPropertyPercentRow("Blend Intensity (%)", "MaskBlendIntensity", &mb.intensity, 0.0f, 1.0f, rock::MaskBlendSettings{}.intensity, "Mask blend intensity changed", Tr("Blends between A and Blend(A, B) using A as the base. 0 uses only A; 1 uses the full blended result.", "A をベースに、A と Blend(A, B) の間を補間する強さです。0 で A のみ、1 で完全に合成結果を使います。")))
     {
         EvaluateGraph();
     }
@@ -511,19 +511,19 @@ bool DrawMaskLevelsProperties(rock::Node& editableNode)
     ml.whitePoint = std::clamp(ml.whitePoint, 0.0f, 1.0f);
     ml.gamma = std::clamp(ml.gamma, 0.05f, 8.0f);
 
-    if (DrawPropertyPercentRow("Black Point (%)", "MaskLevelsBlackPoint", &ml.blackPoint, 0.0f, 1.0f, rock::MaskLevelsSettings{}.blackPoint, "Mask levels black point changed", "この値以下を黒にします。上げるほど弱いマスクを切り落とします。"))
+    if (DrawPropertyPercentRow("Black Point (%)", "MaskLevelsBlackPoint", &ml.blackPoint, 0.0f, 1.0f, rock::MaskLevelsSettings{}.blackPoint, "Mask levels black point changed", Tr("Values at or below this become black. Raising it cuts away weaker mask values.", "この値以下を黒にします。上げるほど弱いマスクを切り落とします。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyPercentRow("White Point (%)", "MaskLevelsWhitePoint", &ml.whitePoint, 0.0f, 1.0f, rock::MaskLevelsSettings{}.whitePoint, "Mask levels white point changed", "この値以上を白にします。下げるほどマスクが早く飽和します。"))
+    if (DrawPropertyPercentRow("White Point (%)", "MaskLevelsWhitePoint", &ml.whitePoint, 0.0f, 1.0f, rock::MaskLevelsSettings{}.whitePoint, "Mask levels white point changed", Tr("Values at or above this become white. Lowering it makes the mask saturate sooner.", "この値以上を白にします。下げるほどマスクが早く飽和します。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Gamma", "MaskLevelsGamma", &ml.gamma, 0.05f, 8.0f, rock::MaskLevelsSettings{}.gamma, "Mask levels gamma changed", true, "中間調のカーブです。1 未満で暗部を持ち上げ、1 より大きいと強い部分だけを残します。"))
+    if (DrawPropertyFloatRow("Gamma", "MaskLevelsGamma", &ml.gamma, 0.05f, 8.0f, rock::MaskLevelsSettings{}.gamma, "Mask levels gamma changed", true, Tr("Midtone curve. Values below 1 lift dark areas; values above 1 keep only stronger areas.", "中間調のカーブです。1 未満で暗部を持ち上げ、1 より大きいと強い部分だけを残します。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyBoolRow("Invert", "MaskLevelsInvert", &ml.invert, "Mask levels invert toggled", "出力マスクを反転します。", rock::MaskLevelsSettings{}.invert))
+    if (DrawPropertyBoolRow("Invert", "MaskLevelsInvert", &ml.invert, "Mask levels invert toggled", Tr("Invert the output mask.", "出力マスクを反転します。"), rock::MaskLevelsSettings{}.invert))
     {
         EvaluateGraph();
     }
@@ -550,22 +550,22 @@ bool DrawMaskBlurProperties(rock::Node& editableNode)
         static_cast<int>(rock::MaskUtilityBackend::GpuCompute)));
 
     int backendInt = static_cast<int>(mb.backend);
-    if (DrawPropertyComboRow("Backend", "MaskBlurBackend", &backendInt, "CPU\0GPU\0\0", "CPU 並列実装と GPU (D3D12 compute) を切り替えます。GPU が失敗した場合は CPU にフォールバックします。", static_cast<int>(rock::MaskBlurSettings{}.backend)))
+    if (DrawPropertyComboRow("Backend", "MaskBlurBackend", &backendInt, "CPU\0GPU\0\0", Tr("Switches between the CPU parallel implementation and GPU (D3D12 compute). If GPU fails, it falls back to CPU.", "CPU 並列実装と GPU (D3D12 compute) を切り替えます。GPU が失敗した場合は CPU にフォールバックします。"), static_cast<int>(rock::MaskBlurSettings{}.backend)))
     {
         mb.backend = static_cast<rock::MaskUtilityBackend>(std::clamp(backendInt,
             static_cast<int>(rock::MaskUtilityBackend::CpuParallel),
             static_cast<int>(rock::MaskUtilityBackend::GpuCompute)));
         EvaluateGraph();
     }
-    if (DrawPropertyFloatInputRow("Radius (m)", "MaskBlurRadiusMeters", &mb.radiusMeters, 0.0f, 100000.0f, rock::MaskBlurSettings{}.radiusMeters, "Mask blur radius changed", true, "Mask をぼかす半径です。地形サイズに対するメートル単位で扱います。", "%.2f"))
+    if (DrawPropertyFloatInputRow("Radius (m)", "MaskBlurRadiusMeters", &mb.radiusMeters, 0.0f, 100000.0f, rock::MaskBlurSettings{}.radiusMeters, "Mask blur radius changed", true, Tr("Blur radius for the mask, measured in meters relative to the terrain size.", "Mask をぼかす半径です。地形サイズに対するメートル単位で扱います。"), "%.2f"))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyIntRow("Iterations", "MaskBlurIterations", &mb.iterations, 1, 16, rock::MaskBlurSettings{}.iterations, "Mask blur iterations changed", true, "ぼかし処理を繰り返す回数です。増やすほど滑らかになりますが計算時間も増えます。"))
+    if (DrawPropertyIntRow("Iterations", "MaskBlurIterations", &mb.iterations, 1, 16, rock::MaskBlurSettings{}.iterations, "Mask blur iterations changed", true, Tr("Number of blur passes. More passes are smoother but take longer to evaluate.", "ぼかし処理を繰り返す回数です。増やすほど滑らかになりますが計算時間も増えます。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyPercentRow("Strength (%)", "MaskBlurStrength", &mb.strength, 0.0f, 1.0f, rock::MaskBlurSettings{}.strength, "Mask blur strength changed", "元のマスクとぼかし後のマスクを混ぜる量です。低いほど元の形を残します。"))
+    if (DrawPropertyPercentRow("Strength (%)", "MaskBlurStrength", &mb.strength, 0.0f, 1.0f, rock::MaskBlurSettings{}.strength, "Mask blur strength changed", Tr("Blend amount between the original mask and blurred mask. Lower values preserve more of the original shape.", "元のマスクとぼかし後のマスクを混ぜる量です。低いほど元の形を残します。")))
     {
         EvaluateGraph();
     }
@@ -593,32 +593,32 @@ bool DrawMaskHeightProperties(rock::Node& editableNode)
     mh.featherMeters = std::clamp(mh.featherMeters, 0.0f, 100000.0f);
     mh.gamma = std::clamp(mh.gamma, 0.05f, 8.0f);
 
-    if (DrawPropertyBoolRow("Use Full Range", "MaskHeightUseFullRange", &mh.useFullRange, "Mask height full range toggled", "入力 Heightmap の最低標高を 0、最高標高を 1 として、標高全体をグラデーションの mask にします。", rock::MaskHeightSettings{}.useFullRange))
+    if (DrawPropertyBoolRow("Use Full Range", "MaskHeightUseFullRange", &mh.useFullRange, "Mask height full range toggled", Tr("Maps the input Heightmap's lowest elevation to 0 and highest elevation to 1, creating a gradient mask across the full height range.", "入力 Heightmap の最低標高を 0、最高標高を 1 として、標高全体をグラデーションの mask にします。"), rock::MaskHeightSettings{}.useFullRange))
     {
         EvaluateGraph();
     }
     if (!mh.useFullRange)
     {
-        if (DrawPropertyFloatInputRow("Height Min (m)", "MaskHeightMinMeters", &mh.heightMinMeters, -100000.0f, 100000.0f, rock::MaskHeightSettings{}.heightMinMeters, "Mask height min changed", true, "この標高より低い部分を黒にします。地形の実スケールに合わせたメートル単位です。", "%.2f"))
+        if (DrawPropertyFloatInputRow("Height Min (m)", "MaskHeightMinMeters", &mh.heightMinMeters, -100000.0f, 100000.0f, rock::MaskHeightSettings{}.heightMinMeters, "Mask height min changed", true, Tr("Terrain below this elevation becomes black. Units are meters in the terrain's real scale.", "この標高より低い部分を黒にします。地形の実スケールに合わせたメートル単位です。"), "%.2f"))
         {
             if (mh.heightMaxMeters < mh.heightMinMeters) mh.heightMaxMeters = mh.heightMinMeters;
             EvaluateGraph();
         }
-        if (DrawPropertyFloatInputRow("Height Max (m)", "MaskHeightMaxMeters", &mh.heightMaxMeters, -100000.0f, 100000.0f, rock::MaskHeightSettings{}.heightMaxMeters, "Mask height max changed", true, "この標高より高い部分を黒にします。Min との差が抽出する標高帯になります。", "%.2f"))
+        if (DrawPropertyFloatInputRow("Height Max (m)", "MaskHeightMaxMeters", &mh.heightMaxMeters, -100000.0f, 100000.0f, rock::MaskHeightSettings{}.heightMaxMeters, "Mask height max changed", true, Tr("Terrain above this elevation becomes black. The difference from Min defines the extracted elevation band.", "この標高より高い部分を黒にします。Min との差が抽出する標高帯になります。"), "%.2f"))
         {
             if (mh.heightMaxMeters < mh.heightMinMeters) mh.heightMinMeters = mh.heightMaxMeters;
             EvaluateGraph();
         }
-        if (DrawPropertyFloatRow("Feather (m)", "MaskHeightFeatherMeters", &mh.featherMeters, 0.0f, 1000.0f, rock::MaskHeightSettings{}.featherMeters, "Mask height feather changed", true, "標高帯の境界をメートル単位でぼかします。スライダーは 0..1000m、数値入力ではより大きい値も指定できます。", "%.2f", 0, 0.0f, 100000.0f))
+        if (DrawPropertyFloatRow("Feather (m)", "MaskHeightFeatherMeters", &mh.featherMeters, 0.0f, 1000.0f, rock::MaskHeightSettings{}.featherMeters, "Mask height feather changed", true, Tr("Softens the elevation band edge in meters. The slider covers 0..1000 m; larger values can be typed manually.", "標高帯の境界をメートル単位でぼかします。スライダーは 0..1000m、数値入力ではより大きい値も指定できます。"), "%.2f", 0, 0.0f, 100000.0f))
         {
             EvaluateGraph();
         }
     }
-    if (DrawPropertyFloatRow("Gamma", "MaskHeightGamma", &mh.gamma, 0.05f, 8.0f, rock::MaskHeightSettings{}.gamma, "Mask height gamma changed", true, "出力 mask のカーブです。1 未満で境界の弱い値を明るく、1 より大きいと中心の強い値を強調します。"))
+    if (DrawPropertyFloatRow("Gamma", "MaskHeightGamma", &mh.gamma, 0.05f, 8.0f, rock::MaskHeightSettings{}.gamma, "Mask height gamma changed", true, Tr("Output mask curve. Values below 1 brighten weaker edge values; values above 1 emphasize the stronger center.", "出力 mask のカーブです。1 未満で境界の弱い値を明るく、1 より大きいと中心の強い値を強調します。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyBoolRow("Invert", "MaskHeightInvert", &mh.invert, "Mask height invert toggled", "出力マスクを反転します。指定標高帯の外側を使うときに便利です。", rock::MaskHeightSettings{}.invert))
+    if (DrawPropertyBoolRow("Invert", "MaskHeightInvert", &mh.invert, "Mask height invert toggled", Tr("Invert the output mask. Useful when you want the outside of the selected elevation band.", "出力マスクを反転します。指定標高帯の外側を使うときに便利です。"), rock::MaskHeightSettings{}.invert))
     {
         EvaluateGraph();
     }
@@ -660,7 +660,7 @@ bool DrawMaskSlopeProperties(rock::Node& editableNode)
                 detailIndex = i;
             }
         }
-        if (DrawPropertyComboRow("Largest Detail Level (m)", "MaskSlopeLargestDetailLevel", &detailIndex, "Max\0" "2 m\0" "4 m\0" "8 m\0" "16 m\0" "32 m\0" "64 m\0" "128 m\0" "256 m\0" "512 m\0" "\0", "傾斜を調べる前の解析用ハイトをならす最大スケールです。Max は入力地形そのまま、数値を上げるほど小さな凹凸を無視して大きな斜面を優先します。入力地形そのものは変更しません。", 0))
+        if (DrawPropertyComboRow("Largest Detail Level (m)", "MaskSlopeLargestDetailLevel", &detailIndex, "Max\0" "2 m\0" "4 m\0" "8 m\0" "16 m\0" "32 m\0" "64 m\0" "128 m\0" "256 m\0" "512 m\0" "\0", Tr("Maximum scale used to smooth the analysis height before measuring slope. Max uses the input terrain as-is; larger values ignore small bumps and prioritize broad slopes. The input terrain itself is not changed.", "傾斜を調べる前の解析用ハイトをならす最大スケールです。Max は入力地形そのまま、数値を上げるほど小さな凹凸を無視して大きな斜面を優先します。入力地形そのものは変更しません。"), 0))
         {
             detailIndex = std::clamp(detailIndex, 0, static_cast<int>(kSlopeDetailLevels.size()) - 1);
             ms.largestDetailLevelM = kSlopeDetailLevels[static_cast<size_t>(detailIndex)];
@@ -668,21 +668,21 @@ bool DrawMaskSlopeProperties(rock::Node& editableNode)
         }
     }
 
-    if (DrawPropertyFloatRow("Slope Min (deg)", "MaskSlopeMinDeg", &ms.slopeMinDeg, 0.0f, 89.9f, rock::MaskSlopeSettings{}.slopeMinDeg, "Mask slope min changed", true, "この角度以下を黒にします。上げるほど急な斜面だけを残します。", "%.1f"))
+    if (DrawPropertyFloatRow("Slope Min (deg)", "MaskSlopeMinDeg", &ms.slopeMinDeg, 0.0f, 89.9f, rock::MaskSlopeSettings{}.slopeMinDeg, "Mask slope min changed", true, Tr("Slopes at or below this angle become black. Raising it keeps only steeper slopes.", "この角度以下を黒にします。上げるほど急な斜面だけを残します。"), "%.1f"))
     {
         if (ms.slopeMaxDeg < ms.slopeMinDeg) ms.slopeMaxDeg = ms.slopeMinDeg;
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Slope Max (deg)", "MaskSlopeMaxDeg", &ms.slopeMaxDeg, 0.0f, 89.9f, rock::MaskSlopeSettings{}.slopeMaxDeg, "Mask slope max changed", true, "この角度以上を白にします。Min との差を広げるほど境界が滑らかになります。", "%.1f"))
+    if (DrawPropertyFloatRow("Slope Max (deg)", "MaskSlopeMaxDeg", &ms.slopeMaxDeg, 0.0f, 89.9f, rock::MaskSlopeSettings{}.slopeMaxDeg, "Mask slope max changed", true, Tr("Slopes at or above this angle become white. Increasing the distance from Min makes the transition smoother.", "この角度以上を白にします。Min との差を広げるほど境界が滑らかになります。"), "%.1f"))
     {
         if (ms.slopeMaxDeg < ms.slopeMinDeg) ms.slopeMinDeg = ms.slopeMaxDeg;
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Gamma", "MaskSlopeGamma", &ms.gamma, 0.05f, 8.0f, rock::MaskSlopeSettings{}.gamma, "Mask slope gamma changed", true, "出力 mask のカーブです。1 未満で弱い斜面を明るく、1 より大きいと急斜面だけを強調します。"))
+    if (DrawPropertyFloatRow("Gamma", "MaskSlopeGamma", &ms.gamma, 0.05f, 8.0f, rock::MaskSlopeSettings{}.gamma, "Mask slope gamma changed", true, Tr("Output mask curve. Values below 1 brighten weaker slopes; values above 1 emphasize only steep slopes.", "出力 mask のカーブです。1 未満で弱い斜面を明るく、1 より大きいと急斜面だけを強調します。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyBoolRow("Invert", "MaskSlopeInvert", &ms.invert, "Mask slope invert toggled", "出力マスクを反転します。平地マスクを作るときに使います。", rock::MaskSlopeSettings{}.invert))
+    if (DrawPropertyBoolRow("Invert", "MaskSlopeInvert", &ms.invert, "Mask slope invert toggled", Tr("Invert the output mask. Use this to create a flat-ground mask.", "出力マスクを反転します。平地マスクを作るときに使います。"), rock::MaskSlopeSettings{}.invert))
     {
         EvaluateGraph();
     }
@@ -708,7 +708,7 @@ bool DrawMaskCurvatureProperties(rock::Node& editableNode)
     mc.gamma = std::clamp(mc.gamma, 0.05f, 8.0f);
 
     int modeInt = static_cast<int>(mc.mode);
-    if (DrawPropertyComboRow("Mode", "MaskCurvatureMode", &modeInt, "Ridges\0Valleys\0Absolute\0\0", "Ridges は周囲より高い凸部、Valleys は周囲より低い凹部、Absolute は両方を検出します。", static_cast<int>(rock::MaskCurvatureSettings{}.mode)))
+    if (DrawPropertyComboRow("Mode", "MaskCurvatureMode", &modeInt, "Ridges\0Valleys\0Absolute\0\0", Tr("Ridges detects raised convex areas, Valleys detects lower concave areas, and Absolute detects both.", "Ridges は周囲より高い凸部、Valleys は周囲より低い凹部、Absolute は両方を検出します。"), static_cast<int>(rock::MaskCurvatureSettings{}.mode)))
     {
         mc.mode = static_cast<rock::MaskCurvatureMode>(std::clamp(modeInt,
             static_cast<int>(rock::MaskCurvatureMode::Ridges),
@@ -728,22 +728,22 @@ bool DrawMaskCurvatureProperties(rock::Node& editableNode)
                 detailIndex = i;
             }
         }
-        if (DrawPropertyComboRow("Largest Detail Level (m)", "MaskCurvatureLargestDetailLevel", &detailIndex, "2 m\0" "4 m\0" "8 m\0" "16 m\0" "32 m\0" "64 m\0" "128 m\0" "256 m\0" "512 m\0" "\0", "曲率を調べる前の解析用ハイトをならす最大スケールです。2m は細かい凹凸を拾いやすく、512m は小さな揺れを無視して大きな尾根や谷を優先します。入力地形そのものは変更しません。", 2))
+        if (DrawPropertyComboRow("Largest Detail Level (m)", "MaskCurvatureLargestDetailLevel", &detailIndex, "2 m\0" "4 m\0" "8 m\0" "16 m\0" "32 m\0" "64 m\0" "128 m\0" "256 m\0" "512 m\0" "\0", Tr("Maximum scale used to smooth the analysis height before measuring curvature. 2 m catches fine bumps; 512 m ignores small variation and favors broad ridges or valleys. The input terrain itself is not changed.", "曲率を調べる前の解析用ハイトをならす最大スケールです。2m は細かい凹凸を拾いやすく、512m は小さな揺れを無視して大きな尾根や谷を優先します。入力地形そのものは変更しません。"), 2))
         {
             detailIndex = std::clamp(detailIndex, 0, static_cast<int>(kCurvatureDetailLevels.size()) - 1);
             mc.largestDetailLevelM = kCurvatureDetailLevels[static_cast<size_t>(detailIndex)];
             EvaluateGraph();
         }
     }
-    if (DrawPropertyFloatRow("Sensitivity (m)", "MaskCurvatureSensitivity", &mc.sensitivityMeters, 0.001f, 1000.0f, rock::MaskCurvatureSettings{}.sensitivityMeters, "Mask curvature sensitivity changed", true, "この高さ差で mask=1 になります。小さいほど弱い曲率も明るくなります。", "%.3f"))
+    if (DrawPropertyFloatRow("Sensitivity (m)", "MaskCurvatureSensitivity", &mc.sensitivityMeters, 0.001f, 1000.0f, rock::MaskCurvatureSettings{}.sensitivityMeters, "Mask curvature sensitivity changed", true, Tr("Height difference that maps to mask=1. Smaller values brighten weaker curvature.", "この高さ差で mask=1 になります。小さいほど弱い曲率も明るくなります。"), "%.3f"))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyPercentRow("Threshold (%)", "MaskCurvatureThreshold", &mc.threshold, 0.0f, 0.99f, rock::MaskCurvatureSettings{}.threshold, "Mask curvature threshold changed", "正規化後の下限です。上げるほど弱い曲率を落として、強い尾根や谷だけを残します。"))
+    if (DrawPropertyPercentRow("Threshold (%)", "MaskCurvatureThreshold", &mc.threshold, 0.0f, 0.99f, rock::MaskCurvatureSettings{}.threshold, "Mask curvature threshold changed", Tr("Lower bound after normalization. Raising it removes weaker curvature and keeps only strong ridges or valleys.", "正規化後の下限です。上げるほど弱い曲率を落として、強い尾根や谷だけを残します。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Gamma", "MaskCurvatureGamma", &mc.gamma, 0.05f, 8.0f, rock::MaskCurvatureSettings{}.gamma, "Mask curvature gamma changed", true, "出力 mask のカーブです。1 未満で微細な曲率を明るく、1 より大きいと強い曲率だけを強調します。"))
+    if (DrawPropertyFloatRow("Gamma", "MaskCurvatureGamma", &mc.gamma, 0.05f, 8.0f, rock::MaskCurvatureSettings{}.gamma, "Mask curvature gamma changed", true, Tr("Output mask curve. Values below 1 brighten subtle curvature; values above 1 emphasize only strong curvature.", "出力 mask のカーブです。1 未満で微細な曲率を明るく、1 より大きいと強い曲率だけを強調します。")))
     {
         EvaluateGraph();
     }
@@ -779,7 +779,7 @@ bool DrawMaskFluvialProperties(rock::Node& editableNode)
 
     {
         int backendInt = static_cast<int>(mf.backend);
-        if (DrawPropertyComboRow("Backend", "MaskFluvialBackend", &backendInt, "CPU\0GPU\0\0", "実行バックエンド。CPU は sort + 降順トポロジカル走査の厳密実装。GPU は Jacobi 反復ゲザー (~2*resolution iter) の近似実装で、視覚的には同等だが数値は完全一致せず (累積順序が異なるため)。GPU は 1024² で 5-10 倍程度高速。シェーダーコンパイル/ディスパッチ失敗時は CPU に自動フォールバック。", static_cast<int>(rock::MaskFluvialSettings{}.backend)))
+        if (DrawPropertyComboRow("Backend", "MaskFluvialBackend", &backendInt, "CPU\0GPU\0\0", Tr("Execution backend. CPU is the exact sort + descending topological traversal implementation. GPU is an approximate Jacobi gather (~2*resolution iterations); it looks similar but is not numerically identical because accumulation order differs. GPU is roughly 5-10x faster at 1024^2. Shader compile or dispatch failures automatically fall back to CPU.", "実行バックエンド。CPU は sort + 降順トポロジカル走査の厳密実装。GPU は Jacobi 反復ゲザー (~2*resolution iter) の近似実装で、視覚的には同等だが数値は完全一致せず (累積順序が異なるため)。GPU は 1024² で 5-10 倍程度高速。シェーダーコンパイル/ディスパッチ失敗時は CPU に自動フォールバック。"), static_cast<int>(rock::MaskFluvialSettings{}.backend)))
         {
             mf.backend = static_cast<rock::MaskFluvialBackend>(std::clamp(backendInt,
                 static_cast<int>(rock::MaskFluvialBackend::CpuReference),
@@ -790,7 +790,7 @@ bool DrawMaskFluvialProperties(rock::Node& editableNode)
 
     {
         int modeInt = static_cast<int>(mf.simulationMode);
-        if (DrawPropertyComboRow("Simulation Mode", "MaskFluvialSimulationMode", &modeInt, "Flow Accumulation\0Particles\0\0", "Flow Accumulation は従来の MFD 流量累積です。Particles は粒子を地形勾配に沿って流し、通過密度を Mask にします。粒子モードは現状 CPU 評価です。", static_cast<int>(rock::MaskFluvialSettings{}.simulationMode)))
+        if (DrawPropertyComboRow("Simulation Mode", "MaskFluvialSimulationMode", &modeInt, "Flow Accumulation\0Particles\0\0", Tr("Flow Accumulation is the classic MFD flow accumulation. Particles moves particles along terrain gradients and turns their passage density into a mask. Particle mode currently evaluates on CPU.", "Flow Accumulation は従来の MFD 流量累積です。Particles は粒子を地形勾配に沿って流し、通過密度を Mask にします。粒子モードは現状 CPU 評価です。"), static_cast<int>(rock::MaskFluvialSettings{}.simulationMode)))
         {
             mf.simulationMode = static_cast<rock::MaskFluvialSimulationMode>(std::clamp(modeInt,
                 static_cast<int>(rock::MaskFluvialSimulationMode::FlowAccumulation),
@@ -801,7 +801,7 @@ bool DrawMaskFluvialProperties(rock::Node& editableNode)
 
     mf.algorithm = rock::FlowAccumulationAlgorithm::MFD;
     int curveInt = static_cast<int>(mf.outputCurve);
-    if (DrawPropertyComboRow("Output Curve", "MaskFluvialCurve", &curveInt, "Log\0Threshold\0Linear\0\0", "累積値をマスクへ写すカーブです。Log は連続的な樹枝状ドレナージマップ(既定、参考画像の見た目)、Threshold は閾値ベースの二値川筋抽出、Linear は非対数の連続マップ(主流偏重)。", static_cast<int>(rock::MaskFluvialSettings{}.outputCurve)))
+    if (DrawPropertyComboRow("Output Curve", "MaskFluvialCurve", &curveInt, "Log\0Threshold\0Linear\0\0", Tr("Curve used to map accumulation to a mask. Log creates a continuous dendritic drainage map (default/reference look), Threshold extracts binary river lines, and Linear is a non-log continuous map biased toward main channels.", "累積値をマスクへ写すカーブです。Log は連続的な樹枝状ドレナージマップ(既定、参考画像の見た目)、Threshold は閾値ベースの二値川筋抽出、Linear は非対数の連続マップ(主流偏重)。"), static_cast<int>(rock::MaskFluvialSettings{}.outputCurve)))
     {
         mf.outputCurve = static_cast<rock::MaskFluvialOutputCurve>(std::clamp(curveInt,
             static_cast<int>(rock::MaskFluvialOutputCurve::Log),
@@ -809,26 +809,26 @@ bool DrawMaskFluvialProperties(rock::Node& editableNode)
         EvaluateGraph();
     }
     const char* thresholdTooltip = (mf.outputCurve == rock::MaskFluvialOutputCurve::Threshold)
-        ? "全セル数に対する割合で、これ以上の上流寄与があるセルが川として現れます。下げるほど支流が増え、上げるほど太い本流のみ残ります。Threshold モード時の主要パラメータです。"
-        : "ノイズフロアです。これ未満の上流寄与しか持たないセルはマスク 0 にクリップされます。0 で全セルを描画(参考画像の見た目)。";
+        ? Tr("Fraction of total cells. Cells with at least this much upstream contribution appear as rivers. Lower values add tributaries; higher values keep only thicker main channels. This is the main parameter in Threshold mode.", "全セル数に対する割合で、これ以上の上流寄与があるセルが川として現れます。下げるほど支流が増え、上げるほど太い本流のみ残ります。Threshold モード時の主要パラメータです。")
+        : Tr("Noise floor. Cells with less upstream contribution than this are clipped to mask 0. Use 0 to draw every cell, matching the reference look.", "ノイズフロアです。これ未満の上流寄与しか持たないセルはマスク 0 にクリップされます。0 で全セルを描画(参考画像の見た目)。");
     if (DrawPropertyPercentRow("Threshold (%)", "MaskFluvialThreshold", &mf.accumulationThreshold, 0.0f, 1.0f, rock::MaskFluvialSettings{}.accumulationThreshold, "Mask fluvial threshold changed", thresholdTooltip))
     {
         EvaluateGraph();
     }
     if (mf.outputCurve != rock::MaskFluvialOutputCurve::Threshold)
     {
-        if (DrawPropertyFloatRow("Gamma", "MaskFluvialGamma", &mf.gamma, 0.05f, 8.0f, rock::MaskFluvialSettings{}.gamma, "Mask fluvial gamma changed", true, "Log/Linear カーブの最後にかける pow 指数です。小さいほど細い支流が明るくなり、大きいほど主流のみが残ってコントラストが上がります。"))
+        if (DrawPropertyFloatRow("Gamma", "MaskFluvialGamma", &mf.gamma, 0.05f, 8.0f, rock::MaskFluvialSettings{}.gamma, "Mask fluvial gamma changed", true, Tr("Power exponent applied after the Log/Linear curve. Smaller values brighten thin tributaries; larger values keep mainly the main channels and increase contrast.", "Log/Linear カーブの最後にかける pow 指数です。小さいほど細い支流が明るくなり、大きいほど主流のみが残ってコントラストが上がります。")))
         {
             EvaluateGraph();
         }
     }
     if (mf.outputCurve == rock::MaskFluvialOutputCurve::Threshold)
     {
-        if (DrawPropertyFloatRow("Softness", "MaskFluvialSoftness", &mf.softness, 0.001f, 4.0f, rock::MaskFluvialSettings{}.softness, "Mask fluvial softness changed", true, "閾値前後の smoothstep 幅です。小さいほどシャープな川筋、大きいほど湿地帯のような広がり。"))
+        if (DrawPropertyFloatRow("Softness", "MaskFluvialSoftness", &mf.softness, 0.001f, 4.0f, rock::MaskFluvialSettings{}.softness, "Mask fluvial softness changed", true, Tr("Smoothstep width around the threshold. Smaller values create sharper river lines; larger values spread like wetlands.", "閾値前後の smoothstep 幅です。小さいほどシャープな川筋、大きいほど湿地帯のような広がり。")))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyFloatRow("Edge Power", "MaskFluvialPower", &mf.power, 0.1f, 8.0f, rock::MaskFluvialSettings{}.power, "Mask fluvial power changed", true, "pow(mask, power) で川縁をテーパーします。1 を超えると細く、1 未満で太く見えます。"))
+        if (DrawPropertyFloatRow("Edge Power", "MaskFluvialPower", &mf.power, 0.1f, 8.0f, rock::MaskFluvialSettings{}.power, "Mask fluvial power changed", true, Tr("Tapers river edges with pow(mask, power). Values above 1 look thinner; below 1 look wider.", "pow(mask, power) で川縁をテーパーします。1 を超えると細く、1 未満で太く見えます。")))
         {
             EvaluateGraph();
         }
@@ -846,37 +846,37 @@ bool DrawMaskFluvialProperties(rock::Node& editableNode)
                 detailIndex = i;
             }
         }
-        if (DrawPropertyComboRow("Largest Detail Level (m)", "MaskFluvialLargestDetailLevel", &detailIndex, "4 m\0" "8 m\0" "16 m\0" "32 m\0" "64 m\0" "128 m\0" "256 m\0" "512 m\0" "\0", "流向を計算する前の解析用ハイトをならす最大スケールです。4m は細かい支流や小さな窪みを拾いやすく、512m は小さな凹凸を無視して大きな谷筋を優先します。入力地形そのものは変更しません。", 1))
+        if (DrawPropertyComboRow("Largest Detail Level (m)", "MaskFluvialLargestDetailLevel", &detailIndex, "4 m\0" "8 m\0" "16 m\0" "32 m\0" "64 m\0" "128 m\0" "256 m\0" "512 m\0" "\0", Tr("Maximum scale used to smooth the analysis height before computing flow direction. 4 m catches fine tributaries and small depressions; 512 m ignores small bumps and favors broad valleys. The input terrain itself is not changed.", "流向を計算する前の解析用ハイトをならす最大スケールです。4m は細かい支流や小さな窪みを拾いやすく、512m は小さな凹凸を無視して大きな谷筋を優先します。入力地形そのものは変更しません。"), 1))
         {
             detailIndex = std::clamp(detailIndex, 0, static_cast<int>(kFluvialDetailLevels.size()) - 1);
             mf.largestDetailLevelM = kFluvialDetailLevels[static_cast<size_t>(detailIndex)];
             EvaluateGraph();
         }
     }
-    if (DrawPropertyFloatRow("Flow Concentration", "MaskFluvialMfdExponent", &mf.mfdExponent, 0.1f, 16.0f, rock::MaskFluvialSettings{}.mfdExponent, "Mask fluvial flow concentration changed", true, "MFD の下流分配の集中度です。大きいほど主流に集まり、小さいほど流域・湿地帯のように面で広がります。"))
+    if (DrawPropertyFloatRow("Flow Concentration", "MaskFluvialMfdExponent", &mf.mfdExponent, 0.1f, 16.0f, rock::MaskFluvialSettings{}.mfdExponent, "Mask fluvial flow concentration changed", true, Tr("Concentration of MFD downstream distribution. Larger values gather flow into main channels; smaller values spread across basins or wetlands.", "MFD の下流分配の集中度です。大きいほど主流に集まり、小さいほど流域・湿地帯のように面で広がります。")))
     {
         EvaluateGraph();
     }
 
     if (mf.simulationMode == rock::MaskFluvialSimulationMode::Particles)
     {
-        if (DrawPropertyIntRow("Particle Count", "MaskFluvialParticleCount", &mf.particleCount, 1, 200000, rock::MaskFluvialSettings{}.particleCount, "Mask fluvial particle count changed", true, "流す粒子数です。多いほど密度が安定しますが計算時間も増えます。"))
+        if (DrawPropertyIntRow("Particle Count", "MaskFluvialParticleCount", &mf.particleCount, 1, 200000, rock::MaskFluvialSettings{}.particleCount, "Mask fluvial particle count changed", true, Tr("Number of particles to simulate. More particles make density more stable but increase evaluation time.", "流す粒子数です。多いほど密度が安定しますが計算時間も増えます。")))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyIntRow("Lifetime", "MaskFluvialParticleLifetime", &mf.particleLifetime, 1, 2048, rock::MaskFluvialSettings{}.particleLifetime, "Mask fluvial particle lifetime changed", true, "粒子が最大何ステップ流れるかです。大きいほど長い流路になります。"))
+        if (DrawPropertyIntRow("Lifetime", "MaskFluvialParticleLifetime", &mf.particleLifetime, 1, 2048, rock::MaskFluvialSettings{}.particleLifetime, "Mask fluvial particle lifetime changed", true, Tr("Maximum number of steps a particle can flow. Larger values create longer flow paths.", "粒子が最大何ステップ流れるかです。大きいほど長い流路になります。")))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyPercentRow("Inertia (%)", "MaskFluvialParticleInertia", &mf.particleInertia, 0.0f, 0.98f, rock::MaskFluvialSettings{}.particleInertia, "Mask fluvial particle inertia changed", "進行方向を保持する強さです。高いほど直進し、低いほど局所勾配や細かい揺らぎへ反応します。"))
+        if (DrawPropertyPercentRow("Inertia (%)", "MaskFluvialParticleInertia", &mf.particleInertia, 0.0f, 0.98f, rock::MaskFluvialSettings{}.particleInertia, "Mask fluvial particle inertia changed", Tr("How strongly particles keep their current direction. Higher values go straighter; lower values react more to local slope and small variation.", "進行方向を保持する強さです。高いほど直進し、低いほど局所勾配や細かい揺らぎへ反応します。")))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyFloatRow("Step Length (m)", "MaskFluvialParticleStepLength", &mf.particleStepLengthM, 0.01f, 1024.0f, rock::MaskFluvialSettings{}.particleStepLengthM, "Mask fluvial particle step changed", true, "粒子が 1 ステップで進む距離です。大きいほど粗く長い線、小さいほど細かく地形を追う線になります。", "%.2f"))
+        if (DrawPropertyFloatRow("Step Length (m)", "MaskFluvialParticleStepLength", &mf.particleStepLengthM, 0.01f, 1024.0f, rock::MaskFluvialSettings{}.particleStepLengthM, "Mask fluvial particle step changed", true, Tr("Distance a particle travels per step. Larger values create coarser, longer lines; smaller values follow terrain more finely.", "粒子が 1 ステップで進む距離です。大きいほど粗く長い線、小さいほど細かく地形を追う線になります。"), "%.2f"))
         {
             EvaluateGraph();
         }
-        if (DrawPropertyIntRow("Seed", "MaskFluvialParticleSeed", &mf.particleSeed, 0, 999999, rock::MaskFluvialSettings{}.particleSeed, "Mask fluvial particle seed changed", true, "粒子の初期配置と揺らぎのシードです。"))
+        if (DrawPropertyIntRow("Seed", "MaskFluvialParticleSeed", &mf.particleSeed, 0, 999999, rock::MaskFluvialSettings{}.particleSeed, "Mask fluvial particle seed changed", true, Tr("Seed for initial particle placement and variation.", "粒子の初期配置と揺らぎのシードです。")))
         {
             EvaluateGraph();
         }
@@ -902,7 +902,7 @@ bool DrawMaskPathProperties(rock::Node& editableNode)
         static_cast<int>(rock::MaskUtilityBackend::GpuCompute)));
 
     int backendInt = static_cast<int>(pm.backend);
-    if (DrawPropertyComboRow("Backend", "MaskPathBackend", &backendInt, "CPU\0GPU\0\0", "CPU 並列実装と GPU (D3D12 compute) を切り替えます。GPU が失敗した場合は CPU にフォールバックします。", static_cast<int>(rock::MaskPathSettings{}.backend)))
+    if (DrawPropertyComboRow("Backend", "MaskPathBackend", &backendInt, "CPU\0GPU\0\0", Tr("Switches between the CPU parallel implementation and GPU (D3D12 compute). If GPU fails, it falls back to CPU.", "CPU 並列実装と GPU (D3D12 compute) を切り替えます。GPU が失敗した場合は CPU にフォールバックします。"), static_cast<int>(rock::MaskPathSettings{}.backend)))
     {
         pm.backend = static_cast<rock::MaskUtilityBackend>(std::clamp(backendInt,
             static_cast<int>(rock::MaskUtilityBackend::CpuParallel),
@@ -919,7 +919,7 @@ bool DrawMaskPathProperties(rock::Node& editableNode)
     }
 
     ImGui::EndTable();
-    ImGui::TextWrapped("Mask Path uses each Path point's Width and Feather. Width is the full mask width; Feather fades outward from that width.");
+    ImGui::TextWrapped("%s", Tr("Mask Path uses each Path point's Width and Feather. Width is the full mask width; Feather fades outward from that width.", "Mask Path は Path の各ポイントに設定された Width と Feather を使います。Width はマスク全幅、Feather はその外側へフェードする幅です。"));
     return true;
 }
 
@@ -941,7 +941,7 @@ bool DrawHeightmapFromMaskProperties(rock::Node& editableNode)
         static_cast<int>(rock::MaskUtilityBackend::GpuCompute)));
 
     int backendInt = static_cast<int>(hm.backend);
-    if (DrawPropertyComboRow("Backend", "HeightmapFromMaskBackend", &backendInt, "CPU\0GPU\0\0", "CPU 並列実装と GPU (D3D12 compute) を切り替えます。GPU が失敗した場合は CPU にフォールバックします。", static_cast<int>(rock::HeightmapFromMaskSettings{}.backend)))
+    if (DrawPropertyComboRow("Backend", "HeightmapFromMaskBackend", &backendInt, "CPU\0GPU\0\0", Tr("Switches between the CPU parallel implementation and GPU (D3D12 compute). If GPU fails, it falls back to CPU.", "CPU 並列実装と GPU (D3D12 compute) を切り替えます。GPU が失敗した場合は CPU にフォールバックします。"), static_cast<int>(rock::HeightmapFromMaskSettings{}.backend)))
     {
         hm.backend = static_cast<rock::MaskUtilityBackend>(std::clamp(backendInt,
             static_cast<int>(rock::MaskUtilityBackend::CpuParallel),
@@ -1003,7 +1003,7 @@ bool DrawRockProperties(rock::Node& editableNode)
 
     {
         int backendInt = static_cast<int>(rk.backend);
-        if (DrawPropertyComboRow("Backend", "RockBackend", &backendInt, "CPU\0GPU\0\0", "実行バックエンド。GPU (D3D12 compute) は CPU 比で 10-30 倍高速。シェーダーコンパイル/ディスパッチ失敗時は CPU に自動フォールバック。CPU は決定論的でデバッグ向き。", static_cast<int>(rock::RockSettings{}.backend)))
+        if (DrawPropertyComboRow("Backend", "RockBackend", &backendInt, "CPU\0GPU\0\0", Tr("Execution backend. GPU (D3D12 compute) is roughly 10-30x faster than CPU. Shader compile or dispatch failures automatically fall back to CPU. CPU is deterministic and useful for debugging.", "実行バックエンド。GPU (D3D12 compute) は CPU 比で 10-30 倍高速。シェーダーコンパイル/ディスパッチ失敗時は CPU に自動フォールバック。CPU は決定論的でデバッグ向き。"), static_cast<int>(rock::RockSettings{}.backend)))
         {
             rk.backend = static_cast<rock::RockBackend>(std::clamp(backendInt,
                 static_cast<int>(rock::RockBackend::CpuReference),
@@ -1013,7 +1013,7 @@ bool DrawRockProperties(rock::Node& editableNode)
     }
     {
         int styleInt = static_cast<int>(rk.style);
-        if (DrawPropertyComboRow("Rock Style", "RockStyle", &styleInt, "Classic\0Polygonal\0Shard\0\0", "岩の基本シェープです。Classic は従来の丸みを残した多角形ドーム、Polygonal はオフセンター頂点を持つ低ポリゴン岩、Shard はより細長い破片状の岩を生成します。", static_cast<int>(rock::RockSettings{}.style)))
+        if (DrawPropertyComboRow("Rock Style", "RockStyle", &styleInt, "Classic\0Polygonal\0Shard\0\0", Tr("Base rock shape. Classic is the original rounded polygonal dome, Polygonal creates low-poly rocks with off-center peaks, and Shard creates longer broken fragments.", "岩の基本シェープです。Classic は従来の丸みを残した多角形ドーム、Polygonal はオフセンター頂点を持つ低ポリゴン岩、Shard はより細長い破片状の岩を生成します。"), static_cast<int>(rock::RockSettings{}.style)))
         {
             rk.style = static_cast<rock::RockStyle>(std::clamp(styleInt,
                 static_cast<int>(rock::RockStyle::Classic),
@@ -1023,7 +1023,7 @@ bool DrawRockProperties(rock::Node& editableNode)
     }
     {
         int orientationInt = static_cast<int>(rk.orientationRule);
-        if (DrawPropertyComboRow("Orientation Rule", "RockOrientationRule", &orientationInt, "Flat\0Follow Ground\0Slope Oriented\0\0", "岩の向きと斜面への沿わせ方です。Flat は従来通り水平基準で加算、Follow Ground は斜面距離と法線の上向き成分を使って地形に沿わせ、Slope Oriented は岩の回転を斜面方向へ寄せます。", static_cast<int>(rock::RockSettings{}.orientationRule)))
+        if (DrawPropertyComboRow("Orientation Rule", "RockOrientationRule", &orientationInt, "Flat\0Follow Ground\0Slope Oriented\0\0", Tr("Controls rock orientation and how it conforms to slopes. Flat adds rocks in a horizontal frame, Follow Ground uses slope distance and upward normal to conform to terrain, and Slope Oriented biases rotation toward the slope direction.", "岩の向きと斜面への沿わせ方です。Flat は従来通り水平基準で加算、Follow Ground は斜面距離と法線の上向き成分を使って地形に沿わせ、Slope Oriented は岩の回転を斜面方向へ寄せます。"), static_cast<int>(rock::RockSettings{}.orientationRule)))
         {
             rk.orientationRule = static_cast<rock::RockOrientationRule>(std::clamp(orientationInt,
                 static_cast<int>(rock::RockOrientationRule::Flat),
@@ -1031,61 +1031,61 @@ bool DrawRockProperties(rock::Node& editableNode)
             EvaluateGraph();
         }
     }
-    if (DrawPropertyIntRow("Layer Count", "RockLayerCount", &rk.layerCount, 1, 8, rock::RockSettings{}.layerCount, "Rock layer count changed", true, "重ねる岩散布レイヤー数です。増やすほど別シードのグリッドを重ねて密度と不規則さが増えますが、評価コストもほぼ比例して上がります。"))
+    if (DrawPropertyIntRow("Layer Count", "RockLayerCount", &rk.layerCount, 1, 8, rock::RockSettings{}.layerCount, "Rock layer count changed", true, Tr("Number of rock scatter layers to stack. More layers add density and irregularity with different seed grids, but evaluation cost rises nearly proportionally.", "重ねる岩散布レイヤー数です。増やすほど別シードのグリッドを重ねて密度と不規則さが増えますが、評価コストもほぼ比例して上がります。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyIntRow("Seed", "RockSeed", &rk.seed, 0, 999999, rock::RockSettings{}.seed, "Rock seed changed", true, "ハッシュのオフセットです。同じパラメータでも異なる岩配置を得るために使います。"))
+    if (DrawPropertyIntRow("Seed", "RockSeed", &rk.seed, 0, 999999, rock::RockSettings{}.seed, "Rock seed changed", true, Tr("Hash offset used to get different rock placement from the same parameters.", "ハッシュのオフセットです。同じパラメータでも異なる岩配置を得るために使います。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Density (m)", "RockDensity", &rk.density, 0.5f, 200.0f, rock::RockSettings{}.density, "Rock density changed", true, "岩中心のばらまき間隔 (m)。岩同士の中心間距離を決めます。岩サイズとは独立。", "%.2f"))
+    if (DrawPropertyFloatRow("Density (m)", "RockDensity", &rk.density, 0.5f, 200.0f, rock::RockSettings{}.density, "Rock density changed", true, Tr("Scatter spacing between rock centers in meters. This controls center-to-center distance independently of rock size.", "岩中心のばらまき間隔 (m)。岩同士の中心間距離を決めます。岩サイズとは独立。"), "%.2f"))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyPercentRow("Coverage (%)", "RockCoverage", &rk.coverage, 0.0f, 1.0f, rock::RockSettings{}.coverage, "Rock coverage changed", "scatter 点が岩になる確率です。1.0 で全点、下げると元の地形が見える隙間が増えます。"))
+    if (DrawPropertyPercentRow("Coverage (%)", "RockCoverage", &rk.coverage, 0.0f, 1.0f, rock::RockSettings{}.coverage, "Rock coverage changed", Tr("Probability that each scatter point becomes a rock. 1.0 uses every point; lower values leave more gaps where the original terrain shows through.", "scatter 点が岩になる確率です。1.0 で全点、下げると元の地形が見える隙間が増えます。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Rock Size Min (m)", "RockSizeMinM", &rk.rockSizeMinM, 0.1f, 200.0f, rock::RockSettings{}.rockSizeMinM, "Rock size min changed", true, "岩の最小直径 (m)。各岩は [Min, Max] の範囲からランダムに選ばれます。Density より大きいと岩が重なり、小さいと隙間ができます。", "%.2f"))
+    if (DrawPropertyFloatRow("Rock Size Min (m)", "RockSizeMinM", &rk.rockSizeMinM, 0.1f, 200.0f, rock::RockSettings{}.rockSizeMinM, "Rock size min changed", true, Tr("Minimum rock diameter in meters. Each rock is randomly chosen from [Min, Max]. Larger than Density causes overlap; smaller values leave gaps.", "岩の最小直径 (m)。各岩は [Min, Max] の範囲からランダムに選ばれます。Density より大きいと岩が重なり、小さいと隙間ができます。"), "%.2f"))
     {
         if (rk.rockSizeMaxM < rk.rockSizeMinM) rk.rockSizeMaxM = rk.rockSizeMinM;
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Rock Size Max (m)", "RockSizeMaxM", &rk.rockSizeMaxM, 0.1f, 200.0f, rock::RockSettings{}.rockSizeMaxM, "Rock size max changed", true, "岩の最大直径 (m)。Min < Max で自動補正。重なる岩同士は max 合成され、接合線で自然な折れ線が出ます。", "%.2f"))
+    if (DrawPropertyFloatRow("Rock Size Max (m)", "RockSizeMaxM", &rk.rockSizeMaxM, 0.1f, 200.0f, rock::RockSettings{}.rockSizeMaxM, "Rock size max changed", true, Tr("Maximum rock diameter in meters. Min < Max is corrected automatically. Overlapping rocks are max-composited, creating natural broken seams at joins.", "岩の最大直径 (m)。Min < Max で自動補正。重なる岩同士は max 合成され、接合線で自然な折れ線が出ます。"), "%.2f"))
     {
         if (rk.rockSizeMaxM < rk.rockSizeMinM) rk.rockSizeMinM = rk.rockSizeMaxM;
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Rock Height (m)", "RockHeight", &rk.rockHeight, 0.0f, 50.0f, rock::RockSettings{}.rockHeight, "Rock height changed", true, "岩塊の最大盛り上がり (m)。地形の起伏スケールに対して大きすぎると岩肌が浮き上がりすぎるので、地形の標高変化の数% 程度が目安。", "%.2f"))
+    if (DrawPropertyFloatRow("Rock Height (m)", "RockHeight", &rk.rockHeight, 0.0f, 50.0f, rock::RockSettings{}.rockHeight, "Rock height changed", true, Tr("Maximum rock rise in meters. If it is too large relative to terrain relief, rocks look overly raised; a few percent of the terrain elevation range is a good starting point.", "岩塊の最大盛り上がり (m)。地形の起伏スケールに対して大きすぎると岩肌が浮き上がりすぎるので、地形の標高変化の数% 程度が目安。"), "%.2f"))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyPercentRow("Height Jitter (%)", "RockHeightJitter", &rk.heightJitter, 0.0f, 1.0f, rock::RockSettings{}.heightJitter, "Rock height jitter changed", "岩ごとの高さ振れ幅です。0 で全部同じ高さ、1 で 0 倍〜2 倍の範囲でランダム。"))
+    if (DrawPropertyPercentRow("Height Jitter (%)", "RockHeightJitter", &rk.heightJitter, 0.0f, 1.0f, rock::RockSettings{}.heightJitter, "Rock height jitter changed", Tr("Per-rock height variation. 0 gives all rocks the same height; 1 randomizes from 0x to 2x.", "岩ごとの高さ振れ幅です。0 で全部同じ高さ、1 で 0 倍〜2 倍の範囲でランダム。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyPercentRow("Rotation Variation (%)", "RockRotationVariation", &rk.rotationVariation, 0.0f, 1.0f, rock::RockSettings{}.rotationVariation, "Rock rotation variation changed", "各岩のランダム回転量です。0 で全岩が同じ向き、1 で完全ランダム回転。表面の面の向きが岩ごとに変わるので散らばり感が出ます。"))
+    if (DrawPropertyPercentRow("Rotation Variation (%)", "RockRotationVariation", &rk.rotationVariation, 0.0f, 1.0f, rock::RockSettings{}.rotationVariation, "Rock rotation variation changed", Tr("Random rotation amount per rock. 0 keeps every rock aligned; 1 gives fully random rotation, varying facet direction and making placement feel more scattered.", "各岩のランダム回転量です。0 で全岩が同じ向き、1 で完全ランダム回転。表面の面の向きが岩ごとに変わるので散らばり感が出ます。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyPercentRow("Aspect Variation (%)", "RockAspectVariation", &rk.aspectVariation, 0.0f, 1.0f, rock::RockSettings{}.aspectVariation, "Rock aspect variation changed", "各岩の細長さの振れ幅です。0 で円形、1 で最大 2:1 まで細長い岩が混ざります。回転と組み合わせて GeoGen のような不揃いな配置になります。"))
+    if (DrawPropertyPercentRow("Aspect Variation (%)", "RockAspectVariation", &rk.aspectVariation, 0.0f, 1.0f, rock::RockSettings{}.aspectVariation, "Rock aspect variation changed", Tr("Variation in rock elongation. 0 is circular; 1 mixes in rocks up to 2:1. Combined with rotation, it creates a GeoGen-like uneven layout.", "各岩の細長さの振れ幅です。0 で円形、1 で最大 2:1 まで細長い岩が混ざります。回転と組み合わせて GeoGen のような不揃いな配置になります。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyPercentRow("Edge Sharpness (%)", "RockEdgeSharpness", &rk.edgeSharpness, 0.0f, 1.0f, rock::RockSettings{}.edgeSharpness, "Rock edge sharpness changed", "岩のシルエット形状です。0 で滑らかな円形ドーム、1 で 4–7 角形のダイヤモンドカット風シルエット。岩ごとに辺数・角度・半径がランダムに揺らぎます。"))
+    if (DrawPropertyPercentRow("Edge Sharpness (%)", "RockEdgeSharpness", &rk.edgeSharpness, 0.0f, 1.0f, rock::RockSettings{}.edgeSharpness, "Rock edge sharpness changed", Tr("Rock silhouette shape. 0 is a smooth circular dome; 1 gives a 4-7 sided cut-stone silhouette. Edge count, angle, and radius vary per rock.", "岩のシルエット形状です。0 で滑らかな円形ドーム、1 で 4–7 角形のダイヤモンドカット風シルエット。岩ごとに辺数・角度・半径がランダムに揺らぎます。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyPercentRow("Bumpiness (%)", "RockBumpiness", &rk.bumpiness, 0.0f, 1.0f, rock::RockSettings{}.bumpiness, "Rock bumpiness changed", "表面ディテールの振幅です。0 で滑らかなドーム、上げるほど岩肌の凹凸が強くなります。Facet Sharpness と組み合わせて多面体感を調整します。"))
+    if (DrawPropertyPercentRow("Bumpiness (%)", "RockBumpiness", &rk.bumpiness, 0.0f, 1.0f, rock::RockSettings{}.bumpiness, "Rock bumpiness changed", Tr("Amplitude of surface detail. 0 is a smooth dome; higher values add stronger rock-surface relief. Use with Facet Sharpness to tune the faceted feel.", "表面ディテールの振幅です。0 で滑らかなドーム、上げるほど岩肌の凹凸が強くなります。Facet Sharpness と組み合わせて多面体感を調整します。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyPercentRow("Facet Sharpness (%)", "RockFacetSharpness", &rk.facetSharpness, 0.0f, 1.0f, rock::RockSettings{}.facetSharpness, "Rock facet sharpness changed", "表面ディテールの形状です。0 で滑らかな丸み、1 で多面体状の平らな面 + 鋭いエッジ。岩肌に角を立てたいときに上げます。"))
+    if (DrawPropertyPercentRow("Facet Sharpness (%)", "RockFacetSharpness", &rk.facetSharpness, 0.0f, 1.0f, rock::RockSettings{}.facetSharpness, "Rock facet sharpness changed", Tr("Shape of surface detail. 0 is smoothly rounded; 1 creates flat polygonal faces with sharp edges. Raise it when you want angular rock surfaces.", "表面ディテールの形状です。0 で滑らかな丸み、1 で多面体状の平らな面 + 鋭いエッジ。岩肌に角を立てたいときに上げます。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Facet Scale", "RockFacetScale", &rk.facetScale, 0.5f, 8.0f, rock::RockSettings{}.facetScale, "Rock facet scale changed", true, "1 つの岩に乗る面の細かさです。大きいほど面が小さく細かくなり、小さいほど大きな面が少数現れます。", "%.2f"))
+    if (DrawPropertyFloatRow("Facet Scale", "RockFacetScale", &rk.facetScale, 0.5f, 8.0f, rock::RockSettings{}.facetScale, "Rock facet scale changed", true, Tr("Facet detail density on each rock. Higher values create smaller, finer facets; lower values create fewer large faces.", "1 つの岩に乗る面の細かさです。大きいほど面が小さく細かくなり、小さいほど大きな面が少数現れます。"), "%.2f"))
     {
         EvaluateGraph();
     }
@@ -1103,7 +1103,7 @@ bool DrawRockProperties(rock::Node& editableNode)
                 detailIndex = i;
             }
         }
-        if (DrawPropertyComboRow("Ground Detail Level", "RockGroundDetailLevel", &detailIndex, "Max\0" "1 m\0" "2 m\0" "4 m\0" "8 m\0" "16 m\0" "32 m\0" "64 m\0" "128 m\0" "\0", "岩を置く底面に使う地形ディテールです。Max は入力地形そのまま、数値を上げるほど小さな凹凸をならした下地に岩を乗せます。", 0))
+        if (DrawPropertyComboRow("Ground Detail Level", "RockGroundDetailLevel", &detailIndex, "Max\0" "1 m\0" "2 m\0" "4 m\0" "8 m\0" "16 m\0" "32 m\0" "64 m\0" "128 m\0" "\0", Tr("Terrain detail used as the base for placing rocks. Max uses the input terrain as-is; larger values place rocks on a base with smaller bumps smoothed away.", "岩を置く底面に使う地形ディテールです。Max は入力地形そのまま、数値を上げるほど小さな凹凸をならした下地に岩を乗せます。"), 0))
         {
             rk.groundDetailLevelM = kGroundDetailLevels[static_cast<size_t>(detailIndex)];
             EvaluateGraph();
@@ -1145,7 +1145,7 @@ bool DrawScatterProperties(rock::Node& editableNode)
 
     {
         int backendInt = static_cast<int>(sc.backend);
-        if (DrawPropertyComboRow("Backend", "ScatterBackend", &backendInt, "CPU\0GPU\0\0", "実行バックエンド。GPU (D3D12 compute) は Mask 入力なし、Ground Detail Level が Max の場合に使われます。それ以外や失敗時は CPU にフォールバックします。", static_cast<int>(rock::ScatterSettings{}.backend)))
+        if (DrawPropertyComboRow("Backend", "ScatterBackend", &backendInt, "CPU\0GPU\0\0", Tr("Execution backend. GPU (D3D12 compute) is used when there is no Mask input and Ground Detail Level is Max. Other cases, or failures, fall back to CPU.", "実行バックエンド。GPU (D3D12 compute) は Mask 入力なし、Ground Detail Level が Max の場合に使われます。それ以外や失敗時は CPU にフォールバックします。"), static_cast<int>(rock::ScatterSettings{}.backend)))
         {
             sc.backend = static_cast<rock::ScatterBackend>(std::clamp(backendInt,
                 static_cast<int>(rock::ScatterBackend::CpuReference),
@@ -1155,7 +1155,7 @@ bool DrawScatterProperties(rock::Node& editableNode)
     }
     {
         int shapeInt = static_cast<int>(sc.shapeType);
-        if (DrawPropertyComboRow("Shape Type", "ScatterShapeType", &shapeInt, "Hemisphere\0Cone\0\0", "散布するプロキシ形状です。Hemisphere は丸い植物や低木の分布、Cone は尖った草や小さな樹形の確認に使えます。", static_cast<int>(rock::ScatterSettings{}.shapeType)))
+        if (DrawPropertyComboRow("Shape Type", "ScatterShapeType", &shapeInt, "Hemisphere\0Cone\0\0", Tr("Proxy shape to scatter. Hemisphere works for round plants or shrubs; Cone helps preview pointed grasses or small tree forms.", "散布するプロキシ形状です。Hemisphere は丸い植物や低木の分布、Cone は尖った草や小さな樹形の確認に使えます。"), static_cast<int>(rock::ScatterSettings{}.shapeType)))
         {
             sc.shapeType = static_cast<rock::ScatterShapeType>(std::clamp(shapeInt,
                 static_cast<int>(rock::ScatterShapeType::Hemisphere),
@@ -1165,7 +1165,7 @@ bool DrawScatterProperties(rock::Node& editableNode)
     }
     {
         int orientationInt = static_cast<int>(sc.orientationRule);
-        if (DrawPropertyComboRow("Orientation Rule", "ScatterOrientationRule", &orientationInt, "Flat\0Follow Ground\0Slope Oriented\0\0", "散布形状の向きと斜面への沿わせ方です。Flat は従来通り水平基準、Follow Ground は斜面距離と法線の上向き成分を使って地形に沿わせ、Slope Oriented は細長い個体の回転を斜面方向へ寄せます。", static_cast<int>(rock::ScatterSettings{}.orientationRule)))
+        if (DrawPropertyComboRow("Orientation Rule", "ScatterOrientationRule", &orientationInt, "Flat\0Follow Ground\0Slope Oriented\0\0", Tr("Controls scatter-shape orientation and how it conforms to slopes. Flat uses a horizontal frame, Follow Ground uses slope distance and upward normal to conform to terrain, and Slope Oriented biases elongated instance rotation toward the slope direction.", "散布形状の向きと斜面への沿わせ方です。Flat は従来通り水平基準、Follow Ground は斜面距離と法線の上向き成分を使って地形に沿わせ、Slope Oriented は細長い個体の回転を斜面方向へ寄せます。"), static_cast<int>(rock::ScatterSettings{}.orientationRule)))
         {
             sc.orientationRule = static_cast<rock::RockOrientationRule>(std::clamp(orientationInt,
                 static_cast<int>(rock::RockOrientationRule::Flat),
@@ -1173,41 +1173,41 @@ bool DrawScatterProperties(rock::Node& editableNode)
             EvaluateGraph();
         }
     }
-    if (DrawPropertyIntRow("Seed", "ScatterSeed", &sc.seed, 0, 999999, rock::ScatterSettings{}.seed, "Scatter seed changed", true, "散布位置と個体差のシードです。"))
+    if (DrawPropertyIntRow("Seed", "ScatterSeed", &sc.seed, 0, 999999, rock::ScatterSettings{}.seed, "Scatter seed changed", true, Tr("Seed for scatter positions and per-instance variation.", "散布位置と個体差のシードです。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Density (m)", "ScatterDensity", &sc.density, 0.5f, 200.0f, rock::ScatterSettings{}.density, "Scatter density changed", true, "scatter 中心の間隔です。植生分布では株間や群落の粒度として扱えます。", "%.2f"))
+    if (DrawPropertyFloatRow("Density (m)", "ScatterDensity", &sc.density, 0.5f, 200.0f, rock::ScatterSettings{}.density, "Scatter density changed", true, Tr("Spacing between scatter centers. For vegetation distribution, this can represent plant spacing or clump granularity.", "scatter 中心の間隔です。植生分布では株間や群落の粒度として扱えます。"), "%.2f"))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyPercentRow("Coverage (%)", "ScatterCoverage", &sc.coverage, 0.0f, 1.0f, rock::ScatterSettings{}.coverage, "Scatter coverage changed", "scatter 点が実際に配置される確率です。入力 Mask がある場合は Mask の値でさらに制限されます。"))
+    if (DrawPropertyPercentRow("Coverage (%)", "ScatterCoverage", &sc.coverage, 0.0f, 1.0f, rock::ScatterSettings{}.coverage, "Scatter coverage changed", Tr("Probability that each scatter point is placed. If an input Mask is connected, its value further limits placement.", "scatter 点が実際に配置される確率です。入力 Mask がある場合は Mask の値でさらに制限されます。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Size Min (m)", "ScatterSizeMinM", &sc.sizeMinM, 0.1f, 200.0f, rock::ScatterSettings{}.sizeMinM, "Scatter size min changed", true, "散布形状の最小直径です。", "%.2f"))
+    if (DrawPropertyFloatRow("Size Min (m)", "ScatterSizeMinM", &sc.sizeMinM, 0.1f, 200.0f, rock::ScatterSettings{}.sizeMinM, "Scatter size min changed", true, Tr("Minimum scatter-shape diameter.", "散布形状の最小直径です。"), "%.2f"))
     {
         if (sc.sizeMaxM < sc.sizeMinM) sc.sizeMaxM = sc.sizeMinM;
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Size Max (m)", "ScatterSizeMaxM", &sc.sizeMaxM, 0.1f, 200.0f, rock::ScatterSettings{}.sizeMaxM, "Scatter size max changed", true, "散布形状の最大直径です。Min < Max で範囲内からランダムに選ばれます。", "%.2f"))
+    if (DrawPropertyFloatRow("Size Max (m)", "ScatterSizeMaxM", &sc.sizeMaxM, 0.1f, 200.0f, rock::ScatterSettings{}.sizeMaxM, "Scatter size max changed", true, Tr("Maximum scatter-shape diameter. When Min < Max, a random value in the range is chosen.", "散布形状の最大直径です。Min < Max で範囲内からランダムに選ばれます。"), "%.2f"))
     {
         if (sc.sizeMaxM < sc.sizeMinM) sc.sizeMinM = sc.sizeMaxM;
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Height (m)", "ScatterHeight", &sc.height, 0.0f, 50.0f, rock::ScatterSettings{}.height, "Scatter height changed", true, "形状を地形へ盛り上げる高さです。0 のままでも Mask と Unique Mask は出力されるので、植生分布用マスクとして使えます。", "%.2f"))
+    if (DrawPropertyFloatRow("Height (m)", "ScatterHeight", &sc.height, 0.0f, 50.0f, rock::ScatterSettings{}.height, "Scatter height changed", true, Tr("Height used to raise the shape into the terrain. Even at 0, Mask and Unique Mask are still output, so it can be used as a vegetation distribution mask.", "形状を地形へ盛り上げる高さです。0 のままでも Mask と Unique Mask は出力されるので、植生分布用マスクとして使えます。"), "%.2f"))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyPercentRow("Height Jitter (%)", "ScatterHeightJitter", &sc.heightJitter, 0.0f, 1.0f, rock::ScatterSettings{}.heightJitter, "Scatter height jitter changed", "個体ごとの高さ振れ幅です。"))
+    if (DrawPropertyPercentRow("Height Jitter (%)", "ScatterHeightJitter", &sc.heightJitter, 0.0f, 1.0f, rock::ScatterSettings{}.heightJitter, "Scatter height jitter changed", Tr("Per-instance height variation.", "個体ごとの高さ振れ幅です。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyPercentRow("Rotation Variation (%)", "ScatterRotationVariation", &sc.rotationVariation, 0.0f, 1.0f, rock::ScatterSettings{}.rotationVariation, "Scatter rotation variation changed", "細長い個体の向きのばらつきです。"))
+    if (DrawPropertyPercentRow("Rotation Variation (%)", "ScatterRotationVariation", &sc.rotationVariation, 0.0f, 1.0f, rock::ScatterSettings{}.rotationVariation, "Scatter rotation variation changed", Tr("Direction variation for elongated instances.", "細長い個体の向きのばらつきです。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyPercentRow("Aspect Variation (%)", "ScatterAspectVariation", &sc.aspectVariation, 0.0f, 1.0f, rock::ScatterSettings{}.aspectVariation, "Scatter aspect variation changed", "個体の細長さの振れ幅です。0 で円形、上げるほど楕円形が混ざります。"))
+    if (DrawPropertyPercentRow("Aspect Variation (%)", "ScatterAspectVariation", &sc.aspectVariation, 0.0f, 1.0f, rock::ScatterSettings{}.aspectVariation, "Scatter aspect variation changed", Tr("Variation in instance elongation. 0 is circular; higher values mix in more elliptical shapes.", "個体の細長さの振れ幅です。0 で円形、上げるほど楕円形が混ざります。")))
     {
         EvaluateGraph();
     }
@@ -1225,7 +1225,7 @@ bool DrawScatterProperties(rock::Node& editableNode)
                 detailIndex = i;
             }
         }
-        if (DrawPropertyComboRow("Ground Detail Level", "ScatterGroundDetailLevel", &detailIndex, "Max\0" "1 m\0" "2 m\0" "4 m\0" "8 m\0" "16 m\0" "32 m\0" "64 m\0" "128 m\0" "\0", "散布形状を置く底面に使う地形ディテールです。Max は入力地形そのまま、数値を上げるほど小さな凹凸をならした下地に配置します。", 0))
+        if (DrawPropertyComboRow("Ground Detail Level", "ScatterGroundDetailLevel", &detailIndex, "Max\0" "1 m\0" "2 m\0" "4 m\0" "8 m\0" "16 m\0" "32 m\0" "64 m\0" "128 m\0" "\0", Tr("Terrain detail used as the base for placing scatter shapes. Max uses the input terrain as-is; larger values place instances on a base with smaller bumps smoothed away.", "散布形状を置く底面に使う地形ディテールです。Max は入力地形そのまま、数値を上げるほど小さな凹凸をならした下地に配置します。"), 0))
         {
             sc.groundDetailLevelM = kGroundDetailLevels[static_cast<size_t>(detailIndex)];
             EvaluateGraph();
@@ -1257,27 +1257,27 @@ bool DrawCrumblingProperties(rock::Node& editableNode)
     cr.spread = std::clamp(cr.spread, 0.0f, 1.0f);
     cr.seed = std::clamp(cr.seed, 0, 999999);
 
-    if (DrawPropertyIntRow("Physics Count", "CrumblingPhysicsCount", &cr.physicsCount, 0, 512, rock::CrumblingSettings{}.physicsCount, "Crumbling physics count changed", true, "崩落粒子を下方向へ進めるステップ数です。大きいほど岩屑が斜面下部へ長く流れて、広くばらけます。"))
+    if (DrawPropertyIntRow("Physics Count", "CrumblingPhysicsCount", &cr.physicsCount, 0, 512, rock::CrumblingSettings{}.physicsCount, "Crumbling physics count changed", true, Tr("Number of steps used to move crumbling particles downward. Larger values let debris flow farther down slopes and spread more widely.", "崩落粒子を下方向へ進めるステップ数です。大きいほど岩屑が斜面下部へ長く流れて、広くばらけます。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyPercentRow("Debris Amount (%)", "CrumblingDebrisAmount", &cr.debrisAmount, 0.0f, 1.0f, rock::CrumblingSettings{}.debrisAmount, "Crumbling debris amount changed", "Emission Mask から発生する岩屑の量です。上げるほど粒子数と盛り上がりが増えます。"))
+    if (DrawPropertyPercentRow("Debris Amount (%)", "CrumblingDebrisAmount", &cr.debrisAmount, 0.0f, 1.0f, rock::CrumblingSettings{}.debrisAmount, "Crumbling debris amount changed", Tr("Amount of debris emitted from the Emission Mask. Higher values increase particle count and buildup.", "Emission Mask から発生する岩屑の量です。上げるほど粒子数と盛り上がりが増えます。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Debris Min Size (m)", "CrumblingDebrisSizeMin", &cr.debrisSizeMinM, 0.1f, 200.0f, rock::CrumblingSettings{}.debrisSizeMinM, "Crumbling debris min size changed", true, "崩落岩片の最小直径です。小さいほど細かい砂礫、大きいほど転石寄りになります。", "%.2f", 0, 0.1f, 1000.0f))
+    if (DrawPropertyFloatRow("Debris Min Size (m)", "CrumblingDebrisSizeMin", &cr.debrisSizeMinM, 0.1f, 200.0f, rock::CrumblingSettings{}.debrisSizeMinM, "Crumbling debris min size changed", true, Tr("Minimum diameter of crumbled debris. Smaller values create fine gravel; larger values feel more like boulders.", "崩落岩片の最小直径です。小さいほど細かい砂礫、大きいほど転石寄りになります。"), "%.2f", 0, 0.1f, 1000.0f))
     {
         if (cr.debrisSizeMaxM < cr.debrisSizeMinM) cr.debrisSizeMaxM = cr.debrisSizeMinM;
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Debris Max Size (m)", "CrumblingDebrisSizeMax", &cr.debrisSizeMaxM, 0.1f, 200.0f, rock::CrumblingSettings{}.debrisSizeMaxM, "Crumbling debris max size changed", true, "崩落岩片の最大直径です。Min < Max で範囲内からランダムに大きさを選びます。", "%.2f", 0, 0.1f, 1000.0f))
+    if (DrawPropertyFloatRow("Debris Max Size (m)", "CrumblingDebrisSizeMax", &cr.debrisSizeMaxM, 0.1f, 200.0f, rock::CrumblingSettings{}.debrisSizeMaxM, "Crumbling debris max size changed", true, Tr("Maximum diameter of crumbled debris. When Min < Max, size is chosen randomly within the range.", "崩落岩片の最大直径です。Min < Max で範囲内からランダムに大きさを選びます。"), "%.2f", 0, 0.1f, 1000.0f))
     {
         if (cr.debrisSizeMaxM < cr.debrisSizeMinM) cr.debrisSizeMinM = cr.debrisSizeMaxM;
         EvaluateGraph();
     }
     {
         int styleInt = static_cast<int>(cr.style);
-        if (DrawPropertyComboRow("Rock Style", "CrumblingRockStyle", &styleInt, "Classic\0Polygonal\0Shard\0\0", "岩片の基本シェープです。Classic は丸み、Polygonal は低ポリゴン状、Shard は斜面に流れた破片状の形になります。", static_cast<int>(rock::CrumblingSettings{}.style)))
+        if (DrawPropertyComboRow("Rock Style", "CrumblingRockStyle", &styleInt, "Classic\0Polygonal\0Shard\0\0", Tr("Base debris shape. Classic is rounded, Polygonal is low-poly, and Shard creates slope-flowing broken fragments.", "岩片の基本シェープです。Classic は丸み、Polygonal は低ポリゴン状、Shard は斜面に流れた破片状の形になります。"), static_cast<int>(rock::CrumblingSettings{}.style)))
         {
             cr.style = static_cast<rock::RockStyle>(std::clamp(styleInt,
                 static_cast<int>(rock::RockStyle::Classic),
@@ -1285,15 +1285,15 @@ bool DrawCrumblingProperties(rock::Node& editableNode)
             EvaluateGraph();
         }
     }
-    if (DrawPropertyPercentRow("Gravity (%)", "CrumblingGravity", &cr.gravity, 0.0f, 1.0f, rock::CrumblingSettings{}.gravity, "Crumbling gravity changed", "低い方へ流れる強さです。高いほど直線的に下り、低いほど地形の細部やランダムな散り方が残ります。"))
+    if (DrawPropertyPercentRow("Gravity (%)", "CrumblingGravity", &cr.gravity, 0.0f, 1.0f, rock::CrumblingSettings{}.gravity, "Crumbling gravity changed", Tr("Strength of downhill flow. Higher values move more directly downward; lower values preserve terrain detail and random spreading.", "低い方へ流れる強さです。高いほど直線的に下り、低いほど地形の細部やランダムな散り方が残ります。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyPercentRow("Spread (%)", "CrumblingSpread", &cr.spread, 0.0f, 1.0f, rock::CrumblingSettings{}.spread, "Crumbling spread changed", "進行方向から横へ逸れる強さです。上げるほど岩屑が筋状に重なりにくく、停止後の岩片も軽く押し分けられます。"))
+    if (DrawPropertyPercentRow("Spread (%)", "CrumblingSpread", &cr.spread, 0.0f, 1.0f, rock::CrumblingSettings{}.spread, "Crumbling spread changed", Tr("Strength of sideways deviation from the travel direction. Higher values reduce streak-like overlap and lightly separate stopped debris.", "進行方向から横へ逸れる強さです。上げるほど岩屑が筋状に重なりにくく、停止後の岩片も軽く押し分けられます。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyIntRow("Seed", "CrumblingSeed", &cr.seed, 0, 999999, rock::CrumblingSettings{}.seed, "Crumbling seed changed", true, "岩屑の発生位置とばらつきのシードです。"))
+    if (DrawPropertyIntRow("Seed", "CrumblingSeed", &cr.seed, 0, 999999, rock::CrumblingSettings{}.seed, "Crumbling seed changed", true, Tr("Seed for debris emission positions and variation.", "岩屑の発生位置とばらつきのシードです。")))
     {
         EvaluateGraph();
     }
@@ -1322,7 +1322,7 @@ bool DrawSedimentProperties(rock::Node& editableNode)
 
     {
         int backendInt = static_cast<int>(sd.backend);
-        if (DrawPropertyComboRow("Backend", "SedimentBackend", &backendInt, "CPU\0GPU\0\0", "実行バックエンド。GPU (D3D12 compute) は CPU 比で 10-30 倍高速 (1024² で 100ms 程度)。シェーダーコンパイル/ディスパッチ失敗時は CPU に自動フォールバック。CPU は決定論的でデバッグ向き。", static_cast<int>(rock::SedimentSettings{}.backend)))
+        if (DrawPropertyComboRow("Backend", "SedimentBackend", &backendInt, "CPU\0GPU\0\0", Tr("Execution backend. GPU (D3D12 compute) is roughly 10-30x faster than CPU, about 100 ms at 1024^2. Shader compile or dispatch failures automatically fall back to CPU. CPU is deterministic and useful for debugging.", "実行バックエンド。GPU (D3D12 compute) は CPU 比で 10-30 倍高速 (1024² で 100ms 程度)。シェーダーコンパイル/ディスパッチ失敗時は CPU に自動フォールバック。CPU は決定論的でデバッグ向き。"), static_cast<int>(rock::SedimentSettings{}.backend)))
         {
             sd.backend = static_cast<rock::SedimentBackend>(std::clamp(backendInt,
                 static_cast<int>(rock::SedimentBackend::CpuReference),
@@ -1330,7 +1330,7 @@ bool DrawSedimentProperties(rock::Node& editableNode)
             EvaluateGraph();
         }
     }
-    if (DrawPropertyPercentRow("Emission Time (%)", "SedimentEmissionTime", &sd.emissionTime, 0.0f, 1.0f, rock::SedimentSettings{}.emissionTime, "Sediment emission time changed", "Emission Amount を最初の何割の Iteration にかけて徐々に追加するか。0% は最初に全量を一度に積む (緩い層が自由に流れて落ち着く)、100% は毎 Iteration に均等追加 (前 Iteration が彫った河道に新層が流れ込みディテールがシャープになる)。"))
+    if (DrawPropertyPercentRow("Emission Time (%)", "SedimentEmissionTime", &sd.emissionTime, 0.0f, 1.0f, rock::SedimentSettings{}.emissionTime, "Sediment emission time changed", Tr("How much of the initial iterations gradually receive Emission Amount. 0% places everything at the start, letting a loose layer flow and settle. 100% adds it evenly each iteration, so new layers flow into channels carved by previous iterations and sharpen detail.", "Emission Amount を最初の何割の Iteration にかけて徐々に追加するか。0% は最初に全量を一度に積む (緩い層が自由に流れて落ち着く)、100% は毎 Iteration に均等追加 (前 Iteration が彫った河道に新層が流れ込みディテールがシャープになる)。")))
     {
         EvaluateGraph();
     }
@@ -1347,34 +1347,34 @@ bool DrawSedimentProperties(rock::Node& editableNode)
                 detailIndex = i;
             }
         }
-        if (DrawPropertyComboRow("Largest Detail Level (m)", "SedimentLargestDetailLevel", &detailIndex, "1 m\0" "2 m\0" "4 m\0" "8 m\0" "16 m\0" "32 m\0" "64 m\0" "128 m\0" "256 m\0" "512 m\0" "\0", "1 iteration あたりの沈降距離スケールです。大きいほど広い盆地まで早く落ち着きますが、スライドパス数が増えて重くなります。小さいほど細部優先です。", 3))
+        if (DrawPropertyComboRow("Largest Detail Level (m)", "SedimentLargestDetailLevel", &detailIndex, "1 m\0" "2 m\0" "4 m\0" "8 m\0" "16 m\0" "32 m\0" "64 m\0" "128 m\0" "256 m\0" "512 m\0" "\0", Tr("Settling distance scale per iteration. Larger values settle broad basins faster but add slide passes and cost more. Smaller values favor detail.", "1 iteration あたりの沈降距離スケールです。大きいほど広い盆地まで早く落ち着きますが、スライドパス数が増えて重くなります。小さいほど細部優先です。"), 3))
         {
             detailIndex = std::clamp(detailIndex, 0, static_cast<int>(kSedimentDetailLevels.size()) - 1);
             sd.largestDetailLevelM = kSedimentDetailLevels[static_cast<size_t>(detailIndex)];
             EvaluateGraph();
         }
     }
-    if (DrawPropertyIntRow("Iterations Count", "SedimentIterations", &sd.iterations, 1, 500, rock::SedimentSettings{}.iterations, "Sediment iterations changed", true, "外側の緩和反復回数。各反復で全スケールを粗→細で 1 周します。多いほど安定状態に近づきます。"))
+    if (DrawPropertyIntRow("Iterations Count", "SedimentIterations", &sd.iterations, 1, 500, rock::SedimentSettings{}.iterations, "Sediment iterations changed", true, Tr("Outer relaxation iteration count. Each iteration runs all scales from coarse to fine once. More iterations approach a more stable state.", "外側の緩和反復回数。各反復で全スケールを粗→細で 1 周します。多いほど安定状態に近づきます。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyIntRow("Stabilization Iterations", "SedimentStabilization", &sd.stabilizationIterations, 1, 16, rock::SedimentSettings{}.stabilizationIterations, "Sediment stabilization changed", true, "1 反復・1 スケール内で何回の安息角スライドを連続実行するか。多いほど各スケールがそのスケール内で完全に静定します。"))
+    if (DrawPropertyIntRow("Stabilization Iterations", "SedimentStabilization", &sd.stabilizationIterations, 1, 16, rock::SedimentSettings{}.stabilizationIterations, "Sediment stabilization changed", true, Tr("How many angle-of-repose slide passes run within one iteration and one scale. More passes let each scale fully settle at that scale.", "1 反復・1 スケール内で何回の安息角スライドを連続実行するか。多いほど各スケールがそのスケール内で完全に静定します。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyPercentRow("Sediment Viscosity (%)", "SedimentViscosity", &sd.sedimentViscosity, 0.0f, 1.0f, rock::SedimentSettings{}.sedimentViscosity, "Sediment viscosity changed", "堆積物の流動性 / 安息角を制御 (二乗カーブ)。0% = 0° (完全流体、谷底で水平面に均される)、20% (既定) ≈ 3° (ほぼ平らな堆積、GeoGen 相当)、50% = 20°、100% = 80° (粘り強く急斜面でも崩れない)。低いほど谷で水平な池状に、高いほど中腹に急な堆積として積もります。"))
+    if (DrawPropertyPercentRow("Sediment Viscosity (%)", "SedimentViscosity", &sd.sedimentViscosity, 0.0f, 1.0f, rock::SedimentSettings{}.sedimentViscosity, "Sediment viscosity changed", Tr("Controls sediment fluidity / angle of repose with a squared curve. 0% = 0 deg, fully fluid and level in valley floors; 20% default is about 3 deg, GeoGen-like nearly flat deposits; 50% = 20 deg; 100% = 80 deg, sticky enough to remain on steep slopes.", "堆積物の流動性 / 安息角を制御 (二乗カーブ)。0% = 0° (完全流体、谷底で水平面に均される)、20% (既定) ≈ 3° (ほぼ平らな堆積、GeoGen 相当)、50% = 20°、100% = 80° (粘り強く急斜面でも崩れない)。低いほど谷で水平な池状に、高いほど中腹に急な堆積として積もります。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Emission Amount (m)", "SedimentEmissionAmount", &sd.emissionAmountM, 0.0f, 100.0f, rock::SedimentSettings{}.emissionAmountM, "Sediment emission amount changed", true, "全セルに上乗せする堆積物の総厚 (m)。Convert Terrain to Sediment が ON のときは元地形に対する追加分です。", "%.2f"))
+    if (DrawPropertyFloatRow("Emission Amount (m)", "SedimentEmissionAmount", &sd.emissionAmountM, 0.0f, 100.0f, rock::SedimentSettings{}.emissionAmountM, "Sediment emission amount changed", true, Tr("Total sediment thickness added to every cell. When Convert Terrain to Sediment is ON, this is added on top of the original terrain.", "全セルに上乗せする堆積物の総厚 (m)。Convert Terrain to Sediment が ON のときは元地形に対する追加分です。"), "%.2f"))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyBoolRow("Convert Terrain to Sediment", "SedimentConvertTerrain", &sd.convertTerrainToSediment, "Sediment convert terrain changed", "ON: 入力ハイトフィールド全体を可動堆積物として扱います (基盤 = 平坦)。山頂が崩れて谷を埋め、典型的な GeoGen 風の樹枝状デポジット模様になります。OFF: 入力は固定基盤、Emission Amount で追加した分だけが流れます。", rock::SedimentSettings{}.convertTerrainToSediment, true))
+    if (DrawPropertyBoolRow("Convert Terrain to Sediment", "SedimentConvertTerrain", &sd.convertTerrainToSediment, "Sediment convert terrain changed", Tr("ON: Treats the whole input heightfield as movable sediment over a flat base. Peaks collapse into valleys, creating typical GeoGen-like dendritic deposits. OFF: The input is fixed bedrock and only Emission Amount flows.", "ON: 入力ハイトフィールド全体を可動堆積物として扱います (基盤 = 平坦)。山頂が崩れて谷を埋め、典型的な GeoGen 風の樹枝状デポジット模様になります。OFF: 入力は固定基盤、Emission Amount で追加した分だけが流れます。"), rock::SedimentSettings{}.convertTerrainToSediment, true))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyPercentRow("Mask Contrast (%)", "SedimentMaskContrast", &sd.maskContrast, 0.0f, 1.0f, rock::SedimentSettings{}.maskContrast, "Sediment mask contrast changed", "Mask 出力のコントラスト。0 で線形 (滑らかなグラデーション)、1 でほぼバイナリ。dendritic を強調するなら 0.5 以上。"))
+    if (DrawPropertyPercentRow("Mask Contrast (%)", "SedimentMaskContrast", &sd.maskContrast, 0.0f, 1.0f, rock::SedimentSettings{}.maskContrast, "Sediment mask contrast changed", Tr("Contrast of the Mask output. 0 is linear with a smooth gradient; 1 is almost binary. Use 0.5 or higher to emphasize dendritic patterns.", "Mask 出力のコントラスト。0 で線形 (滑らかなグラデーション)、1 でほぼバイナリ。dendritic を強調するなら 0.5 以上。")))
     {
         EvaluateGraph();
     }
@@ -1410,7 +1410,7 @@ bool DrawSnowProperties(rock::Node& editableNode)
 
     {
         int backendInt = static_cast<int>(sn.backend);
-        if (DrawPropertyComboRow("Backend", "SnowBackend", &backendInt, "CPU\0GPU\0\0", "Snow の再配分モデルは現在 CPU 参照実装で評価します。GPU は今後の移植用に保存されますが、現時点では同じ CPU 経路にフォールバックします。", static_cast<int>(rock::SnowSettings{}.backend)))
+        if (DrawPropertyComboRow("Backend", "SnowBackend", &backendInt, "CPU\0GPU\0\0", Tr("The Snow redistribution model currently evaluates with the CPU reference implementation. GPU is saved for future migration, but currently falls back to the same CPU path.", "Snow の再配分モデルは現在 CPU 参照実装で評価します。GPU は今後の移植用に保存されますが、現時点では同じ CPU 経路にフォールバックします。"), static_cast<int>(rock::SnowSettings{}.backend)))
         {
             sn.backend = static_cast<rock::SnowBackend>(std::clamp(backendInt,
                 static_cast<int>(rock::SnowBackend::CpuReference),
@@ -1418,39 +1418,39 @@ bool DrawSnowProperties(rock::Node& editableNode)
             EvaluateGraph();
         }
     }
-    if (DrawPropertyFloatRow("Emission Amount (m)", "SnowEmissionAmount", &sn.emissionAmount, 0.0f, 50.0f, rock::SnowSettings{}.emissionAmount, "Snow emission amount changed", true, "平地 (slope <= Slope Limit Min) に積もる雪の最大厚み (m)。地形の高さが全体的にこの値だけ持ち上がる感覚です。", "%.2f"))
+    if (DrawPropertyFloatRow("Emission Amount (m)", "SnowEmissionAmount", &sn.emissionAmount, 0.0f, 50.0f, rock::SnowSettings{}.emissionAmount, "Snow emission amount changed", true, Tr("Maximum snow thickness on flat areas. Conceptually, terrain height is lifted by this amount where snow fully accumulates.", "平地 (slope <= Slope Limit Min) に積もる雪の最大厚み (m)。地形の高さが全体的にこの値だけ持ち上がる感覚です。"), "%.2f"))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyIntRow("Iterations Count", "SnowIterations", &sn.iterationCount, 1, 256, rock::SnowSettings{}.iterationCount, "Snow iterations changed", true, "雪を何ステップで積もらせて安定化するかです。大きいほど少しずつ積もり、Emission Amount が小さいときの急な谷埋めを抑えやすくなります。"))
+    if (DrawPropertyIntRow("Iterations Count", "SnowIterations", &sn.iterationCount, 1, 256, rock::SnowSettings{}.iterationCount, "Snow iterations changed", true, Tr("How many steps are used to accumulate and stabilize snow. Larger values build snow more gradually and help avoid sudden valley filling when Emission Amount is small.", "雪を何ステップで積もらせて安定化するかです。大きいほど少しずつ積もり、Emission Amount が小さいときの急な谷埋めを抑えやすくなります。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyPercentRow("Emission Time (%)", "SnowEmissionTime", &sn.emissionTime, 0.0f, 1.0f, rock::SnowSettings{}.emissionTime, "Snow emission time changed", "Iterations Count のうち、どの割合まで雪を降らせ続けるかです。0% は最初に全量を置いてから安定化し、100% は最後まで少しずつ降らせます。"))
+    if (DrawPropertyPercentRow("Emission Time (%)", "SnowEmissionTime", &sn.emissionTime, 0.0f, 1.0f, rock::SnowSettings{}.emissionTime, "Snow emission time changed", Tr("How far into Iterations Count snow continues to fall. 0% places all snow at the start before stabilizing; 100% keeps adding it gradually until the end.", "Iterations Count のうち、どの割合まで雪を降らせ続けるかです。0% は最初に全量を置いてから安定化し、100% は最後まで少しずつ降らせます。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Snow Motion Slope Limit (deg)", "SnowMotionSlopeLimit", &sn.motionSlopeLimitDeg, 0.0f, 89.9f, rock::SnowSettings{}.motionSlopeLimitDeg, "Snow motion slope limit changed", true, "この角度以下の雪面では雪が流れず、これより急な雪面では低い隣接セルへ雪が移動します。GeoGen の snow motion slope limit 相当です。", "%.1f"))
+    if (DrawPropertyFloatRow("Snow Motion Slope Limit (deg)", "SnowMotionSlopeLimit", &sn.motionSlopeLimitDeg, 0.0f, 89.9f, rock::SnowSettings{}.motionSlopeLimitDeg, "Snow motion slope limit changed", true, Tr("Snow does not move on snow surfaces at or below this angle. On steeper snow surfaces it moves to lower neighboring cells. Equivalent to GeoGen's snow motion slope limit.", "この角度以下の雪面では雪が流れず、これより急な雪面では低い隣接セルへ雪が移動します。GeoGen の snow motion slope limit 相当です。"), "%.1f"))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyPercentRow("Transport Rate (%)", "SnowTransportRate", &sn.transportRate, 0.0f, 1.0f, rock::SnowSettings{}.transportRate, "Snow transport rate changed", "不安定な雪のうち、1 回の安定化パスで下へ動かす割合です。高いほど急斜面から雪が早く逃げ、谷や棚に集まりやすくなります。"))
+    if (DrawPropertyPercentRow("Transport Rate (%)", "SnowTransportRate", &sn.transportRate, 0.0f, 1.0f, rock::SnowSettings{}.transportRate, "Snow transport rate changed", Tr("Fraction of unstable snow moved downward per stabilization pass. Higher values remove snow from steep slopes faster and collect it in valleys or ledges.", "不安定な雪のうち、1 回の安定化パスで下へ動かす割合です。高いほど急斜面から雪が早く逃げ、谷や棚に集まりやすくなります。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyPercentRow("Snow Surface Smoothing (%)", "SnowSurfaceSmoothing", &sn.surfaceSmoothing, 0.0f, 1.0f, rock::SnowSettings{}.surfaceSmoothing, "Snow surface smoothing changed", "積もった雪面だけをならす強さです。半径は Largest Detail Level (m) を使うため、追加のスケール設定はありません。"))
+    if (DrawPropertyPercentRow("Snow Surface Smoothing (%)", "SnowSurfaceSmoothing", &sn.surfaceSmoothing, 0.0f, 1.0f, rock::SnowSettings{}.surfaceSmoothing, "Snow surface smoothing changed", Tr("Strength for smoothing only the accumulated snow surface. The radius uses Largest Detail Level (m), so there is no separate scale setting.", "積もった雪面だけをならす強さです。半径は Largest Detail Level (m) を使うため、追加のスケール設定はありません。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Mask Threshold (m)", "SnowMaskThreshold", &sn.maskThresholdM, 0.0f, 1.0f, rock::SnowSettings{}.maskThresholdM, "Snow mask threshold changed", true, "この雪厚以上を積雪域として白に近づけます。中間グレーを減らし、積もっている場所と地面が出ている場所を分けるためのしきい値です。", "%.3f", 0, 0.0f, 1000.0f))
+    if (DrawPropertyFloatRow("Mask Threshold (m)", "SnowMaskThreshold", &sn.maskThresholdM, 0.0f, 1.0f, rock::SnowSettings{}.maskThresholdM, "Snow mask threshold changed", true, Tr("Snow at or above this thickness approaches white in the mask. This threshold reduces mid-gray and separates snow-covered areas from exposed ground.", "この雪厚以上を積雪域として白に近づけます。中間グレーを減らし、積もっている場所と地面が出ている場所を分けるためのしきい値です。"), "%.3f", 0, 0.0f, 1000.0f))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Mask Feather (m)", "SnowMaskFeather", &sn.maskFeatherM, 0.0f, 0.5f, rock::SnowSettings{}.maskFeatherM, "Snow mask feather changed", true, "積雪境界だけを少しグレーにする幅です。0 にするとほぼ二値のマスクになります。", "%.3f", 0, 0.0f, 1000.0f))
+    if (DrawPropertyFloatRow("Mask Feather (m)", "SnowMaskFeather", &sn.maskFeatherM, 0.0f, 0.5f, rock::SnowSettings{}.maskFeatherM, "Snow mask feather changed", true, Tr("Width that leaves only the snow boundary slightly gray. 0 creates an almost binary mask.", "積雪境界だけを少しグレーにする幅です。0 にするとほぼ二値のマスクになります。"), "%.3f", 0, 0.0f, 1000.0f))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyIntRow("Settling Passes", "SnowSmoothingIterations", &sn.smoothingIterations, 1, 16, rock::SnowSettings{}.smoothingIterations, "Snow settling passes changed", true, "各 simulation step の中で雪を低い場所へ再配分する回数です。大きいほど急斜面から雪が逃げ、谷底や棚へまとまりやすくなります。"))
+    if (DrawPropertyIntRow("Settling Passes", "SnowSmoothingIterations", &sn.smoothingIterations, 1, 16, rock::SnowSettings{}.smoothingIterations, "Snow settling passes changed", true, Tr("Number of times snow is redistributed toward lower places within each simulation step. Higher values move snow off steep slopes and collect it in valley floors or shelves.", "各 simulation step の中で雪を低い場所へ再配分する回数です。大きいほど急斜面から雪が逃げ、谷底や棚へまとまりやすくなります。")))
     {
         EvaluateGraph();
     }
@@ -1467,7 +1467,7 @@ bool DrawSnowProperties(rock::Node& editableNode)
                 detailIndex = i;
             }
         }
-        if (DrawPropertyComboRow("Largest Detail Level (m)", "SnowLargestDetailLevel", &detailIndex, "4 m\0" "8 m\0" "16 m\0" "32 m\0" "64 m\0" "128 m\0" "256 m\0" "512 m\0" "\0", "GeoGen Snow の Largest detail level 相当です。雪面をならして隙間を埋める最大スケールをメートル単位で選びます。4m は細い隙間まで追いやすく、512m は大きなスケールの積雪面を作ります。", 1))
+        if (DrawPropertyComboRow("Largest Detail Level (m)", "SnowLargestDetailLevel", &detailIndex, "4 m\0" "8 m\0" "16 m\0" "32 m\0" "64 m\0" "128 m\0" "256 m\0" "512 m\0" "\0", Tr("Equivalent to GeoGen Snow's Largest detail level. Chooses the maximum meter scale used to smooth snow surfaces and fill gaps. 4 m tracks narrow gaps; 512 m creates broad snow surfaces.", "GeoGen Snow の Largest detail level 相当です。雪面をならして隙間を埋める最大スケールをメートル単位で選びます。4m は細い隙間まで追いやすく、512m は大きなスケールの積雪面を作ります。"), 1))
         {
             detailIndex = std::clamp(detailIndex, 0, static_cast<int>(kSnowDetailLevels.size()) - 1);
             sn.largestDetailLevelM = kSnowDetailLevels[static_cast<size_t>(detailIndex)];
@@ -1507,7 +1507,7 @@ bool DrawMultiScaleErosionProperties(rock::Node& editableNode)
 
     {
         int backendInt = static_cast<int>(mse.backend);
-        if (DrawPropertyComboRow("Backend", "MseBackend", &backendInt, "CPU\0GPU\0\0", "CPU 並列実装と GPU (D3D12 compute) を切り替えます。GPU は反復回数が多いほど速くなりますが、結果が CPU と微小にずれることがあります (浮動小数の累積順序)。\nGPU が初期化に失敗したり実行時エラーになると自動的に CPU 版にフォールバックします。", static_cast<int>(rock::MultiScaleErosionSettings{}.backend)))
+        if (DrawPropertyComboRow("Backend", "MseBackend", &backendInt, "CPU\0GPU\0\0", Tr("Switches between CPU parallel implementation and GPU (D3D12 compute). GPU gets faster with more iterations, but results can differ slightly from CPU due to floating-point accumulation order.\nIf GPU initialization or dispatch fails, it automatically falls back to CPU.", "CPU 並列実装と GPU (D3D12 compute) を切り替えます。GPU は反復回数が多いほど速くなりますが、結果が CPU と微小にずれることがあります (浮動小数の累積順序)。\nGPU が初期化に失敗したり実行時エラーになると自動的に CPU 版にフォールバックします。"), static_cast<int>(rock::MultiScaleErosionSettings{}.backend)))
         {
             mse.backend = static_cast<rock::MultiScaleErosionBackend>(std::clamp(backendInt,
                 static_cast<int>(rock::MultiScaleErosionBackend::CpuReference),
@@ -1515,23 +1515,23 @@ bool DrawMultiScaleErosionProperties(rock::Node& editableNode)
             EvaluateGraph();
         }
     }
-    if (DrawPropertyIntRow("Iterations", "MseIterations", &mse.iterations, 0, 500, rock::MultiScaleErosionSettings{}.iterations, "Multi-scale erosion iterations changed", true, "SPE → Thermal → Deposition の 3 パスを繰り返す回数です。Multigrid 有効時は各レベルで個別に反復します (粗→細の各段で同じ回数)。多いほど浸食が進みますが計算時間も増えます。"))
+    if (DrawPropertyIntRow("Iterations", "MseIterations", &mse.iterations, 0, 500, rock::MultiScaleErosionSettings{}.iterations, "Multi-scale erosion iterations changed", true, Tr("Number of times to repeat the SPE, Thermal, and Deposition passes. With Multigrid enabled, each level runs this count separately from coarse to fine. More iterations erode further but cost more.", "SPE → Thermal → Deposition の 3 パスを繰り返す回数です。Multigrid 有効時は各レベルで個別に反復します (粗→細の各段で同じ回数)。多いほど浸食が進みますが計算時間も増えます。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyBoolRow("Use Multigrid", "MseUseMultigrid", &mse.useMultigrid, "Multi-scale erosion multigrid toggled", "粗い解像度から目標解像度へ x2 アップサンプルしながら段階的に浸食を適用するピラミッド処理を有効にします。解像度を変えても結果が安定しやすくなります (Schott et al. 論文の本来の構成)。OFF にすると入力解像度で 1 段階のみの単純処理になります。", rock::MultiScaleErosionSettings{}.useMultigrid))
+    if (DrawPropertyBoolRow("Use Multigrid", "MseUseMultigrid", &mse.useMultigrid, "Multi-scale erosion multigrid toggled", Tr("Enables pyramid processing that applies erosion progressively from coarse resolution to target resolution while upsampling by x2. This makes results more stable across resolutions, matching the original Schott et al. setup. OFF uses a single stage at input resolution.", "粗い解像度から目標解像度へ x2 アップサンプルしながら段階的に浸食を適用するピラミッド処理を有効にします。解像度を変えても結果が安定しやすくなります (Schott et al. 論文の本来の構成)。OFF にすると入力解像度で 1 段階のみの単純処理になります。"), rock::MultiScaleErosionSettings{}.useMultigrid))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyBoolRow("Enable Stream Power", "MseEnableSpe", &mse.enableStreamPower, "Multi-scale erosion SPE toggled", "河川浸食 (Stream Power Erosion) パスの ON/OFF。", rock::MultiScaleErosionSettings{}.enableStreamPower))
+    if (DrawPropertyBoolRow("Enable Stream Power", "MseEnableSpe", &mse.enableStreamPower, "Multi-scale erosion SPE toggled", Tr("Toggles the Stream Power Erosion pass.", "河川浸食 (Stream Power Erosion) パスの ON/OFF。"), rock::MultiScaleErosionSettings{}.enableStreamPower))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyBoolRow("Enable Thermal", "MseEnableThermal", &mse.enableThermal, "Multi-scale erosion thermal toggled", "タラス崩壊 (角度しきい値による斜面安定化) パスの ON/OFF。", rock::MultiScaleErosionSettings{}.enableThermal))
+    if (DrawPropertyBoolRow("Enable Thermal", "MseEnableThermal", &mse.enableThermal, "Multi-scale erosion thermal toggled", Tr("Toggles the talus collapse pass, which stabilizes slopes by angle threshold.", "タラス崩壊 (角度しきい値による斜面安定化) パスの ON/OFF。"), rock::MultiScaleErosionSettings{}.enableThermal))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyBoolRow("Enable Deposition", "MseEnableDeposition", &mse.enableDeposition, "Multi-scale erosion deposition toggled", "土砂堆積パスの ON/OFF。流量と搬送能の差から谷底や合流部に土砂を残します。", rock::MultiScaleErosionSettings{}.enableDeposition))
+    if (DrawPropertyBoolRow("Enable Deposition", "MseEnableDeposition", &mse.enableDeposition, "Multi-scale erosion deposition toggled", Tr("Toggles the sediment deposition pass. It leaves sediment in valley floors and confluences based on the difference between flow and transport capacity.", "土砂堆積パスの ON/OFF。流量と搬送能の差から谷底や合流部に土砂を残します。"), rock::MultiScaleErosionSettings{}.enableDeposition))
     {
         EvaluateGraph();
     }
@@ -1540,27 +1540,27 @@ bool DrawMultiScaleErosionProperties(rock::Node& editableNode)
     ImGui::TextDisabled("Stream Power");
     ImGui::TableSetColumnIndex(1);
     ImGui::SeparatorText("Stream Power");
-    if (DrawPropertyFloatRow("SPE Strength", "MseSpeStrength", &mse.speStrength, 0.0f, 0.01f, rock::MultiScaleErosionSettings{}.speStrength, "Multi-scale erosion SPE strength changed", true, "SPE シェーダーの k 係数。1 反復あたりの削り量倍率です。", "%.5f", ImGuiSliderFlags_Logarithmic))
+    if (DrawPropertyFloatRow("SPE Strength", "MseSpeStrength", &mse.speStrength, 0.0f, 0.01f, rock::MultiScaleErosionSettings{}.speStrength, "Multi-scale erosion SPE strength changed", true, Tr("SPE shader k coefficient. Multiplier for erosion amount per iteration.", "SPE シェーダーの k 係数。1 反復あたりの削り量倍率です。"), "%.5f", ImGuiSliderFlags_Logarithmic))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Stream Exponent", "MseStreamExp", &mse.streamExponent, 0.0f, 2.0f, rock::MultiScaleErosionSettings{}.streamExponent, "Multi-scale erosion stream exponent changed", true, "SPE の p_sa。流量に対する非線形性です。大きいほど流量集中部で削れが強くなります。"))
+    if (DrawPropertyFloatRow("Stream Exponent", "MseStreamExp", &mse.streamExponent, 0.0f, 2.0f, rock::MultiScaleErosionSettings{}.streamExponent, "Multi-scale erosion stream exponent changed", true, Tr("SPE p_sa. Nonlinearity for flow amount. Larger values erode more strongly where flow is concentrated.", "SPE の p_sa。流量に対する非線形性です。大きいほど流量集中部で削れが強くなります。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Slope Exponent", "MseSlopeExp", &mse.slopeExponent, 0.0f, 4.0f, rock::MultiScaleErosionSettings{}.slopeExponent, "Multi-scale erosion slope exponent changed", true, "SPE の p_sl。勾配に対する非線形性です。大きいほど急斜面でのみ削ります。"))
+    if (DrawPropertyFloatRow("Slope Exponent", "MseSlopeExp", &mse.slopeExponent, 0.0f, 4.0f, rock::MultiScaleErosionSettings{}.slopeExponent, "Multi-scale erosion slope exponent changed", true, Tr("SPE p_sl. Nonlinearity for slope. Larger values erode only steeper slopes.", "SPE の p_sl。勾配に対する非線形性です。大きいほど急斜面でのみ削ります。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Max Stream Power", "MseMaxSpe", &mse.maxStreamPower, 1.0f, 1000000.0f, rock::MultiScaleErosionSettings{}.maxStreamPower, "Multi-scale erosion max SPE changed", true, "SPE シェーダーの max_spe 上限。極端な削れの暴走を防ぎます。", "%.0f", ImGuiSliderFlags_Logarithmic))
+    if (DrawPropertyFloatRow("Max Stream Power", "MseMaxSpe", &mse.maxStreamPower, 1.0f, 1000000.0f, rock::MultiScaleErosionSettings{}.maxStreamPower, "Multi-scale erosion max SPE changed", true, Tr("SPE shader max_spe limit. Prevents extreme erosion runaway.", "SPE シェーダーの max_spe 上限。極端な削れの暴走を防ぎます。"), "%.0f", ImGuiSliderFlags_Logarithmic))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Flow Exponent", "MseFlowExp", &mse.flowExponent, 0.5f, 4.0f, rock::MultiScaleErosionSettings{}.flowExponent, "Multi-scale erosion flow exponent changed", true, "D8 重み付きフローの集中度 (flow_p)。大きいほど最急方向に流量が集まります。"))
+    if (DrawPropertyFloatRow("Flow Exponent", "MseFlowExp", &mse.flowExponent, 0.5f, 4.0f, rock::MultiScaleErosionSettings{}.flowExponent, "Multi-scale erosion flow exponent changed", true, Tr("Concentration of D8 weighted flow (flow_p). Larger values gather more flow in the steepest direction.", "D8 重み付きフローの集中度 (flow_p)。大きいほど最急方向に流量が集まります。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Time Step", "MseTimeStep", &mse.speTimeStep, 0.0f, 4.0f, rock::MultiScaleErosionSettings{}.speTimeStep, "Multi-scale erosion time step changed", true, "SPE の dt。1 反復あたりの時間刻みです。大きいほど速いが不安定になります。"))
+    if (DrawPropertyFloatRow("Time Step", "MseTimeStep", &mse.speTimeStep, 0.0f, 4.0f, rock::MultiScaleErosionSettings{}.speTimeStep, "Multi-scale erosion time step changed", true, Tr("SPE dt, the time step per iteration. Larger values are faster but less stable.", "SPE の dt。1 反復あたりの時間刻みです。大きいほど速いが不安定になります。")))
     {
         EvaluateGraph();
     }
@@ -1569,27 +1569,27 @@ bool DrawMultiScaleErosionProperties(rock::Node& editableNode)
     ImGui::TextDisabled("Thermal");
     ImGui::TableSetColumnIndex(1);
     ImGui::SeparatorText("Thermal");
-    if (DrawPropertyFloatRow("Threshold Angle (deg)", "MseThermalAngle", &mse.thermalAngleDegrees, 0.0f, 60.0f, rock::MultiScaleErosionSettings{}.thermalAngleDegrees, "Multi-scale erosion thermal angle changed", true, "タラス崩壊の安息角。これを超える勾配は崩落します。"))
+    if (DrawPropertyFloatRow("Threshold Angle (deg)", "MseThermalAngle", &mse.thermalAngleDegrees, 0.0f, 60.0f, rock::MultiScaleErosionSettings{}.thermalAngleDegrees, "Multi-scale erosion thermal angle changed", true, Tr("Angle of repose for talus collapse. Slopes above this angle collapse.", "タラス崩壊の安息角。これを超える勾配は崩落します。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Thermal Strength", "MseThermalStrength", &mse.thermalStrength, 0.0f, 0.01f, rock::MultiScaleErosionSettings{}.thermalStrength, "Multi-scale erosion thermal strength changed", true, "タラスシェーダーの ε。1 反復あたりに移動する土砂量です。", "%.6f", ImGuiSliderFlags_Logarithmic))
+    if (DrawPropertyFloatRow("Thermal Strength", "MseThermalStrength", &mse.thermalStrength, 0.0f, 0.01f, rock::MultiScaleErosionSettings{}.thermalStrength, "Multi-scale erosion thermal strength changed", true, Tr("Talus shader epsilon. Amount of sediment moved per iteration.", "タラスシェーダーの ε。1 反復あたりに移動する土砂量です。"), "%.6f", ImGuiSliderFlags_Logarithmic))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyBoolRow("Noisify Angle", "MseThermalNoisify", &mse.thermalNoisifyAngle, "Multi-scale erosion noisify angle toggled", "安息角を空間ノイズで揺らし、岩質の不均一を表現します。", rock::MultiScaleErosionSettings{}.thermalNoisifyAngle))
+    if (DrawPropertyBoolRow("Noisify Angle", "MseThermalNoisify", &mse.thermalNoisifyAngle, "Multi-scale erosion noisify angle toggled", Tr("Varies the angle of repose with spatial noise to express uneven rock material.", "安息角を空間ノイズで揺らし、岩質の不均一を表現します。"), rock::MultiScaleErosionSettings{}.thermalNoisifyAngle))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Noise Min", "MseThermalNoiseMin", &mse.thermalNoiseMin, 0.0f, 4.0f, rock::MultiScaleErosionSettings{}.thermalNoiseMin, "Multi-scale erosion thermal noise min changed", true, "tan(角度) 倍率の下限。"))
+    if (DrawPropertyFloatRow("Noise Min", "MseThermalNoiseMin", &mse.thermalNoiseMin, 0.0f, 4.0f, rock::MultiScaleErosionSettings{}.thermalNoiseMin, "Multi-scale erosion thermal noise min changed", true, Tr("Lower bound for the tan(angle) multiplier.", "tan(角度) 倍率の下限。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Noise Max", "MseThermalNoiseMax", &mse.thermalNoiseMax, 0.0f, 4.0f, rock::MultiScaleErosionSettings{}.thermalNoiseMax, "Multi-scale erosion thermal noise max changed", true, "tan(角度) 倍率の上限。"))
+    if (DrawPropertyFloatRow("Noise Max", "MseThermalNoiseMax", &mse.thermalNoiseMax, 0.0f, 4.0f, rock::MultiScaleErosionSettings{}.thermalNoiseMax, "Multi-scale erosion thermal noise max changed", true, Tr("Upper bound for the tan(angle) multiplier.", "tan(角度) 倍率の上限。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Noise Wavelength", "MseThermalNoiseWavelength", &mse.thermalNoiseWavelength, 0.0f, 0.05f, rock::MultiScaleErosionSettings{}.thermalNoiseWavelength, "Multi-scale erosion thermal noise wavelength changed", true, "角度ノイズの空間周波数。小さいほど広い範囲で同じ角度になります。", "%.4f"))
+    if (DrawPropertyFloatRow("Noise Wavelength", "MseThermalNoiseWavelength", &mse.thermalNoiseWavelength, 0.0f, 0.05f, rock::MultiScaleErosionSettings{}.thermalNoiseWavelength, "Multi-scale erosion thermal noise wavelength changed", true, Tr("Spatial frequency of angle noise. Smaller values make the same angle cover broader areas.", "角度ノイズの空間周波数。小さいほど広い範囲で同じ角度になります。"), "%.4f"))
     {
         EvaluateGraph();
     }
@@ -1598,11 +1598,11 @@ bool DrawMultiScaleErosionProperties(rock::Node& editableNode)
     ImGui::TextDisabled("Deposition");
     ImGui::TableSetColumnIndex(1);
     ImGui::SeparatorText("Deposition");
-    if (DrawPropertyFloatRow("Deposition Strength", "MseDepositionStrength", &mse.depositionStrength, 0.0f, 8.0f, rock::MultiScaleErosionSettings{}.depositionStrength, "Multi-scale erosion deposition strength changed", true, "搬送能を超えた分の堆積率。大きいほど土砂が早く落ちます。"))
+    if (DrawPropertyFloatRow("Deposition Strength", "MseDepositionStrength", &mse.depositionStrength, 0.0f, 8.0f, rock::MultiScaleErosionSettings{}.depositionStrength, "Multi-scale erosion deposition strength changed", true, Tr("Deposition rate for material exceeding transport capacity. Larger values drop sediment faster.", "搬送能を超えた分の堆積率。大きいほど土砂が早く落ちます。")))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Rain", "MseRain", &mse.rain, 0.0f, 10.0f, rock::MultiScaleErosionSettings{}.rain, "Multi-scale erosion rain changed", true, "セルあたりに降る水量。大きいほど流量が増え、堆積も活発になります。"))
+    if (DrawPropertyFloatRow("Rain", "MseRain", &mse.rain, 0.0f, 10.0f, rock::MultiScaleErosionSettings{}.rain, "Multi-scale erosion rain changed", true, Tr("Water amount falling per cell. Larger values increase flow and make deposition more active.", "セルあたりに降る水量。大きいほど流量が増え、堆積も活発になります。")))
     {
         EvaluateGraph();
     }
@@ -1962,16 +1962,16 @@ bool DrawPathProperties(rock::Node& editableNode)
     bool changed = false;
     if (ImGui::BeginTable("PathPropertyRows", 2, ImGuiTableFlags_SizingStretchProp))
     {
-        changed |= DrawPropertyFloatRow("Default Width (m)", "PathDefaultWidth", &editableNode.path.defaultWidthMeters, 0.01f, 100000.0f, rock::PathSettings{}.defaultWidthMeters, "Path default width changed", false, "新しく作るエッジの幅です。", "%.1f");
-        changed |= DrawPropertyFloatRow("Default Feather (m)", "PathDefaultFeather", &editableNode.path.defaultFeatherMeters, 0.0f, 100000.0f, rock::PathSettings{}.defaultFeatherMeters, "Path default feather changed", false, "新しく作るエッジのフェザー幅です。", "%.1f");
-        if (DrawPropertyFloatRow("Default Height Offset (m)", "PathDefaultHeightOffset", &editableNode.path.defaultHeightOffset, -1000000.0f, 1000000.0f, rock::PathSettings{}.defaultHeightOffset, "Path default height offset changed", false, "Terrain Offset のときに、地形高さから上下へずらす既定値です。", "%.3f"))
+        changed |= DrawPropertyFloatRow("Default Width (m)", "PathDefaultWidth", &editableNode.path.defaultWidthMeters, 0.01f, 100000.0f, rock::PathSettings{}.defaultWidthMeters, "Path default width changed", false, Tr("Width for newly created edges.", "新しく作るエッジの幅です。"), "%.1f");
+        changed |= DrawPropertyFloatRow("Default Feather (m)", "PathDefaultFeather", &editableNode.path.defaultFeatherMeters, 0.0f, 100000.0f, rock::PathSettings{}.defaultFeatherMeters, "Path default feather changed", false, Tr("Feather width for newly created edges.", "新しく作るエッジのフェザー幅です。"), "%.1f");
+        if (DrawPropertyFloatRow("Default Height Offset (m)", "PathDefaultHeightOffset", &editableNode.path.defaultHeightOffset, -1000000.0f, 1000000.0f, rock::PathSettings{}.defaultHeightOffset, "Path default height offset changed", false, Tr("Default offset from terrain height when using Terrain Offset.", "Terrain Offset のときに、地形高さから上下へずらす既定値です。"), "%.3f"))
         {
             ApplyPathDefaultHeightSettings(editableNode.path);
             changed = true;
         }
 
         int defaultHeightMode = PathHeightModeToIndex(editableNode.path.defaultHeightMode);
-        if (DrawPropertyComboRow("Height Mode", "PathDefaultHeightMode", &defaultHeightMode, PathHeightModeItems(), "Path 全体に適用する高さモードです。新規ポイントと既存ポイントへ反映します。", PathHeightModeToIndex(rock::PathSettings{}.defaultHeightMode)))
+        if (DrawPropertyComboRow("Height Mode", "PathDefaultHeightMode", &defaultHeightMode, PathHeightModeItems(), Tr("Height mode applied to the whole Path. It is reflected in new and existing points.", "Path 全体に適用する高さモードです。新規ポイントと既存ポイントへ反映します。"), PathHeightModeToIndex(rock::PathSettings{}.defaultHeightMode)))
         {
             editableNode.path.defaultHeightMode = PathHeightModeFromIndex(defaultHeightMode);
             ApplyPathDefaultHeightSettings(editableNode.path);
@@ -1979,7 +1979,7 @@ bool DrawPathProperties(rock::Node& editableNode)
         }
 
         int defaultSegmentType = PathSegmentTypeToIndex(editableNode.path.defaultSegmentType);
-        if (DrawPropertyComboRow("Segment Type", "PathDefaultSegmentType", &defaultSegmentType, PathSegmentTypeItems(), "新しく作るエッジの形状です。Smooth は打ったポイントを通る Catmull-Rom カーブとして扱います。", PathSegmentTypeToIndex(rock::PathSettings{}.defaultSegmentType)))
+        if (DrawPropertyComboRow("Segment Type", "PathDefaultSegmentType", &defaultSegmentType, PathSegmentTypeItems(), Tr("Shape for newly created edges. Smooth treats the placed points as a Catmull-Rom curve passing through them.", "新しく作るエッジの形状です。Smooth は打ったポイントを通る Catmull-Rom カーブとして扱います。"), PathSegmentTypeToIndex(rock::PathSettings{}.defaultSegmentType)))
         {
             editableNode.path.defaultSegmentType = PathSegmentTypeFromIndex(defaultSegmentType);
             changed = true;
