@@ -261,8 +261,10 @@ std::vector<std::filesystem::path> g_recentProjectPaths;
 std::vector<std::pair<rock::GraphId, ImVec2>> g_pendingNodePositions;
 std::vector<std::pair<rock::GraphId, ImVec2>> g_nodePositionCache;
 std::vector<rock::GraphId> g_pendingSelectedNodeIds;
+std::optional<std::vector<rock::GraphId>> g_pendingPreviewSelectionRestore;
 rock::UiThemeManager g_themeManager;
 rock::GraphId g_selectedNodeId = 0;
+rock::GraphId g_pendingPreviewPinId = 0;
 bool g_focusPickMode = false;
 bool g_focusPickCursorActive = false;
 bool g_sunDirectionDragActive = false;
@@ -9534,6 +9536,14 @@ void DrawRockNode(const rock::Node& node, const ImVec2& editorScreenMin, const I
             const ImVec2 textMin = ImGui::GetItemRectMin();
             drawList->AddText(ImVec2(textMin.x + 0.7f, textMin.y), ColorToU32(outputTextColor), output.label.c_str());
         }
+        if (ImGui::IsItemClicked(ImGuiMouseButton_Left))
+        {
+            if (!g_pendingPreviewSelectionRestore)
+            {
+                g_pendingPreviewSelectionRestore = CurrentSelectedNodeIds();
+            }
+            g_pendingPreviewPinId = output.id;
+        }
         ImGui::SameLine();
         ImGui::SetCursorPosY(outputY);
         ed::BeginPin(ed::PinId(output.id), ed::PinKind::Output);
@@ -9975,12 +9985,32 @@ void DrawNodeGraph()
     ed::Resume();
 
     ed::NodeId selectedNodes[1];
-    if (ed::GetSelectedNodes(selectedNodes, 1) > 0)
+    bool restoredPreviewSelection = false;
+    if (g_pendingPreviewPinId != 0)
+    {
+        const rock::GraphId pinId = g_pendingPreviewPinId;
+        g_pendingPreviewPinId = 0;
+        if (g_graph.SetPreviewPin(pinId))
+        {
+            MarkProjectDirty();
+            if (g_graph.Evaluation().dirty)
+            {
+                EvaluateGraph();
+            }
+        }
+        if (g_pendingPreviewSelectionRestore)
+        {
+            ApplyNodeSelection(*g_pendingPreviewSelectionRestore);
+            g_pendingPreviewSelectionRestore.reset();
+            restoredPreviewSelection = true;
+        }
+    }
+    if (!restoredPreviewSelection && ed::GetSelectedNodes(selectedNodes, 1) > 0)
     {
         const rock::GraphId selectedNodeId = ToGraphId(selectedNodes[0].Get());
         g_selectedNodeId = selectedNodeId;
     }
-    else
+    else if (!restoredPreviewSelection)
     {
         g_selectedNodeId = 0;
     }
