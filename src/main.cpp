@@ -8624,10 +8624,6 @@ void DrawViewportDisplayMenu(const ImVec2& min)
         {
             SaveAppSettingsSilently();
         }
-        if (drawSmallToggle("ViewportCameraOrbitToggle", Tr("Orbit Camera", "カメラを回す"), &g_viewport.autoOrbitEnabled))
-        {
-            SaveAppSettingsSilently();
-        }
         ImGui::Separator();
         ImGui::TextUnformatted(Tr("Display Mode", "表示モード"));
         ImGui::Separator();
