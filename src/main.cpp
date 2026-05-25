@@ -433,6 +433,8 @@ struct ViewportState
     float fovDegrees = kDefaultViewportFovDegrees;
     float orbitDistance = kDefaultViewportOrbitDistance;
     ImVec2 pan = ImVec2(0.0f, 0.0f);
+    bool autoOrbitEnabled = false;
+    float autoOrbitSpeedDegreesPerSecond = 15.0f;
 };
 
 ViewportState g_viewport;
@@ -1435,6 +1437,8 @@ bool SaveAppSettings(std::string* error = nullptr)
             {"fovDegrees", g_viewport.fovDegrees},
             {"orbitDistance", g_viewport.orbitDistance},
             {"pan", {g_viewport.pan.x, g_viewport.pan.y}},
+            {"autoOrbitEnabled", g_viewport.autoOrbitEnabled},
+            {"autoOrbitSpeedDegreesPerSecond", g_viewport.autoOrbitSpeedDegreesPerSecond},
         };
         root["mapViewport"] = {
             {"zoom", g_mapViewport.zoom},
@@ -1693,6 +1697,8 @@ bool LoadAppSettings(std::string* error = nullptr)
         g_viewport.pitch = viewportJson.value("pitch", g_viewport.pitch);
         g_viewport.fovDegrees = viewportJson.value("fovDegrees", g_viewport.fovDegrees);
         g_viewport.orbitDistance = viewportJson.value("orbitDistance", g_viewport.orbitDistance);
+        g_viewport.autoOrbitEnabled = viewportJson.value("autoOrbitEnabled", g_viewport.autoOrbitEnabled);
+        g_viewport.autoOrbitSpeedDegreesPerSecond = std::clamp(viewportJson.value("autoOrbitSpeedDegreesPerSecond", g_viewport.autoOrbitSpeedDegreesPerSecond), -360.0f, 360.0f);
         const std::string savedAppVersion = root.value("appVersion", std::string());
         NormalizeLoadedViewport(savedAppVersion != TERRAIN_EDITOR_VERSION_STRING);
         if (viewportJson.contains("pan") && viewportJson["pan"].is_array() && viewportJson["pan"].size() == 2)
@@ -1983,7 +1989,10 @@ void NewProject()
 
 nlohmann::json MakeViewportJson()
 {
-    return terrain::MakeViewportJson(MakeViewportCameraState());
+    nlohmann::json viewportJson = terrain::MakeViewportJson(MakeViewportCameraState());
+    viewportJson["autoOrbitEnabled"] = g_viewport.autoOrbitEnabled;
+    viewportJson["autoOrbitSpeedDegreesPerSecond"] = g_viewport.autoOrbitSpeedDegreesPerSecond;
+    return viewportJson;
 }
 
 void WriteSelectedNodesJson(nlohmann::json& root)
@@ -2168,6 +2177,9 @@ void ReadViewportJson(const nlohmann::json& root)
     g_viewport.fovDegrees = viewport.fovDegrees;
     g_viewport.orbitDistance = viewport.orbitDistance;
     g_viewport.pan = viewport.pan;
+    const nlohmann::json viewportJson = root.value("viewport", nlohmann::json::object());
+    g_viewport.autoOrbitEnabled = viewportJson.value("autoOrbitEnabled", g_viewport.autoOrbitEnabled);
+    g_viewport.autoOrbitSpeedDegreesPerSecond = std::clamp(viewportJson.value("autoOrbitSpeedDegreesPerSecond", g_viewport.autoOrbitSpeedDegreesPerSecond), -360.0f, 360.0f);
 }
 
 void ReadSerializedLinksJson(const nlohmann::json& root)
@@ -5512,6 +5524,16 @@ void UpdateSunDirectionDrag(const ImVec2& mouseDelta)
     g_sunDirectionGizmoVisibleUntil = ImGui::GetTime() + 0.35;
 }
 
+void UpdateCameraAutoOrbit(float deltaSeconds)
+{
+    if (!g_viewport.autoOrbitEnabled || deltaSeconds <= 0.0f)
+    {
+        return;
+    }
+    const float speedRadiansPerSecond = g_viewport.autoOrbitSpeedDegreesPerSecond * kDegreesToRadians;
+    g_viewport.yaw = std::remainder(g_viewport.yaw + speedRadiansPerSecond * deltaSeconds, 2.0f * 3.1415926535f);
+}
+
 void UpdateViewportInteraction(const ImVec2& min, const ImVec2& max)
 {
     ImGuiIO& io = ImGui::GetIO();
@@ -8602,6 +8624,10 @@ void DrawViewportDisplayMenu(const ImVec2& min)
         {
             SaveAppSettingsSilently();
         }
+        if (drawSmallToggle("ViewportCameraOrbitToggle", Tr("Orbit Camera", "カメラを回す"), &g_viewport.autoOrbitEnabled))
+        {
+            SaveAppSettingsSilently();
+        }
         ImGui::Separator();
         ImGui::TextUnformatted(Tr("Display Mode", "表示モード"));
         ImGui::Separator();
@@ -10102,6 +10128,8 @@ void DrawCameraPanel()
             g_viewport.pitch,
             g_viewport.fovDegrees,
             g_viewport.orbitDistance,
+            g_viewport.autoOrbitEnabled,
+            g_viewport.autoOrbitSpeedDegreesPerSecond,
         },
         preview,
         preview.gridCellCount,
@@ -10117,6 +10145,7 @@ void DrawCameraPanel()
         g_focusPickMode,
         []() { g_focusPickMode = true; },
         [](const char* reason) { MarkGraphChanged(reason); },
+        []() { SaveAppSettingsSilently(); },
     });
 }
 
@@ -11479,6 +11508,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
             g_frameTiming.newFrameMs = std::chrono::duration<double, std::milli>(newFrameEnd - newFrameStart).count();
 
             UpdateCloudLoopPhase(ImGui::GetIO().DeltaTime);
+            UpdateCameraAutoOrbit(ImGui::GetIO().DeltaTime);
             UpdateColorizeScreenPick(g_graph);
             const auto mainThreadWorkStart = std::chrono::steady_clock::now();
             ProcessMainThreadEvaluationWork();

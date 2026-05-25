@@ -12,6 +12,8 @@ struct CameraPanelViewport
     float& pitch;
     float& fovDegrees;
     float& orbitDistance;
+    bool& autoOrbitEnabled;
+    float& autoOrbitSpeedDegreesPerSecond;
 };
 
 struct CameraPanelDefaults
@@ -34,6 +36,7 @@ struct CameraPanelState
     bool focusPickActive = false;
     std::function<void()> requestFocusPick;
     std::function<void(const char*)> markGraphChanged;
+    std::function<void()> saveAppSettings;
 };
 
 void DrawCameraPanel(CameraPanelState state);

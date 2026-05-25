@@ -5,6 +5,7 @@
 
 #include <imgui.h>
 
+#include "Localization.h"
 #include "PropertyWidgets.h"
 
 namespace terrain::ui
@@ -35,7 +36,7 @@ void DrawCameraPanel(CameraPanelState state)
     rock::PreviewSettings& preview = state.preview;
     const CameraPanelDefaults& defaults = state.defaults;
 
-    if (ImGui::Button("Reset View"))
+    if (ImGui::Button(Tr("Reset View", "ビューをリセット")))
     {
         if (state.resetViewport)
         {
@@ -44,7 +45,8 @@ void DrawCameraPanel(CameraPanelState state)
     }
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
     {
-        ImGui::SetTooltip("カメラの向き、距離、パンを既定値に戻します。ショートカット: F");
+        ImGui::SetTooltip("%s", Tr("Reset camera rotation, distance, and pan to their defaults. Shortcut: F",
+            "カメラの向き、距離、パンを既定値に戻します。ショートカット: F"));
     }
 
     ImGui::Spacing();
@@ -54,19 +56,43 @@ void DrawCameraPanel(CameraPanelState state)
         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
 
         DrawCameraFloatRow("FOV", "FovDegrees", &viewport.fovDegrees, 15.0f, 90.0f, defaults.fovDegrees, "%.1f",
-            "垂直画角です。小さいほど望遠、大きいほど広角になります。焦点距離 (mm) と連動します。");
+            Tr("Vertical field of view. Smaller values are telephoto; larger values are wide-angle. Linked with Focal Length (mm).",
+                "垂直画角です。小さいほど望遠、大きいほど広角になります。焦点距離 (mm) と連動します。"));
         float focalLengthMm = CameraFocalLengthMmFromFovYDegrees(viewport.fovDegrees);
-        if (DrawCameraFloatRow("焦点距離 (mm)", "FocalLengthMm", &focalLengthMm, 1.0f, 200.0f, CameraFocalLengthMmFromFovYDegrees(defaults.fovDegrees), "%.1f",
-            "35mm フルサイズ相当のレンズ焦点距離です。画角と DOF のぼけ量の両方に反映されます。"))
+        if (DrawCameraFloatRow(Tr("Focal Length (mm)", "焦点距離 (mm)"), "FocalLengthMm", &focalLengthMm, 1.0f, 200.0f, CameraFocalLengthMmFromFovYDegrees(defaults.fovDegrees), "%.1f",
+            Tr("Lens focal length in 35mm full-frame terms. It affects both the view angle and DOF blur amount.",
+                "35mm フルサイズ相当のレンズ焦点距離です。画角と DOF のぼけ量の両方に反映されます。")))
         {
             viewport.fovDegrees = CameraFovYDegreesFromFocalLengthMm(focalLengthMm);
         }
         DrawCameraFloatRow("Distance", "OrbitDistance", &viewport.orbitDistance, 1.0f, defaults.maxOrbitDistance, defaults.orbitDistance, "%.1f",
-            "注視点からカメラまでの距離です。マウスホイールのオービット距離と同じ値です。");
+            Tr("Distance from the focus point to the camera. This is the same orbit distance controlled by the mouse wheel.",
+                "注視点からカメラまでの距離です。マウスホイールのオービット距離と同じ値です。"));
         DrawCameraFloatRow("Yaw", "ViewportYaw", &viewport.yaw, -3.14159f, 3.14159f, defaults.yaw, "%.3f",
-            "カメラの水平回転です。地形を左右から見る向きを調整します。単位はラジアンです。");
+            Tr("Horizontal camera rotation. Adjusts the direction used to view the terrain from the sides. Unit: radians.",
+                "カメラの水平回転です。地形を左右から見る向きを調整します。単位はラジアンです。"));
         DrawCameraFloatRow("Pitch", "ViewportPitch", &viewport.pitch, -1.25f, 1.25f, defaults.pitch, "%.3f",
-            "カメラの上下角です。高い視点や低い視点から地形を見る角度を調整します。単位はラジアンです。");
+            Tr("Vertical camera angle. Adjusts whether the terrain is viewed from a higher or lower point. Unit: radians.",
+                "カメラの上下角です。高い視点や低い視点から地形を見る角度を調整します。単位はラジアンです。"));
+        if (DrawPropertyBoolRow(Tr("Orbit Camera", "カメラを回す"), "CameraAutoOrbitEnabled", &viewport.autoOrbitEnabled, "Camera auto orbit toggled",
+            Tr("Automatically rotates the camera around the Y axis for demos.",
+                "デモ用に、カメラを Y 軸まわりへ自動回転させます。"), false, true))
+        {
+            if (state.saveAppSettings)
+            {
+                state.saveAppSettings();
+            }
+        }
+        if (DrawCameraFloatRow(Tr("Angular Speed (deg/s)", "角速度 (deg/s)"), "CameraAutoOrbitSpeed", &viewport.autoOrbitSpeedDegreesPerSecond, -180.0f, 180.0f, 15.0f, "%.1f",
+            Tr("Angular speed for automatic camera orbit. Positive values rotate one way; negative values rotate the other way.",
+                "カメラ自動回転の角速度です。正の値で右回り、負の値で逆回りに回転します。")))
+        {
+            viewport.autoOrbitSpeedDegreesPerSecond = std::clamp(viewport.autoOrbitSpeedDegreesPerSecond, -360.0f, 360.0f);
+            if (state.saveAppSettings)
+            {
+                state.saveAppSettings();
+            }
+        }
 
         ImGui::EndTable();
     }
@@ -77,19 +103,22 @@ void DrawCameraPanel(CameraPanelState state)
     {
         ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 112.0f);
         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-        DrawPropertyBoolRow("有効", "DofEnabled", &preview.depthOfFieldEnabled, "Depth of Field toggled",
-            "ビューポート表示だけにかかる被写界深度です。地形データや OBJ エクスポートには影響しません。",
+        DrawPropertyBoolRow(Tr("Enabled", "有効"), "DofEnabled", &preview.depthOfFieldEnabled, "Depth of Field toggled",
+            Tr("Depth of Field applied only to the viewport display. It does not affect terrain data or OBJ export.",
+                "ビューポート表示だけにかかる被写界深度です。地形データや OBJ エクスポートには影響しません。"),
             rock::PreviewSettings{}.depthOfFieldEnabled, true);
         ImGui::BeginDisabled(!preview.depthOfFieldEnabled);
-        DrawPropertyFloatRow("F 値", "DofFStop", &preview.dofFStop, 0.7f, 32.0f, rock::PreviewSettings{}.dofFStop, "Depth of Field f-stop changed", false,
-            "絞り値です。小さいほどぼけが強く、大きいほど深くピントが合います。", "%.1f");
-        DrawPropertyFloatRow("フォーカス距離 (m)", "DofFocusDistance", &preview.dofFocusDistanceMeters, 0.1f, 20000.0f, rock::PreviewSettings{}.dofFocusDistanceMeters, "Depth of Field focus distance changed", false,
-            "カメラからピント面までの距離です。Orbit Distance と近い値にすると注視点付近にピントが合います。", "%.1f", ImGuiSliderFlags_Logarithmic);
+        DrawPropertyFloatRow(Tr("F-Stop", "F 値"), "DofFStop", &preview.dofFStop, 0.7f, 32.0f, rock::PreviewSettings{}.dofFStop, "Depth of Field f-stop changed", false,
+            Tr("Aperture value. Smaller values create stronger blur; larger values keep more depth in focus.",
+                "絞り値です。小さいほどぼけが強く、大きいほど深くピントが合います。"), "%.1f");
+        DrawPropertyFloatRow(Tr("Focus Distance (m)", "フォーカス距離 (m)"), "DofFocusDistance", &preview.dofFocusDistanceMeters, 0.1f, 20000.0f, rock::PreviewSettings{}.dofFocusDistanceMeters, "Depth of Field focus distance changed", false,
+            Tr("Distance from the camera to the focus plane. Values near Orbit Distance focus around the point of interest.",
+                "カメラからピント面までの距離です。Orbit Distance と近い値にすると注視点付近にピントが合います。"), "%.1f", ImGuiSliderFlags_Logarithmic);
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
-        ImGui::TextUnformatted("フォーカス指定");
+        ImGui::TextUnformatted(Tr("Focus Picker", "フォーカス指定"));
         ImGui::TableSetColumnIndex(1);
-        if (ImGui::Button(state.focusPickActive ? "選択中..." : "フォーカスを選択", ImVec2(132.0f, 0.0f)))
+        if (ImGui::Button(state.focusPickActive ? Tr("Picking...", "選択中...") : Tr("Pick Focus", "フォーカスを選択"), ImVec2(132.0f, 0.0f)))
         {
             if (state.requestFocusPick)
             {
@@ -98,22 +127,28 @@ void DrawCameraPanel(CameraPanelState state)
         }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         {
-            ImGui::SetTooltip("ビューポートの地形をクリックしてフォーカス距離を設定します。\nショートカット: Ctrl+クリック");
+            ImGui::SetTooltip("%s", Tr("Click terrain in the viewport to set the focus distance.\nShortcut: Ctrl+Click",
+                "ビューポートの地形をクリックしてフォーカス距離を設定します。\nショートカット: Ctrl+クリック"));
         }
-        DrawPropertyFloatRow("センサー高さ (mm)", "DofSensorHeight", &preview.dofSensorHeightMm, 4.0f, 80.0f, rock::PreviewSettings{}.dofSensorHeightMm, "Depth of Field sensor height changed", false,
-            "Circle of Confusion の描画計算に使うセンサー高さです。フルサイズ横位置なら 24mm が標準です。", "%.1f");
-        DrawPropertyFloatRow("最大ぼけ (px)", "DofMaxBlur", &preview.dofMaxBlurPixels, 0.0f, 64.0f, rock::PreviewSettings{}.dofMaxBlurPixels, "Depth of Field max blur changed", false,
-            "表示上の最大ぼけ半径です。現実値ベースの操作感を保ちながら、重くなりすぎるぼけを抑えます。", "%.1f");
+        DrawPropertyFloatRow(Tr("Sensor Height (mm)", "センサー高さ (mm)"), "DofSensorHeight", &preview.dofSensorHeightMm, 4.0f, 80.0f, rock::PreviewSettings{}.dofSensorHeightMm, "Depth of Field sensor height changed", false,
+            Tr("Sensor height used for Circle of Confusion rendering. 24 mm is standard for full-frame landscape orientation.",
+                "Circle of Confusion の描画計算に使うセンサー高さです。フルサイズ横位置なら 24mm が標準です。"), "%.1f");
+        DrawPropertyFloatRow(Tr("Max Blur (px)", "最大ぼけ (px)"), "DofMaxBlur", &preview.dofMaxBlurPixels, 0.0f, 64.0f, rock::PreviewSettings{}.dofMaxBlurPixels, "Depth of Field max blur changed", false,
+            Tr("Maximum blur radius on screen. Keeps physically based controls usable while preventing overly heavy blur.",
+                "表示上の最大ぼけ半径です。現実値ベースの操作感を保ちながら、重くなりすぎるぼけを抑えます。"), "%.1f");
         DrawPropertyBoolRow("Miniature", "DofMiniatureEnabled", &preview.dofMiniatureEnabled, "Depth of Field miniature toggled",
-            "地形をミニチュア撮影のように見せるため、DOF のぼけ範囲を視覚的に強調します。物理カメラ設定はそのまま残し、表示だけを調整します。",
+            Tr("Visually exaggerates the DOF blur range to make terrain look like miniature photography. Physical camera settings remain unchanged.",
+                "地形をミニチュア撮影のように見せるため、DOF のぼけ範囲を視覚的に強調します。物理カメラ設定はそのまま残し、表示だけを調整します。"),
             rock::PreviewSettings{}.dofMiniatureEnabled, true);
         ImGui::BeginDisabled(!preview.dofMiniatureEnabled);
         DrawPropertyFloatRow("Miniature Scale", "DofMiniatureScale", &preview.dofMiniatureScale, 1.0f, 50.0f, rock::PreviewSettings{}.dofMiniatureScale, "Depth of Field miniature scale changed", false,
-            "DOF のぼけ範囲に掛ける倍率です。大きいほどミニチュア風の浅い焦点幅になります。", "%.1f", ImGuiSliderFlags_Logarithmic);
+            Tr("Multiplier applied to the DOF blur range. Larger values create a shallower miniature-style focus band.",
+                "DOF のぼけ範囲に掛ける倍率です。大きいほどミニチュア風の浅い焦点幅になります。"), "%.1f", ImGuiSliderFlags_Logarithmic);
         ImGui::EndDisabled();
         int apertureShape = std::clamp(preview.dofApertureShape, 0, 4);
-        if (DrawPropertyComboRow("絞り形状", "DofApertureShape", &apertureShape, "丸\0三角形\0六角形\0八角形\0カスタム\0\0",
-            "ぼけのサンプル形状です。多角形にすると絞り羽根由来の角の立ったボケになります。", rock::PreviewSettings{}.dofApertureShape))
+        if (DrawPropertyComboRow(Tr("Aperture Shape", "絞り形状"), "DofApertureShape", &apertureShape, Tr("Circle\0Triangle\0Hexagon\0Octagon\0Custom\0\0", "丸\0三角形\0六角形\0八角形\0カスタム\0\0"),
+            Tr("Sample shape for blur. Polygon shapes create angular bokeh based on aperture blades.",
+                "ぼけのサンプル形状です。多角形にすると絞り羽根由来の角の立ったボケになります。"), rock::PreviewSettings{}.dofApertureShape))
         {
             preview.dofApertureShape = std::clamp(apertureShape, 0, 4);
             if (state.markGraphChanged)
@@ -122,13 +157,16 @@ void DrawCameraPanel(CameraPanelState state)
             }
         }
         ImGui::BeginDisabled(preview.dofApertureShape != 4);
-        DrawPropertyIntRow("絞り羽根", "DofApertureBlades", &preview.dofApertureBlades, 3, 12, rock::PreviewSettings{}.dofApertureBlades, "Depth of Field aperture blades changed", false,
-            "カスタム多角形ボケの羽根数です。");
+        DrawPropertyIntRow(Tr("Aperture Blades", "絞り羽根"), "DofApertureBlades", &preview.dofApertureBlades, 3, 12, rock::PreviewSettings{}.dofApertureBlades, "Depth of Field aperture blades changed", false,
+            Tr("Number of blades for custom polygon bokeh.",
+                "カスタム多角形ボケの羽根数です。"));
         ImGui::EndDisabled();
-        DrawPropertyFloatRow("絞り回転 (deg)", "DofApertureRotation", &preview.dofApertureRotationDegrees, -180.0f, 180.0f, rock::PreviewSettings{}.dofApertureRotationDegrees, "Depth of Field aperture rotation changed", false,
-            "多角形ボケの角度です。丸ボケでは見た目にほぼ影響しません。", "%.1f");
-        DrawPropertyFloatRow("ハイライト強調", "DofHighlightBoost", &preview.dofHighlightBoost, 0.0f, 4.0f, rock::PreviewSettings{}.dofHighlightBoost, "Depth of Field highlight boost changed", false,
-            "明るいサンプルを少し強め、点光源や明るい輪郭のボケを目立たせます。", "%.2f");
+        DrawPropertyFloatRow(Tr("Aperture Rotation (deg)", "絞り回転 (deg)"), "DofApertureRotation", &preview.dofApertureRotationDegrees, -180.0f, 180.0f, rock::PreviewSettings{}.dofApertureRotationDegrees, "Depth of Field aperture rotation changed", false,
+            Tr("Angle of polygon bokeh. It has almost no visible effect for circular bokeh.",
+                "多角形ボケの角度です。丸ボケでは見た目にほぼ影響しません。"), "%.1f");
+        DrawPropertyFloatRow(Tr("Highlight Boost", "ハイライト強調"), "DofHighlightBoost", &preview.dofHighlightBoost, 0.0f, 4.0f, rock::PreviewSettings{}.dofHighlightBoost, "Depth of Field highlight boost changed", false,
+            Tr("Slightly boosts bright samples so point lights and bright edges stand out in the blur.",
+                "明るいサンプルを少し強め、点光源や明るい輪郭のボケを目立たせます。"), "%.2f");
         ImGui::EndDisabled();
         ImGui::EndTable();
     }
