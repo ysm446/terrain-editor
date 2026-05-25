@@ -8344,7 +8344,7 @@ void DrawViewportDisplayMenu(const ImVec2& min)
             ImGui::PushID(id);
             const float rowHeight = std::max(ImGui::GetTextLineHeight() + 4.0f, 20.0f);
             const float rowWidth = ImGui::GetContentRegionAvail().x;
-            const bool pressed = ImGui::Selectable("##toggle_row", false, 0, ImVec2(rowWidth, rowHeight));
+            const bool pressed = ImGui::Selectable("##toggle_row", false, ImGuiSelectableFlags_NoAutoClosePopups, ImVec2(rowWidth, rowHeight));
             if (pressed)
             {
                 *value = !*value;
@@ -8386,7 +8386,7 @@ void DrawViewportDisplayMenu(const ImVec2& min)
         ImGui::Separator();
         const auto drawModeItem = [&](const char* label, ViewportDisplayMode mode) {
             const bool selected = displayMode == mode;
-            if (ImGui::Selectable(label, selected))
+            if (ImGui::Selectable(label, selected, ImGuiSelectableFlags_NoAutoClosePopups))
             {
                 displayMode = mode;
                 ApplyViewportDisplayMode(settings, mode);
@@ -8960,7 +8960,7 @@ ImVec4 NodeAccentColor(rock::NodeKind kind)
     case rock::NodeCategory::Color:
         return ImVec4(0.44f, 0.50f, 0.96f, 1.0f); // 青紫 (カラー系)
     case rock::NodeCategory::Path:
-        return ImVec4(0.34f, 0.68f, 1.00f, 1.0f);
+        return ImVec4(0.42f, 0.78f, 0.92f, 1.0f);
     default:
         return ImVec4(0.75f, 0.75f, 0.75f, 1.0f);
     }

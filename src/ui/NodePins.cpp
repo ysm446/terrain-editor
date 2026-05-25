@@ -28,7 +28,7 @@ ImVec4 PinTypeColor(rock::ValueType valueType)
     case rock::ValueType::ColorTexture:
         return ImVec4(0.54f, 0.60f, 1.0f, 1.0f);
     case rock::ValueType::Path:
-        return ImVec4(0.34f, 0.68f, 1.00f, 1.0f);
+        return ImVec4(0.42f, 0.78f, 0.92f, 1.0f);
     case rock::ValueType::Mesh:
     default:
         return ImVec4(0.52f, 0.58f, 0.56f, 1.0f);
