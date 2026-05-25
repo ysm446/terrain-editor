@@ -10,7 +10,7 @@ namespace terrain
 namespace
 {
 
-constexpr std::array<int, 5> kResolutionPresets = {128, 256, 512, 1024, 2048};
+constexpr std::array<int, 6> kResolutionPresets = {128, 256, 512, 1024, 2048, 4096};
 constexpr std::array<int, 4> kTerrainSizePresets = {512, 1024, 2048, 4096};
 constexpr std::array<int, 4> kShadowResolutionPresets = {512, 1024, 2048, 4096};
 

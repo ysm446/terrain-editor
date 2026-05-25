@@ -15,7 +15,7 @@ namespace terrain::ui
 namespace
 {
 constexpr std::array<int, 4> kTerrainSizePresets = {512, 1024, 2048, 4096};
-constexpr std::array<int, 5> kResolutionPresets = {128, 256, 512, 1024, 2048};
+constexpr std::array<int, 6> kResolutionPresets = {128, 256, 512, 1024, 2048, 4096};
 constexpr std::array<int, 3> kFrameRateLimitPresets = {0, 60, 30};
 
 enum class ViewportDisplayMode

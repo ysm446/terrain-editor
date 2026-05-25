@@ -142,7 +142,7 @@ constexpr float kDefaultViewportOrbitDistance = 2044.0f;
 constexpr float kMaxViewportOrbitDistance = 100000.0f;
 constexpr float kViewportFarPlane = 200000.0f;
 constexpr std::array<int, 4> kTerrainSizePresets = {512, 1024, 2048, 4096};
-constexpr std::array<int, 5> kResolutionPresets = {128, 256, 512, 1024, 2048};
+constexpr std::array<int, 6> kResolutionPresets = {128, 256, 512, 1024, 2048, 4096};
 constexpr std::array<int, 4> kShadowResolutionPresets = {512, 1024, 2048, 4096};
 
 template <size_t N>
@@ -5568,6 +5568,18 @@ void UpdateViewportInteraction(const ImVec2& min, const ImVec2& max)
     }
 
     const bool sunDirectionDragShortcut = ImGui::IsKeyDown(ImGuiKey_L) && !io.KeyCtrl && !io.KeyShift && !io.KeyAlt;
+    if (sunDirectionDragShortcut && ImGui::IsMouseDown(ImGuiMouseButton_Left))
+    {
+        if (ImGui::IsMouseDragging(ImGuiMouseButton_Left))
+        {
+            if (!g_sunDirectionDragActive)
+            {
+                BeginSunDirectionDrag();
+            }
+            UpdateSunDirectionDrag(io.MouseDelta);
+        }
+        return;
+    }
     if ((g_sunDirectionDragActive || sunDirectionDragShortcut) && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
     {
         if (!g_sunDirectionDragActive)
