@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <string>
 
 #include <imgui.h>
 
@@ -15,6 +16,17 @@ namespace
 {
 constexpr std::array<int, 4> kShadowResolutionPresets = {512, 1024, 2048, 4096};
 constexpr float kDegreesToRadians = 3.1415926535f / 180.0f;
+
+std::string StableImGuiLabel(const char* label, const char* stableId)
+{
+    std::string stableLabel = label != nullptr ? label : "";
+    if (stableId != nullptr && stableId[0] != '\0')
+    {
+        stableLabel += "###";
+        stableLabel += stableId;
+    }
+    return stableLabel;
+}
 
 void SaveAppSettings(const SkyPanelState& state)
 {
@@ -135,7 +147,8 @@ void DrawSkySettingsPanel(SkyPanelState state)
     const float sectionWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x - headerRightPadding);
     ImGui::BeginChild("SkySettingsSection", ImVec2(sectionWidth, 0.0f), false);
 
-    if (ImGui::CollapsingHeader(Tr("Sun and Shadows", "太陽と影"), ImGuiTreeNodeFlags_DefaultOpen))
+    const std::string sunHeaderLabel = StableImGuiLabel(Tr("Sun and Shadows", "太陽と影"), "SkySunAndShadowsHeader");
+    if (ImGui::CollapsingHeader(sunHeaderLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
     {
         if (ImGui::BeginTable("SunShadowSettingsRows", 2, ImGuiTableFlags_SizingStretchProp))
         {
@@ -278,7 +291,8 @@ void DrawSkySettingsPanel(SkyPanelState state)
         }
     }
 
-    if (!ImGui::CollapsingHeader(Tr("Sky", "天球"), ImGuiTreeNodeFlags_DefaultOpen))
+    const std::string skyHeaderLabel = StableImGuiLabel(Tr("Sky", "天球"), "SkyAtmosphereHeader");
+    if (!ImGui::CollapsingHeader(skyHeaderLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
     {
         ImGui::EndChild();
         return;

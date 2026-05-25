@@ -249,7 +249,7 @@ bool g_nodeGraphNavigatedToContent = false;
 bool g_layoutSplitterActive = false;
 ImGuiID g_activeLayoutSplitterId = 0;
 rock::NodeGraph g_graph = rock::NodeGraph::CreateDefaultTerrainGraph();
-std::string g_exportStatus = "No export yet";
+std::string g_exportStatus;
 std::string g_projectStatus = "No project file";
 std::string g_lastEvaluationDuration = "Eval --";
 bool g_projectSettingsHadSimulationResolution = false;
@@ -1987,7 +1987,7 @@ void NewProject()
     SetProjectDirty(false);
     UpdateWindowTitle();
     g_projectStatus = "New project";
-    g_exportStatus = "No export yet";
+    g_exportStatus.clear();
     ResetViewport();
     ResetNodeEditorViewToDefault();
     EvaluateGraph();
@@ -10277,9 +10277,21 @@ void PopTabHeaderStyle()
     ImGui::PopStyleVar(2);
 }
 
-bool BeginStyledTabItem(const char* label)
+std::string StableImGuiLabel(const char* label, const char* stableId)
 {
-    const bool open = ImGui::BeginTabItem(label);
+    std::string stableLabel = label != nullptr ? label : "";
+    if (stableId != nullptr && stableId[0] != '\0')
+    {
+        stableLabel += "###";
+        stableLabel += stableId;
+    }
+    return stableLabel;
+}
+
+bool BeginStyledTabItem(const char* label, const char* stableId = nullptr)
+{
+    const std::string stableLabel = StableImGuiLabel(label, stableId);
+    const bool open = ImGui::BeginTabItem(stableLabel.c_str());
     if (open)
     {
         PopTabHeaderStyle();
@@ -10406,7 +10418,7 @@ void DrawViewportTabs(float previewWidth, float workHeight, float timeSeconds, I
     PushTabHeaderStyle(defaultTabStyle);
     if (ImGui::BeginTabBar("ViewportTabs"))
     {
-        if (BeginStyledTabItem(Tr("3D View", "3Dビュー")))
+        if (BeginStyledTabItem(Tr("3D View", "3Dビュー"), "Main3DView"))
         {
             const ImVec2 min = ImGui::GetCursorScreenPos();
             const ImVec2 max(min.x + ImGui::GetContentRegionAvail().x, min.y + ImGui::GetContentRegionAvail().y);
@@ -10414,7 +10426,7 @@ void DrawViewportTabs(float previewWidth, float workHeight, float timeSeconds, I
             ImGui::Dummy(ImGui::GetContentRegionAvail());
             EndStyledTabItem(defaultTabStyle);
         }
-        if (BeginStyledTabItem(Tr("2D View", "2Dビュー")))
+        if (BeginStyledTabItem(Tr("2D View", "2Dビュー"), "Main2DView"))
         {
             const ImVec2 min = ImGui::GetCursorScreenPos();
             const ImVec2 max(min.x + ImGui::GetContentRegionAvail().x, min.y + ImGui::GetContentRegionAvail().y);
@@ -10439,7 +10451,7 @@ void DrawNodeNetworkTabs(float nodePaneHeight, ImGuiWindowFlags childFlags)
     PushTabHeaderStyle(defaultTabStyle);
     if (ImGui::BeginTabBar("NodeNetworkTabs"))
     {
-        if (BeginStyledTabItem(Tr("Node Network", "ノードネットワーク")))
+        if (BeginStyledTabItem(Tr("Node Network", "ノードネットワーク"), "MainNodeNetwork"))
         {
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 6.0f));
             DrawNodeGraph();
@@ -10567,7 +10579,8 @@ void DrawDebugLogWindow(float width, float height, ImGuiWindowFlags childFlags)
         {
             ImGui::SetTooltip("%s", Tr("Close debug area", "デバッグ領域を閉じる"));
         }
-        if (ImGui::BeginTabItem(Tr("Log", "ログ")))
+        const std::string logTabLabel = StableImGuiLabel(Tr("Log", "ログ"), "DebugLog");
+        if (ImGui::BeginTabItem(logTabLabel.c_str()))
         {
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 8.0f));
             ImGui::BeginChild("DebugLogContent", ImVec2(0.0f, 0.0f), false);
@@ -10617,7 +10630,8 @@ void DrawDebugLogWindow(float width, float height, ImGuiWindowFlags childFlags)
             ImGui::PopStyleVar();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem(Tr("Diagnostics", "診断")))
+        const std::string diagnosticsTabLabel = StableImGuiLabel(Tr("Diagnostics", "診断"), "DebugDiagnostics");
+        if (ImGui::BeginTabItem(diagnosticsTabLabel.c_str()))
         {
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 8.0f));
             ImGui::BeginChild("DebugPanelContent", ImVec2(0.0f, 0.0f), false);
@@ -11010,14 +11024,14 @@ void DrawUi()
     PushTabHeaderStyle(defaultTabStyle);
     if (ImGui::BeginTabBar("InspectorTabs"))
     {
-        if (BeginStyledTabItem(Tr("Properties", "プロパティ")))
+        if (BeginStyledTabItem(Tr("Properties", "プロパティ"), "InspectorProperties"))
         {
             BeginInspectorTabContent();
             DrawPropertiesPanel();
             EndInspectorTabContent();
             EndStyledTabItem(defaultTabStyle);
         }
-        if (BeginStyledTabItem(Tr("Settings", "設定")))
+        if (BeginStyledTabItem(Tr("Settings", "設定"), "InspectorSettings"))
         {
             BeginInspectorTabContent();
             DrawLanguageSettings();
@@ -11025,35 +11039,35 @@ void DrawUi()
             EndInspectorTabContent();
             EndStyledTabItem(defaultTabStyle);
         }
-        if (BeginStyledTabItem(Tr("Sky", "天球")))
+        if (BeginStyledTabItem(Tr("Sky", "天球"), "InspectorSky"))
         {
             BeginInspectorTabContent();
             DrawSkySettingsPanel();
             EndInspectorTabContent();
             EndStyledTabItem(defaultTabStyle);
         }
-        if (BeginStyledTabItem(Tr("Clouds", "雲")))
+        if (BeginStyledTabItem(Tr("Clouds", "雲"), "InspectorClouds"))
         {
             BeginInspectorTabContent();
             DrawCloudSettingsPanel();
             EndInspectorTabContent();
             EndStyledTabItem(defaultTabStyle);
         }
-        if (BeginStyledTabItem(Tr("Water", "水面")))
+        if (BeginStyledTabItem(Tr("Water", "水面"), "InspectorWater"))
         {
             BeginInspectorTabContent();
             DrawWaterSettingsPanel();
             EndInspectorTabContent();
             EndStyledTabItem(defaultTabStyle);
         }
-        if (BeginStyledTabItem(Tr("Camera", "カメラ")))
+        if (BeginStyledTabItem(Tr("Camera", "カメラ"), "InspectorCamera"))
         {
             BeginInspectorTabContent();
             DrawCameraPanel();
             EndInspectorTabContent();
             EndStyledTabItem(defaultTabStyle);
         }
-        if (BeginStyledTabItem(Tr("Export", "エクスポート")))
+        if (BeginStyledTabItem(Tr("Export", "エクスポート"), "InspectorExport"))
         {
             BeginInspectorTabContent();
             DrawAssetExportPanel();
@@ -11081,12 +11095,16 @@ void DrawUi()
     const ImVec4 stateColor = g_evaluationInFlight
         ? ImVec4(0.90f, 0.72f, 0.34f, 1.0f)
         : (evaluation.dirty ? ImVec4(0.90f, 0.64f, 0.30f, 1.0f) : ImVec4(0.54f, 0.78f, 0.58f, 1.0f));
-    const std::string statusDetail = std::format(
-        " | {} | {} | {} | {}",
+    std::string statusDetail = std::format(
+        " | {} | {} | {}",
         rock::ToString(evaluation.previewStage).data(),
         g_lastEvaluationDuration,
-        g_projectStatus,
-        g_exportStatus);
+        g_projectStatus);
+    if (!g_exportStatus.empty())
+    {
+        statusDetail += " | ";
+        statusDetail += g_exportStatus;
+    }
     const float textY = statusMin.y + 2.0f;
     const float textX = statusMin.x + 8.0f;
     ImDrawList* statusDrawList = ImGui::GetWindowDrawList();

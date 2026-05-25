@@ -4,6 +4,7 @@
 #include <array>
 #include <cfloat>
 #include <cmath>
+#include <string>
 
 #include <imgui.h>
 
@@ -17,6 +18,17 @@ namespace
 constexpr std::array<int, 4> kTerrainSizePresets = {512, 1024, 2048, 4096};
 constexpr std::array<int, 6> kResolutionPresets = {128, 256, 512, 1024, 2048, 4096};
 constexpr std::array<int, 3> kFrameRateLimitPresets = {0, 60, 30};
+
+std::string StableImGuiLabel(const char* label, const char* stableId)
+{
+    std::string stableLabel = label != nullptr ? label : "";
+    if (stableId != nullptr && stableId[0] != '\0')
+    {
+        stableLabel += "###";
+        stableLabel += stableId;
+    }
+    return stableLabel;
+}
 
 enum class ViewportDisplayMode
 {
@@ -207,7 +219,8 @@ void DrawDisplaySettingsPanel(DisplayPanelState state)
     const float headerRightPadding = 10.0f;
     const float sectionWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x - headerRightPadding);
     ImGui::BeginChild("PreviewDisplaySection", ImVec2(sectionWidth, 0.0f), false);
-    if (!ImGui::CollapsingHeader(Tr("Settings", "設定"), ImGuiTreeNodeFlags_DefaultOpen))
+    const std::string settingsHeaderLabel = StableImGuiLabel(Tr("Settings", "設定"), "DisplaySettingsHeader");
+    if (!ImGui::CollapsingHeader(settingsHeaderLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
     {
         ImGui::EndChild();
         return;

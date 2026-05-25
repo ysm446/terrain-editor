@@ -159,12 +159,15 @@ void DrawAssetExportPanel(AssetExportPanelState state)
             }
         }
 
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Status");
-        ImGui::TableSetColumnIndex(1);
-        ImGui::TextWrapped("%s", state.exportStatus.c_str());
+        if (!state.exportStatus.empty())
+        {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted("Status");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::TextWrapped("%s", state.exportStatus.c_str());
+        }
 
         ImGui::EndTable();
     }
