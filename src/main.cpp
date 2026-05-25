@@ -266,6 +266,7 @@ rock::GraphId g_selectedNodeId = 0;
 rock::GraphId g_pendingPreviewPinId = 0;
 bool g_focusPickMode = false;
 bool g_focusPickCursorActive = false;
+bool g_sunDirectionDragActive = false;
 
 struct AsyncEvaluationResult
 {
@@ -5471,11 +5472,38 @@ bool UpdatePathViewportInteraction(const ImVec2& min, const ImVec2& max)
     return false;
 }
 
+void BeginSunDirectionDrag()
+{
+    rock::PreviewSettings& preview = g_graph.Settings().preview;
+    if (preview.sunDirectionMode == rock::SunDirectionMode::DateTime)
+    {
+        const SunPositionDegrees currentSun = EffectiveSunPosition(preview);
+        preview.sunAzimuthDegrees = currentSun.azimuth;
+        preview.sunElevationDegrees = std::clamp(currentSun.elevation, -10.0f, 89.0f);
+        preview.sunDirectionMode = rock::SunDirectionMode::Manual;
+    }
+    g_sunDirectionDragActive = true;
+}
+
+void UpdateSunDirectionDrag(const ImVec2& mouseDelta)
+{
+    rock::PreviewSettings& preview = g_graph.Settings().preview;
+    constexpr float kDegreesPerPixel = 0.25f;
+    preview.sunAzimuthDegrees = NormalizeDegrees(preview.sunAzimuthDegrees + mouseDelta.x * kDegreesPerPixel);
+    preview.sunElevationDegrees = std::clamp(preview.sunElevationDegrees - mouseDelta.y * kDegreesPerPixel, -10.0f, 89.0f);
+}
+
 void UpdateViewportInteraction(const ImVec2& min, const ImVec2& max)
 {
     ImGuiIO& io = ImGui::GetIO();
     const bool hovered = ImGui::IsMouseHoveringRect(min, max);
     const bool viewportInputAvailable = hovered && !io.WantTextInput;
+    if (g_sunDirectionDragActive && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
+    {
+        g_sunDirectionDragActive = false;
+        SaveAppSettingsSilently();
+    }
+
     const bool pathEditMode = SelectedPathNode() != nullptr;
     const bool focusPickAvailable = g_graph.Settings().preview.depthOfFieldEnabled && !pathEditMode;
     if (!focusPickAvailable)
@@ -5524,6 +5552,17 @@ void UpdateViewportInteraction(const ImVec2& min, const ImVec2& max)
         return;
     }
 
+    const bool sunDirectionDragShortcut = io.KeyShift && io.KeyAlt && !io.KeyCtrl;
+    if ((g_sunDirectionDragActive || sunDirectionDragShortcut) && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
+    {
+        if (!g_sunDirectionDragActive)
+        {
+            BeginSunDirectionDrag();
+        }
+        UpdateSunDirectionDrag(io.MouseDelta);
+        return;
+    }
+
     const bool altNavigation = io.KeyAlt;
     if (altNavigation && io.MouseWheel != 0.0f)
     {
@@ -5531,7 +5570,7 @@ void UpdateViewportInteraction(const ImVec2& min, const ImVec2& max)
         g_viewport.orbitDistance = std::clamp(g_viewport.orbitDistance * zoomFactor, 1.0f, kMaxViewportOrbitDistance);
     }
 
-    if (altNavigation && ImGui::IsMouseDragging(ImGuiMouseButton_Left) && !io.KeyCtrl)
+    if (altNavigation && ImGui::IsMouseDragging(ImGuiMouseButton_Left) && !io.KeyCtrl && !io.KeyShift)
     {
         g_viewport.yaw -= io.MouseDelta.x * 0.01f;
         g_viewport.pitch += io.MouseDelta.y * 0.01f;
