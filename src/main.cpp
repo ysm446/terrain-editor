@@ -251,6 +251,7 @@ ImGuiID g_activeLayoutSplitterId = 0;
 rock::NodeGraph g_graph = rock::NodeGraph::CreateDefaultTerrainGraph();
 std::string g_exportStatus;
 std::string g_projectStatus = "No project file";
+std::chrono::steady_clock::time_point g_projectStatusExpiresAt{};
 std::string g_lastEvaluationDuration = "Eval --";
 bool g_projectSettingsHadSimulationResolution = false;
 std::filesystem::path g_projectPath;
@@ -270,6 +271,26 @@ bool g_focusPickCursorActive = false;
 bool g_sunDirectionDragActive = false;
 double g_sunDirectionGizmoVisibleUntil = 0.0;
 
+void SetProjectStatus(std::string status)
+{
+    g_projectStatus = std::move(status);
+    g_projectStatusExpiresAt = {};
+}
+
+void SetTransientProjectStatus(std::string status, std::chrono::seconds duration = std::chrono::seconds(4))
+{
+    g_projectStatus = std::move(status);
+    g_projectStatusExpiresAt = std::chrono::steady_clock::now() + duration;
+}
+
+void RefreshProjectStatus()
+{
+    if (g_projectStatusExpiresAt != std::chrono::steady_clock::time_point{} &&
+        std::chrono::steady_clock::now() >= g_projectStatusExpiresAt)
+    {
+        SetProjectStatus("Ready");
+    }
+}
 
 struct AsyncEvaluationResult
 {
@@ -1475,7 +1496,7 @@ void SaveAppSettingsSilently()
     std::string error;
     if (!SaveAppSettings(&error))
     {
-        g_projectStatus = "App settings save failed: " + error;
+        SetProjectStatus("App settings save failed: " + error);
     }
 }
 
@@ -1719,7 +1740,7 @@ bool LoadAppSettings(std::string* error = nullptr)
             g_mapViewport.pan = ImVec2(mapViewportJson["pan"][0].get<float>(), mapViewportJson["pan"][1].get<float>());
         }
 
-        g_projectStatus = "Loaded app settings " + PathToUtf8(path);
+        SetTransientProjectStatus("Loaded app settings " + PathToUtf8(path));
         return true;
     }
     catch (const std::exception& ex)
@@ -1960,7 +1981,7 @@ void UndoGraphEdit()
     g_undoStack.pop_back();
     g_redoStack.push_back(CaptureGraphEditSnapshot());
     ApplyGraphEditSnapshot(undoSnapshot);
-    g_projectStatus = "Undo";
+    SetProjectStatus("Undo");
     MarkProjectDirty();
 }
 
@@ -1975,7 +1996,7 @@ void RedoGraphEdit()
     g_redoStack.pop_back();
     g_undoStack.push_back(CaptureGraphEditSnapshot());
     ApplyGraphEditSnapshot(redoSnapshot);
-    g_projectStatus = "Redo";
+    SetProjectStatus("Redo");
     MarkProjectDirty();
 }
 
@@ -1986,7 +2007,7 @@ void NewProject()
     g_projectPath.clear();
     SetProjectDirty(false);
     UpdateWindowTitle();
-    g_projectStatus = "New project";
+    SetProjectStatus("New project");
     g_exportStatus.clear();
     ResetViewport();
     ResetNodeEditorViewToDefault();
@@ -2082,7 +2103,7 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
         UpdateWindowTitle();
         AddRecentProjectPath(path);
         SaveAppSettingsSilently();
-        g_projectStatus = "Saved " + PathToUtf8(path);
+        SetProjectStatus("Saved " + PathToUtf8(path));
         return true;
     }
     catch (const std::exception& ex)
@@ -2105,7 +2126,7 @@ bool SaveCurrentProject()
     std::string error;
     if (!SaveProjectToFile(*path, &error))
     {
-        g_projectStatus = "Save failed: " + error;
+        SetProjectStatus("Save failed: " + error);
         return false;
     }
 
@@ -2295,7 +2316,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
         AddRecentProjectPath(path);
         SaveAppSettingsSilently();
         ClearUndoHistory();
-        g_projectStatus = "Loaded " + PathToUtf8(path);
+        SetTransientProjectStatus("Loaded " + PathToUtf8(path));
         EvaluateGraph();
         return true;
     }
@@ -4806,7 +4827,7 @@ bool FinishPathSegmentFromShortcut()
         return false;
     }
     ResetPathActiveTail();
-    g_projectStatus = "Path segment finished";
+    SetProjectStatus("Path segment finished");
     return true;
 }
 
@@ -5014,7 +5035,7 @@ void AddPathPointFromViewport(float x, float z, float height)
     g_pathEditNodeId = node->id;
     MarkGraphChanged("Path point added");
     EvaluateGraph();
-    g_projectStatus = "Path point added";
+    SetProjectStatus("Path point added");
 }
 
 void SelectPathPoint(rock::GraphId pointId)
@@ -5023,7 +5044,7 @@ void SelectPathPoint(rock::GraphId pointId)
     g_pathSelectedElementId = pointId;
     g_pathActiveTailPointId = pointId;
     g_pathEditNodeId = g_selectedNodeId;
-    g_projectStatus = "Path point selected";
+    SetProjectStatus("Path point selected");
 }
 
 void SelectPathEdge(rock::GraphId edgeId)
@@ -5032,7 +5053,7 @@ void SelectPathEdge(rock::GraphId edgeId)
     g_pathSelectedElementId = edgeId;
     g_pathActiveTailPointId = 0;
     g_pathEditNodeId = g_selectedNodeId;
-    g_projectStatus = "Path edge selected";
+    SetProjectStatus("Path edge selected");
 }
 
 void DeleteSelectedPathElement()
@@ -5066,7 +5087,7 @@ void DeleteSelectedPathElement()
         ClearPathSelection();
         MarkGraphChanged("Path point deleted");
         EvaluateGraph();
-        g_projectStatus = "Path point deleted";
+        SetProjectStatus("Path point deleted");
         return;
     }
 
@@ -5086,7 +5107,7 @@ void DeleteSelectedPathElement()
         ClearPathSelection();
         MarkGraphChanged("Path edge deleted");
         EvaluateGraph();
-        g_projectStatus = "Path edge deleted";
+        SetProjectStatus("Path edge deleted");
     }
 }
 
@@ -5095,7 +5116,7 @@ void EnablePathMoveGizmo()
     if (g_pathSelectionKind == PathSelectionKind::Point && g_pathSelectedElementId != 0)
     {
         g_pathMoveGizmoVisible = true;
-        g_projectStatus = "Path move gizmo";
+        SetProjectStatus("Path move gizmo");
     }
 }
 
@@ -5165,7 +5186,7 @@ bool UpdatePathMoveGizmoDrag(const ImVec2& min, const ImVec2& max)
         g_pathMoveGizmoDragPointId = 0;
         MarkGraphChanged("Path point moved");
         EvaluateGraph();
-        g_projectStatus = "Path point moved";
+        SetProjectStatus("Path point moved");
         return true;
     }
 
@@ -5280,7 +5301,7 @@ void InsertPathPointOnEdge(rock::Node& node, rock::GraphId edgeId, float t)
     SelectPathPoint(point.id);
     MarkGraphChanged("Path edge split");
     EvaluateGraph();
-    g_projectStatus = "Path point inserted";
+    SetProjectStatus("Path point inserted");
 }
 
 PathHitResult HitTestPathViewport(const rock::Node& node, const ImVec2& min, const ImVec2& max, const ImVec2& mouse)
@@ -9669,7 +9690,7 @@ void CopySelectedNodesToClipboard()
             g_nodeClipboard.links.push_back(link);
         }
     }
-    g_projectStatus = std::format("Copied {} node{}", g_nodeClipboard.nodes.size(), g_nodeClipboard.nodes.size() == 1 ? "" : "s");
+    SetProjectStatus(std::format("Copied {} node{}", g_nodeClipboard.nodes.size(), g_nodeClipboard.nodes.size() == 1 ? "" : "s"));
 }
 
 void PasteNodesFromClipboard(const ImVec2& pasteCenter)
@@ -9758,7 +9779,7 @@ void PasteNodesFromClipboard(const ImVec2& pasteCenter)
 
     g_pendingSelectedNodeIds = pastedNodeIds;
     g_selectedNodeId = pastedNodeIds.empty() ? 0 : pastedNodeIds.front();
-    g_projectStatus = std::format("Pasted {} node{}", pastedNodeIds.size(), pastedNodeIds.size() == 1 ? "" : "s");
+    SetProjectStatus(std::format("Pasted {} node{}", pastedNodeIds.size(), pastedNodeIds.size() == 1 ? "" : "s"));
     MarkProjectDirty();
     EvaluateGraph();
 }
@@ -9965,7 +9986,7 @@ void DrawNodeGraph()
                 g_pendingNodePositions.push_back({nodeId, addNodePosition});
                 g_pendingSelectedNodeIds = {nodeId};
                 g_selectedNodeId = nodeId;
-                g_projectStatus = "Added " + std::string(rock::ToString(kind));
+                SetProjectStatus("Added " + std::string(rock::ToString(kind)));
                 MarkProjectDirty();
                 EvaluateGraph();
             }
@@ -10066,7 +10087,7 @@ void DrawNodeGraph()
         if (NodePositionsChanged(currentNodePositions, g_pendingNodeMoveUndo->nodePositions))
         {
             CommitUndoSnapshot(std::move(*g_pendingNodeMoveUndo));
-            g_projectStatus = "Node moved";
+            SetProjectStatus("Node moved");
             MarkProjectDirty();
         }
         g_pendingNodeMoveUndo.reset();
@@ -10749,13 +10770,14 @@ void DrawUi()
         std::string error;
         if (terrain::CaptureWindowScreenshot(g_hwnd, ScreenshotDirectory(), &screenshotPath, &error))
         {
-            g_projectStatus = "Screenshot saved " + PathToUtf8(screenshotPath);
+            SetProjectStatus("Screenshot saved " + PathToUtf8(screenshotPath));
         }
         else
         {
-            g_projectStatus = "Screenshot failed: " + error;
+            SetProjectStatus("Screenshot failed: " + error);
         }
     }
+    RefreshProjectStatus();
     CaptureDebugStatusLogs();
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 8.0f));
@@ -10784,7 +10806,7 @@ void DrawUi()
                         std::string error;
                         if (!LoadProjectFromFile(*path, &error))
                         {
-                            g_projectStatus = "Load failed: " + error;
+                            SetProjectStatus("Load failed: " + error);
                         }
                     }
                 }
@@ -10807,7 +10829,7 @@ void DrawUi()
                             std::string error;
                             if (!LoadProjectFromFile(recentPath, &error))
                             {
-                                g_projectStatus = "Load failed: " + error;
+                                SetProjectStatus("Load failed: " + error);
                             }
                         }
                     }
@@ -10835,7 +10857,7 @@ void DrawUi()
                     std::string error;
                     if (!SaveProjectToFile(*path, &error))
                     {
-                        g_projectStatus = "Save failed: " + error;
+                        SetProjectStatus("Save failed: " + error);
                     }
                 }
             }
@@ -11535,7 +11557,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         std::string appSettingsError;
         if (!LoadAppSettings(&appSettingsError) && !appSettingsError.empty())
         {
-            g_projectStatus = "App settings load failed: " + appSettingsError;
+            SetProjectStatus("App settings load failed: " + appSettingsError);
         }
         EvaluateGraph();
 
