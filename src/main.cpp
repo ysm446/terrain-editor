@@ -61,6 +61,7 @@
 #include "ui/CameraPanel.h"
 #include "ui/DebugPanel.h"
 #include "ui/DisplayPanel.h"
+#include "ui/Localization.h"
 #include "ui/NodeIcon.h"
 #include "ui/NodePins.h"
 #include "ui/NodeProperties.h"
@@ -267,6 +268,7 @@ rock::GraphId g_pendingPreviewPinId = 0;
 bool g_focusPickMode = false;
 bool g_focusPickCursorActive = false;
 bool g_sunDirectionDragActive = false;
+
 
 struct AsyncEvaluationResult
 {
@@ -1344,6 +1346,7 @@ bool SaveAppSettings(std::string* error = nullptr)
         root["formatVersion"] = 1;
         root["appVersion"] = TERRAIN_EDITOR_VERSION_STRING;
         root["uiTheme"] = g_themeManager.CurrentThemeId();
+        root["language"] = UiLanguageCode(CurrentLanguage());
         root["previewVisibility"] = {
             {"mesh", g_ui.meshPreview},
             {"fps", g_ui.showFps},
@@ -1468,6 +1471,16 @@ void SaveAppSettingsSilently()
     }
 }
 
+void SetUiLanguage(UiLanguage language)
+{
+    if (CurrentLanguage() == language)
+    {
+        return;
+    }
+    SetCurrentLanguage(language);
+    SaveAppSettingsSilently();
+}
+
 void ResetLayoutToDefaults()
 {
     g_ui.rightPaneWidth = 0.0f;
@@ -1545,6 +1558,7 @@ bool LoadAppSettings(std::string* error = nullptr)
         {
             g_themeManager.ApplyTheme(themeId);
         }
+        SetCurrentLanguage(UiLanguageFromCode(root.value("language", std::string(UiLanguageCode(CurrentLanguage())))));
 
         rock::GraphSettings& settings = g_graph.Settings();
 
@@ -2091,8 +2105,10 @@ bool ConfirmSaveUnsavedChanges()
 
     const int result = MessageBoxW(
         g_hwnd,
-        L"保存されていない変更があります。\n\n変更を保存しますか？",
-        L"未保存の変更",
+        CurrentLanguage() == UiLanguage::Japanese
+            ? L"保存されていない変更があります。\n\n変更を保存しますか？"
+            : L"There are unsaved changes.\n\nDo you want to save them?",
+        CurrentLanguage() == UiLanguage::Japanese ? L"未保存の変更" : L"Unsaved Changes",
         MB_ICONWARNING | MB_YESNOCANCEL | MB_DEFBUTTON1);
     if (result == IDYES)
     {
@@ -5703,7 +5719,7 @@ void DrawFocusPickOverlay(ImDrawList* drawList, const ImVec2& min, const ImVec2&
     }
     else if (g_focusPickMode)
     {
-        const char* text = "地形をクリックしてフォーカス距離を設定";
+        const char* text = Tr("Click terrain to set focus distance", "地形をクリックしてフォーカス距離を設定");
         const ImVec2 textSize = ImGui::CalcTextSize(text);
         const ImVec2 padding(9.0f, 6.0f);
         const ImVec2 textMin(min.x + 14.0f, max.y - textSize.y - padding.y * 2.0f - 14.0f);
@@ -8354,6 +8370,20 @@ void ApplyViewportDisplayMode(rock::GraphSettings& settings, ViewportDisplayMode
     }
 }
 
+const char* ViewportDisplayModeLabel(ViewportDisplayMode mode)
+{
+    switch (mode)
+    {
+    case ViewportDisplayMode::Pbr:
+        return "PBR";
+    case ViewportDisplayMode::Sky:
+        return Tr("Sky", "天球");
+    case ViewportDisplayMode::Simple:
+    default:
+        return Tr("Simple", "シンプル");
+    }
+}
+
 void DrawViewportDisplayMenu(const ImVec2& min)
 {
     rock::GraphSettings& settings = g_graph.Settings();
@@ -8365,7 +8395,7 @@ void DrawViewportDisplayMenu(const ImVec2& min)
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(32, 38, 36, 220));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(54, 70, 62, 235));
     ImGui::PushStyleColor(ImGuiCol_Text, ThemeColor("accentText", ImVec4(0.86f, 0.88f, 0.85f, 1.0f)));
-    if (ImGui::Button("表示", buttonSize))
+    if (ImGui::Button(Tr("View", "表示"), buttonSize))
     {
         ImGui::OpenPopup("ViewportDisplayMenu");
     }
@@ -8412,16 +8442,16 @@ void DrawViewportDisplayMenu(const ImVec2& min)
             return pressed;
         };
 
-        if (drawSmallToggle("ViewportFpsToggle", "FPSを表示", &g_ui.showFps))
+        if (drawSmallToggle("ViewportFpsToggle", Tr("Show FPS", "FPSを表示"), &g_ui.showFps))
         {
             SaveAppSettingsSilently();
         }
-        if (drawSmallToggle("ViewportGridToggle", "グリッドを表示", &settings.preview.showGrid))
+        if (drawSmallToggle("ViewportGridToggle", Tr("Show Grid", "グリッドを表示"), &settings.preview.showGrid))
         {
             SaveAppSettingsSilently();
         }
         ImGui::Separator();
-        ImGui::TextUnformatted("表示モード");
+        ImGui::TextUnformatted(Tr("Display Mode", "表示モード"));
         ImGui::Separator();
         const auto drawModeItem = [&](const char* label, ViewportDisplayMode mode) {
             const bool selected = displayMode == mode;
@@ -8432,18 +8462,18 @@ void DrawViewportDisplayMenu(const ImVec2& min)
                 SaveAppSettingsSilently();
             }
         };
-        drawModeItem("シンプル", ViewportDisplayMode::Simple);
-        drawModeItem("PBR", ViewportDisplayMode::Pbr);
-        drawModeItem("天球", ViewportDisplayMode::Sky);
+        drawModeItem(ViewportDisplayModeLabel(ViewportDisplayMode::Simple), ViewportDisplayMode::Simple);
+        drawModeItem(ViewportDisplayModeLabel(ViewportDisplayMode::Pbr), ViewportDisplayMode::Pbr);
+        drawModeItem(ViewportDisplayModeLabel(ViewportDisplayMode::Sky), ViewportDisplayMode::Sky);
 
         if (displayMode == ViewportDisplayMode::Sky)
         {
             ImGui::Spacing();
-            if (drawSmallToggle("ViewportCloudToggle", "雲を描画", &settings.clouds.enabled))
+            if (drawSmallToggle("ViewportCloudToggle", Tr("Draw Clouds", "雲を描画"), &settings.clouds.enabled))
             {
                 SaveAppSettingsSilently();
             }
-            if (settings.clouds.enabled && drawSmallToggle("ViewportCloudAnimateToggle", "雲を動かす", &settings.clouds.animate))
+            if (settings.clouds.enabled && drawSmallToggle("ViewportCloudAnimateToggle", Tr("Animate Clouds", "雲を動かす"), &settings.clouds.animate))
             {
                 SaveAppSettingsSilently();
             }
@@ -8863,7 +8893,7 @@ void DrawHeightfieldMapPreview(const ImVec2& min, const ImVec2& max)
         const rock::ColorGrid& cg = evaluation.previewColorGrid;
         if (cg.resolution < 2 || static_cast<int>(cg.pixels.size()) < cg.resolution * cg.resolution * 4)
         {
-            drawList->AddText(ImVec2(min.x + 16.0f, min.y + 42.0f), ThemeColor("mutedText", ImVec4(0.54f, 0.59f, 0.56f, 1.0f)), "Gradient Mask を接続してください。");
+            drawList->AddText(ImVec2(min.x + 16.0f, min.y + 42.0f), ThemeColor("mutedText", ImVec4(0.54f, 0.59f, 0.56f, 1.0f)), Tr("Connect a Gradient Mask.", "Gradient Mask を接続してください。"));
             return;
         }
         const float availableWidth = std::max(1.0f, max.x - min.x - 32.0f);
@@ -9751,7 +9781,7 @@ void DrawNodeGraph()
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f, 6.0f));
     if (ImGui::BeginPopup("AddNodeContextMenu"))
     {
-        ImGui::TextDisabled("ノードを追加");
+        ImGui::TextDisabled("%s", Tr("Add Node", "ノードを追加"));
         ImGui::Separator();
         const auto addNodeMenuItem = [&](rock::NodeKind kind) {
             if (ImGui::MenuItem(rock::ToString(kind).data()))
@@ -9767,7 +9797,7 @@ void DrawNodeGraph()
                 EvaluateGraph();
             }
         };
-        if (ImGui::BeginMenu("ハイトフィールド"))
+        if (ImGui::BeginMenu(Tr("Heightfield", "ハイトフィールド")))
         {
             addNodeMenuItem(rock::NodeKind::HeightmapLoad);
             addNodeMenuItem(rock::NodeKind::Shape);
@@ -9781,7 +9811,7 @@ void DrawNodeGraph()
             addNodeMenuItem(rock::NodeKind::Snow);
             ImGui::EndMenu();
         }
-        if (ImGui::BeginMenu("マスク"))
+        if (ImGui::BeginMenu(Tr("Mask", "マスク")))
         {
             addNodeMenuItem(rock::NodeKind::MaskNoise);
             addNodeMenuItem(rock::NodeKind::MaskBlend);
@@ -9794,12 +9824,12 @@ void DrawNodeGraph()
             addNodeMenuItem(rock::NodeKind::MaskPath);
             ImGui::EndMenu();
         }
-        if (ImGui::BeginMenu("カラー"))
+        if (ImGui::BeginMenu(Tr("Color", "カラー")))
         {
             addNodeMenuItem(rock::NodeKind::Colorize);
             ImGui::EndMenu();
         }
-        if (ImGui::BeginMenu("パス"))
+        if (ImGui::BeginMenu(Tr("Path", "パス")))
         {
             addNodeMenuItem(rock::NodeKind::Path);
             ImGui::EndMenu();
@@ -10200,7 +10230,7 @@ void DrawViewportTabs(float previewWidth, float workHeight, float timeSeconds, I
     PushTabHeaderStyle(defaultTabStyle);
     if (ImGui::BeginTabBar("ViewportTabs"))
     {
-        if (BeginStyledTabItem("3Dビュー"))
+        if (BeginStyledTabItem(Tr("3D View", "3Dビュー")))
         {
             const ImVec2 min = ImGui::GetCursorScreenPos();
             const ImVec2 max(min.x + ImGui::GetContentRegionAvail().x, min.y + ImGui::GetContentRegionAvail().y);
@@ -10208,7 +10238,7 @@ void DrawViewportTabs(float previewWidth, float workHeight, float timeSeconds, I
             ImGui::Dummy(ImGui::GetContentRegionAvail());
             EndStyledTabItem(defaultTabStyle);
         }
-        if (BeginStyledTabItem("2Dビュー"))
+        if (BeginStyledTabItem(Tr("2D View", "2Dビュー")))
         {
             const ImVec2 min = ImGui::GetCursorScreenPos();
             const ImVec2 max(min.x + ImGui::GetContentRegionAvail().x, min.y + ImGui::GetContentRegionAvail().y);
@@ -10233,7 +10263,7 @@ void DrawNodeNetworkTabs(float nodePaneHeight, ImGuiWindowFlags childFlags)
     PushTabHeaderStyle(defaultTabStyle);
     if (ImGui::BeginTabBar("NodeNetworkTabs"))
     {
-        if (BeginStyledTabItem("ノードネットワーク"))
+        if (BeginStyledTabItem(Tr("Node Network", "ノードネットワーク")))
         {
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 6.0f));
             DrawNodeGraph();
@@ -10359,17 +10389,18 @@ void DrawDebugLogWindow(float width, float height, ImGuiWindowFlags childFlags)
         }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         {
-            ImGui::SetTooltip("デバッグ領域を閉じる");
+            ImGui::SetTooltip("%s", Tr("Close debug area", "デバッグ領域を閉じる"));
         }
-        if (ImGui::BeginTabItem("ログ"))
+        if (ImGui::BeginTabItem(Tr("Log", "ログ")))
         {
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 8.0f));
             ImGui::BeginChild("DebugLogContent", ImVec2(0.0f, 0.0f), false);
             BeginInspectorTabContent();
-            ImGui::Checkbox("自動スクロール", &g_debugLogAutoScroll);
-            const float clearButtonWidth = ImGui::CalcTextSize("クリア").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+            ImGui::Checkbox(Tr("Auto-scroll", "自動スクロール"), &g_debugLogAutoScroll);
+            const char* clearText = Tr("Clear", "クリア");
+            const float clearButtonWidth = ImGui::CalcTextSize(clearText).x + ImGui::GetStyle().FramePadding.x * 2.0f;
             ImGui::SameLine(std::max(ImGui::GetCursorPosX(), ImGui::GetContentRegionMax().x - clearButtonWidth));
-            if (ImGui::SmallButton("クリア"))
+            if (ImGui::SmallButton(clearText))
             {
                 g_debugLogEntries.clear();
             }
@@ -10410,7 +10441,7 @@ void DrawDebugLogWindow(float width, float height, ImGuiWindowFlags childFlags)
             ImGui::PopStyleVar();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("診断"))
+        if (ImGui::BeginTabItem(Tr("Diagnostics", "診断")))
         {
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 8.0f));
             ImGui::BeginChild("DebugPanelContent", ImVec2(0.0f, 0.0f), false);
@@ -10427,6 +10458,48 @@ void DrawDebugLogWindow(float width, float height, ImGuiWindowFlags childFlags)
 
     ImGui::EndChild();
     ImGui::PopStyleVar();
+}
+
+void DrawLanguageSettings()
+{
+    ImGui::SeparatorText(Tr("Language", "言語"));
+    if (ImGui::BeginTable("LanguageSettingsRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 112.0f);
+        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextUnformatted(Tr("Language", "言語"));
+        ImGui::TableSetColumnIndex(1);
+
+        const char* currentLabel = CurrentLanguage() == UiLanguage::Japanese ? "日本語" : "English";
+        ImGui::SetNextItemWidth(std::min(180.0f, ImGui::GetContentRegionAvail().x));
+        if (ImGui::BeginCombo("##UiLanguage", currentLabel))
+        {
+            const bool englishSelected = CurrentLanguage() == UiLanguage::English;
+            if (ImGui::Selectable("English", englishSelected))
+            {
+                SetUiLanguage(UiLanguage::English);
+            }
+            if (englishSelected)
+            {
+                ImGui::SetItemDefaultFocus();
+            }
+
+            const bool japaneseSelected = CurrentLanguage() == UiLanguage::Japanese;
+            if (ImGui::Selectable("日本語", japaneseSelected))
+            {
+                SetUiLanguage(UiLanguage::Japanese);
+            }
+            if (japaneseSelected)
+            {
+                ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::EndTable();
+    }
+    ImGui::Spacing();
 }
 
 void DrawUi()
@@ -10503,16 +10576,16 @@ void DrawUi()
     if (ImGui::BeginMenuBar())
     {
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 5.0f);
-        if (ImGui::BeginMenu("ファイル"))
+        if (ImGui::BeginMenu(Tr("File", "ファイル")))
         {
-            if (ImGui::MenuItem("新規", "Ctrl+N"))
+            if (ImGui::MenuItem(Tr("New", "新規"), "Ctrl+N"))
             {
                 if (ConfirmSaveUnsavedChanges())
                 {
                     NewProject();
                 }
             }
-            if (ImGui::MenuItem("開く", "Ctrl+O"))
+            if (ImGui::MenuItem(Tr("Open", "開く"), "Ctrl+O"))
             {
                 if (ConfirmSaveUnsavedChanges())
                 {
@@ -10530,7 +10603,7 @@ void DrawUi()
             {
                 SaveAppSettingsSilently();
             }
-            if (ImGui::BeginMenu("最近使ったファイル", !g_recentProjectPaths.empty()))
+            if (ImGui::BeginMenu(Tr("Recent Files", "最近使ったファイル"), !g_recentProjectPaths.empty()))
             {
                 for (size_t index = 0; index < g_recentProjectPaths.size(); ++index)
                 {
@@ -10554,18 +10627,18 @@ void DrawUi()
                     }
                 }
                 ImGui::Separator();
-                if (ImGui::MenuItem("履歴をクリア"))
+                if (ImGui::MenuItem(Tr("Clear History", "履歴をクリア")))
                 {
                     g_recentProjectPaths.clear();
                     SaveAppSettingsSilently();
                 }
                 ImGui::EndMenu();
             }
-            if (ImGui::MenuItem("保存", "Ctrl+S"))
+            if (ImGui::MenuItem(Tr("Save", "保存"), "Ctrl+S"))
             {
                 SaveCurrentProject();
             }
-            if (ImGui::MenuItem("名前を付けて保存"))
+            if (ImGui::MenuItem(Tr("Save As", "名前を付けて保存")))
             {
                 if (const std::optional<std::filesystem::path> path = ShowProjectFileDialog(true))
                 {
@@ -10577,12 +10650,12 @@ void DrawUi()
                 }
             }
             ImGui::Separator();
-            if (ImGui::MenuItem("プロジェクトの保存場所を開く", nullptr, false, !g_projectPath.empty()))
+            if (ImGui::MenuItem(Tr("Open Project Folder", "プロジェクトの保存場所を開く"), nullptr, false, !g_projectPath.empty()))
             {
                 OpenFolderInExplorer(ProjectFolder());
             }
             ImGui::Separator();
-            if (ImGui::MenuItem("終了"))
+            if (ImGui::MenuItem(Tr("Exit", "終了")))
             {
                 if (ConfirmSaveUnsavedChanges())
                 {
@@ -10591,39 +10664,51 @@ void DrawUi()
             }
             ImGui::EndMenu();
         }
-        if (ImGui::BeginMenu("編集"))
+        if (ImGui::BeginMenu(Tr("Edit", "編集")))
         {
-            if (ImGui::MenuItem("元に戻す", "Ctrl+Z", false, !g_undoStack.empty()))
+            if (ImGui::MenuItem(Tr("Undo", "元に戻す"), "Ctrl+Z", false, !g_undoStack.empty()))
             {
                 UndoGraphEdit();
             }
-            if (ImGui::MenuItem("やり直し", "Ctrl+Y", false, !g_redoStack.empty()))
+            if (ImGui::MenuItem(Tr("Redo", "やり直し"), "Ctrl+Y", false, !g_redoStack.empty()))
             {
                 RedoGraphEdit();
             }
             ImGui::Separator();
-            ImGui::MenuItem("コピー", "Ctrl+C", false, false);
-            ImGui::MenuItem("貼り付け", "Ctrl+V", false, false);
-            ImGui::MenuItem("削除", "Delete", false, false);
+            ImGui::MenuItem(Tr("Copy", "コピー"), "Ctrl+C", false, false);
+            ImGui::MenuItem(Tr("Paste", "貼り付け"), "Ctrl+V", false, false);
+            ImGui::MenuItem(Tr("Delete", "削除"), "Delete", false, false);
             ImGui::EndMenu();
         }
-        if (ImGui::BeginMenu("表示"))
+        if (ImGui::BeginMenu(Tr("View", "表示")))
         {
-            if (ImGui::MenuItem("デバッグ", nullptr, g_ui.debugLogVisible))
+            if (ImGui::MenuItem(Tr("Debug Log", "デバッグログ"), nullptr, g_ui.debugLogVisible))
             {
                 g_ui.debugLogVisible = !g_ui.debugLogVisible;
                 SaveAppSettingsSilently();
             }
             ImGui::Separator();
-            if (ImGui::MenuItem("レイアウトを初期化"))
+            if (ImGui::MenuItem(Tr("Reset Layout", "レイアウトを初期化")))
             {
                 ResetLayoutToDefaults();
             }
             ImGui::EndMenu();
         }
-        if (ImGui::BeginMenu("設定"))
+        if (ImGui::BeginMenu(Tr("Settings", "設定")))
         {
-            if (ImGui::BeginMenu("UIテーマ"))
+            if (ImGui::BeginMenu(Tr("Language", "言語")))
+            {
+                if (ImGui::MenuItem("English", nullptr, CurrentLanguage() == UiLanguage::English))
+                {
+                    SetUiLanguage(UiLanguage::English);
+                }
+                if (ImGui::MenuItem("日本語", nullptr, CurrentLanguage() == UiLanguage::Japanese))
+                {
+                    SetUiLanguage(UiLanguage::Japanese);
+                }
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu(Tr("UI Theme", "UIテーマ")))
             {
                 for (const rock::UiThemeInfo& themeInfo : g_themeManager.ThemeInfos())
                 {
@@ -10637,8 +10722,8 @@ void DrawUi()
                 ImGui::EndMenu();
             }
             ImGui::Separator();
-            ImGui::MenuItem("環境設定", nullptr, false, false);
-            ImGui::MenuItem("ショートカット設定", nullptr, false, false);
+            ImGui::MenuItem(Tr("Preferences", "環境設定"), nullptr, false, false);
+            ImGui::MenuItem(Tr("Shortcut Settings", "ショートカット設定"), nullptr, false, false);
             ImGui::EndMenu();
         }
         ImGui::EndMenuBar();
@@ -10749,49 +10834,50 @@ void DrawUi()
     PushTabHeaderStyle(defaultTabStyle);
     if (ImGui::BeginTabBar("InspectorTabs"))
     {
-        if (BeginStyledTabItem("プロパティ"))
+        if (BeginStyledTabItem(Tr("Properties", "プロパティ")))
         {
             BeginInspectorTabContent();
             DrawPropertiesPanel();
             EndInspectorTabContent();
             EndStyledTabItem(defaultTabStyle);
         }
-        if (BeginStyledTabItem("設定"))
+        if (BeginStyledTabItem(Tr("Settings", "設定")))
         {
             BeginInspectorTabContent();
+            DrawLanguageSettings();
             DrawDisplaySettingsPanel();
             EndInspectorTabContent();
             EndStyledTabItem(defaultTabStyle);
         }
-        if (BeginStyledTabItem("天球"))
+        if (BeginStyledTabItem(Tr("Sky", "天球")))
         {
             BeginInspectorTabContent();
             DrawSkySettingsPanel();
             EndInspectorTabContent();
             EndStyledTabItem(defaultTabStyle);
         }
-        if (BeginStyledTabItem("雲"))
+        if (BeginStyledTabItem(Tr("Clouds", "雲")))
         {
             BeginInspectorTabContent();
             DrawCloudSettingsPanel();
             EndInspectorTabContent();
             EndStyledTabItem(defaultTabStyle);
         }
-        if (BeginStyledTabItem("水面"))
+        if (BeginStyledTabItem(Tr("Water", "水面")))
         {
             BeginInspectorTabContent();
             DrawWaterSettingsPanel();
             EndInspectorTabContent();
             EndStyledTabItem(defaultTabStyle);
         }
-        if (BeginStyledTabItem("カメラ"))
+        if (BeginStyledTabItem(Tr("Camera", "カメラ")))
         {
             BeginInspectorTabContent();
             DrawCameraPanel();
             EndInspectorTabContent();
             EndStyledTabItem(defaultTabStyle);
         }
-        if (BeginStyledTabItem("エクスポート"))
+        if (BeginStyledTabItem(Tr("Export", "エクスポート")))
         {
             BeginInspectorTabContent();
             DrawAssetExportPanel();

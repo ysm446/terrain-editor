@@ -8,6 +8,7 @@
 
 #include <imgui.h>
 
+#include "Localization.h"
 #include "PropertyWidgets.h"
 
 namespace terrain::ui
@@ -235,9 +236,9 @@ void DrawNodePropertiesPanel(rock::NodeGraph& graph, rock::GraphId selectedNodeI
     const rock::Node* selectedNode = graph.FindNode(selectedNodeId);
     if (selectedNode == nullptr)
     {
-        ImGui::TextDisabled("ノードを選択してください");
+        ImGui::TextDisabled("%s", Tr("Select a node", "ノードを選択してください"));
         ImGui::Spacing();
-        ImGui::TextWrapped("選択したノードの設定だけをここに表示します。");
+        ImGui::TextWrapped("%s", Tr("Only the selected node's settings are shown here.", "選択したノードの設定だけをここに表示します。"));
         return;
     }
 
@@ -1792,7 +1793,7 @@ bool DrawColorizeProperties(rock::Node& editableNode)
     }
     ImGui::SetCursorScreenPos(ImVec2(barMin.x, barMax.y + 14.0f));
 
-    ImGui::TextDisabled("クリックで追加 / ドラッグで位置変更 / Deleteで削除");
+    ImGui::TextDisabled("%s", Tr("Click to add / drag to move / Delete to remove", "クリックで追加 / ドラッグで位置変更 / Deleteで削除"));
     ImGui::Spacing();
 
     // --- 選択中ストップの編集 ---
@@ -1815,7 +1816,7 @@ bool DrawColorizeProperties(rock::Node& editableNode)
         bool stopDeleted = false;
         // 削除ボタン (ストップが 2 以上の場合のみ)
         ImGui::BeginDisabled(cs.stops.size() <= 2);
-        if (ImGui::SmallButton("削除"))
+        if (ImGui::SmallButton(Tr("Delete", "削除")))
         {
             stopDeleted = deleteSelectedStop();
         }
@@ -1882,15 +1883,15 @@ bool DrawColorizeProperties(rock::Node& editableNode)
             {
                 ImGui::ColorButton("##pickPreview", previewCol, ImGuiColorEditFlags_NoBorder, ImVec2(22, 22));
                 ImGui::SameLine();
-                ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.2f, 1.0f), "Ctrl 待機中...");
-                ImGui::TextDisabled("取得したい色の上で Ctrl を押しながら移動してください");
+                ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.2f, 1.0f), "%s", Tr("Waiting for Ctrl...", "Ctrl 待機中..."));
+                ImGui::TextDisabled("%s", Tr("Hold Ctrl and move over colors to sample them", "取得したい色の上で Ctrl を押しながら移動してください"));
             }
             else // DragCollecting
             {
                 const int cnt = static_cast<int>(g_screenPick.dragSamples.size());
                 ImGui::ColorButton("##pickPreview", previewCol, ImGuiColorEditFlags_NoBorder, ImVec2(22, 22));
                 ImGui::SameLine();
-                ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1.0f), "収集中... %d サンプル", cnt);
+                ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1.0f), Tr("Collecting... %d samples", "収集中... %d サンプル"), cnt);
 
                 // ミニプレビューグラデーション (収集済みサンプルを縮小表示)
                 if (cnt >= 2)
@@ -1913,11 +1914,11 @@ bool DrawColorizeProperties(rock::Node& editableNode)
                     mDl->AddRect(mMin, mMax, IM_COL32(80,80,80,255));
                     ImGui::Dummy(ImVec2(miniW, miniH + 2.0f));
                 }
-                ImGui::TextDisabled("Ctrl を離すとグラデーションに投影します");
+                ImGui::TextDisabled("%s", Tr("Release Ctrl to project the samples onto the gradient", "Ctrl を離すとグラデーションに投影します"));
             }
 
             ImGui::Spacing();
-            if (ImGui::SmallButton("Esc でキャンセル"))
+            if (ImGui::SmallButton(Tr("Cancel with Esc", "Esc でキャンセル")))
             {
                 g_screenPick.mode = ScreenPickMode::Idle;
                 g_screenPick.dragSamples.clear();
@@ -1926,7 +1927,7 @@ bool DrawColorizeProperties(rock::Node& editableNode)
         else
         {
             // ---- 通常時: ピッカーボタン ----
-            if (ImGui::Button("Ctrl で取得", ImVec2(128.0f, 30.0f)))
+            if (ImGui::Button(Tr("Sample with Ctrl", "Ctrl で取得"), ImVec2(128.0f, 30.0f)))
             {
                 g_screenPick.mode    = ScreenPickMode::DragArmed;
                 g_screenPick.nodeId  = editableNode.id;
@@ -1936,10 +1937,17 @@ bool DrawColorizeProperties(rock::Node& editableNode)
             }
             if (ImGui::IsItemHovered())
             {
-                ImGui::SetTooltip("Ctrl を押しながらマウスを移動すると軌跡の色を収集します。\n"
-                    "Ctrl を離した時点で間引きし、収集時の位置を保ってグラデーション化します。\n"
-                    "既存のストップはすべて置き換えられます。\n"
-                    "他アプリ上でも使用可能。Esc でキャンセル。");
+                ImGui::SetTooltip(
+                    "%s",
+                    Tr(
+                        "Hold Ctrl and move the mouse to collect colors along the path.\n"
+                        "When you release Ctrl, samples are reduced and projected into a gradient while preserving their captured positions.\n"
+                        "All existing stops will be replaced.\n"
+                        "Works over other apps too. Press Esc to cancel.",
+                        "Ctrl を押しながらマウスを移動すると軌跡の色を収集します。\n"
+                        "Ctrl を離した時点で間引きし、収集時の位置を保ってグラデーション化します。\n"
+                        "既存のストップはすべて置き換えられます。\n"
+                        "他アプリ上でも使用可能。Esc でキャンセル。"));
             }
         }
     }
@@ -1982,7 +1990,11 @@ bool DrawPathProperties(rock::Node& editableNode)
     ImGui::SeparatorText("Path");
     ImGui::Text("Points: %d", static_cast<int>(editableNode.path.points.size()));
     ImGui::Text("Edges: %d", static_cast<int>(editableNode.path.edges.size()));
-    ImGui::TextWrapped("Path ノードを選択した状態で 2D/3D ビューをクリックするとポイントを追加します。ポイントクリックで選択、W キーで移動ギズモ表示、中心ドラッグでカメラ平面移動、エッジクリックでポイント挿入、Del キーで選択ポイント削除、Enter キーで現在の連続線を確定します。");
+    ImGui::TextWrapped(
+        "%s",
+        Tr(
+            "With a Path node selected, click the 2D/3D view to add points. Click a point to select it, press W to show the move gizmo, drag the center to move on the camera plane, click an edge to insert a point, press Del to delete the selected point, and press Enter to finish the current polyline.",
+            "Path ノードを選択した状態で 2D/3D ビューをクリックするとポイントを追加します。ポイントクリックで選択、W キーで移動ギズモ表示、中心ドラッグでカメラ平面移動、エッジクリックでポイント挿入、Del キーで選択ポイント削除、Enter キーで現在の連続線を確定します。"));
     const rock::GraphId selectedPointId = SelectedPathPointId(editableNode.id);
     rock::PathPoint* selectedPoint = selectedPointId != 0 ? FindMutablePathPoint(editableNode.path, selectedPointId) : nullptr;
     const rock::GraphId selectedEdgeId = SelectedPathEdgeId(editableNode.id);
