@@ -2910,7 +2910,7 @@ bool NodeGraph::SetPreviewNode(GraphId nodeId)
     // If the node has no HeightField output but does have a Mask output,
     // selecting the node body should default to the mask view — otherwise
     // the user sees terrain when the node produces a mask, which is
-    // confusing. (Pin clicks still override via SetPreviewPin.)
+    // confusing.
     bool hasHeightOutput = false;
     bool hasMaskOutput = false;
     for (const Pin& pin : node->outputs)
