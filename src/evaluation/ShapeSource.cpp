@@ -55,9 +55,13 @@ HeightfieldGrid BuildHeightfieldFromShape(const ShapeSettings& settings, int res
                     const float radiusSq = nx * nx + nz * nz;
                     normalizedHeight = radiusSq < 1.0f ? std::sqrt(1.0f - radiusSq) : 0.0f;
                 }
-                else
+                else if (settings.kind == ShapeKind::Pyramid)
                 {
                     normalizedHeight = std::max(0.0f, 1.0f - std::max(std::abs(nx), std::abs(nz)));
+                }
+                else if (settings.kind == ShapeKind::Box)
+                {
+                    normalizedHeight = 1.0f;
                 }
             }
             grid.heights[row + static_cast<size_t>(x)] = normalizedHeight * heightMeters;

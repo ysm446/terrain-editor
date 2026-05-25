@@ -3864,6 +3864,8 @@ std::string_view ToString(ShapeKind kind)
         return "Hemisphere";
     case ShapeKind::Pyramid:
         return "Pyramid";
+    case ShapeKind::Box:
+        return "Box";
     default:
         return "Unknown";
     }

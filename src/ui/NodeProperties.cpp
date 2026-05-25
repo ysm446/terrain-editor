@@ -369,9 +369,9 @@ bool DrawShapeProperties(rock::Node& editableNode)
     shape.relativeHeightPercent = std::clamp(shape.relativeHeightPercent, 0.0f, 100.0f);
 
     int shapeKind = static_cast<int>(shape.kind);
-    if (DrawPropertyComboRow("Shape Type", "ShapeType", &shapeKind, "Hemisphere\0Pyramid\0", Tr("Basic debug heightfield shape.", "デバッグ用の基本ハイトフィールド形状です。"), static_cast<int>(rock::ShapeSettings{}.kind)))
+    if (DrawPropertyComboRow("Shape Type", "ShapeType", &shapeKind, "Hemisphere\0Pyramid\0Box\0\0", Tr("Basic debug heightfield shape.", "デバッグ用の基本ハイトフィールド形状です。"), static_cast<int>(rock::ShapeSettings{}.kind)))
     {
-        shape.kind = static_cast<rock::ShapeKind>(std::clamp(shapeKind, 0, 1));
+        shape.kind = static_cast<rock::ShapeKind>(std::clamp(shapeKind, 0, 2));
         MarkGraphChanged("Shape type changed");
         EvaluateGraph();
     }

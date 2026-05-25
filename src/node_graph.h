@@ -138,6 +138,7 @@ enum class ShapeKind
 {
     Hemisphere,
     Pyramid,
+    Box,
 };
 
 enum class MaskBlendMode
