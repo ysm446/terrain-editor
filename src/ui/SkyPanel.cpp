@@ -195,6 +195,29 @@ void DrawSkySettingsPanel(SkyPanelState state)
                 {
                     SaveAppSettings(state);
                 }
+                if (DrawPropertyBoolRow(Tr("Animate Time", "時間を進める"), "SunTimeAnimate", &settings.preview.sunTimeAnimate, "Sun time animation toggled",
+                    Tr("Automatically advances Date Time while the app is running.",
+                        "アプリ実行中に Date Time の時刻を自動で進めます。"),
+                    rock::PreviewSettings{}.sunTimeAnimate, true))
+                {
+                    SaveAppSettings(state);
+                }
+                ImGui::BeginDisabled(!settings.preview.sunTimeAnimate);
+                if (DrawPropertyFloatRow(Tr("Day Length (sec)", "1日の長さ (sec)"), "SunTimeDayLength", &settings.preview.sunTimeDayLengthSeconds, 5.0f, 600.0f, rock::PreviewSettings{}.sunTimeDayLengthSeconds, "Sun time day length changed", false,
+                    Tr("Real seconds for one full 24-hour Date Time cycle. Smaller values move the sun faster.",
+                        "Date Time の 24 時間を何秒で一周させるかです。小さいほど太陽が速く動きます。"), "%.1f", ImGuiSliderFlags_Logarithmic, 5.0f, 3600.0f))
+                {
+                    settings.preview.sunTimeDayLengthSeconds = std::clamp(settings.preview.sunTimeDayLengthSeconds, 5.0f, 3600.0f);
+                    SaveAppSettings(state);
+                }
+                if (DrawPropertyBoolRow(Tr("Skip Night", "夜をスキップ"), "SunTimeSkipNight", &settings.preview.sunTimeSkipNight, "Sun time skip night toggled",
+                    Tr("When the sun drops below -5 degrees, jump forward to the next time it rises back to -5 degrees.",
+                        "太陽高度が -5 度を下回ったら、次に -5 度へ戻る時刻まで早送りします。"),
+                    rock::PreviewSettings{}.sunTimeSkipNight, true))
+                {
+                    SaveAppSettings(state);
+                }
+                ImGui::EndDisabled();
 
                 const SkyPanelSunPosition computedSun = EffectiveSunPosition(settings.preview);
                 DrawReadOnlyFloatRow("Computed Azimuth", computedSun.azimuth, "%.2f",

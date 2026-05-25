@@ -1400,6 +1400,9 @@ bool SaveAppSettings(std::string* error = nullptr)
             {"sunMonth", settings.preview.sunMonth},
             {"sunDay", settings.preview.sunDay},
             {"sunTimeHours", settings.preview.sunTimeHours},
+            {"sunTimeAnimate", settings.preview.sunTimeAnimate},
+            {"sunTimeDayLengthSeconds", settings.preview.sunTimeDayLengthSeconds},
+            {"sunTimeSkipNight", settings.preview.sunTimeSkipNight},
             {"pbrAlbedo", {
                 settings.preview.pbrAlbedo[0],
                 settings.preview.pbrAlbedo[1],
@@ -1633,6 +1636,9 @@ bool LoadAppSettings(std::string* error = nullptr)
         settings.preview.sunMonth = std::clamp(visibilityJson.value("sunMonth", settings.preview.sunMonth), 1, 12);
         settings.preview.sunDay = std::clamp(visibilityJson.value("sunDay", settings.preview.sunDay), 1, DaysInMonth(settings.preview.sunMonth));
         settings.preview.sunTimeHours = std::clamp(visibilityJson.value("sunTimeHours", settings.preview.sunTimeHours), 0.0f, 24.0f);
+        settings.preview.sunTimeAnimate = visibilityJson.value("sunTimeAnimate", settings.preview.sunTimeAnimate);
+        settings.preview.sunTimeDayLengthSeconds = std::clamp(visibilityJson.value("sunTimeDayLengthSeconds", settings.preview.sunTimeDayLengthSeconds), 5.0f, 3600.0f);
+        settings.preview.sunTimeSkipNight = visibilityJson.value("sunTimeSkipNight", settings.preview.sunTimeSkipNight);
         if (visibilityJson.contains("pbrAlbedo") && visibilityJson["pbrAlbedo"].is_array() && visibilityJson["pbrAlbedo"].size() == 3)
         {
             settings.preview.pbrAlbedo[0] = std::clamp(visibilityJson["pbrAlbedo"][0].get<float>(), 0.0f, 1.0f);
@@ -11234,6 +11240,85 @@ void UpdateCloudLoopPhase(float deltaSeconds)
     clouds.loopPhase = WrapUnitPhase(clouds.loopPhase + deltaSeconds * clouds.windSpeedMetersPerSec / cloudLoop.distanceMeters);
 }
 
+void AdvanceSunDateTime(rock::PreviewSettings& preview, float hours)
+{
+    if (!std::isfinite(hours) || hours == 0.0f)
+    {
+        preview.sunTimeHours = std::clamp(preview.sunTimeHours, 0.0f, 24.0f);
+        preview.sunMonth = std::clamp(preview.sunMonth, 1, 12);
+        preview.sunDay = std::clamp(preview.sunDay, 1, DaysInMonth(preview.sunMonth));
+        return;
+    }
+
+    preview.sunMonth = std::clamp(preview.sunMonth, 1, 12);
+    preview.sunDay = std::clamp(preview.sunDay, 1, DaysInMonth(preview.sunMonth));
+    preview.sunTimeHours += hours;
+    while (preview.sunTimeHours >= 24.0f)
+    {
+        preview.sunTimeHours -= 24.0f;
+        ++preview.sunDay;
+        if (preview.sunDay > DaysInMonth(preview.sunMonth))
+        {
+            preview.sunDay = 1;
+            preview.sunMonth = preview.sunMonth == 12 ? 1 : preview.sunMonth + 1;
+        }
+    }
+    while (preview.sunTimeHours < 0.0f)
+    {
+        preview.sunTimeHours += 24.0f;
+        --preview.sunDay;
+        if (preview.sunDay < 1)
+        {
+            preview.sunMonth = preview.sunMonth == 1 ? 12 : preview.sunMonth - 1;
+            preview.sunDay = DaysInMonth(preview.sunMonth);
+        }
+    }
+}
+
+void SkipSunNightIfNeeded(rock::PreviewSettings& preview)
+{
+    constexpr float kNightSkipElevationDegrees = -5.0f;
+    if (!preview.sunTimeSkipNight || ComputeDateTimeSunPosition(preview).elevation >= kNightSkipElevationDegrees)
+    {
+        return;
+    }
+
+    rock::PreviewSettings candidate = preview;
+    constexpr float kSearchStepHours = 5.0f / 60.0f;
+    constexpr int kMaxSearchSteps = static_cast<int>((48.0f / kSearchStepHours) + 0.5f);
+    for (int i = 0; i < kMaxSearchSteps; ++i)
+    {
+        AdvanceSunDateTime(candidate, kSearchStepHours);
+        if (ComputeDateTimeSunPosition(candidate).elevation >= kNightSkipElevationDegrees)
+        {
+            preview.sunMonth = candidate.sunMonth;
+            preview.sunDay = candidate.sunDay;
+            preview.sunTimeHours = candidate.sunTimeHours;
+            return;
+        }
+    }
+}
+
+void UpdateSunTimeAnimation(float deltaSeconds)
+{
+    rock::PreviewSettings& preview = g_graph.Settings().preview;
+    if (preview.sunDirectionMode != rock::SunDirectionMode::DateTime || !preview.sunTimeAnimate)
+    {
+        return;
+    }
+
+    preview.sunTimeDayLengthSeconds = std::clamp(preview.sunTimeDayLengthSeconds, 5.0f, 3600.0f);
+    if (deltaSeconds <= 0.0f || !std::isfinite(deltaSeconds))
+    {
+        SkipSunNightIfNeeded(preview);
+        return;
+    }
+
+    const float clampedDeltaSeconds = std::min(deltaSeconds, 1.0f);
+    AdvanceSunDateTime(preview, clampedDeltaSeconds * 24.0f / preview.sunTimeDayLengthSeconds);
+    SkipSunNightIfNeeded(preview);
+}
+
 LRESULT WINAPI WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg)
@@ -11504,6 +11589,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
             g_frameTiming.newFrameMs = std::chrono::duration<double, std::milli>(newFrameEnd - newFrameStart).count();
 
             UpdateCloudLoopPhase(ImGui::GetIO().DeltaTime);
+            UpdateSunTimeAnimation(ImGui::GetIO().DeltaTime);
             UpdateCameraAutoOrbit(ImGui::GetIO().DeltaTime);
             UpdateColorizeScreenPick(g_graph);
             const auto mainThreadWorkStart = std::chrono::steady_clock::now();

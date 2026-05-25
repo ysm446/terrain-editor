@@ -123,6 +123,9 @@ nlohmann::json MakeProjectSettingsJson(const rock::GraphSettings& graphSettings,
             {"sunMonth", preview.sunMonth},
             {"sunDay", preview.sunDay},
             {"sunTimeHours", preview.sunTimeHours},
+            {"sunTimeAnimate", preview.sunTimeAnimate},
+            {"sunTimeDayLengthSeconds", preview.sunTimeDayLengthSeconds},
+            {"sunTimeSkipNight", preview.sunTimeSkipNight},
             {"showGrid", preview.showGrid},
             {"gridCellCount", preview.gridCellCount},
             {"gridCellSizeMeters", preview.gridCellSizeMeters},
@@ -313,6 +316,9 @@ void ReadPreviewSettingsJson(const nlohmann::json& settingsJson, rock::PreviewSe
     preview.sunMonth = std::clamp(previewJson.value("sunMonth", preview.sunMonth), 1, 12);
     preview.sunDay = std::clamp(previewJson.value("sunDay", preview.sunDay), 1, DaysInMonth(preview.sunMonth));
     preview.sunTimeHours = std::clamp(previewJson.value("sunTimeHours", preview.sunTimeHours), 0.0f, 24.0f);
+    preview.sunTimeAnimate = previewJson.value("sunTimeAnimate", preview.sunTimeAnimate);
+    preview.sunTimeDayLengthSeconds = std::clamp(previewJson.value("sunTimeDayLengthSeconds", preview.sunTimeDayLengthSeconds), 5.0f, 3600.0f);
+    preview.sunTimeSkipNight = previewJson.value("sunTimeSkipNight", preview.sunTimeSkipNight);
     preview.showGrid = previewJson.value("showGrid", preview.showGrid);
     preview.gridCellCount = std::clamp(previewJson.value("gridCellCount", preview.gridCellCount), 1, 200);
     preview.gridCellSizeMeters = std::clamp(previewJson.value("gridCellSizeMeters", preview.gridCellSizeMeters), 1.0f, 10000.0f);

@@ -719,6 +719,9 @@ struct PreviewSettings
     int sunMonth = 6;
     int sunDay = 21;
     float sunTimeHours = 14.0f;
+    bool sunTimeAnimate = false;
+    float sunTimeDayLengthSeconds = 60.0f;
+    bool sunTimeSkipNight = true;
     std::array<float, 3> pbrAlbedo = {0.80f, 0.80f, 0.80f};
     int gridCellCount = 10;
     float gridCellSizeMeters = 100.0f;
