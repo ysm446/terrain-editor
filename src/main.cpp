@@ -268,6 +268,7 @@ rock::GraphId g_pendingPreviewPinId = 0;
 bool g_focusPickMode = false;
 bool g_focusPickCursorActive = false;
 bool g_sunDirectionDragActive = false;
+double g_sunDirectionGizmoVisibleUntil = 0.0;
 
 
 struct AsyncEvaluationResult
@@ -5499,6 +5500,7 @@ void BeginSunDirectionDrag()
         preview.sunDirectionMode = rock::SunDirectionMode::Manual;
     }
     g_sunDirectionDragActive = true;
+    g_sunDirectionGizmoVisibleUntil = ImGui::GetTime() + 0.35;
 }
 
 void UpdateSunDirectionDrag(const ImVec2& mouseDelta)
@@ -5507,6 +5509,7 @@ void UpdateSunDirectionDrag(const ImVec2& mouseDelta)
     constexpr float kDegreesPerPixel = 0.25f;
     preview.sunAzimuthDegrees = NormalizeDegrees(preview.sunAzimuthDegrees + mouseDelta.x * kDegreesPerPixel);
     preview.sunElevationDegrees = std::clamp(preview.sunElevationDegrees - mouseDelta.y * kDegreesPerPixel, -10.0f, 89.0f);
+    g_sunDirectionGizmoVisibleUntil = ImGui::GetTime() + 0.35;
 }
 
 void UpdateViewportInteraction(const ImVec2& min, const ImVec2& max)
@@ -5517,6 +5520,7 @@ void UpdateViewportInteraction(const ImVec2& min, const ImVec2& max)
     if (g_sunDirectionDragActive && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
     {
         g_sunDirectionDragActive = false;
+        g_sunDirectionGizmoVisibleUntil = ImGui::GetTime() + 0.35;
         SaveAppSettingsSilently();
     }
 
@@ -5558,17 +5562,12 @@ void UpdateViewportInteraction(const ImVec2& min, const ImVec2& max)
         return;
     }
 
-    if (UpdatePathViewportInteraction(min, max))
-    {
-        return;
-    }
-
     if (!hovered)
     {
         return;
     }
 
-    const bool sunDirectionDragShortcut = io.KeyShift && io.KeyAlt && !io.KeyCtrl;
+    const bool sunDirectionDragShortcut = ImGui::IsKeyDown(ImGuiKey_L) && !io.KeyCtrl && !io.KeyShift && !io.KeyAlt;
     if ((g_sunDirectionDragActive || sunDirectionDragShortcut) && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
     {
         if (!g_sunDirectionDragActive)
@@ -5576,6 +5575,11 @@ void UpdateViewportInteraction(const ImVec2& min, const ImVec2& max)
             BeginSunDirectionDrag();
         }
         UpdateSunDirectionDrag(io.MouseDelta);
+        return;
+    }
+
+    if (UpdatePathViewportInteraction(min, max))
+    {
         return;
     }
 
@@ -5726,6 +5730,142 @@ void DrawFocusPickOverlay(ImDrawList* drawList, const ImVec2& min, const ImVec2&
         const ImVec2 textMax(textMin.x + textSize.x + padding.x * 2.0f, textMin.y + textSize.y + padding.y * 2.0f);
         drawList->AddRectFilled(textMin, textMax, IM_COL32(8, 10, 10, 190), 4.0f);
         drawList->AddText(ImVec2(textMin.x + padding.x, textMin.y + padding.y), IM_COL32(232, 235, 233, 255), text);
+    }
+
+    drawList->PopClipRect();
+}
+
+void DrawSunDirectionGizmo(ImDrawList* drawList, const ImVec2& min, const ImVec2& max)
+{
+    const double now = ImGui::GetTime();
+    if (!g_sunDirectionDragActive && now >= g_sunDirectionGizmoVisibleUntil)
+    {
+        return;
+    }
+
+    const float fadeAlpha = g_sunDirectionDragActive ? 1.0f : static_cast<float>(std::clamp((g_sunDirectionGizmoVisibleUntil - now) / 0.35, 0.0, 1.0));
+    if (fadeAlpha <= 0.001f)
+    {
+        return;
+    }
+
+    const float viewportSize = std::min(max.x - min.x, max.y - min.y);
+    const float scale = viewportSize * 1.20f;
+    const ImVec2 center((min.x + max.x) * 0.5f + g_viewport.pan.x, (min.y + max.y) * 0.5f + g_viewport.pan.y);
+    const rock::PreviewSettings& preview = g_graph.Settings().preview;
+    const SunPositionDegrees sun = EffectiveSunPosition(preview);
+    const float azimuth = sun.azimuth * kDegreesToRadians;
+    const float elevation = sun.elevation * kDegreesToRadians;
+    const float cosElevation = std::cos(elevation);
+    const Vec3 sunDir(
+        std::sin(azimuth) * cosElevation,
+        std::sin(elevation),
+        std::cos(azimuth) * cosElevation);
+    const Vec3 horizontalDir(std::sin(azimuth), 0.0f, std::cos(azimuth));
+    const float terrainSize = std::max(1.0f, preview.terrainSizeMeters);
+    const float radius = terrainSize * 0.24f;
+    const Vec3 origin(
+        0.0f,
+        terrain::SampleHeightAtWorld(g_graph.Evaluation().previewHeightfield, 0.0f, 0.0f) + terrainSize * 0.018f,
+        0.0f);
+
+    const auto color = [fadeAlpha](int r, int g, int b, int a) {
+        return IM_COL32(r, g, b, static_cast<int>(std::clamp(static_cast<float>(a) * fadeAlpha, 0.0f, 255.0f)));
+    };
+    const auto worldPoint = [](const Vec3& a, const Vec3& b, float amount) {
+        return Vec3(a.x + b.x * amount, a.y + b.y * amount, a.z + b.z * amount);
+    };
+    const auto project = [&](const Vec3& p) {
+        return ProjectWorldToScreen(p.x, p.y, p.z, center, scale);
+    };
+    const auto drawWorldLine = [&](const Vec3& a, const Vec3& b, ImU32 lineColor, float thickness) {
+        const ProjectedPoint pa = project(a);
+        const ProjectedPoint pb = project(b);
+        if (pa.depth > 0.05f && pb.depth > 0.05f)
+        {
+            drawList->AddLine(pa.screen, pb.screen, lineColor, thickness);
+        }
+    };
+    const auto drawRing = [&](float ringRadius, ImU32 ringColor, float thickness) {
+        constexpr int kSegments = 96;
+        ProjectedPoint prev{};
+        bool havePrev = false;
+        for (int i = 0; i <= kSegments; ++i)
+        {
+            const float t = (static_cast<float>(i) / static_cast<float>(kSegments)) * 2.0f * 3.1415926535f;
+            const Vec3 p(origin.x + std::sin(t) * ringRadius, origin.y, origin.z + std::cos(t) * ringRadius);
+            const ProjectedPoint current = project(p);
+            if (havePrev && prev.depth > 0.05f && current.depth > 0.05f)
+            {
+                drawList->AddLine(prev.screen, current.screen, ringColor, thickness);
+            }
+            prev = current;
+            havePrev = true;
+        }
+    };
+
+    drawList->PushClipRect(min, max, true);
+
+    drawRing(radius, color(108, 151, 255, 178), 2.2f);
+    drawRing(radius * 0.67f, color(108, 151, 255, 82), 1.2f);
+    drawRing(radius * 0.34f, color(108, 151, 255, 58), 1.0f);
+
+    drawWorldLine(origin, worldPoint(origin, Vec3(0.0f, 0.0f, 1.0f), radius), color(145, 171, 255, 128), 1.4f);
+
+    constexpr float kSunArrowTipRadius = 0.18f;
+    const float projectionLength = radius;
+    const Vec3 projectionEnd = worldPoint(origin, horizontalDir, projectionLength);
+    drawWorldLine(origin, projectionEnd, color(124, 169, 255, 176), 2.0f);
+
+    constexpr int kArcSegments = 48;
+    ProjectedPoint prevArc{};
+    bool havePrevArc = false;
+    for (int i = 0; i <= kArcSegments; ++i)
+    {
+        const float t = static_cast<float>(i) / static_cast<float>(kArcSegments);
+        const float angle = elevation * t;
+        const Vec3 p(
+            origin.x + horizontalDir.x * std::cos(angle) * radius,
+            origin.y + std::sin(angle) * radius,
+            origin.z + horizontalDir.z * std::cos(angle) * radius);
+        const ProjectedPoint current = project(p);
+        if (havePrevArc && prevArc.depth > 0.05f && current.depth > 0.05f)
+        {
+            drawList->AddLine(prevArc.screen, current.screen, color(255, 206, 112, 126), 1.6f);
+        }
+        prevArc = current;
+        havePrevArc = true;
+    }
+
+    const ProjectedPoint originScreen = project(origin);
+    const Vec3 sunArrowStart = worldPoint(origin, sunDir, radius);
+    const Vec3 sunArrowEnd = worldPoint(origin, sunDir, radius * kSunArrowTipRadius);
+    const ProjectedPoint sunStartScreen = project(sunArrowStart);
+    const ProjectedPoint sunEndScreen = project(sunArrowEnd);
+    if (sunStartScreen.depth > 0.05f && sunEndScreen.depth > 0.05f)
+    {
+        const ImU32 sunColor = color(255, 188, 76, 245);
+        ImVec2 screenDir(sunEndScreen.screen.x - sunStartScreen.screen.x, sunEndScreen.screen.y - sunStartScreen.screen.y);
+        const float screenLen = std::sqrt(screenDir.x * screenDir.x + screenDir.y * screenDir.y);
+        if (screenLen > 0.001f)
+        {
+            screenDir.x /= screenLen;
+            screenDir.y /= screenLen;
+            const ImVec2 side(-screenDir.y, screenDir.x);
+            constexpr float headLength = 15.0f;
+            constexpr float headHalfWidth = 6.5f;
+            const ImVec2 base(sunEndScreen.screen.x - screenDir.x * headLength, sunEndScreen.screen.y - screenDir.y * headLength);
+            drawList->AddLine(sunStartScreen.screen, base, sunColor, 4.0f);
+            drawList->AddTriangleFilled(
+                sunEndScreen.screen,
+                ImVec2(base.x + side.x * headHalfWidth, base.y + side.y * headHalfWidth),
+                ImVec2(base.x - side.x * headHalfWidth, base.y - side.y * headHalfWidth),
+                sunColor);
+        }
+    }
+    if (originScreen.depth > 0.05f)
+    {
+        drawList->AddCircle(originScreen.screen, 6.5f, color(108, 151, 255, 235), 20, 2.0f);
     }
 
     drawList->PopClipRect();
@@ -8428,8 +8568,8 @@ void DrawViewportDisplayMenu(const ImVec2& min)
             const bool hovered = ImGui::IsItemHovered();
             const ImU32 boxFill = hovered ? IM_COL32(44, 50, 50, 230) : IM_COL32(28, 31, 31, 230);
             const ImU32 boxBorder = *value ? IM_COL32(92, 168, 218, 255) : IM_COL32(76, 80, 80, 230);
-            drawList->AddRectFilled(boxMin, boxMax, boxFill, 3.0f);
-            drawList->AddRect(boxMin, boxMax, boxBorder, 3.0f);
+            drawList->AddRectFilled(boxMin, boxMax, boxFill, 1.0f);
+            drawList->AddRect(boxMin, boxMax, boxBorder, 1.0f);
             if (*value)
             {
                 const ImU32 checkColor = IM_COL32(91, 177, 232, 255);
@@ -8500,6 +8640,7 @@ void DrawViewportCube(const ImVec2& min, const ImVec2& max, float timeSeconds)
                            drawMeshSurface && preview.showWireframe);
     }
     DrawPathViewportOverlay(drawList, min, max);
+    DrawSunDirectionGizmo(drawList, min, max);
     DrawFocusPickOverlay(drawList, min, max);
     DrawViewportDisplayMenu(min);
     float overlayTop = min.y + 14.0f;

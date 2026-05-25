@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(TerrainEditor VERSION 0.19.79 LANGUAGES CXX RC)
+project(TerrainEditor VERSION 0.19.87 LANGUAGES CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
