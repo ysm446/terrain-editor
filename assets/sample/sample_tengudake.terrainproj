@@ -1,5 +1,5 @@
 {
-  "appVersion": "0.19.73",
+  "appVersion": "0.19.101",
   "format": "terrain_editor_project",
   "formatVersion": 1,
   "links": [
@@ -134,21 +134,6 @@
       "startPin": 100055
     },
     {
-      "endPin": 100092,
-      "id": 100203,
-      "startPin": 100196
-    },
-    {
-      "endPin": 100059,
-      "id": 100204,
-      "startPin": 100196
-    },
-    {
-      "endPin": 100047,
-      "id": 100205,
-      "startPin": 100196
-    },
-    {
       "endPin": 100207,
       "id": 100215,
       "startPin": 100196
@@ -274,11 +259,6 @@
       "startPin": 100271
     },
     {
-      "endPin": 100276,
-      "id": 100282,
-      "startPin": 100211
-    },
-    {
       "endPin": 100284,
       "id": 100286,
       "startPin": 100271
@@ -317,6 +297,26 @@
       "endPin": 100005,
       "id": 100351,
       "startPin": 100010
+    },
+    {
+      "endPin": 100092,
+      "id": 100352,
+      "startPin": 100134
+    },
+    {
+      "endPin": 100059,
+      "id": 100353,
+      "startPin": 100134
+    },
+    {
+      "endPin": 100047,
+      "id": 100354,
+      "startPin": 100260
+    },
+    {
+      "endPin": 100276,
+      "id": 100356,
+      "startPin": 100096
     }
   ],
   "nodePositions": {
@@ -417,8 +417,8 @@
       1890.0
     ],
     "100193": [
-      4321.0,
-      130.0
+      4305.0,
+      466.0
     ],
     "100206": [
       6349.0,
@@ -449,20 +449,20 @@
       1074.0
     ],
     "100257": [
-      3809.0,
-      122.0
+      3917.0,
+      234.0
     ],
     "100269": [
-      6241.0,
-      754.0
+      5857.0,
+      866.0
     ],
     "100274": [
-      7053.0,
-      250.0
+      6355.0,
+      794.0
     ],
     "100283": [
-      6621.0,
-      802.0
+      6305.0,
+      1042.0
     ],
     "100290": [
       -911.0,
@@ -10470,7 +10470,7 @@
         "defaultFeatherMeters": 128.0,
         "defaultHeightMode": 0,
         "defaultHeightOffset": 0.0,
-        "defaultSegmentType": 0,
+        "defaultSegmentType": 1,
         "defaultWidthMeters": 128.0,
         "edges": [
           {
@@ -10674,7 +10674,7 @@
             "featherMeters": 300.0,
             "height": 0.0,
             "heightMode": 0,
-            "heightOffset": 0.5,
+            "heightOffset": 0.0,
             "id": 100297,
             "intensity": 0.800000011920929,
             "widthMeters": 0.009999999776482582,
@@ -10684,7 +10684,7 @@
           {
             "featherMeters": 200.0,
             "height": 0.0,
-            "heightMode": 2,
+            "heightMode": 0,
             "heightOffset": 0.0,
             "id": 100299,
             "intensity": 0.10000000149011612,
@@ -10760,8 +10760,8 @@
           },
           {
             "featherMeters": 128.0,
-            "height": 102.8453369140625,
-            "heightMode": 2,
+            "height": 0.0,
+            "heightMode": 0,
             "heightOffset": 0.0,
             "id": 100326,
             "intensity": 0.20000000298023224,
@@ -10771,8 +10771,8 @@
           },
           {
             "featherMeters": 313.48760986328125,
-            "height": 115.51821899414063,
-            "heightMode": 2,
+            "height": 0.0,
+            "heightMode": 0,
             "heightOffset": 0.0,
             "id": 100328,
             "intensity": 0.4493112862110138,
@@ -10817,7 +10817,7 @@
             "featherMeters": 300.0,
             "height": 0.0,
             "heightMode": 0,
-            "heightOffset": 0.23792427778244019,
+            "heightOffset": 0.0,
             "id": 100336,
             "intensity": 0.43309399485588074,
             "widthMeters": 0.009999999776482582,
@@ -10826,7 +10826,7 @@
           },
           {
             "featherMeters": 200.0,
-            "height": 172.93060302734375,
+            "height": 0.0,
             "heightMode": 0,
             "heightOffset": 0.0,
             "id": 100347,
@@ -10837,7 +10837,7 @@
           },
           {
             "featherMeters": 128.0,
-            "height": 122.65887451171875,
+            "height": 0.0,
             "heightMode": 0,
             "heightOffset": 0.0,
             "id": 100349,
@@ -11638,7 +11638,7 @@
       "horizontalScale": 4000.0,
       "lightSamples": 6,
       "lightStepMeters": 80.0,
-      "loopPhase": 0.7213799953460693,
+      "loopPhase": 0.12138649821281433,
       "phaseEccentricity": 0.0,
       "qualitySamples": 32,
       "seed": 6098,
@@ -11648,7 +11648,7 @@
       "shadowSamples": 16,
       "shadowStrength": 0.699999988079071,
       "windDirectionDegrees": 135.0,
-      "windSpeedMetersPerSec": 95.36599731445313
+      "windSpeedMetersPerSec": 40.0
     },
     "display": {
       "cloudsEnabled": true,
@@ -11656,16 +11656,16 @@
       "showFps": true
     },
     "preview": {
-      "ambientStrength": 0.6000000238418579,
+      "ambientStrength": 0.3799999952316284,
       "aoEnabled": true,
       "aoRadius": 10.0,
       "aoStrength": 0.699999988079071,
-      "depthOfFieldEnabled": false,
+      "depthOfFieldEnabled": true,
       "dofApertureBlades": 6,
       "dofApertureRotationDegrees": 0.0,
       "dofApertureShape": 0,
       "dofFStop": 4.0,
-      "dofFocusDistanceMeters": 5477.71435546875,
+      "dofFocusDistanceMeters": 6605.7138671875,
       "dofHighlightBoost": 0.0,
       "dofMaxBlurPixels": 6.199999809265137,
       "dofMiniatureEnabled": true,
@@ -11687,15 +11687,18 @@
       "shadowStrength": 1.0,
       "showGrid": false,
       "simulationResolution": 1024,
-      "sunAzimuthDegrees": 37.31700134277344,
-      "sunDay": 21,
+      "sunAzimuthDegrees": 48.5233154296875,
+      "sunDay": 4,
       "sunDirectionMode": 0,
-      "sunElevationDegrees": 31.652000427246094,
+      "sunElevationDegrees": 30.136520385742188,
       "sunIntensity": 1.600000023841858,
       "sunLatitudeDegrees": 35.0,
       "sunLongitudeDegrees": 139.0,
-      "sunMonth": 2,
-      "sunTimeHours": 9.609749794006348,
+      "sunMonth": 3,
+      "sunTimeAnimate": true,
+      "sunTimeDayLengthSeconds": 90.0,
+      "sunTimeHours": 12.456155776977539,
+      "sunTimeSkipNight": true,
       "sunUtcOffsetHours": 9.0,
       "terrainBoundaryMode": 2,
       "terrainSizeMeters": 2048.0,
@@ -11735,13 +11738,15 @@
     }
   },
   "viewport": {
-    "fovDegrees": 45.0,
-    "orbitDistance": 6194.2294921875,
+    "autoOrbitEnabled": false,
+    "autoOrbitSpeedDegreesPerSecond": 2.0,
+    "fovDegrees": 37.84928512573242,
+    "orbitDistance": 7202.59228515625,
     "pan": [
-      -29.0,
-      99.0
+      -20.0,
+      66.0
     ],
-    "pitch": 0.430000901222229,
-    "yaw": -14.326552391052246
+    "pitch": 0.49999988079071045,
+    "yaw": -1.749603271484375
   }
 }
