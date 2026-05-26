@@ -14,7 +14,6 @@ namespace terrain::ui
 {
 namespace
 {
-constexpr std::array<int, 4> kShadowResolutionPresets = {512, 1024, 2048, 4096};
 constexpr float kDegreesToRadians = 3.1415926535f / 180.0f;
 
 std::string StableImGuiLabel(const char* label, const char* stableId)
@@ -34,11 +33,6 @@ void SaveAppSettings(const SkyPanelState& state)
     {
         state.saveAppSettings();
     }
-}
-
-bool DrawShadowResolutionPresetRow(const char* label, const char* id, int* value, int defaultValue, const char* dirtyReason, bool recordUndo = true, const char* tooltip = nullptr)
-{
-    return DrawPresetIntRow(label, id, value, defaultValue, kShadowResolutionPresets, 1024, dirtyReason, recordUndo, tooltip);
 }
 
 int DaysInMonth(int month)
@@ -274,12 +268,6 @@ void DrawSkySettingsPanel(SkyPanelState state)
             {
                 SaveAppSettings(state);
             }
-            if (DrawShadowResolutionPresetRow("Shadow Map Resolution", "DisplayShadowMapResolution", &settings.preview.shadowMapResolution, rock::PreviewSettings{}.shadowMapResolution, "Shadow map resolution changed", false,
-                Tr("Resolution of the depth map viewed from the sun direction. Higher values create finer shadow edges but cost more to render.",
-                    "太陽方向から見た深度マップの解像度です。高いほど影の輪郭が細かくなりますが描画負荷が増えます。")))
-            {
-                SaveAppSettings(state);
-            }
             if (DrawPropertyFloatRow("Shadow Bias", "DisplayShadowBias", &settings.preview.shadowBias, 0.0f, 0.05f, rock::PreviewSettings{}.shadowBias, "Shadow bias changed", false,
                 Tr("Depth offset used to reduce shadow bleeding and striping. Too much bias makes shadows look detached.",
                     "影のにじみや縞を抑えるための深度オフセットです。大きすぎると影が浮いて見えます。")))
@@ -414,28 +402,13 @@ void DrawCloudSettingsPanel(SkyPanelState state)
                         Tr("Direction the clouds move, in degrees. North = 0, east = 90.",
                             "雲が流れる向きです。度数で指定します。北=0、東=90。"), "%.0f");
                 }
-                DrawPropertyIntRow("Quality (samples)", "CloudQuality", &clouds.qualitySamples, 8, 96, rock::CloudSettings{}.qualitySamples, "Cloud quality changed", false,
-                    Tr("Raymarch samples per pixel. Higher values improve cloud detail but increase rendering cost. 32 is standard, 16 suits lower-spec machines, and 64 is high quality.",
-                        "1 ピクセルあたりのレイマーチサンプル数。大きいほど雲のディテールが上がりますが負荷も増えます。32 が標準、低スペックなら 16、高品質なら 64。"));
                 DrawPropertyFloatRow("Shadow Strength", "CloudShadowStrength", &clouds.shadowStrength, 0.0f, 1.0f, rock::CloudSettings{}.shadowStrength, "Cloud shadow strength changed", false,
                     Tr("Strength of cloud shadows cast onto terrain. 0 disables them; 1 is fully dark. The terrain shader multiplies by cloud transmittance projected along the sun direction.",
                         "雲が地形に落とす影の強さ。0 で影無し、1 で完全に暗くなります。太陽方向に projection した雲の透過率を地形シェーダーで乗算します。"));
-                if (DrawShadowResolutionPresetRow("Shadow Resolution", "CloudShadowResolution", &clouds.shadowResolution, rock::CloudSettings{}.shadowResolution, "Cloud shadow resolution changed", false,
-                    Tr("Resolution of the cloud shadow texture in pixels per side. 1024 is about 1 MB. Larger values create finer shadow edges but cost more to generate.",
-                        "雲影テクスチャの解像度 (片辺ピクセル数)。1024 で約 1MB。大きいほど影の輪郭が細かくなりますが生成負荷が増えます。")))
-                {
-                    SaveAppSettings(state);
-                }
-                DrawPropertyIntRow("Shadow Samples", "CloudShadowSamples", &clouds.shadowSamples, 4, 64, rock::CloudSettings{}.shadowSamples, "Cloud shadow samples changed", false,
-                    Tr("Number of samples shot along the sun direction when generating the cloud shadow texture. Higher values make shadows from thick clouds more accurate but increase generation time. 16 is standard.",
-                        "雲影テクスチャ生成時に太陽方向へ撃つレイのサンプル数。大きいほど厚い雲の影が正確になりますが生成時間も増えます。16 が標準。"));
                 DrawPropertyBoolRow("Cloud-to-Cloud Shadows", "CloudSelfShadowEnabled", &clouds.selfShadowEnabled, "Cloud self shadow toggled",
                     Tr("Enables self-shadowing by sampling density from each cloud sample toward the sun, letting front clouds darken clouds behind or below them.",
                         "雲の各サンプルから太陽方向へ密度を読み、手前の雲が奥や下側の雲を暗くする自己遮蔽を有効化します。"), rock::CloudSettings{}.selfShadowEnabled, true);
                 ImGui::BeginDisabled(!clouds.selfShadowEnabled);
-                    DrawPropertyIntRow("Light Samples", "CloudLightSamples", &clouds.lightSamples, 1, 16, rock::CloudSettings{}.lightSamples, "Cloud light samples changed", false,
-                        Tr("Number of sun-direction raymarch steps for cloud self-shadowing. 6 is standard. Higher values make cloud mass shading clearer but cost more.",
-                            "雲内自己遮蔽の太陽方向レイマーチ段数。6 が標準。大きいほど雲塊の陰影がはっきりしますが負荷も増えます。"));
                     DrawPropertyFloatRow("Light Step (m)", "CloudLightStep", &clouds.lightStepMeters, 1.0f, 1000.0f, rock::CloudSettings{}.lightStepMeters, "Cloud light step changed", false,
                         Tr("Distance per self-shadow raymarch step. Light Samples x Light Step gives the light travel distance toward the sun. Too short relative to cloud scale will not reach deep into clouds; too long makes sampling coarse.",
                             "自己遮蔽レイマーチの 1 ステップあたりの距離 (m)。Light Samples × Light Step が太陽方向への投光距離になります。雲スケールに対して短すぎると深い雲の中まで届かず、長すぎるとサンプルが粗くなります。"), "%.0f");

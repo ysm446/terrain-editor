@@ -57,13 +57,13 @@ Vec3 Normalize(Vec3 value, Vec3 fallback)
     return Scale(value, 1.0f / std::sqrt(lengthSq));
 }
 
-float DefaultViewportOrbitDistance(float terrainSizeMeters)
+float DefaultViewportOrbitDistance(float terrainSizeMeters, float fovDegrees)
 {
     const float terrainSize = std::max(1.0f, terrainSizeMeters);
-    const float fovRadians = std::clamp(45.0f, 15.0f, 90.0f) * kDegreesToRadians;
-    const float horizontalBoundingRadius = terrainSize * 0.70710678f;
-    const float distance = horizontalBoundingRadius / std::sin(fovRadians * 0.5f);
-    return std::clamp(distance * 1.08f, 1.0f, kMaxViewportOrbitDistance);
+    const float fovRadians = std::clamp(fovDegrees, 15.0f, 90.0f) * kDegreesToRadians;
+    const float terrainBoundingRadius = terrainSize * 0.70710678f;
+    const float distance = terrainBoundingRadius / std::sin(fovRadians * 0.5f);
+    return std::clamp(distance * 1.32f, 1.0f, kMaxViewportOrbitDistance);
 }
 
 float CameraFocalLengthMmFromFovYDegrees(float fovYDegrees)

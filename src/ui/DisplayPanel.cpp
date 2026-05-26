@@ -17,7 +17,6 @@ namespace
 {
 constexpr std::array<int, 4> kTerrainSizePresets = {512, 1024, 2048, 4096};
 constexpr std::array<int, 6> kResolutionPresets = {128, 256, 512, 1024, 2048, 4096};
-constexpr std::array<int, 3> kFrameRateLimitPresets = {0, 60, 30};
 
 std::string StableImGuiLabel(const char* label, const char* stableId)
 {
@@ -62,66 +61,6 @@ bool DrawTerrainSizePresetRow(const char* label, const char* id, float* value, f
     const int intDefault = NearestTerrainSizePreset(defaultValue);
     const bool changed = DrawPresetIntRow(label, id, &intValue, intDefault, kTerrainSizePresets, 1024, dirtyReason, recordUndo, tooltip);
     *value = static_cast<float>(intValue);
-    return changed;
-}
-
-const char* FrameRateLimitLabel(int limitFps)
-{
-    switch (limitFps)
-    {
-    case 60:
-        return "60 FPS";
-    case 30:
-        return "30 FPS";
-    default:
-        return Tr("Unlimited", "上限なし");
-    }
-}
-
-bool DrawFrameRateLimitRow(const char* label, const char* id, int* value, const char* tooltip)
-{
-    int currentIndex = 0;
-    for (int i = 0; i < static_cast<int>(kFrameRateLimitPresets.size()); ++i)
-    {
-        if (*value == kFrameRateLimitPresets[static_cast<size_t>(i)])
-        {
-            currentIndex = i;
-            break;
-        }
-    }
-
-    ImGui::TableNextRow();
-    ImGui::TableSetColumnIndex(0);
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(label);
-    if (tooltip && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-    {
-        ImGui::SetTooltip("%s", tooltip);
-    }
-
-    ImGui::TableSetColumnIndex(1);
-    ImGui::SetNextItemWidth(120.0f);
-    ImGui::PushID(id);
-    bool changed = false;
-    if (ImGui::BeginCombo("##FrameRateLimit", FrameRateLimitLabel(kFrameRateLimitPresets[static_cast<size_t>(currentIndex)])))
-    {
-        for (int i = 0; i < static_cast<int>(kFrameRateLimitPresets.size()); ++i)
-        {
-            const int preset = kFrameRateLimitPresets[static_cast<size_t>(i)];
-            const bool selected = (i == currentIndex);
-            if (ImGui::Selectable(FrameRateLimitLabel(preset), selected))
-            {
-                *value = preset;
-                changed = true;
-            }
-            if (selected)
-            {
-                ImGui::SetItemDefaultFocus();
-            }
-        }
-        ImGui::EndCombo();
-    }
-    ImGui::PopID();
     return changed;
 }
 
@@ -247,77 +186,12 @@ void DrawDisplaySettingsPanel(DisplayPanelState state)
             MarkGraphChanged(state, "Simulation resolution changed");
             EvaluateGraph(state);
         }
-        if (DrawResolutionPresetRow("Viewport Mesh Resolution", "DisplayPreviewResolution", &settings.preview.resolution, rock::PreviewSettings{}.resolution, "Preview mesh resolution changed", false, Tr("Mesh density for the 3D preview. This changes only the displayed subdivisions, not the Simulation Resolution.", "3D プレビュー用メッシュの細かさです。Simulation Resolution は変えず、表示の分割数だけを変更します。")))
-        {
-            EvaluateGraph(state);
-            SaveAppSettings(state);
-        }
-        if (DrawPropertyIntRow("LOD", "DisplayPreviewLod", &settings.preview.lod, 0, 4, rock::PreviewSettings{}.lod, "Preview LOD changed", false))
-        {
-            EvaluateGraph(state);
-            SaveAppSettings(state);
-        }
-
         ImGui::SeparatorText(Tr("Preview", "プレビュー画面"));
         if (DrawPropertyBoolRow("Mesh Preview", "DisplayMeshPreview", &state.meshPreview, "Mesh preview visibility changed", nullptr, true, true))
         {
             SaveAppSettings(state);
         }
-        if (DrawPropertyBoolRow("FPS", "DisplayFps", &state.showFps, "FPS visibility changed", nullptr, true, true))
-        {
-            SaveAppSettings(state);
-        }
-        if (DrawFrameRateLimitRow("FPS Limit", "DisplayFrameRateLimit", &settings.preview.frameRateLimitFps, Tr("Frame-rate cap for the whole app, including the 3D viewport. Unlimited does not add an app-side wait.", "3D ビューポートを含むアプリ全体の描画更新上限です。上限なしではアプリ側の待ちを入れません。")))
-        {
-            SaveAppSettings(state);
-        }
-        {
-            int backendInt = static_cast<int>(settings.preview.meshBackend);
-            if (DrawPropertyComboRow("Mesh Backend", "DisplayMeshBackend", &backendInt, "CPU Mesh\0GPU Displacement\0\0", Tr("Rendering backend for the 3D preview. CPU Mesh builds and uploads mesh data on the CPU. GPU Displacement uses a static UV grid and a height texture in the vertex shader for faster parameter updates.", "プレビュー 3D ビューポートのレンダリング経路。CPU Mesh は CPU 側でメッシュを生成・アップロード(従来動作)、GPU Displacement は静的 UV グリッド + ハイトテクスチャを頂点シェーダーで displace します。GPU 側はテクスチャアップロード(~数 ms)だけで済むため、パラメータ変更時の応答性が上がります(現状はサーフェス描画のみ。シャドウ・ワイヤフレームは CPU パスを併走させます)。"), static_cast<int>(rock::PreviewSettings{}.meshBackend)))
-            {
-                settings.preview.meshBackend = static_cast<rock::MeshPreviewBackend>(std::clamp(backendInt,
-                    static_cast<int>(rock::MeshPreviewBackend::CpuMesh),
-                    static_cast<int>(rock::MeshPreviewBackend::GpuDisplacement)));
-                SaveAppSettings(state);
-            }
-        }
-        if (settings.preview.meshBackend == rock::MeshPreviewBackend::GpuDisplacement)
-        {
-            if (DrawPropertyBoolRow("Tessellation", "DisplayViewportTessellation", &settings.preview.viewportTessellation, "Viewport tessellation changed", Tr("Subdivides only the GPU Displacement viewport rendering with hardware tessellation. Node evaluation and exported meshes are not affected.", "GPU Displacement のビューポート描画だけをハードウェアテセレーションで細分化します。ノード評価やエクスポート用メッシュには影響しません。"), rock::PreviewSettings{}.viewportTessellation, true))
-            {
-                SaveAppSettings(state);
-            }
-            if (settings.preview.viewportTessellation)
-            {
-                if (DrawPropertyFloatRow("Tess Min", "DisplayTessMin", &settings.preview.tessellationMinFactor, 1.0f, 16.0f, rock::PreviewSettings{}.tessellationMinFactor, "Tessellation min changed", false, Tr("Minimum tessellation factor used in the distance.", "遠景で使う最小テセレーション係数です。")))
-                {
-                    settings.preview.tessellationMinFactor = std::clamp(settings.preview.tessellationMinFactor, 1.0f, 64.0f);
-                    settings.preview.tessellationMaxFactor = std::max(settings.preview.tessellationMaxFactor, settings.preview.tessellationMinFactor);
-                    SaveAppSettings(state);
-                }
-                if (DrawPropertyFloatRow("Tess Max", "DisplayTessMax", &settings.preview.tessellationMaxFactor, 1.0f, 32.0f, rock::PreviewSettings{}.tessellationMaxFactor, "Tessellation max changed", false, Tr("Maximum tessellation factor used nearby. Higher values look smoother but cost more to render.", "近景で使う最大テセレーション係数です。高いほど滑らかになりますが描画負荷が増えます。")))
-                {
-                    settings.preview.tessellationMaxFactor = std::clamp(settings.preview.tessellationMaxFactor, settings.preview.tessellationMinFactor, 64.0f);
-                    SaveAppSettings(state);
-                }
-                if (DrawPropertyFloatRow("Tess Near (m)", "DisplayTessNear", &settings.preview.tessellationNearDistance, 1.0f, 20000.0f, rock::PreviewSettings{}.tessellationNearDistance, "Tessellation near changed", false, Tr("Uses the maximum tessellation factor up to this distance.", "この距離までは最大テセレーション係数を使います。"), "%.0f"))
-                {
-                    settings.preview.tessellationNearDistance = std::clamp(settings.preview.tessellationNearDistance, 1.0f, 100000.0f);
-                    settings.preview.tessellationFarDistance = std::max(settings.preview.tessellationFarDistance, settings.preview.tessellationNearDistance + 1.0f);
-                    SaveAppSettings(state);
-                }
-                if (DrawPropertyFloatRow("Tess Far (m)", "DisplayTessFar", &settings.preview.tessellationFarDistance, 1.0f, 50000.0f, rock::PreviewSettings{}.tessellationFarDistance, "Tessellation far changed", false, Tr("Falls back to the minimum tessellation factor beyond this distance.", "この距離以遠では最小テセレーション係数へ落とします。"), "%.0f"))
-                {
-                    settings.preview.tessellationFarDistance = std::clamp(settings.preview.tessellationFarDistance, settings.preview.tessellationNearDistance + 1.0f, 200000.0f);
-                    SaveAppSettings(state);
-                }
-            }
-        }
 
-        if (DrawPropertyBoolRow("Surface", "DisplaySurface", &settings.preview.showSurface, "Surface visibility changed", nullptr, rock::PreviewSettings{}.showSurface, true))
-        {
-            SaveAppSettings(state);
-        }
         {
             int boundaryModeInt = static_cast<int>(settings.preview.terrainBoundaryMode);
             if (DrawPropertyComboRow(Tr("Terrain Boundary", "地形境界"), "DisplayTerrainBoundaryMode", &boundaryModeInt, Tr("None\0Section Polygon\0Lines\0\0", "なし\0断面ポリゴン\0ライン\0\0"),

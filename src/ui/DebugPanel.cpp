@@ -37,6 +37,15 @@ void DrawDebugPanel(DebugPanelState state)
                 state.saveAppSettings();
             }
         }
+        if (DrawPropertyBoolRow("Surface", "DebugSurface", &settings.preview.showSurface, "Surface visibility changed",
+                "Shows the filled terrain surface. Turn it off when inspecting wireframe or grid-only debug views.",
+                rock::PreviewSettings{}.showSurface, true))
+        {
+            if (state.saveAppSettings)
+            {
+                state.saveAppSettings();
+            }
+        }
         if (DrawPropertyBoolRow("Wireframe", "DebugWireframe", &settings.preview.showWireframe, "Wireframe visibility changed",
                 "Shows mesh edges for topology debugging. High viewport resolutions can make this expensive.",
                 rock::PreviewSettings{}.showWireframe, true))

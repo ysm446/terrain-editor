@@ -135,7 +135,7 @@ constexpr int kFrameCount = 2;
 constexpr int kSrvDescriptorCount = 128;
 constexpr float kDegreesToRadians = 3.1415926535f / 180.0f;
 constexpr float kFullFrameSensorHeightMm = 24.0f;
-constexpr float kDefaultViewportYaw = 30.0f * kDegreesToRadians;
+constexpr float kDefaultViewportYaw = -30.0f * kDegreesToRadians;
 constexpr float kDefaultViewportPitch = 30.0f * kDegreesToRadians;
 constexpr float kDefaultViewportFovDegrees = 45.0f;
 constexpr float kDefaultViewportOrbitDistance = 2044.0f;
@@ -384,6 +384,8 @@ struct UiState
 {
     bool meshPreview = true;
     bool showFps = true;
+    int frameRateLimitFps = 0;
+    bool newNodeBackendGpu = true;
     bool showDrawStats = false;
     bool showFrameStats = false;
     bool debugLogVisible = false;
@@ -1422,12 +1424,13 @@ bool SaveAppSettings(std::string* error = nullptr)
         root["previewVisibility"] = {
             {"mesh", g_ui.meshPreview},
             {"fps", g_ui.showFps},
+            {"frameRateLimitFps", g_ui.frameRateLimitFps},
+            {"newNodeBackendGpu", g_ui.newNodeBackendGpu},
             {"drawStats", g_ui.showDrawStats},
             {"frameStats", g_ui.showFrameStats},
             {"debugLog", g_ui.debugLogVisible},
             {"meshSurface", settings.preview.showSurface},
             {"meshWireframe", settings.preview.showWireframe},
-            {"frameRateLimitFps", settings.preview.frameRateLimitFps},
             {"terrainSizeMeters", settings.preview.terrainSizeMeters},
             {"simulationResolution", settings.preview.simulationResolution},
             {"previewResolution", settings.preview.resolution},
@@ -1462,6 +1465,10 @@ bool SaveAppSettings(std::string* error = nullptr)
             {"shadowStrength", settings.preview.shadowStrength},
             {"shadowMapResolution", settings.preview.shadowMapResolution},
             {"shadowBias", settings.preview.shadowBias},
+            {"cloudQualitySamples", settings.clouds.qualitySamples},
+            {"cloudShadowResolution", settings.clouds.shadowResolution},
+            {"cloudShadowSamples", settings.clouds.shadowSamples},
+            {"cloudLightSamples", settings.clouds.lightSamples},
             {"sunDirectionMode", static_cast<int>(settings.preview.sunDirectionMode)},
             {"sunLatitudeDegrees", settings.preview.sunLatitudeDegrees},
             {"sunLongitudeDegrees", settings.preview.sunLongitudeDegrees},
@@ -1642,12 +1649,13 @@ bool LoadAppSettings(std::string* error = nullptr)
         const nlohmann::json visibilityJson = root.value("previewVisibility", nlohmann::json::object());
         g_ui.meshPreview = visibilityJson.value("mesh", g_ui.meshPreview);
         g_ui.showFps = visibilityJson.value("fps", g_ui.showFps);
+        g_ui.frameRateLimitFps = ClampFrameRateLimitFps(visibilityJson.value("frameRateLimitFps", g_ui.frameRateLimitFps));
+        g_ui.newNodeBackendGpu = visibilityJson.value("newNodeBackendGpu", g_ui.newNodeBackendGpu);
         g_ui.showDrawStats = visibilityJson.value("drawStats", g_ui.showDrawStats);
         g_ui.showFrameStats = visibilityJson.value("frameStats", g_ui.showFrameStats);
         g_ui.debugLogVisible = visibilityJson.value("debugLog", g_ui.debugLogVisible);
         settings.preview.showSurface = visibilityJson.value("meshSurface", settings.preview.showSurface);
         settings.preview.showWireframe = visibilityJson.value("meshWireframe", settings.preview.showWireframe);
-        settings.preview.frameRateLimitFps = ClampFrameRateLimitFps(visibilityJson.value("frameRateLimitFps", settings.preview.frameRateLimitFps));
         settings.preview.terrainSizeMeters = static_cast<float>(NearestTerrainSizePreset(visibilityJson.value("terrainSizeMeters", settings.preview.terrainSizeMeters)));
         settings.preview.simulationResolution = NearestResolutionPreset(visibilityJson.value("simulationResolution", settings.preview.simulationResolution));
         settings.preview.resolution = NearestResolutionPreset(visibilityJson.value("previewResolution", settings.preview.resolution));
@@ -1693,6 +1701,10 @@ bool LoadAppSettings(std::string* error = nullptr)
         settings.preview.shadowStrength = std::clamp(visibilityJson.value("shadowStrength", settings.preview.shadowStrength), 0.0f, 1.0f);
         settings.preview.shadowMapResolution = NearestShadowResolutionPreset(visibilityJson.value("shadowMapResolution", settings.preview.shadowMapResolution));
         settings.preview.shadowBias = std::clamp(visibilityJson.value("shadowBias", settings.preview.shadowBias), 0.0f, 0.05f);
+        settings.clouds.qualitySamples = std::clamp(visibilityJson.value("cloudQualitySamples", settings.clouds.qualitySamples), 8, 128);
+        settings.clouds.shadowResolution = NearestShadowResolutionPreset(visibilityJson.value("cloudShadowResolution", settings.clouds.shadowResolution));
+        settings.clouds.shadowSamples = std::clamp(visibilityJson.value("cloudShadowSamples", settings.clouds.shadowSamples), 4, 64);
+        settings.clouds.lightSamples = std::clamp(visibilityJson.value("cloudLightSamples", settings.clouds.lightSamples), 1, 16);
         {
             const int sunModeInt = std::clamp(visibilityJson.value("sunDirectionMode", static_cast<int>(settings.preview.sunDirectionMode)),
                 static_cast<int>(rock::SunDirectionMode::Manual),
@@ -1796,6 +1808,47 @@ bool LoadAppSettings(std::string* error = nullptr)
         if (error) *error = ex.what();
         return false;
     }
+}
+
+void ApplyEnvironmentBackendDefault(rock::Node& node)
+{
+    if (g_ui.newNodeBackendGpu)
+    {
+        node.multiScaleErosion.backend = rock::MultiScaleErosionBackend::GpuCompute;
+        node.maskNoise.backend = rock::MaskNoiseBackend::GpuCompute;
+        node.maskBlur.backend = rock::MaskUtilityBackend::GpuCompute;
+        node.maskPath.backend = rock::MaskUtilityBackend::GpuCompute;
+        node.heightmapFromMask.backend = rock::MaskUtilityBackend::GpuCompute;
+        node.maskFluvial.backend = rock::MaskFluvialBackend::GpuCompute;
+        node.rock.backend = rock::RockBackend::GpuCompute;
+        node.scatter.backend = rock::ScatterBackend::GpuCompute;
+        node.sediment.backend = rock::SedimentBackend::GpuCompute;
+        node.snow.backend = rock::SnowBackend::GpuCompute;
+        node.colorize.backend = rock::ColorizeBackend::GpuCompute;
+        return;
+    }
+
+    node.multiScaleErosion.backend = rock::MultiScaleErosionBackend::CpuReference;
+    node.maskNoise.backend = rock::MaskNoiseBackend::CpuParallel;
+    node.maskBlur.backend = rock::MaskUtilityBackend::CpuParallel;
+    node.maskPath.backend = rock::MaskUtilityBackend::CpuParallel;
+    node.heightmapFromMask.backend = rock::MaskUtilityBackend::CpuParallel;
+    node.maskFluvial.backend = rock::MaskFluvialBackend::CpuReference;
+    node.rock.backend = rock::RockBackend::CpuReference;
+    node.scatter.backend = rock::ScatterBackend::CpuReference;
+    node.sediment.backend = rock::SedimentBackend::CpuReference;
+    node.snow.backend = rock::SnowBackend::CpuReference;
+    node.colorize.backend = rock::ColorizeBackend::CpuParallel;
+}
+
+rock::GraphId CreateNodeWithEnvironmentDefaults(rock::NodeKind kind)
+{
+    const rock::GraphId nodeId = g_graph.CreateNode(kind);
+    if (rock::Node* node = g_graph.FindMutableNode(nodeId))
+    {
+        ApplyEnvironmentBackendDefault(*node);
+    }
+    return nodeId;
 }
 
 void ResetNodeEditorViewToDefault()
@@ -2125,7 +2178,7 @@ bool SaveProjectToFile(const std::filesystem::path& path, std::string* error)
         WriteSelectedNodesJson(root);
         root["previewStage"] = static_cast<int>(g_graph.Preview());
         root["previewPinId"] = g_graph.Evaluation().previewPinId;
-        root["settings"] = terrain::MakeProjectSettingsJson(g_graph.Settings(), terrain::ProjectDisplaySettings{g_ui.showFps});
+        root["settings"] = terrain::MakeProjectSettingsJson(g_graph.Settings());
 
         root["nodeSettings"] = nlohmann::json::object();
         root["viewport"] = MakeViewportJson();
@@ -2347,9 +2400,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
             return false;
         }
 
-        terrain::ProjectDisplaySettings displaySettings{g_ui.showFps};
-        g_projectSettingsHadSimulationResolution = terrain::ReadProjectSettingsJson(root, g_graph.Settings(), displaySettings);
-        g_ui.showFps = displaySettings.showFps;
+        g_projectSettingsHadSimulationResolution = terrain::ReadProjectSettingsJson(root, g_graph.Settings());
         ReadSerializedNodesJson(root);
         MigrateLegacySimulationResolutionFromNodes();
         ReadViewportJson(root);
@@ -4954,15 +5005,16 @@ terrain::ViewportCameraState MakeViewportCameraState()
 
 float DefaultViewportOrbitDistance()
 {
-    return terrain::DefaultViewportOrbitDistance(g_graph.Settings().preview.terrainSizeMeters);
+    return terrain::DefaultViewportOrbitDistance(g_graph.Settings().preview.terrainSizeMeters, g_viewport.fovDegrees);
 }
 
 void ResetViewport()
 {
+    const float fovDegrees = std::clamp(g_viewport.fovDegrees, 15.0f, 90.0f);
     g_viewport = {};
     g_viewport.yaw = kDefaultViewportYaw;
     g_viewport.pitch = kDefaultViewportPitch;
-    g_viewport.fovDegrees = kDefaultViewportFovDegrees;
+    g_viewport.fovDegrees = fovDegrees;
     g_viewport.orbitDistance = DefaultViewportOrbitDistance();
 }
 
@@ -5809,7 +5861,8 @@ void UpdateViewportInteraction(const ImVec2& min, const ImVec2& max)
     {
         g_focusPickMode = false;
     }
-    const bool focusPickShortcut = focusPickAvailable && viewportInputAvailable && io.KeyCtrl;
+    const bool focusPickShortcut =
+        focusPickAvailable && viewportInputAvailable && ImGui::IsKeyDown(ImGuiKey_F) && !io.KeyCtrl && !io.KeyShift && !io.KeyAlt;
     g_focusPickCursorActive = focusPickAvailable && (g_focusPickMode || focusPickShortcut);
     g_focusPickHoverPoint.reset();
 
@@ -10554,7 +10607,7 @@ void DrawNodeGraph()
             {
                 PushUndoSnapshot();
                 g_skipNodeMoveUndoThisFrame = true;
-                const rock::GraphId nodeId = g_graph.CreateNode(kind);
+                const rock::GraphId nodeId = CreateNodeWithEnvironmentDefaults(kind);
                 g_pendingNodePositions.push_back({nodeId, addNodePosition});
                 g_pendingSelectedNodeIds = {nodeId};
                 g_selectedNodeId = nodeId;
@@ -10682,7 +10735,6 @@ void DrawDisplaySettingsPanel()
     terrain::ui::DrawDisplaySettingsPanel({
         g_graph.Settings(),
         g_ui.meshPreview,
-        g_ui.showFps,
         g_viewport.orbitDistance,
         []() { return DefaultViewportOrbitDistance(); },
         []() { EvaluateGraph(); },
@@ -11287,6 +11339,252 @@ void DrawLanguageSettings()
     ImGui::Spacing();
 }
 
+int FrameRateLimitIndex(int limitFps)
+{
+    switch (limitFps)
+    {
+    case 60:
+        return 1;
+    case 30:
+        return 2;
+    default:
+        return 0;
+    }
+}
+
+int FrameRateLimitFromIndex(int index)
+{
+    switch (index)
+    {
+    case 1:
+        return 60;
+    case 2:
+        return 30;
+    default:
+        return 0;
+    }
+}
+
+int ResolutionPresetIndex(int value)
+{
+    const int preset = NearestResolutionPreset(value);
+    const auto it = std::ranges::find(kResolutionPresets, preset);
+    return it != kResolutionPresets.end() ? static_cast<int>(std::distance(kResolutionPresets.begin(), it)) : 2;
+}
+
+int ShadowResolutionPresetIndex(int value)
+{
+    const int preset = NearestShadowResolutionPreset(value);
+    const auto it = std::ranges::find(kShadowResolutionPresets, preset);
+    return it != kShadowResolutionPresets.end() ? static_cast<int>(std::distance(kShadowResolutionPresets.begin(), it)) : 1;
+}
+
+void DrawEnvironmentSettingsPanel()
+{
+    DrawLanguageSettings();
+
+    rock::GraphSettings& settings = g_graph.Settings();
+
+    ImGui::SeparatorText(Tr("Performance", "パフォーマンス"));
+    if (ImGui::BeginTable("EnvironmentPerformanceRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 112.0f);
+        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+
+        if (DrawPropertyBoolRow("FPS", "EnvironmentFps", &g_ui.showFps, "FPS visibility changed", nullptr, true, true))
+        {
+            SaveAppSettingsSilently();
+        }
+
+        int frameRateLimitIndex = FrameRateLimitIndex(g_ui.frameRateLimitFps);
+        if (DrawPropertyComboRow(
+                "FPS Limit",
+                "EnvironmentFrameRateLimit",
+                &frameRateLimitIndex,
+                Tr("Unlimited\0" "60 FPS\0" "30 FPS\0" "\0", "上限なし\0" "60 FPS\0" "30 FPS\0" "\0"),
+                Tr("Frame-rate cap for the whole app, including the 3D viewport. Unlimited does not add an app-side wait.",
+                    "3D ビューポートを含むアプリ全体の描画更新上限です。上限なしではアプリ側の待ちを入れません。"),
+                0))
+        {
+            g_ui.frameRateLimitFps = FrameRateLimitFromIndex(frameRateLimitIndex);
+            SaveAppSettingsSilently();
+        }
+
+        ImGui::EndTable();
+    }
+
+    ImGui::SeparatorText(Tr("Viewport", "ビューポート"));
+    if (ImGui::BeginTable("EnvironmentViewportRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 112.0f);
+        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+
+        int previewResolutionIndex = ResolutionPresetIndex(settings.preview.resolution);
+        if (DrawPropertyComboRow(
+                "Viewport Mesh",
+                "EnvironmentPreviewResolution",
+                &previewResolutionIndex,
+                "128\0" "256\0" "512\0" "1024\0" "2048\0" "4096\0" "\0",
+                Tr("Mesh density for the 3D preview. This changes only displayed subdivisions, not Simulation Resolution.",
+                    "3D プレビュー用メッシュの細かさです。Simulation Resolution は変えず、表示の分割数だけを変更します。"),
+                ResolutionPresetIndex(rock::PreviewSettings{}.resolution)))
+        {
+            settings.preview.resolution = kResolutionPresets[static_cast<size_t>(std::clamp(previewResolutionIndex, 0, static_cast<int>(kResolutionPresets.size()) - 1))];
+            SaveAppSettingsSilently();
+        }
+
+        if (DrawPropertyIntRow("LOD", "EnvironmentPreviewLod", &settings.preview.lod, 0, 4, rock::PreviewSettings{}.lod, "Preview LOD changed", false))
+        {
+            settings.preview.lod = std::clamp(settings.preview.lod, 0, 4);
+            SaveAppSettingsSilently();
+        }
+
+        int backendInt = static_cast<int>(settings.preview.meshBackend);
+        if (DrawPropertyComboRow(
+                "Mesh Backend",
+                "EnvironmentMeshBackend",
+                &backendInt,
+                "CPU Mesh\0GPU Displacement\0\0",
+                Tr("Rendering backend for the 3D preview. GPU Displacement uses a static UV grid and displaces it on the GPU.",
+                    "プレビュー 3D ビューポートのレンダリング経路です。GPU Displacement は静的 UV グリッドを GPU 側で変位させます。"),
+                static_cast<int>(rock::PreviewSettings{}.meshBackend)))
+        {
+            settings.preview.meshBackend = static_cast<rock::MeshPreviewBackend>(std::clamp(
+                backendInt,
+                static_cast<int>(rock::MeshPreviewBackend::CpuMesh),
+                static_cast<int>(rock::MeshPreviewBackend::GpuDisplacement)));
+            SaveAppSettingsSilently();
+        }
+
+        if (settings.preview.meshBackend == rock::MeshPreviewBackend::GpuDisplacement)
+        {
+            if (DrawPropertyBoolRow("Tessellation", "EnvironmentViewportTessellation", &settings.preview.viewportTessellation, "Viewport tessellation changed",
+                    Tr("Subdivides only the GPU Displacement viewport rendering with hardware tessellation. Node evaluation and exported meshes are not affected.",
+                        "GPU Displacement のビューポート描画だけをハードウェアテセレーションで細分化します。ノード評価やエクスポート用メッシュには影響しません。"),
+                    rock::PreviewSettings{}.viewportTessellation, true))
+            {
+                SaveAppSettingsSilently();
+            }
+
+            if (settings.preview.viewportTessellation)
+            {
+                if (DrawPropertyFloatRow("Tess Min", "EnvironmentTessMin", &settings.preview.tessellationMinFactor, 1.0f, 16.0f, rock::PreviewSettings{}.tessellationMinFactor, "Tessellation min changed", false,
+                        Tr("Minimum tessellation factor used in the distance.", "遠景で使う最小テセレーション係数です。")))
+                {
+                    settings.preview.tessellationMinFactor = std::clamp(settings.preview.tessellationMinFactor, 1.0f, 64.0f);
+                    settings.preview.tessellationMaxFactor = std::max(settings.preview.tessellationMaxFactor, settings.preview.tessellationMinFactor);
+                    SaveAppSettingsSilently();
+                }
+                if (DrawPropertyFloatRow("Tess Max", "EnvironmentTessMax", &settings.preview.tessellationMaxFactor, 1.0f, 32.0f, rock::PreviewSettings{}.tessellationMaxFactor, "Tessellation max changed", false,
+                        Tr("Maximum tessellation factor used nearby. Higher values look smoother but cost more to render.", "近景で使う最大テセレーション係数です。高いほど滑らかになりますが描画負荷が増えます。")))
+                {
+                    settings.preview.tessellationMaxFactor = std::clamp(settings.preview.tessellationMaxFactor, settings.preview.tessellationMinFactor, 64.0f);
+                    SaveAppSettingsSilently();
+                }
+                if (DrawPropertyFloatRow("Tess Near (m)", "EnvironmentTessNear", &settings.preview.tessellationNearDistance, 1.0f, 20000.0f, rock::PreviewSettings{}.tessellationNearDistance, "Tessellation near changed", false,
+                        Tr("Uses the maximum tessellation factor up to this distance.", "この距離までは最大テセレーション係数を使います。"), "%.0f"))
+                {
+                    settings.preview.tessellationNearDistance = std::clamp(settings.preview.tessellationNearDistance, 1.0f, 100000.0f);
+                    settings.preview.tessellationFarDistance = std::max(settings.preview.tessellationFarDistance, settings.preview.tessellationNearDistance + 1.0f);
+                    SaveAppSettingsSilently();
+                }
+                if (DrawPropertyFloatRow("Tess Far (m)", "EnvironmentTessFar", &settings.preview.tessellationFarDistance, 1.0f, 50000.0f, rock::PreviewSettings{}.tessellationFarDistance, "Tessellation far changed", false,
+                        Tr("Falls back to the minimum tessellation factor beyond this distance.", "この距離以遠では最小テセレーション係数へ落とします。"), "%.0f"))
+                {
+                    settings.preview.tessellationFarDistance = std::clamp(settings.preview.tessellationFarDistance, settings.preview.tessellationNearDistance + 1.0f, 200000.0f);
+                    SaveAppSettingsSilently();
+                }
+            }
+        }
+
+        int shadowMapResolutionIndex = ShadowResolutionPresetIndex(settings.preview.shadowMapResolution);
+        if (DrawPropertyComboRow(
+                "Shadow Map",
+                "EnvironmentShadowMapResolution",
+                &shadowMapResolutionIndex,
+                "512\0" "1024\0" "2048\0" "4096\0" "\0",
+                Tr("Resolution of the terrain shadow depth map. Higher values create finer shadow edges but cost more to render.",
+                    "地形シャドウ用深度マップの解像度です。高いほど影の輪郭が細かくなりますが描画負荷が増えます。"),
+                ShadowResolutionPresetIndex(rock::PreviewSettings{}.shadowMapResolution)))
+        {
+            settings.preview.shadowMapResolution = kShadowResolutionPresets[static_cast<size_t>(std::clamp(shadowMapResolutionIndex, 0, static_cast<int>(kShadowResolutionPresets.size()) - 1))];
+            SaveAppSettingsSilently();
+        }
+
+        ImGui::EndTable();
+    }
+
+    ImGui::SeparatorText(Tr("Cloud Quality", "雲の品質"));
+    if (ImGui::BeginTable("EnvironmentCloudQualityRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 112.0f);
+        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+
+        if (DrawPropertyIntRow("Quality", "EnvironmentCloudQuality", &settings.clouds.qualitySamples, 8, 96, rock::CloudSettings{}.qualitySamples, "Cloud quality changed", false,
+                Tr("Raymarch samples per pixel. Higher values improve cloud detail but increase rendering cost.",
+                    "1 ピクセルあたりのレイマーチサンプル数。大きいほど雲のディテールが上がりますが負荷も増えます。")))
+        {
+            settings.clouds.qualitySamples = std::clamp(settings.clouds.qualitySamples, 8, 128);
+            SaveAppSettingsSilently();
+        }
+
+        int cloudShadowResolutionIndex = ShadowResolutionPresetIndex(settings.clouds.shadowResolution);
+        if (DrawPropertyComboRow(
+                "Shadow Res",
+                "EnvironmentCloudShadowResolution",
+                &cloudShadowResolutionIndex,
+                "512\0" "1024\0" "2048\0" "4096\0" "\0",
+                Tr("Resolution of the cloud shadow texture. Larger values create finer shadow edges but cost more to generate.",
+                    "雲影テクスチャの解像度です。大きいほど影の輪郭が細かくなりますが生成負荷が増えます。"),
+                ShadowResolutionPresetIndex(rock::CloudSettings{}.shadowResolution)))
+        {
+            settings.clouds.shadowResolution = kShadowResolutionPresets[static_cast<size_t>(std::clamp(cloudShadowResolutionIndex, 0, static_cast<int>(kShadowResolutionPresets.size()) - 1))];
+            SaveAppSettingsSilently();
+        }
+
+        if (DrawPropertyIntRow("Shadow Samples", "EnvironmentCloudShadowSamples", &settings.clouds.shadowSamples, 4, 64, rock::CloudSettings{}.shadowSamples, "Cloud shadow samples changed", false,
+                Tr("Samples shot along the sun direction when generating the cloud shadow texture.",
+                    "雲影テクスチャ生成時に太陽方向へ撃つレイのサンプル数です。")))
+        {
+            settings.clouds.shadowSamples = std::clamp(settings.clouds.shadowSamples, 4, 64);
+            SaveAppSettingsSilently();
+        }
+
+        if (DrawPropertyIntRow("Light Samples", "EnvironmentCloudLightSamples", &settings.clouds.lightSamples, 1, 16, rock::CloudSettings{}.lightSamples, "Cloud light samples changed", false,
+                Tr("Sun-direction raymarch steps for cloud self-shadowing.",
+                    "雲内自己遮蔽の太陽方向レイマーチ段数です。")))
+        {
+            settings.clouds.lightSamples = std::clamp(settings.clouds.lightSamples, 1, 16);
+            SaveAppSettingsSilently();
+        }
+
+        ImGui::EndTable();
+    }
+
+    ImGui::SeparatorText(Tr("Node Defaults", "ノード既定値"));
+    if (ImGui::BeginTable("EnvironmentNodeDefaultRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 112.0f);
+        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+
+        int nodeBackendIndex = g_ui.newNodeBackendGpu ? 1 : 0;
+        if (DrawPropertyComboRow(
+                "Backend",
+                "EnvironmentNodeBackendDefault",
+                &nodeBackendIndex,
+                "CPU\0GPU\0\0",
+                Tr("Default backend for newly created nodes. Existing nodes keep their own saved backend.",
+                    "新しく作成するノードの既定バックエンドです。既存ノードは個別に保存された Backend を維持します。"),
+                1))
+        {
+            g_ui.newNodeBackendGpu = nodeBackendIndex == 1;
+            SaveAppSettingsSilently();
+        }
+
+        ImGui::EndTable();
+    }
+}
+
 void DrawUi()
 {
     static const auto start = std::chrono::steady_clock::now();
@@ -11334,9 +11632,24 @@ void DrawUi()
     {
         RedoGraphEdit();
     }
-    if (!io.WantTextInput && !io.KeyCtrl && !io.KeyShift && !io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_F, false))
+    if (!io.WantTextInput && !io.KeyCtrl && !io.KeyShift && !io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_A, false))
     {
         ResetViewport();
+    }
+    if (!io.WantTextInput && !io.KeyCtrl && !io.KeyShift && !io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_O, false))
+    {
+        g_viewport.autoOrbitEnabled = !g_viewport.autoOrbitEnabled;
+        SaveAppSettingsSilently();
+    }
+    if (!io.WantTextInput && !io.KeyCtrl && !io.KeyShift && !io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_D, false))
+    {
+        rock::PreviewSettings& preview = g_graph.Settings().preview;
+        preview.depthOfFieldEnabled = !preview.depthOfFieldEnabled;
+        if (!preview.depthOfFieldEnabled)
+        {
+            g_focusPickMode = false;
+        }
+        MarkGraphChanged("Depth of Field toggled");
     }
     if (!io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F12, false))
     {
@@ -11630,7 +11943,6 @@ void DrawUi()
         if (BeginStyledTabItem(Tr("Settings", "設定"), "InspectorSettings"))
         {
             BeginInspectorTabContent();
-            DrawLanguageSettings();
             DrawDisplaySettingsPanel();
             EndInspectorTabContent();
             EndStyledTabItem(defaultTabStyle);
@@ -11667,6 +11979,13 @@ void DrawUi()
         {
             BeginInspectorTabContent();
             DrawAssetExportPanel();
+            EndInspectorTabContent();
+            EndStyledTabItem(defaultTabStyle);
+        }
+        if (BeginStyledTabItem(Tr("Environment", "環境設定"), "InspectorEnvironment"))
+        {
+            BeginInspectorTabContent();
+            DrawEnvironmentSettingsPanel();
             EndInspectorTabContent();
             EndStyledTabItem(defaultTabStyle);
         }
@@ -11776,7 +12095,7 @@ void ApplyFrameRateLimit(std::chrono::steady_clock::time_point frameStart)
 {
     using Clock = std::chrono::steady_clock;
 
-    const int limitFps = ClampFrameRateLimitFps(g_graph.Settings().preview.frameRateLimitFps);
+    const int limitFps = ClampFrameRateLimitFps(g_ui.frameRateLimitFps);
     if (limitFps <= 0)
     {
         g_frameTiming.frameLimitSleepMs = 0.0;
@@ -12157,7 +12476,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         {
             const auto frameStart = std::chrono::steady_clock::now();
             g_frameTiming = {};
-            g_frameTiming.frameRateLimitFps = ClampFrameRateLimitFps(g_graph.Settings().preview.frameRateLimitFps);
+            g_frameTiming.frameRateLimitFps = ClampFrameRateLimitFps(g_ui.frameRateLimitFps);
 
             const auto messagePumpStart = std::chrono::steady_clock::now();
             while (PeekMessage(&msg, nullptr, 0U, 0U, PM_REMOVE))

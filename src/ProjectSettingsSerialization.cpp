@@ -12,7 +12,6 @@ namespace
 
 constexpr std::array<int, 6> kResolutionPresets = {128, 256, 512, 1024, 2048, 4096};
 constexpr std::array<int, 4> kTerrainSizePresets = {512, 1024, 2048, 4096};
-constexpr std::array<int, 4> kShadowResolutionPresets = {512, 1024, 2048, 4096};
 
 template <size_t N>
 int NearestPreset(int value, const std::array<int, N>& presets, int fallback)
@@ -33,20 +32,6 @@ int NearestTerrainSizePreset(float value)
     return NearestPreset(static_cast<int>(std::round(value)), kTerrainSizePresets, 1024);
 }
 
-int NearestShadowResolutionPreset(int value)
-{
-    return NearestPreset(value, kShadowResolutionPresets, 1024);
-}
-
-int ClampFrameRateLimitFps(int value)
-{
-    if (value <= 0)
-    {
-        return 0;
-    }
-    return std::clamp(value, 15, 240);
-}
-
 int DaysInMonth(int month)
 {
     static constexpr std::array<int, 12> kDays = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
@@ -56,7 +41,7 @@ int DaysInMonth(int month)
 
 } // namespace
 
-nlohmann::json MakeProjectSettingsJson(const rock::GraphSettings& graphSettings, const ProjectDisplaySettings& display)
+nlohmann::json MakeProjectSettingsJson(const rock::GraphSettings& graphSettings)
 {
     const rock::PreviewSettings& preview = graphSettings.preview;
     const rock::SkySettings& sky = graphSettings.sky;
@@ -68,7 +53,6 @@ nlohmann::json MakeProjectSettingsJson(const rock::GraphSettings& graphSettings,
     return {
         {"display", {
             {"mode", displayMode},
-            {"showFps", display.showFps},
             {"cloudsEnabled", clouds.enabled},
         }},
         {"preview", {
@@ -83,14 +67,7 @@ nlohmann::json MakeProjectSettingsJson(const rock::GraphSettings& graphSettings,
             {"autoExposureMaxEv", preview.autoExposureMaxEv},
             {"autoExposureSpeed", preview.autoExposureSpeed},
             {"colorTemperatureKelvin", preview.colorTemperatureKelvin},
-            {"meshBackend", static_cast<int>(preview.meshBackend)},
             {"terrainBoundaryMode", static_cast<int>(preview.terrainBoundaryMode)},
-            {"frameRateLimitFps", preview.frameRateLimitFps},
-            {"viewportTessellation", preview.viewportTessellation},
-            {"tessellationMinFactor", preview.tessellationMinFactor},
-            {"tessellationMaxFactor", preview.tessellationMaxFactor},
-            {"tessellationNearDistance", preview.tessellationNearDistance},
-            {"tessellationFarDistance", preview.tessellationFarDistance},
             {"waterEnabled", preview.waterEnabled},
             {"waterLevelMeters", preview.waterLevelMeters},
             {"waterOpacity", preview.waterOpacity},
@@ -122,7 +99,6 @@ nlohmann::json MakeProjectSettingsJson(const rock::GraphSettings& graphSettings,
             {"sunIntensity", preview.sunIntensity},
             {"ambientStrength", preview.ambientStrength},
             {"shadowStrength", preview.shadowStrength},
-            {"shadowMapResolution", preview.shadowMapResolution},
             {"shadowBias", preview.shadowBias},
             {"sunDirectionMode", static_cast<int>(preview.sunDirectionMode)},
             {"sunLatitudeDegrees", preview.sunLatitudeDegrees},
@@ -170,14 +146,10 @@ nlohmann::json MakeProjectSettingsJson(const rock::GraphSettings& graphSettings,
             {"loopPhase", clouds.loopPhase},
             {"windDirectionDegrees", clouds.windDirectionDegrees},
             {"windSpeedMetersPerSec", clouds.windSpeedMetersPerSec},
-            {"qualitySamples", clouds.qualitySamples},
             {"shadowStrength", clouds.shadowStrength},
-            {"shadowResolution", clouds.shadowResolution},
-            {"shadowSamples", clouds.shadowSamples},
             {"fieldRadius", clouds.fieldRadius},
             {"fieldFalloff", clouds.fieldFalloff},
             {"selfShadowEnabled", clouds.selfShadowEnabled},
-            {"lightSamples", clouds.lightSamples},
             {"lightStepMeters", clouds.lightStepMeters},
             {"phaseEccentricity", clouds.phaseEccentricity},
             {"shadowAmbientStrength", clouds.shadowAmbientStrength},
@@ -219,7 +191,15 @@ void ReadSkySettingsJson(const nlohmann::json& settingsJson, rock::SkySettings& 
 void ReadCloudSettingsJson(const nlohmann::json& settingsJson, rock::CloudSettings& clouds)
 {
     const nlohmann::json cloudsJson = settingsJson.value("clouds", nlohmann::json::object());
+    const int qualitySamples = clouds.qualitySamples;
+    const int shadowResolution = clouds.shadowResolution;
+    const int shadowSamples = clouds.shadowSamples;
+    const int lightSamples = clouds.lightSamples;
     clouds = rock::CloudSettings{};
+    clouds.qualitySamples = qualitySamples;
+    clouds.shadowResolution = shadowResolution;
+    clouds.shadowSamples = shadowSamples;
+    clouds.lightSamples = lightSamples;
     if (cloudsJson.empty())
     {
         return;
@@ -240,13 +220,9 @@ void ReadCloudSettingsJson(const nlohmann::json& settingsJson, rock::CloudSettin
     clouds.loopPhase = std::clamp(cloudsJson.value("loopPhase", clouds.loopPhase), 0.0f, 1.0f);
     clouds.windDirectionDegrees = std::clamp(cloudsJson.value("windDirectionDegrees", clouds.windDirectionDegrees), 0.0f, 360.0f);
     clouds.windSpeedMetersPerSec = std::clamp(cloudsJson.value("windSpeedMetersPerSec", clouds.windSpeedMetersPerSec), 0.0f, 500.0f);
-    clouds.qualitySamples = std::clamp(cloudsJson.value("qualitySamples", clouds.qualitySamples), 8, 128);
     clouds.shadowStrength = std::clamp(cloudsJson.value("shadowStrength", clouds.shadowStrength), 0.0f, 1.0f);
-    clouds.shadowResolution = NearestShadowResolutionPreset(cloudsJson.value("shadowResolution", clouds.shadowResolution));
-    clouds.shadowSamples = std::clamp(cloudsJson.value("shadowSamples", clouds.shadowSamples), 4, 64);
     clouds.fieldRadius = std::clamp(cloudsJson.value("fieldRadius", clouds.fieldRadius), 100.0f, 200000.0f);
     clouds.fieldFalloff = std::clamp(cloudsJson.value("fieldFalloff", clouds.fieldFalloff), 1.0f, 50000.0f);
-    clouds.lightSamples = std::clamp(cloudsJson.value("lightSamples", clouds.lightSamples), 0, 16);
     clouds.selfShadowEnabled = cloudsJson.value("selfShadowEnabled", clouds.lightSamples > 0);
     clouds.lightStepMeters = std::clamp(cloudsJson.value("lightStepMeters", clouds.lightStepMeters), 1.0f, 2000.0f);
     clouds.phaseEccentricity = std::clamp(cloudsJson.value("phaseEccentricity", clouds.phaseEccentricity), -0.99f, 0.99f);
@@ -282,20 +258,10 @@ void ReadPreviewSettingsJson(const nlohmann::json& settingsJson, rock::PreviewSe
     preview.autoExposureMaxEv = std::clamp(previewJson.value("autoExposureMaxEv", preview.autoExposureMaxEv), preview.autoExposureMinEv, 8.0f);
     preview.autoExposureSpeed = std::clamp(previewJson.value("autoExposureSpeed", preview.autoExposureSpeed), 0.05f, 8.0f);
     preview.colorTemperatureKelvin = std::clamp(previewJson.value("colorTemperatureKelvin", preview.colorTemperatureKelvin), 2000.0f, 12000.0f);
-    const int backendInt = std::clamp(previewJson.value("meshBackend", static_cast<int>(preview.meshBackend)),
-                                      static_cast<int>(rock::MeshPreviewBackend::CpuMesh),
-                                      static_cast<int>(rock::MeshPreviewBackend::GpuDisplacement));
-    preview.meshBackend = static_cast<rock::MeshPreviewBackend>(backendInt);
     const int boundaryInt = std::clamp(previewJson.value("terrainBoundaryMode", static_cast<int>(preview.terrainBoundaryMode)),
-                                      static_cast<int>(rock::TerrainBoundaryMode::None),
-                                      static_cast<int>(rock::TerrainBoundaryMode::Lines));
+                                       static_cast<int>(rock::TerrainBoundaryMode::None),
+                                       static_cast<int>(rock::TerrainBoundaryMode::Lines));
     preview.terrainBoundaryMode = static_cast<rock::TerrainBoundaryMode>(boundaryInt);
-    preview.frameRateLimitFps = ClampFrameRateLimitFps(previewJson.value("frameRateLimitFps", preview.frameRateLimitFps));
-    preview.viewportTessellation = previewJson.value("viewportTessellation", preview.viewportTessellation);
-    preview.tessellationMinFactor = std::clamp(previewJson.value("tessellationMinFactor", preview.tessellationMinFactor), 1.0f, 64.0f);
-    preview.tessellationMaxFactor = std::clamp(previewJson.value("tessellationMaxFactor", preview.tessellationMaxFactor), preview.tessellationMinFactor, 64.0f);
-    preview.tessellationNearDistance = std::clamp(previewJson.value("tessellationNearDistance", preview.tessellationNearDistance), 1.0f, 100000.0f);
-    preview.tessellationFarDistance = std::clamp(previewJson.value("tessellationFarDistance", preview.tessellationFarDistance), preview.tessellationNearDistance + 1.0f, 200000.0f);
     preview.waterEnabled = previewJson.value("waterEnabled", preview.waterEnabled);
     preview.waterLevelMeters = std::clamp(previewJson.value("waterLevelMeters", preview.waterLevelMeters), 0.0f, 10000.0f);
     preview.waterOpacity = std::clamp(previewJson.value("waterOpacity", preview.waterOpacity), 0.0f, 1.0f);
@@ -323,7 +289,6 @@ void ReadPreviewSettingsJson(const nlohmann::json& settingsJson, rock::PreviewSe
     preview.sunIntensity = std::clamp(previewJson.value("sunIntensity", preview.sunIntensity), 0.0f, 5.0f);
     preview.ambientStrength = std::clamp(previewJson.value("ambientStrength", preview.ambientStrength), 0.0f, 2.0f);
     preview.shadowStrength = std::clamp(previewJson.value("shadowStrength", preview.shadowStrength), 0.0f, 1.0f);
-    preview.shadowMapResolution = NearestShadowResolutionPreset(previewJson.value("shadowMapResolution", preview.shadowMapResolution));
     preview.shadowBias = std::clamp(previewJson.value("shadowBias", preview.shadowBias), 0.0f, 0.05f);
     {
         const int sunModeInt = std::clamp(previewJson.value("sunDirectionMode", static_cast<int>(preview.sunDirectionMode)),
@@ -353,8 +318,7 @@ void ReadPreviewSettingsJson(const nlohmann::json& settingsJson, rock::PreviewSe
 void ReadDisplaySettingsJson(const nlohmann::json& settingsJson,
                              rock::PreviewSettings& preview,
                              rock::SkySettings& sky,
-                             rock::CloudSettings& clouds,
-                             ProjectDisplaySettings& display)
+                             rock::CloudSettings& clouds)
 {
     const nlohmann::json displayJson = settingsJson.value("display", nlohmann::json::object());
     if (displayJson.empty())
@@ -362,7 +326,6 @@ void ReadDisplaySettingsJson(const nlohmann::json& settingsJson,
         return;
     }
 
-    display.showFps = displayJson.value("showFps", display.showFps);
     clouds.enabled = displayJson.value("cloudsEnabled", clouds.enabled);
     const int displayMode = std::clamp(displayJson.value("mode", -1), -1, 2);
     if (displayMode == 0)
@@ -382,7 +345,7 @@ void ReadDisplaySettingsJson(const nlohmann::json& settingsJson,
     }
 }
 
-bool ReadProjectSettingsJson(const nlohmann::json& root, rock::GraphSettings& graphSettings, ProjectDisplaySettings& display)
+bool ReadProjectSettingsJson(const nlohmann::json& root, rock::GraphSettings& graphSettings)
 {
     const nlohmann::json settingsJson = root.value("settings", nlohmann::json::object());
     rock::PreviewSettings& preview = graphSettings.preview;
@@ -393,7 +356,7 @@ bool ReadProjectSettingsJson(const nlohmann::json& root, rock::GraphSettings& gr
     ReadSkySettingsJson(settingsJson, sky);
     ReadCloudSettingsJson(settingsJson, clouds);
     ReadPreviewSettingsJson(settingsJson, preview, sky, hadSimulationResolution);
-    ReadDisplaySettingsJson(settingsJson, preview, sky, clouds, display);
+    ReadDisplaySettingsJson(settingsJson, preview, sky, clouds);
     return hadSimulationResolution;
 }
 

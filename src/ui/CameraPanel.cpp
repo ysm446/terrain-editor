@@ -45,8 +45,8 @@ void DrawCameraPanel(CameraPanelState state)
     }
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
     {
-        ImGui::SetTooltip("%s", Tr("Reset camera rotation, distance, and pan to their defaults. Shortcut: F",
-            "カメラの向き、距離、パンを既定値に戻します。ショートカット: F"));
+        ImGui::SetTooltip("%s", Tr("Reset camera rotation, distance, and pan to their defaults. Shortcut: A",
+            "カメラの向き、距離、パンを既定値に戻します。ショートカット: A"));
     }
 
     ImGui::Spacing();
@@ -75,8 +75,8 @@ void DrawCameraPanel(CameraPanelState state)
             Tr("Vertical camera angle. Adjusts whether the terrain is viewed from a higher or lower point. Unit: radians.",
                 "カメラの上下角です。高い視点や低い視点から地形を見る角度を調整します。単位はラジアンです。"));
         if (DrawPropertyBoolRow(Tr("Orbit Camera", "カメラを回す"), "CameraAutoOrbitEnabled", &viewport.autoOrbitEnabled, "Camera auto orbit toggled",
-            Tr("Automatically rotates the camera around the Y axis for demos.",
-                "デモ用に、カメラを Y 軸まわりへ自動回転させます。"), false, true))
+            Tr("Automatically rotates the camera around the Y axis for demos. Shortcut: O",
+                "デモ用に、カメラを Y 軸まわりへ自動回転させます。ショートカット: O"), false, true))
         {
             if (state.saveAppSettings)
             {
@@ -174,8 +174,8 @@ void DrawCameraPanel(CameraPanelState state)
         ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 112.0f);
         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
         DrawPropertyBoolRow(Tr("Enabled", "有効"), "DofEnabled", &preview.depthOfFieldEnabled, "Depth of Field toggled",
-            Tr("Depth of Field applied only to the viewport display. It does not affect terrain data or OBJ export.",
-                "ビューポート表示だけにかかる被写界深度です。地形データや OBJ エクスポートには影響しません。"),
+            Tr("Depth of Field applied only to the viewport display. It does not affect terrain data or OBJ export. Shortcut: D",
+                "ビューポート表示だけにかかる被写界深度です。地形データや OBJ エクスポートには影響しません。ショートカット: D"),
             rock::PreviewSettings{}.depthOfFieldEnabled, true);
         ImGui::BeginDisabled(!preview.depthOfFieldEnabled);
         DrawPropertyFloatRow(Tr("F-Stop", "F 値"), "DofFStop", &preview.dofFStop, 0.7f, 32.0f, rock::PreviewSettings{}.dofFStop, "Depth of Field f-stop changed", false,
@@ -197,8 +197,8 @@ void DrawCameraPanel(CameraPanelState state)
         }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         {
-            ImGui::SetTooltip("%s", Tr("Click terrain in the viewport to set the focus distance.\nShortcut: Ctrl+Click",
-                "ビューポートの地形をクリックしてフォーカス距離を設定します。\nショートカット: Ctrl+クリック"));
+            ImGui::SetTooltip("%s", Tr("Click terrain in the viewport to set the focus distance.\nShortcut: F+Click",
+                "ビューポートの地形をクリックしてフォーカス距離を設定します。\nショートカット: F+クリック"));
         }
         DrawPropertyFloatRow(Tr("Sensor Height (mm)", "センサー高さ (mm)"), "DofSensorHeight", &preview.dofSensorHeightMm, 4.0f, 80.0f, rock::PreviewSettings{}.dofSensorHeightMm, "Depth of Field sensor height changed", false,
             Tr("Sensor height used for Circle of Confusion rendering. 24 mm is standard for full-frame landscape orientation.",

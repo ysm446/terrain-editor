@@ -57,7 +57,7 @@ float Length(Vec3 value);
 Vec3 Cross(Vec3 a, Vec3 b);
 Vec3 Normalize(Vec3 value, Vec3 fallback);
 
-float DefaultViewportOrbitDistance(float terrainSizeMeters);
+float DefaultViewportOrbitDistance(float terrainSizeMeters, float fovDegrees);
 float CameraFocalLengthMmFromFovYDegrees(float fovYDegrees);
 float CameraFovYDegreesFromFocalLengthMm(float focalLengthMm);
 

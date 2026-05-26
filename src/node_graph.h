@@ -692,9 +692,8 @@ struct PreviewSettings
     bool showSurface = true;
     bool showWireframe = false;
     bool showGrid = true;
-    int frameRateLimitFps = 0; // 0 = unlimited, otherwise target FPS cap.
     int lightingMode = 0;
-    bool hdrViewportEnabled = true;
+    bool hdrViewportEnabled = false;
     ExposureMode exposureMode = ExposureMode::Auto;
     float exposureEv = 0.0f;
     float autoExposureBiasEv = 0.0f;

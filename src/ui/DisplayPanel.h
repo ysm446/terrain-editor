@@ -10,7 +10,6 @@ struct DisplayPanelState
 {
     rock::GraphSettings& settings;
     bool& meshPreview;
-    bool& showFps;
     float& orbitDistance;
     std::function<float()> defaultViewportOrbitDistance;
     std::function<void()> evaluateGraph;
