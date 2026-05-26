@@ -98,6 +98,61 @@ void DrawCameraPanel(CameraPanelState state)
     }
 
     ImGui::Spacing();
+    ImGui::SeparatorText("HDR");
+    if (ImGui::BeginTable("CameraHdrRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 112.0f);
+        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+        DrawPropertyBoolRow("HDR Viewport", "CameraHdrViewportEnabled", &preview.hdrViewportEnabled, "HDR viewport toggled",
+            Tr("Uses a 16-bit float HDR viewport buffer with tonemapping and exposure controls. Turn this off to use the pre-HDR 8-bit viewport path.",
+                "16-bit float の HDR ビューポートバッファを使い、トーンマップと露出調整を有効にします。オフにすると HDR 以前の 8-bit ビューポート経路を使います。"),
+            rock::PreviewSettings{}.hdrViewportEnabled, true);
+
+        if (preview.hdrViewportEnabled)
+        {
+            int exposureModeInt = static_cast<int>(preview.exposureMode);
+            if (DrawPropertyComboRow(Tr("Exposure Mode", "露出モード"), "CameraExposureMode", &exposureModeInt, Tr("Manual\0Auto\0\0", "Manual\0Auto\0\0"),
+                Tr("Manual uses the Exposure EV value directly. Auto samples the HDR viewport and adjusts exposure into the selected EV range.",
+                    "Manual は Exposure EV をそのまま使います。Auto は HDR ビューポートをサンプリングし、指定した EV 範囲内で露出を自動調整します。"),
+                static_cast<int>(rock::PreviewSettings{}.exposureMode)))
+            {
+                preview.exposureMode = static_cast<rock::ExposureMode>(std::clamp(exposureModeInt,
+                    static_cast<int>(rock::ExposureMode::Manual),
+                    static_cast<int>(rock::ExposureMode::Auto)));
+            }
+            if (preview.exposureMode == rock::ExposureMode::Manual)
+            {
+                DrawPropertyFloatRow("Exposure EV", "CameraExposureEv", &preview.exposureEv, -8.0f, 8.0f, rock::PreviewSettings{}.exposureEv, "Exposure changed", false,
+                    Tr("Manual exposure compensation in stops. Positive values brighten the viewport; negative values darken it.",
+                        "手動露出補正です。正の値で明るく、負の値で暗くします。"), "%.2f");
+            }
+            else
+            {
+                DrawPropertyFloatRow("Bias EV", "CameraAutoExposureBiasEv", &preview.autoExposureBiasEv, -4.0f, 4.0f, rock::PreviewSettings{}.autoExposureBiasEv, "Auto exposure bias changed", false,
+                    Tr("Exposure compensation applied after auto metering.", "自動測光後に加える露出補正です。"), "%.2f");
+                if (DrawPropertyFloatRow("Min EV", "CameraAutoExposureMinEv", &preview.autoExposureMinEv, -8.0f, 8.0f, rock::PreviewSettings{}.autoExposureMinEv, "Auto exposure min changed", false,
+                    Tr("Darkest exposure allowed for auto exposure.", "自動露出で許可する最も暗い露出です。"), "%.2f"))
+                {
+                    preview.autoExposureMinEv = std::clamp(preview.autoExposureMinEv, -8.0f, 8.0f);
+                    preview.autoExposureMaxEv = std::max(preview.autoExposureMaxEv, preview.autoExposureMinEv);
+                }
+                if (DrawPropertyFloatRow("Max EV", "CameraAutoExposureMaxEv", &preview.autoExposureMaxEv, -8.0f, 8.0f, rock::PreviewSettings{}.autoExposureMaxEv, "Auto exposure max changed", false,
+                    Tr("Brightest exposure allowed for auto exposure.", "自動露出で許可する最も明るい露出です。"), "%.2f"))
+                {
+                    preview.autoExposureMaxEv = std::clamp(preview.autoExposureMaxEv, preview.autoExposureMinEv, 8.0f);
+                }
+                if (DrawPropertyFloatRow("Speed", "CameraAutoExposureSpeed", &preview.autoExposureSpeed, 0.05f, 8.0f, rock::PreviewSettings{}.autoExposureSpeed, "Auto exposure speed changed", false,
+                    Tr("How quickly auto exposure adapts. Lower values make transitions slower.",
+                        "自動露出が追従する速さです。小さいほど露出変化がゆっくりになります。"), "%.2f"))
+                {
+                    preview.autoExposureSpeed = std::clamp(preview.autoExposureSpeed, 0.05f, 8.0f);
+                }
+            }
+        }
+        ImGui::EndTable();
+    }
+
+    ImGui::Spacing();
     ImGui::SeparatorText("Depth of Field");
     if (ImGui::BeginTable("CameraDofRows", 2, ImGuiTableFlags_SizingStretchProp))
     {

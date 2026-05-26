@@ -374,66 +374,6 @@ void DrawDisplaySettingsPanel(DisplayPanelState state)
             }
         }
 
-        ImGui::SeparatorText("HDR");
-        if (DrawPropertyBoolRow("HDR Viewport", "DisplayHdrViewportEnabled", &settings.preview.hdrViewportEnabled, "HDR viewport toggled",
-            Tr("Uses a 16-bit float HDR viewport buffer with tonemapping and exposure controls. Turn this off to use the pre-HDR 8-bit viewport path.", "16-bit float の HDR ビューポートバッファを使い、トーンマップと露出調整を有効にします。オフにすると HDR 以前の 8-bit ビューポート経路を使います。"),
-            rock::PreviewSettings{}.hdrViewportEnabled, true))
-        {
-            SaveAppSettings(state);
-        }
-
-        if (settings.preview.hdrViewportEnabled)
-        {
-            ImGui::SeparatorText(Tr("Exposure", "露出"));
-            {
-                int exposureModeInt = static_cast<int>(settings.preview.exposureMode);
-                if (DrawPropertyComboRow(Tr("Mode", "モード"), "DisplayExposureMode", &exposureModeInt, Tr("Manual\0Auto\0\0", "Manual\0Auto\0\0"),
-                    Tr("Manual uses the Exposure EV value directly. Auto samples the HDR viewport and adjusts exposure into the selected EV range.", "Manual は Exposure EV をそのまま使います。Auto は HDR ビューポートをサンプリングし、指定した EV 範囲内で露出を自動調整します。"),
-                    static_cast<int>(rock::PreviewSettings{}.exposureMode)))
-                {
-                    settings.preview.exposureMode = static_cast<rock::ExposureMode>(std::clamp(exposureModeInt,
-                        static_cast<int>(rock::ExposureMode::Manual),
-                        static_cast<int>(rock::ExposureMode::Auto)));
-                    SaveAppSettings(state);
-                }
-            }
-            if (settings.preview.exposureMode == rock::ExposureMode::Manual)
-            {
-                if (DrawPropertyFloatRow("Exposure EV", "DisplayExposureEv", &settings.preview.exposureEv, -8.0f, 8.0f, rock::PreviewSettings{}.exposureEv, "Exposure changed", false,
-                    Tr("Manual exposure compensation in stops. Positive values brighten the viewport; negative values darken it.", "手動露出補正です。正の値で明るく、負の値で暗くします。"), "%.2f"))
-                {
-                    SaveAppSettings(state);
-                }
-            }
-            else
-            {
-                if (DrawPropertyFloatRow("Bias EV", "DisplayAutoExposureBiasEv", &settings.preview.autoExposureBiasEv, -4.0f, 4.0f, rock::PreviewSettings{}.autoExposureBiasEv, "Auto exposure bias changed", false,
-                    Tr("Exposure compensation applied after auto metering.", "自動測光後に加える露出補正です。"), "%.2f"))
-                {
-                    SaveAppSettings(state);
-                }
-                if (DrawPropertyFloatRow("Min EV", "DisplayAutoExposureMinEv", &settings.preview.autoExposureMinEv, -8.0f, 8.0f, rock::PreviewSettings{}.autoExposureMinEv, "Auto exposure min changed", false,
-                    Tr("Darkest exposure allowed for auto exposure.", "自動露出で許可する最も暗い露出です。"), "%.2f"))
-                {
-                    settings.preview.autoExposureMinEv = std::clamp(settings.preview.autoExposureMinEv, -8.0f, 8.0f);
-                    settings.preview.autoExposureMaxEv = std::max(settings.preview.autoExposureMaxEv, settings.preview.autoExposureMinEv);
-                    SaveAppSettings(state);
-                }
-                if (DrawPropertyFloatRow("Max EV", "DisplayAutoExposureMaxEv", &settings.preview.autoExposureMaxEv, -8.0f, 8.0f, rock::PreviewSettings{}.autoExposureMaxEv, "Auto exposure max changed", false,
-                    Tr("Brightest exposure allowed for auto exposure.", "自動露出で許可する最も明るい露出です。"), "%.2f"))
-                {
-                    settings.preview.autoExposureMaxEv = std::clamp(settings.preview.autoExposureMaxEv, settings.preview.autoExposureMinEv, 8.0f);
-                    SaveAppSettings(state);
-                }
-                if (DrawPropertyFloatRow("Speed", "DisplayAutoExposureSpeed", &settings.preview.autoExposureSpeed, 0.05f, 8.0f, rock::PreviewSettings{}.autoExposureSpeed, "Auto exposure speed changed", false,
-                    Tr("How quickly auto exposure adapts. Lower values make transitions slower.", "自動露出が追従する速さです。小さいほど露出変化がゆっくりになります。"), "%.2f"))
-                {
-                    settings.preview.autoExposureSpeed = std::clamp(settings.preview.autoExposureSpeed, 0.05f, 8.0f);
-                    SaveAppSettings(state);
-                }
-            }
-        }
-
         ImGui::SeparatorText(Tr("Ambient Occlusion", "アンビエントオクルージョン"));
         if (DrawPropertyBoolRow("AO", "DisplayAOEnabled", &settings.preview.aoEnabled, "AO toggled", Tr("Static ambient occlusion computed from the heightfield horizon angle. It darkens valleys and concave areas and is recalculated when the heightfield changes.", "ハイトフィールドから水平線仰角を計算した静的アンビエントオクルージョンです。谷や凹部のアンビエントライトを遮蔽します。ハイトフィールドが変わると自動で再計算されます。"), rock::PreviewSettings{}.aoEnabled, true))
         {
