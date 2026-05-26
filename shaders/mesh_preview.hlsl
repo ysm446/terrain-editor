@@ -571,19 +571,19 @@ float4 PSSurface(VSOut i) : SV_TARGET
             float visibility = ComputeShadowVisibility(i.worldPos);
             float cloudVisibility = ComputeCloudShadowVisibility(i.worldPos);
             float cloudShadowFactor = lerp(1.0, cloudVisibility, cloudShadowStrength);
-            float shadowAmount = (1.0 - visibility) * shadowStrength;
-            float shadowMix = lerp(1.0 - shadowStrength * 0.75, 1.0, visibility);
+            float directVisibility = lerp(1.0 - shadowStrength, 1.0, visibility);
+            float castShadowAmount = (1.0 - visibility) * shadowStrength;
 
             float3 skyAmbient = n.y >= 0.0
                 ? lerp(skyHorizonColor.rgb, skyZenithColor.rgb, n.y)
                 : lerp(skyHorizonColor.rgb, skyGroundColor.rgb, -n.y);
             skyAmbient *= ambientStrength;
+            float3 shadowAmbient = skyHorizonColor.rgb * ambientStrength;
+            skyAmbient = lerp(skyAmbient, shadowAmbient, castShadowAmount);
 
             float ambientCloudMix = lerp(1.0, cloudVisibility, cloudShadowStrength * 0.4);
-            float3 sunTint = skySunColor.rgb * ndl * sunIntensity * shadowMix * cloudShadowFactor;
-            float3 bounceTint = skyGroundColor.rgb * ambientStrength * shadowAmount * 0.35;
-            col = sectionBaseColor * (skyAmbient * ambientCloudMix + sunTint + bounceTint);
-            col = lerp(col, dot(col, float3(0.299, 0.587, 0.114)).xxx, shadowAmount * 0.18);
+            float3 sunTint = skySunColor.rgb * ndl * sunIntensity * directVisibility * cloudShadowFactor;
+            col = sectionBaseColor * (skyAmbient * ambientCloudMix + sunTint);
         }
         if (atmosphereDensity > 0.001 && maskPreview < 0.5)
         {
@@ -621,8 +621,8 @@ float4 PSSurface(VSOut i) : SV_TARGET
         float cloudVisibility = ComputeCloudShadowVisibility(i.worldPos);
         float cloudShadowFactor = lerp(1.0, cloudVisibility, cloudShadowStrength);
         float viewFacing = pow(saturate(dot(n, V) * 0.5 + 0.5), 0.35);
-        float shadowAmount = (1.0 - visibility) * shadowStrength;
-        float shadowMix = lerp(1.0 - shadowStrength * 0.75, 1.0, visibility);
+        float directVisibility = lerp(1.0 - shadowStrength, 1.0, visibility);
+        float castShadowAmount = (1.0 - visibility) * shadowStrength;
 
         // Hemisphere ambient driven by sky settings: surfaces facing up
         // sample the zenith colour, surfaces facing the horizon sample the
@@ -639,6 +639,8 @@ float4 PSSurface(VSOut i) : SV_TARGET
         }
         skyAmbient *= ambientStrength;
         skyAmbient *= aoFactor;
+        float3 shadowAmbient = skyHorizonColor.rgb * ambientStrength * aoFactor;
+        skyAmbient = lerp(skyAmbient, shadowAmbient, castShadowAmount);
 
         // Cloud shadow attenuates the sun (direct light) fully but only
         // partially attenuates ambient sky light, since clouds scatter light
@@ -646,20 +648,15 @@ float4 PSSurface(VSOut i) : SV_TARGET
         float ambientCloudMix = lerp(1.0, cloudVisibility, cloudShadowStrength * 0.4);
 
         // Direct sun: uses the sky's sun colour so a warm sky tints the
-        // direct light too.
-        float3 sunTint = skySunColor.rgb * ndl * sunIntensity * shadowMix * cloudShadowFactor;
-
-        // Bounce / fill: light reflected off the ground reaching the
-        // shadowed side of surfaces. Tinted by groundColor for consistency
-        // with the lower hemisphere.
-        float3 bounceTint = skyGroundColor.rgb * ambientStrength * shadowAmount * 0.55;
+        // direct light too. Shadow maps attenuate only this direct term;
+        // ambient remains shared by self-shaded and cast-shadow regions.
+        float3 sunTint = skySunColor.rgb * ndl * sunIntensity * directVisibility * cloudShadowFactor;
 
         float3 slopeMicroShade = lerp(float3(0.78, 0.80, 0.82), float3(1.06, 1.05, 1.02), viewFacing);
         float3 effectiveAlbedo = UseColorTexture()
             ? colorTexture.Sample(linearSampler, TerrainTextureUv(i.worldPos)).rgb
             : albedoColor.rgb;
-        col = effectiveAlbedo * (skyAmbient * ambientCloudMix + sunTint + bounceTint) * slopeMicroShade;
-        col = lerp(col, dot(col, float3(0.299, 0.587, 0.114)).xxx, shadowAmount * 0.18);
+        col = effectiveAlbedo * (skyAmbient * ambientCloudMix + sunTint) * slopeMicroShade;
         col += pow(saturate(ndl), 24.0) * sunIntensity * visibility * cloudShadowFactor * 0.045;
     }
     if (maskPreview > 0.5)
