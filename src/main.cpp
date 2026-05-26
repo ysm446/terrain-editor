@@ -10902,6 +10902,20 @@ void EndInspectorTabContent()
     ImGui::Unindent(10.0f);
 }
 
+void BeginScrollableInspectorTabContent(const char* id)
+{
+    const float rightInset = ImGui::GetStyle().WindowPadding.x;
+    const float width = std::max(1.0f, ImGui::GetContentRegionAvail().x - rightInset);
+    ImGui::BeginChild(id, ImVec2(width, 0.0f), false);
+    BeginInspectorTabContent();
+}
+
+void EndScrollableInspectorTabContent()
+{
+    EndInspectorTabContent();
+    ImGui::EndChild();
+}
+
 struct TabHeaderStyle
 {
     ImVec2 framePadding = ImVec2(12.0f, 5.0f);
@@ -11929,64 +11943,64 @@ void DrawUi()
     }
 
     const auto inspectorStart = std::chrono::steady_clock::now();
-    ImGui::BeginChild("Inspector", ImVec2(0.0f, 0.0f), false);
+    ImGui::BeginChild("Inspector", ImVec2(0.0f, 0.0f), false, fixedPaneFlags);
     PushTabHeaderStyle(defaultTabStyle);
     if (ImGui::BeginTabBar("InspectorTabs"))
     {
         if (BeginStyledTabItem(Tr("Properties", "プロパティ"), "InspectorProperties"))
         {
-            BeginInspectorTabContent();
+            BeginScrollableInspectorTabContent("InspectorPropertiesContent");
             DrawPropertiesPanel();
-            EndInspectorTabContent();
+            EndScrollableInspectorTabContent();
             EndStyledTabItem(defaultTabStyle);
         }
         if (BeginStyledTabItem(Tr("Settings", "設定"), "InspectorSettings"))
         {
-            BeginInspectorTabContent();
+            BeginScrollableInspectorTabContent("InspectorSettingsContent");
             DrawDisplaySettingsPanel();
-            EndInspectorTabContent();
+            EndScrollableInspectorTabContent();
             EndStyledTabItem(defaultTabStyle);
         }
         if (BeginStyledTabItem(Tr("Sky", "天球"), "InspectorSky"))
         {
-            BeginInspectorTabContent();
+            BeginScrollableInspectorTabContent("InspectorSkyContent");
             DrawSkySettingsPanel();
-            EndInspectorTabContent();
+            EndScrollableInspectorTabContent();
             EndStyledTabItem(defaultTabStyle);
         }
         if (BeginStyledTabItem(Tr("Clouds", "雲"), "InspectorClouds"))
         {
-            BeginInspectorTabContent();
+            BeginScrollableInspectorTabContent("InspectorCloudsContent");
             DrawCloudSettingsPanel();
-            EndInspectorTabContent();
+            EndScrollableInspectorTabContent();
             EndStyledTabItem(defaultTabStyle);
         }
         if (BeginStyledTabItem(Tr("Water", "水面"), "InspectorWater"))
         {
-            BeginInspectorTabContent();
+            BeginScrollableInspectorTabContent("InspectorWaterContent");
             DrawWaterSettingsPanel();
-            EndInspectorTabContent();
+            EndScrollableInspectorTabContent();
             EndStyledTabItem(defaultTabStyle);
         }
         if (BeginStyledTabItem(Tr("Camera", "カメラ"), "InspectorCamera"))
         {
-            BeginInspectorTabContent();
+            BeginScrollableInspectorTabContent("InspectorCameraContent");
             DrawCameraPanel();
-            EndInspectorTabContent();
+            EndScrollableInspectorTabContent();
             EndStyledTabItem(defaultTabStyle);
         }
         if (BeginStyledTabItem(Tr("Export", "エクスポート"), "InspectorExport"))
         {
-            BeginInspectorTabContent();
+            BeginScrollableInspectorTabContent("InspectorExportContent");
             DrawAssetExportPanel();
-            EndInspectorTabContent();
+            EndScrollableInspectorTabContent();
             EndStyledTabItem(defaultTabStyle);
         }
         if (BeginStyledTabItem(Tr("Environment", "環境設定"), "InspectorEnvironment"))
         {
-            BeginInspectorTabContent();
+            BeginScrollableInspectorTabContent("InspectorEnvironmentContent");
             DrawEnvironmentSettingsPanel();
-            EndInspectorTabContent();
+            EndScrollableInspectorTabContent();
             EndStyledTabItem(defaultTabStyle);
         }
         ImGui::EndTabBar();
