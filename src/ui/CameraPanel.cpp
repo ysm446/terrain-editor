@@ -148,13 +148,22 @@ void DrawCameraPanel(CameraPanelState state)
                     preview.autoExposureSpeed = std::clamp(preview.autoExposureSpeed, 0.05f, 8.0f);
                 }
             }
-            DrawPropertyFloatRow(Tr("Color Temperature (K)", "色温度 (K)"), "CameraColorTemperatureKelvin", &preview.colorTemperatureKelvin,
-                2000.0f, 12000.0f, rock::PreviewSettings{}.colorTemperatureKelvin, "Color temperature changed", false,
-                Tr("Viewport white balance. Lower values warm the image; higher values cool it.",
-                    "ビューポートのホワイトバランスです。低い値で暖色、高い値で寒色へ寄せます。"), "%.0f");
-            preview.colorTemperatureKelvin = std::clamp(preview.colorTemperatureKelvin, 2000.0f, 12000.0f);
         }
         ImGui::EndDisabled();
+        ImGui::EndTable();
+    }
+
+    ImGui::Spacing();
+    ImGui::SeparatorText("Color");
+    if (ImGui::BeginTable("CameraColorRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 112.0f);
+        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+        DrawPropertyFloatRow(Tr("Color Temperature (K)", "色温度 (K)"), "CameraColorTemperatureKelvin", &preview.colorTemperatureKelvin,
+            2000.0f, 12000.0f, rock::PreviewSettings{}.colorTemperatureKelvin, "Color temperature changed", false,
+            Tr("Viewport white balance. Lower values warm the image; higher values cool it.",
+                "ビューポートのホワイトバランスです。低い値で暖色、高い値で寒色へ寄せます。"), "%.0f");
+        preview.colorTemperatureKelvin = std::clamp(preview.colorTemperatureKelvin, 2000.0f, 12000.0f);
         ImGui::EndTable();
     }
 

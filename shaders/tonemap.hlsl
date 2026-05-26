@@ -96,3 +96,11 @@ float4 TonemapPS(VsOut input) : SV_Target
     float3 mapped = AcesFitted(exposed);
     return float4(mapped, 1.0);
 }
+
+float4 ColorGradePS(VsOut input) : SV_Target
+{
+    float4 color = HdrColor.SampleLevel(LinearSampler, input.uv, 0);
+    float3 whiteBalance = ColorTemperatureRgb(colorTemperatureKelvin) / max(ColorTemperatureRgb(6500.0), float3(1.0e-3, 1.0e-3, 1.0e-3));
+    color.rgb = saturate(max(color.rgb, 0.0) * whiteBalance);
+    return float4(color.rgb, color.a);
+}

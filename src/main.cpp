@@ -707,6 +707,7 @@ DXGI_FORMAT g_cloudRenderPipelineFormat = DXGI_FORMAT_UNKNOWN;
 ComPtr<ID3D12RootSignature> g_tonemapRootSignature;
 ComPtr<ID3D12PipelineState> g_exposurePso;
 ComPtr<ID3D12PipelineState> g_tonemapPso;
+ComPtr<ID3D12PipelineState> g_colorGradePso;
 bool g_tonemapPipelineReady = false;
 std::string g_tonemapPipelineStatus = "Tonemap pipeline not initialized";
 
@@ -1125,6 +1126,7 @@ void CleanupD3D()
     g_dofPipelineReady = false;
     g_dofPipelineFormat = DXGI_FORMAT_UNKNOWN;
     g_tonemapPso.Reset();
+    g_colorGradePso.Reset();
     g_exposurePso.Reset();
     g_tonemapRootSignature.Reset();
     g_tonemapPipelineReady = false;
@@ -1219,6 +1221,11 @@ DXGI_FORMAT MeshPreviewColorFormat()
     return g_graph.Settings().preview.hdrViewportEnabled
         ? DXGI_FORMAT_R16G16B16A16_FLOAT
         : DXGI_FORMAT_R8G8B8A8_UNORM;
+}
+
+bool ColorTemperatureAdjusted()
+{
+    return std::abs(g_graph.Settings().preview.colorTemperatureKelvin - rock::PreviewSettings{}.colorTemperatureKelvin) > 0.5f;
 }
 
 void EvaluateGraph();
@@ -3333,7 +3340,7 @@ bool EnsureDepthOfFieldPipeline(std::string* error)
 
 bool EnsureTonemapPipeline(std::string* error)
 {
-    if (g_tonemapPipelineReady && g_tonemapRootSignature && g_exposurePso && g_tonemapPso)
+    if (g_tonemapPipelineReady && g_tonemapRootSignature && g_exposurePso && g_tonemapPso && g_colorGradePso)
     {
         return true;
     }
@@ -3414,10 +3421,11 @@ bool EnsureTonemapPipeline(std::string* error)
         return true;
     };
 
-    ComPtr<ID3DBlob> vsBlob, exposurePsBlob, psBlob;
+    ComPtr<ID3DBlob> vsBlob, exposurePsBlob, psBlob, colorGradePsBlob;
     if (!compileEntry("TonemapVS", "vs_5_0", vsBlob)) { g_tonemapPipelineStatus = "Tonemap VS compile failed"; return false; }
     if (!compileEntry("ExposurePS", "ps_5_0", exposurePsBlob)) { g_tonemapPipelineStatus = "Exposure PS compile failed"; return false; }
     if (!compileEntry("TonemapPS", "ps_5_0", psBlob)) { g_tonemapPipelineStatus = "Tonemap PS compile failed"; return false; }
+    if (!compileEntry("ColorGradePS", "ps_5_0", colorGradePsBlob)) { g_tonemapPipelineStatus = "Color grade PS compile failed"; return false; }
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
     psoDesc.pRootSignature = g_tonemapRootSignature.Get();
@@ -3450,6 +3458,15 @@ bool EnsureTonemapPipeline(std::string* error)
     {
         if (error) *error = "Create tonemap PSO failed";
         g_tonemapPipelineStatus = "Tonemap PSO failed";
+        return false;
+    }
+
+    psoDesc.PS = {colorGradePsBlob->GetBufferPointer(), colorGradePsBlob->GetBufferSize()};
+    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_colorGradePso));
+    if (FAILED(hr))
+    {
+        if (error) *error = "Create color grade PSO failed";
+        g_tonemapPipelineStatus = "Color grade PSO failed";
         return false;
     }
 
@@ -8120,7 +8137,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             dofReady = EnsureDepthOfFieldPipeline(&ignoredErr);
         }
         bool tonemapReady = false;
-        if (g_graph.Settings().preview.hdrViewportEnabled)
+        if (g_graph.Settings().preview.hdrViewportEnabled || ColorTemperatureAdjusted())
         {
             std::string tonemapErr;
             tonemapReady = EnsureTonemapPipeline(&tonemapErr);
@@ -8836,6 +8853,59 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             commandList->ResourceBarrier(1, &outputToSrv);
             g_gpuMeshPreview.outputState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         }
+        else if (ColorTemperatureAdjusted() && tonemapReady && g_gpuMeshPreview.outputTarget)
+        {
+            const bool useDofSource =
+                useDepthOfField &&
+                dofReady &&
+                g_gpuMeshPreview.postSrvAllocated &&
+                g_gpuMeshPreview.postState == D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            const D3D12_GPU_DESCRIPTOR_HANDLE colorGradeSource = useDofSource ? g_gpuMeshPreview.postSrvGpu : g_gpuMeshPreview.srvGpu;
+
+            TonemapShaderConstants colorGrade{};
+            colorGrade.colorTemperatureKelvin = std::clamp(g_graph.Settings().preview.colorTemperatureKelvin, 2000.0f, 12000.0f);
+
+            ID3D12DescriptorHeap* heaps[] = {g_srvHeap.Get()};
+            commandList->SetDescriptorHeaps(1, heaps);
+
+            if (g_gpuMeshPreview.outputState != D3D12_RESOURCE_STATE_RENDER_TARGET)
+            {
+                D3D12_RESOURCE_BARRIER outputToRt{};
+                outputToRt.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                outputToRt.Transition.pResource = g_gpuMeshPreview.outputTarget.Get();
+                outputToRt.Transition.StateBefore = g_gpuMeshPreview.outputState;
+                outputToRt.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+                outputToRt.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                commandList->ResourceBarrier(1, &outputToRt);
+                g_gpuMeshPreview.outputState = D3D12_RESOURCE_STATE_RENDER_TARGET;
+            }
+
+            const float clearOutput[] = {0.0f, 0.0f, 0.0f, 1.0f};
+            commandList->ClearRenderTargetView(g_gpuMeshPreview.outputRtvCpu, clearOutput, 0, nullptr);
+            commandList->OMSetRenderTargets(1, &g_gpuMeshPreview.outputRtvCpu, FALSE, nullptr);
+            commandList->RSSetViewports(1, &vp);
+            commandList->RSSetScissorRects(1, &scissor);
+
+            commandList->SetGraphicsRootSignature(g_tonemapRootSignature.Get());
+            commandList->SetPipelineState(g_colorGradePso.Get());
+            commandList->SetGraphicsRoot32BitConstants(0, sizeof(colorGrade) / 4, &colorGrade, 0);
+            commandList->SetGraphicsRootDescriptorTable(1, colorGradeSource);
+            commandList->SetGraphicsRootDescriptorTable(2, g_gpuMeshPreview.exposureSrvGpu[0]);
+            commandList->IASetVertexBuffers(0, 0, nullptr);
+            commandList->IASetIndexBuffer(nullptr);
+            commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            commandList->DrawInstanced(3, 1, 0, 0);
+            recordDraw(3, true);
+
+            D3D12_RESOURCE_BARRIER outputToSrv{};
+            outputToSrv.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            outputToSrv.Transition.pResource = g_gpuMeshPreview.outputTarget.Get();
+            outputToSrv.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+            outputToSrv.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            outputToSrv.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            commandList->ResourceBarrier(1, &outputToSrv);
+            g_gpuMeshPreview.outputState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        }
 
         ThrowIfFailed(commandList->Close(), "Close mesh preview CL failed");
         ID3D12CommandList* cls[] = {commandList.Get()};
@@ -8959,7 +9029,7 @@ void DrawGpuMeshPreview(ImDrawList* drawList, const ImVec2& min, const ImVec2& m
         return;
     }
     const bool useOutputImage =
-        g_gpuMeshPreview.hdrViewportEnabled &&
+        (g_gpuMeshPreview.hdrViewportEnabled || ColorTemperatureAdjusted()) &&
         g_tonemapPipelineReady &&
         g_gpuMeshPreview.outputSrvAllocated &&
         g_gpuMeshPreview.outputState == D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
