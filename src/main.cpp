@@ -8610,7 +8610,33 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
                 const AtmosphereSamples atm = SampleAtmosphericEnvironment(
                     skyForCloud, constants.sunDirection[0], constants.sunDirection[1], constants.sunDirection[2]);
                 atmSunColor = atm.sun;
-                atmSkyColor = atm.zenith;
+                // Use a hemisphere-ish hue for clouds so their ambient stays
+                // close to terrain ambient instead of leaning only on the
+                // often more violet zenith colour. Keep the old zenith
+                // luminance and chroma amount so this remains a hue adjustment
+                // rather than a brightness/saturation change.
+                constexpr float kCloudAmbientHorizonMix = 0.4f;
+                std::array<float, 3> hemiSkyColor = {
+                    atm.zenith[0] * (1.0f - kCloudAmbientHorizonMix) + atm.horizon[0] * kCloudAmbientHorizonMix,
+                    atm.zenith[1] * (1.0f - kCloudAmbientHorizonMix) + atm.horizon[1] * kCloudAmbientHorizonMix,
+                    atm.zenith[2] * (1.0f - kCloudAmbientHorizonMix) + atm.horizon[2] * kCloudAmbientHorizonMix,
+                };
+                const float oldLum = atm.zenith[0] * 0.2126f + atm.zenith[1] * 0.7152f + atm.zenith[2] * 0.0722f;
+                const float hemiLum = hemiSkyColor[0] * 0.2126f + hemiSkyColor[1] * 0.7152f + hemiSkyColor[2] * 0.0722f;
+                const float oldChromaR = atm.zenith[0] - oldLum;
+                const float oldChromaG = atm.zenith[1] - oldLum;
+                const float oldChromaB = atm.zenith[2] - oldLum;
+                const float hemiChromaR = hemiSkyColor[0] - hemiLum;
+                const float hemiChromaG = hemiSkyColor[1] - hemiLum;
+                const float hemiChromaB = hemiSkyColor[2] - hemiLum;
+                const float oldChromaLen = std::sqrt(oldChromaR * oldChromaR + oldChromaG * oldChromaG + oldChromaB * oldChromaB);
+                const float hemiChromaLen = std::sqrt(hemiChromaR * hemiChromaR + hemiChromaG * hemiChromaG + hemiChromaB * hemiChromaB);
+                const float chromaScale = oldChromaLen / std::max(hemiChromaLen, 1.0e-5f);
+                atmSkyColor = {
+                    std::max(oldLum + hemiChromaR * chromaScale, 0.0f),
+                    std::max(oldLum + hemiChromaG * chromaScale, 0.0f),
+                    std::max(oldLum + hemiChromaB * chromaScale, 0.0f),
+                };
             }
             cloudBase.atmosphereSunColor[0] = atmSunColor[0];
             cloudBase.atmosphereSunColor[1] = atmSunColor[1];
