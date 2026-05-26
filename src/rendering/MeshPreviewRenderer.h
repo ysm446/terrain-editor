@@ -49,6 +49,8 @@ struct GpuMeshPreview
     bool showSurface = false;
     bool showWireframe = false;
     bool showGrid = false;
+    bool hdrViewportEnabled = false;
+    DXGI_FORMAT colorFormat = DXGI_FORMAT_UNKNOWN;
     bool maskPreview = false;
     int maskShading = -1;
     int terrainBoundaryMode = -1;
@@ -64,6 +66,8 @@ struct GpuMeshPreview
     std::array<float, 3> gridColor = {};
     Microsoft::WRL::ComPtr<ID3D12Resource> colorTarget;
     Microsoft::WRL::ComPtr<ID3D12Resource> postTarget;
+    Microsoft::WRL::ComPtr<ID3D12Resource> outputTarget;
+    std::array<Microsoft::WRL::ComPtr<ID3D12Resource>, 2> exposureTargets;
     Microsoft::WRL::ComPtr<ID3D12Resource> depthTarget;
     Microsoft::WRL::ComPtr<ID3D12Resource> sceneDepthTarget;
     Microsoft::WRL::ComPtr<ID3D12Resource> shadowTarget;
@@ -76,12 +80,18 @@ struct GpuMeshPreview
     Microsoft::WRL::ComPtr<ID3D12Resource> waterIndexBuffer;
     D3D12_CPU_DESCRIPTOR_HANDLE rtvCpu{};
     D3D12_CPU_DESCRIPTOR_HANDLE postRtvCpu{};
+    D3D12_CPU_DESCRIPTOR_HANDLE outputRtvCpu{};
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 2> exposureRtvCpu{};
     D3D12_CPU_DESCRIPTOR_HANDLE dsvCpu{};
     D3D12_CPU_DESCRIPTOR_HANDLE shadowDsvCpu{};
     D3D12_CPU_DESCRIPTOR_HANDLE srvCpu{};
     D3D12_GPU_DESCRIPTOR_HANDLE srvGpu{};
     D3D12_CPU_DESCRIPTOR_HANDLE postSrvCpu{};
     D3D12_GPU_DESCRIPTOR_HANDLE postSrvGpu{};
+    D3D12_CPU_DESCRIPTOR_HANDLE outputSrvCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE outputSrvGpu{};
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 2> exposureSrvCpu{};
+    std::array<D3D12_GPU_DESCRIPTOR_HANDLE, 2> exposureSrvGpu{};
     D3D12_CPU_DESCRIPTOR_HANDLE shadowSrvCpu{};
     D3D12_GPU_DESCRIPTOR_HANDLE shadowSrvGpu{};
     D3D12_CPU_DESCRIPTOR_HANDLE depthSrvCpu{};
@@ -90,6 +100,10 @@ struct GpuMeshPreview
     D3D12_GPU_DESCRIPTOR_HANDLE sceneDepthSrvGpu{};
     bool srvAllocated = false;
     bool postSrvAllocated = false;
+    bool outputSrvAllocated = false;
+    bool exposureSrvAllocated = false;
+    bool exposureInitialized = false;
+    int exposureHistoryIndex = 0;
     bool shadowSrvAllocated = false;
     bool depthSrvAllocated = false;
     bool sceneDepthSrvAllocated = false;
@@ -179,6 +193,12 @@ struct GpuMeshPreview
     float tessellationNearDistance = 0.0f;
     float tessellationFarDistance = 0.0f;
     bool depthOfFieldEnabled = false;
+    int exposureMode = -1;
+    float exposureEv = 0.0f;
+    float autoExposureBiasEv = 0.0f;
+    float autoExposureMinEv = 0.0f;
+    float autoExposureMaxEv = 0.0f;
+    float autoExposureSpeed = 0.0f;
     float dofFStop = 0.0f;
     float dofFocusDistanceMeters = 0.0f;
     float dofSensorHeightMm = 0.0f;
@@ -206,6 +226,8 @@ struct GpuMeshPreview
 
     D3D12_RESOURCE_STATES colorState = D3D12_RESOURCE_STATE_COMMON;
     D3D12_RESOURCE_STATES postState = D3D12_RESOURCE_STATE_COMMON;
+    D3D12_RESOURCE_STATES outputState = D3D12_RESOURCE_STATE_COMMON;
+    std::array<D3D12_RESOURCE_STATES, 2> exposureStates = {D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON};
     D3D12_RESOURCE_STATES shadowState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     D3D12_RESOURCE_STATES depthState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
     D3D12_RESOURCE_STATES sceneDepthState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
@@ -234,6 +256,8 @@ struct MeshPreviewPipelineResources
 
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> rtvHeap;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> dsvHeap;
+    DXGI_FORMAT renderTargetFormat = DXGI_FORMAT_UNKNOWN;
+    DXGI_FORMAT displacementRenderTargetFormat = DXGI_FORMAT_UNKNOWN;
 };
 
 struct MeshPreviewPipelineContext

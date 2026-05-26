@@ -17,7 +17,17 @@ bool EnsureMeshPreviewPipeline(MeshPreviewPipelineResources& resources,
                                const MeshPreviewPipelineContext& context,
                                std::string* error)
 {
-    if (resources.surfacePso) return true;
+    if (resources.surfacePso && resources.renderTargetFormat == context.renderTargetFormat) return true;
+    if (resources.surfacePso && resources.renderTargetFormat != context.renderTargetFormat)
+    {
+        resources.surfacePso.Reset();
+        resources.waterPso.Reset();
+        resources.wirePso.Reset();
+        resources.gridPso.Reset();
+        resources.shadowPso.Reset();
+        resources.rootSignature.Reset();
+        resources.renderTargetFormat = DXGI_FORMAT_UNKNOWN;
+    }
     if (!context.device)
     {
         if (error) *error = "D3D12 device not initialized";
@@ -174,6 +184,7 @@ bool EnsureMeshPreviewPipeline(MeshPreviewPipelineResources& resources,
     hr = context.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&resources.shadowPso));
     if (FAILED(hr)) { if (error) *error = "Create mesh shadow PSO failed"; return false; }
 
+    resources.renderTargetFormat = context.renderTargetFormat;
     return true;
 }
 
@@ -181,7 +192,21 @@ bool EnsureMeshPreviewDisplacementPipeline(MeshPreviewPipelineResources& resourc
                                            const MeshPreviewPipelineContext& context,
                                            std::string* error)
 {
-    if (resources.displacementSurfacePso) return true;
+    if (resources.displacementSurfacePso && resources.displacementRenderTargetFormat == context.renderTargetFormat) return true;
+    if (resources.displacementSurfacePso && resources.displacementRenderTargetFormat != context.renderTargetFormat)
+    {
+        resources.displacementSurfacePso.Reset();
+        resources.displacementShadowPso.Reset();
+        resources.displacementWirePso.Reset();
+        resources.displacementSectionPso.Reset();
+        resources.displacementSectionShadowPso.Reset();
+        resources.displacementSectionWirePso.Reset();
+        resources.displacementTessSurfacePso.Reset();
+        resources.displacementTessShadowPso.Reset();
+        resources.displacementTessWirePso.Reset();
+        resources.displacementRootSignature.Reset();
+        resources.displacementRenderTargetFormat = DXGI_FORMAT_UNKNOWN;
+    }
     if (!context.device) { if (error) *error = "D3D12 device not initialized"; return false; }
 
     // Persistent CBV upload buffer for mesh constants. Aligned to 256 bytes
@@ -493,6 +518,7 @@ bool EnsureMeshPreviewDisplacementPipeline(MeshPreviewPipelineResources& resourc
     hr = context.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&resources.displacementTessShadowPso));
     if (FAILED(hr)) { if (error) *error = "Create displacement tessellation shadow PSO failed"; return false; }
 
+    resources.displacementRenderTargetFormat = context.renderTargetFormat;
     return true;
 }
 
@@ -519,6 +545,8 @@ void ResetMeshPreviewPipelineResources(MeshPreviewPipelineResources& resources)
 
     resources.rtvHeap.Reset();
     resources.dsvHeap.Reset();
+    resources.renderTargetFormat = DXGI_FORMAT_UNKNOWN;
+    resources.displacementRenderTargetFormat = DXGI_FORMAT_UNKNOWN;
 }
 
 } // namespace terrain::rendering

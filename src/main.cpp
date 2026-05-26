@@ -678,6 +678,7 @@ ComPtr<ID3D12RootSignature> g_skyRootSignature;
 ComPtr<ID3D12PipelineState> g_skyPso;
 bool g_skyPipelineReady = false;
 std::string g_skyPipelineStatus = "Sky pipeline not initialized";
+DXGI_FORMAT g_skyPipelineFormat = DXGI_FORMAT_UNKNOWN;
 ComPtr<ID3D12RootSignature> g_atmosphereMultiScatterRootSignature;
 ComPtr<ID3D12PipelineState> g_atmosphereMultiScatterPso;
 ComPtr<ID3D12Resource> g_atmosphereMultiScatterTexture;
@@ -701,6 +702,13 @@ ComPtr<ID3D12RootSignature> g_dofRootSignature;
 ComPtr<ID3D12PipelineState> g_dofPso;
 bool g_dofPipelineReady = false;
 std::string g_dofPipelineStatus = "Depth of Field pipeline not initialized";
+DXGI_FORMAT g_dofPipelineFormat = DXGI_FORMAT_UNKNOWN;
+DXGI_FORMAT g_cloudRenderPipelineFormat = DXGI_FORMAT_UNKNOWN;
+ComPtr<ID3D12RootSignature> g_tonemapRootSignature;
+ComPtr<ID3D12PipelineState> g_exposurePso;
+ComPtr<ID3D12PipelineState> g_tonemapPso;
+bool g_tonemapPipelineReady = false;
+std::string g_tonemapPipelineStatus = "Tonemap pipeline not initialized";
 
 struct GpuClouds
 {
@@ -1031,6 +1039,17 @@ void CleanupD3D()
         FreeSrvDescriptor(nullptr, g_gpuMeshPreview.postSrvCpu, g_gpuMeshPreview.postSrvGpu);
         g_gpuMeshPreview.postSrvAllocated = false;
     }
+    if (g_gpuMeshPreview.outputSrvAllocated)
+    {
+        FreeSrvDescriptor(nullptr, g_gpuMeshPreview.outputSrvCpu, g_gpuMeshPreview.outputSrvGpu);
+        g_gpuMeshPreview.outputSrvAllocated = false;
+    }
+    if (g_gpuMeshPreview.exposureSrvAllocated)
+    {
+        FreeSrvDescriptor(nullptr, g_gpuMeshPreview.exposureSrvCpu[0], g_gpuMeshPreview.exposureSrvGpu[0]);
+        FreeSrvDescriptor(nullptr, g_gpuMeshPreview.exposureSrvCpu[1], g_gpuMeshPreview.exposureSrvGpu[1]);
+        g_gpuMeshPreview.exposureSrvAllocated = false;
+    }
     if (g_gpuMeshPreview.sceneDepthSrvAllocated)
     {
         FreeSrvDescriptor(nullptr, g_gpuMeshPreview.sceneDepthSrvCpu, g_gpuMeshPreview.sceneDepthSrvGpu);
@@ -1038,6 +1057,9 @@ void CleanupD3D()
     }
     g_gpuMeshPreview.colorTarget.Reset();
     g_gpuMeshPreview.postTarget.Reset();
+    g_gpuMeshPreview.outputTarget.Reset();
+    g_gpuMeshPreview.exposureTargets[0].Reset();
+    g_gpuMeshPreview.exposureTargets[1].Reset();
     g_gpuMeshPreview.depthTarget.Reset();
     g_gpuMeshPreview.sceneDepthTarget.Reset();
     g_gpuMeshPreview.vertexBuffer.Reset();
@@ -1080,6 +1102,7 @@ void CleanupD3D()
     g_skyPso.Reset();
     g_skyRootSignature.Reset();
     g_skyPipelineReady = false;
+    g_skyPipelineFormat = DXGI_FORMAT_UNKNOWN;
     g_atmosphereMultiScatterPso.Reset();
     g_atmosphereMultiScatterRootSignature.Reset();
     g_atmosphereMultiScatterTexture.Reset();
@@ -1096,9 +1119,15 @@ void CleanupD3D()
     g_cloudShadowPso.Reset();
     g_cloudShadowRootSignature.Reset();
     g_cloudPipelinesReady = false;
+    g_cloudRenderPipelineFormat = DXGI_FORMAT_UNKNOWN;
     g_dofPso.Reset();
     g_dofRootSignature.Reset();
     g_dofPipelineReady = false;
+    g_dofPipelineFormat = DXGI_FORMAT_UNKNOWN;
+    g_tonemapPso.Reset();
+    g_exposurePso.Reset();
+    g_tonemapRootSignature.Reset();
+    g_tonemapPipelineReady = false;
     if (g_gpuClouds.meshCbUploadBuffer && g_gpuClouds.meshCbMapped)
     {
         g_gpuClouds.meshCbUploadBuffer->Unmap(0, nullptr);
@@ -1178,6 +1207,18 @@ std::filesystem::path CloudShadowShaderPath()
 std::filesystem::path DepthOfFieldShaderPath()
 {
     return ShaderPath("depth_of_field.hlsl");
+}
+
+std::filesystem::path TonemapShaderPath()
+{
+    return ShaderPath("tonemap.hlsl");
+}
+
+DXGI_FORMAT MeshPreviewColorFormat()
+{
+    return g_graph.Settings().preview.hdrViewportEnabled
+        ? DXGI_FORMAT_R16G16B16A16_FLOAT
+        : DXGI_FORMAT_R8G8B8A8_UNORM;
 }
 
 void EvaluateGraph();
@@ -3152,11 +3193,32 @@ struct DepthOfFieldShaderConstants
 };
 static_assert(sizeof(DepthOfFieldShaderConstants) == 12 * sizeof(UINT));
 
+struct TonemapShaderConstants
+{
+    float exposureMode;
+    float exposureEv;
+    float autoExposureBiasEv;
+    float autoExposureMinEv;
+    float autoExposureMaxEv;
+    float adaptationRate;
+    float deltaTimeSeconds;
+    float pad1;
+};
+static_assert(sizeof(TonemapShaderConstants) == 8 * sizeof(UINT));
+
 bool EnsureDepthOfFieldPipeline(std::string* error)
 {
-    if (g_dofPipelineReady && g_dofRootSignature && g_dofPso)
+    const DXGI_FORMAT targetFormat = MeshPreviewColorFormat();
+    if (g_dofPipelineReady && g_dofRootSignature && g_dofPso && g_dofPipelineFormat == targetFormat)
     {
         return true;
+    }
+    if (g_dofPipelineFormat != DXGI_FORMAT_UNKNOWN && g_dofPipelineFormat != targetFormat)
+    {
+        g_dofPso.Reset();
+        g_dofRootSignature.Reset();
+        g_dofPipelineReady = false;
+        g_dofPipelineFormat = DXGI_FORMAT_UNKNOWN;
     }
     if (!g_device)
     {
@@ -3246,7 +3308,7 @@ bool EnsureDepthOfFieldPipeline(std::string* error)
     psoDesc.SampleMask = UINT_MAX;
     psoDesc.SampleDesc.Count = 1;
     psoDesc.NumRenderTargets = 1;
-    psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.RTVFormats[0] = targetFormat;
     psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
     psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
     psoDesc.RasterizerState.FrontCounterClockwise = FALSE;
@@ -3265,14 +3327,150 @@ bool EnsureDepthOfFieldPipeline(std::string* error)
 
     g_dofPipelineReady = true;
     g_dofPipelineStatus = "Depth of Field pipeline ready";
+    g_dofPipelineFormat = targetFormat;
+    return true;
+}
+
+bool EnsureTonemapPipeline(std::string* error)
+{
+    if (g_tonemapPipelineReady && g_tonemapRootSignature && g_exposurePso && g_tonemapPso)
+    {
+        return true;
+    }
+    if (!g_device)
+    {
+        if (error) *error = "D3D12 device is not available";
+        g_tonemapPipelineStatus = "Tonemap pipeline unavailable";
+        return false;
+    }
+
+    D3D12_DESCRIPTOR_RANGE colorRange{};
+    colorRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    colorRange.NumDescriptors = 1;
+    colorRange.BaseShaderRegister = 0;
+    colorRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_DESCRIPTOR_RANGE exposureRange{};
+    exposureRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    exposureRange.NumDescriptors = 1;
+    exposureRange.BaseShaderRegister = 1;
+    exposureRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_ROOT_PARAMETER rootParams[3]{};
+    rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    rootParams[0].Constants.ShaderRegister = 0;
+    rootParams[0].Constants.Num32BitValues = 8;
+    rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[1].DescriptorTable.pDescriptorRanges = &colorRange;
+    rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    rootParams[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[2].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[2].DescriptorTable.pDescriptorRanges = &exposureRange;
+    rootParams[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    D3D12_STATIC_SAMPLER_DESC sampler{};
+    sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.ShaderRegister = 0;
+    sampler.RegisterSpace = 0;
+    sampler.MaxLOD = D3D12_FLOAT32_MAX;
+    sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    D3D12_ROOT_SIGNATURE_DESC rsDesc{};
+    rsDesc.NumParameters = 3;
+    rsDesc.pParameters = rootParams;
+    rsDesc.NumStaticSamplers = 1;
+    rsDesc.pStaticSamplers = &sampler;
+    rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+
+    ComPtr<ID3DBlob> errBlob;
+    HRESULT hr = CreateRootSignatureFromDesc(g_device.Get(),
+                                             rsDesc,
+                                             g_tonemapRootSignature.ReleaseAndGetAddressOf(),
+                                             errBlob.ReleaseAndGetAddressOf());
+    if (FAILED(hr))
+    {
+        if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Create tonemap root signature failed";
+        g_tonemapPipelineStatus = "Tonemap root signature failed";
+        return false;
+    }
+
+    const std::filesystem::path shaderPath = TonemapShaderPath();
+    const UINT compileFlags = DefaultShaderCompileFlags();
+
+    auto compileEntry = [&](const char* entryPoint, const char* target, ComPtr<ID3DBlob>& outBlob) -> bool {
+        errBlob.Reset();
+        const HRESULT compileHr = D3DCompileFromFile(shaderPath.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE,
+                                                     entryPoint, target, compileFlags, 0, &outBlob, &errBlob);
+        if (FAILED(compileHr))
+        {
+            if (error) *error = errBlob ? static_cast<const char*>(errBlob->GetBufferPointer()) : "Compile tonemap shader failed";
+            return false;
+        }
+        return true;
+    };
+
+    ComPtr<ID3DBlob> vsBlob, exposurePsBlob, psBlob;
+    if (!compileEntry("TonemapVS", "vs_5_0", vsBlob)) { g_tonemapPipelineStatus = "Tonemap VS compile failed"; return false; }
+    if (!compileEntry("ExposurePS", "ps_5_0", exposurePsBlob)) { g_tonemapPipelineStatus = "Exposure PS compile failed"; return false; }
+    if (!compileEntry("TonemapPS", "ps_5_0", psBlob)) { g_tonemapPipelineStatus = "Tonemap PS compile failed"; return false; }
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
+    psoDesc.pRootSignature = g_tonemapRootSignature.Get();
+    psoDesc.VS = {vsBlob->GetBufferPointer(), vsBlob->GetBufferSize()};
+    psoDesc.PS = {exposurePsBlob->GetBufferPointer(), exposurePsBlob->GetBufferSize()};
+    psoDesc.SampleMask = UINT_MAX;
+    psoDesc.SampleDesc.Count = 1;
+    psoDesc.NumRenderTargets = 1;
+    psoDesc.RTVFormats[0] = DXGI_FORMAT_R16_FLOAT;
+    psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+    psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    psoDesc.RasterizerState.FrontCounterClockwise = FALSE;
+    psoDesc.DepthStencilState.DepthEnable = FALSE;
+    psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    psoDesc.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+
+    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_exposurePso));
+    if (FAILED(hr))
+    {
+        if (error) *error = "Create exposure PSO failed";
+        g_tonemapPipelineStatus = "Exposure PSO failed";
+        return false;
+    }
+
+    psoDesc.PS = {psBlob->GetBufferPointer(), psBlob->GetBufferSize()};
+    psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_tonemapPso));
+    if (FAILED(hr))
+    {
+        if (error) *error = "Create tonemap PSO failed";
+        g_tonemapPipelineStatus = "Tonemap PSO failed";
+        return false;
+    }
+
+    g_tonemapPipelineReady = true;
+    g_tonemapPipelineStatus = "Tonemap pipeline ready";
     return true;
 }
 
 bool EnsureSkyPipeline(std::string* error)
 {
-    if (g_skyPipelineReady && g_skyRootSignature && g_skyPso)
+    const DXGI_FORMAT targetFormat = MeshPreviewColorFormat();
+    if (g_skyPipelineReady && g_skyRootSignature && g_skyPso && g_skyPipelineFormat == targetFormat)
     {
         return true;
+    }
+    if (g_skyPipelineFormat != DXGI_FORMAT_UNKNOWN && g_skyPipelineFormat != targetFormat)
+    {
+        g_skyPso.Reset();
+        g_skyRootSignature.Reset();
+        g_skyPipelineReady = false;
+        g_skyPipelineFormat = DXGI_FORMAT_UNKNOWN;
     }
     if (!g_device)
     {
@@ -3354,7 +3552,7 @@ bool EnsureSkyPipeline(std::string* error)
     psoDesc.SampleMask = UINT_MAX;
     psoDesc.SampleDesc.Count = 1;
     psoDesc.NumRenderTargets = 1;
-    psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.RTVFormats[0] = targetFormat;
     psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
     psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
     psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
@@ -3374,6 +3572,7 @@ bool EnsureSkyPipeline(std::string* error)
 
     g_skyPipelineReady = true;
     g_skyPipelineStatus = "Sky pipeline ready";
+    g_skyPipelineFormat = targetFormat;
     return true;
 }
 
@@ -3851,9 +4050,22 @@ static_assert(sizeof(CloudRenderShaderConstants) == 56 * sizeof(UINT), "CloudRen
 
 bool EnsureCloudPipelines(std::string* error)
 {
-    if (g_cloudPipelinesReady && g_cloudVolumePso && g_cloudVolumeRootSignature && g_cloudRenderPso && g_cloudRenderRootSignature)
+    const DXGI_FORMAT targetFormat = MeshPreviewColorFormat();
+    if (g_cloudPipelinesReady && g_cloudVolumePso && g_cloudVolumeRootSignature && g_cloudRenderPso && g_cloudRenderRootSignature &&
+        g_cloudRenderPipelineFormat == targetFormat)
     {
         return true;
+    }
+    if (g_cloudRenderPipelineFormat != DXGI_FORMAT_UNKNOWN && g_cloudRenderPipelineFormat != targetFormat)
+    {
+        g_cloudVolumePso.Reset();
+        g_cloudVolumeRootSignature.Reset();
+        g_cloudRenderPso.Reset();
+        g_cloudRenderRootSignature.Reset();
+        g_cloudShadowPso.Reset();
+        g_cloudShadowRootSignature.Reset();
+        g_cloudPipelinesReady = false;
+        g_cloudRenderPipelineFormat = DXGI_FORMAT_UNKNOWN;
     }
     if (!g_device)
     {
@@ -3983,7 +4195,7 @@ bool EnsureCloudPipelines(std::string* error)
         psoDesc.SampleMask = UINT_MAX;
         psoDesc.SampleDesc.Count = 1;
         psoDesc.NumRenderTargets = 1;
-        psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+        psoDesc.RTVFormats[0] = targetFormat;
         psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
         psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
         psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
@@ -4074,6 +4286,7 @@ bool EnsureCloudPipelines(std::string* error)
 
     g_cloudPipelinesReady = true;
     g_cloudPipelineStatus = "Cloud pipelines ready";
+    g_cloudRenderPipelineFormat = targetFormat;
     return true;
 }
 
@@ -6197,10 +6410,13 @@ ImU32 ThemeColor(const std::string& name, const ImVec4& fallback);
 
 bool EnsureMeshPreviewRenderTarget(int width, int height, std::string* error)
 {
+    const DXGI_FORMAT meshPreviewColorFormat = MeshPreviewColorFormat();
     const int shadowResolution = std::clamp(g_graph.Settings().preview.shadowMapResolution, 512, 4096);
-    if (g_gpuMeshPreview.colorTarget && g_gpuMeshPreview.shadowTarget &&
+    if (g_gpuMeshPreview.colorTarget && g_gpuMeshPreview.postTarget && g_gpuMeshPreview.outputTarget &&
+        g_gpuMeshPreview.exposureTargets[0] && g_gpuMeshPreview.exposureTargets[1] && g_gpuMeshPreview.shadowTarget &&
         g_gpuMeshPreview.width == width && g_gpuMeshPreview.height == height &&
-        g_gpuMeshPreview.shadowMapResolution == shadowResolution)
+        g_gpuMeshPreview.shadowMapResolution == shadowResolution &&
+        g_gpuMeshPreview.colorFormat == meshPreviewColorFormat)
     {
         return true;
     }
@@ -6210,25 +6426,39 @@ bool EnsureMeshPreviewRenderTarget(int width, int height, std::string* error)
         WaitForLastSubmittedFrame();
         g_gpuMeshPreview.colorTarget.Reset();
         g_gpuMeshPreview.postTarget.Reset();
+        g_gpuMeshPreview.outputTarget.Reset();
+        g_gpuMeshPreview.exposureTargets[0].Reset();
+        g_gpuMeshPreview.exposureTargets[1].Reset();
         g_gpuMeshPreview.depthTarget.Reset();
         g_gpuMeshPreview.sceneDepthTarget.Reset();
         g_gpuMeshPreview.shadowTarget.Reset();
         g_gpuMeshPreview.width = width;
         g_gpuMeshPreview.height = height;
         g_gpuMeshPreview.shadowMapResolution = shadowResolution;
+        g_gpuMeshPreview.colorFormat = meshPreviewColorFormat;
         g_gpuMeshPreview.colorState = D3D12_RESOURCE_STATE_RENDER_TARGET;
         g_gpuMeshPreview.postState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        g_gpuMeshPreview.outputState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        g_gpuMeshPreview.exposureStates = {D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_RENDER_TARGET};
+        g_gpuMeshPreview.exposureInitialized = false;
+        g_gpuMeshPreview.exposureHistoryIndex = 0;
         g_gpuMeshPreview.shadowState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         g_gpuMeshPreview.sceneDepthState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 
         if (!g_meshPreviewPipelines.rtvHeap)
         {
             D3D12_DESCRIPTOR_HEAP_DESC desc =
-                DescriptorHeapDesc(D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 2);
+                DescriptorHeapDesc(D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 5);
             ThrowIfFailed(g_device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&g_meshPreviewPipelines.rtvHeap)), "Create mesh RTV heap failed");
             g_gpuMeshPreview.rtvCpu = g_meshPreviewPipelines.rtvHeap->GetCPUDescriptorHandleForHeapStart();
             g_gpuMeshPreview.postRtvCpu = g_gpuMeshPreview.rtvCpu;
             g_gpuMeshPreview.postRtvCpu.ptr += g_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+            g_gpuMeshPreview.outputRtvCpu = g_gpuMeshPreview.postRtvCpu;
+            g_gpuMeshPreview.outputRtvCpu.ptr += g_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+            g_gpuMeshPreview.exposureRtvCpu[0] = g_gpuMeshPreview.outputRtvCpu;
+            g_gpuMeshPreview.exposureRtvCpu[0].ptr += g_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+            g_gpuMeshPreview.exposureRtvCpu[1] = g_gpuMeshPreview.exposureRtvCpu[0];
+            g_gpuMeshPreview.exposureRtvCpu[1].ptr += g_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
         }
         if (!g_meshPreviewPipelines.dsvHeap)
         {
@@ -6249,6 +6479,17 @@ bool EnsureMeshPreviewRenderTarget(int width, int height, std::string* error)
             AllocateSrvDescriptor(nullptr, &g_gpuMeshPreview.postSrvCpu, &g_gpuMeshPreview.postSrvGpu);
             g_gpuMeshPreview.postSrvAllocated = true;
         }
+        if (!g_gpuMeshPreview.outputSrvAllocated)
+        {
+            AllocateSrvDescriptor(nullptr, &g_gpuMeshPreview.outputSrvCpu, &g_gpuMeshPreview.outputSrvGpu);
+            g_gpuMeshPreview.outputSrvAllocated = true;
+        }
+        if (!g_gpuMeshPreview.exposureSrvAllocated)
+        {
+            AllocateSrvDescriptor(nullptr, &g_gpuMeshPreview.exposureSrvCpu[0], &g_gpuMeshPreview.exposureSrvGpu[0]);
+            AllocateSrvDescriptor(nullptr, &g_gpuMeshPreview.exposureSrvCpu[1], &g_gpuMeshPreview.exposureSrvGpu[1]);
+            g_gpuMeshPreview.exposureSrvAllocated = true;
+        }
         if (!g_gpuMeshPreview.shadowSrvAllocated)
         {
             AllocateSrvDescriptor(nullptr, &g_gpuMeshPreview.shadowSrvCpu, &g_gpuMeshPreview.shadowSrvGpu);
@@ -6264,20 +6505,37 @@ bool EnsureMeshPreviewRenderTarget(int width, int height, std::string* error)
 
         {
             D3D12_CLEAR_VALUE clearVal{};
-            clearVal.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            clearVal.Format = meshPreviewColorFormat;
             const D3D12_RESOURCE_DESC desc = Texture2DResourceDesc(
                 static_cast<UINT>(width), static_cast<UINT>(height),
-                DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+                meshPreviewColorFormat, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
             ThrowIfFailed(g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &desc,
                 D3D12_RESOURCE_STATE_RENDER_TARGET, &clearVal, IID_PPV_ARGS(&g_gpuMeshPreview.colorTarget)),
                 "Create mesh color RT failed");
             g_device->CreateRenderTargetView(g_gpuMeshPreview.colorTarget.Get(), nullptr, g_gpuMeshPreview.rtvCpu);
             D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-            srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            srvDesc.Format = meshPreviewColorFormat;
             srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
             srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
             srvDesc.Texture2D.MipLevels = 1;
             g_device->CreateShaderResourceView(g_gpuMeshPreview.colorTarget.Get(), &srvDesc, g_gpuMeshPreview.srvCpu);
+        }
+        {
+            D3D12_CLEAR_VALUE clearVal{};
+            clearVal.Format = meshPreviewColorFormat;
+            const D3D12_RESOURCE_DESC desc = Texture2DResourceDesc(
+                static_cast<UINT>(width), static_cast<UINT>(height),
+                meshPreviewColorFormat, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+            ThrowIfFailed(g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &desc,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &clearVal, IID_PPV_ARGS(&g_gpuMeshPreview.postTarget)),
+                "Create mesh post RT failed");
+            g_device->CreateRenderTargetView(g_gpuMeshPreview.postTarget.Get(), nullptr, g_gpuMeshPreview.postRtvCpu);
+            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+            srvDesc.Format = meshPreviewColorFormat;
+            srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            srvDesc.Texture2D.MipLevels = 1;
+            g_device->CreateShaderResourceView(g_gpuMeshPreview.postTarget.Get(), &srvDesc, g_gpuMeshPreview.postSrvCpu);
         }
         {
             D3D12_CLEAR_VALUE clearVal{};
@@ -6286,15 +6544,33 @@ bool EnsureMeshPreviewRenderTarget(int width, int height, std::string* error)
                 static_cast<UINT>(width), static_cast<UINT>(height),
                 DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
             ThrowIfFailed(g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &desc,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &clearVal, IID_PPV_ARGS(&g_gpuMeshPreview.postTarget)),
-                "Create mesh post RT failed");
-            g_device->CreateRenderTargetView(g_gpuMeshPreview.postTarget.Get(), nullptr, g_gpuMeshPreview.postRtvCpu);
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &clearVal, IID_PPV_ARGS(&g_gpuMeshPreview.outputTarget)),
+                "Create mesh output RT failed");
+            g_device->CreateRenderTargetView(g_gpuMeshPreview.outputTarget.Get(), nullptr, g_gpuMeshPreview.outputRtvCpu);
             D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
             srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
             srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
             srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
             srvDesc.Texture2D.MipLevels = 1;
-            g_device->CreateShaderResourceView(g_gpuMeshPreview.postTarget.Get(), &srvDesc, g_gpuMeshPreview.postSrvCpu);
+            g_device->CreateShaderResourceView(g_gpuMeshPreview.outputTarget.Get(), &srvDesc, g_gpuMeshPreview.outputSrvCpu);
+        }
+        for (int i = 0; i < 2; ++i)
+        {
+            D3D12_CLEAR_VALUE clearVal{};
+            clearVal.Format = DXGI_FORMAT_R16_FLOAT;
+            clearVal.Color[0] = 0.0f;
+            const D3D12_RESOURCE_DESC desc = Texture2DResourceDesc(
+                1u, 1u, DXGI_FORMAT_R16_FLOAT, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+            ThrowIfFailed(g_device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &desc,
+                D3D12_RESOURCE_STATE_RENDER_TARGET, &clearVal, IID_PPV_ARGS(&g_gpuMeshPreview.exposureTargets[static_cast<size_t>(i)])),
+                "Create mesh exposure RT failed");
+            g_device->CreateRenderTargetView(g_gpuMeshPreview.exposureTargets[static_cast<size_t>(i)].Get(), nullptr, g_gpuMeshPreview.exposureRtvCpu[static_cast<size_t>(i)]);
+            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+            srvDesc.Format = DXGI_FORMAT_R16_FLOAT;
+            srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            srvDesc.Texture2D.MipLevels = 1;
+            g_device->CreateShaderResourceView(g_gpuMeshPreview.exposureTargets[static_cast<size_t>(i)].Get(), &srvDesc, g_gpuMeshPreview.exposureSrvCpu[static_cast<size_t>(i)]);
         }
         {
             D3D12_CLEAR_VALUE clearVal{};
@@ -6971,7 +7247,11 @@ CloudLoopVector ComputeCloudLoopVector(const rock::CloudSettings& clouds)
 bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface, bool showWireframe, std::string* error)
 {
     static const auto s_waterStartTime = std::chrono::steady_clock::now();
-    const float s_waterTimeSeconds = std::chrono::duration<float>(std::chrono::steady_clock::now() - s_waterStartTime).count();
+    static auto s_lastExposureUpdateTime = std::chrono::steady_clock::now();
+    const auto renderTimeNow = std::chrono::steady_clock::now();
+    const float s_waterTimeSeconds = std::chrono::duration<float>(renderTimeNow - s_waterStartTime).count();
+    const float exposureDeltaSeconds = std::clamp(std::chrono::duration<float>(renderTimeNow - s_lastExposureUpdateTime).count(), 1.0f / 240.0f, 0.25f);
+    s_lastExposureUpdateTime = renderTimeNow;
     const rock::PreviewSettings& previewSettings = g_graph.Settings().preview;
     const bool showGrid = previewSettings.showGrid;
     const bool showWater = previewSettings.waterEnabled && showSurface;
@@ -6983,7 +7263,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
     const MeshPreviewPipelineContext pipelineContext{
         g_device.Get(),
         MeshPreviewShaderPath(),
-        DXGI_FORMAT_R8G8B8A8_UNORM,
+        MeshPreviewColorFormat(),
         DXGI_FORMAT_D32_FLOAT,
         sizeof(MeshPreviewConstants) / sizeof(UINT),
         sizeof(DisplacementShaderConstants) / sizeof(UINT),
@@ -7023,10 +7303,18 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.showSurface != showSurface ||
         g_gpuMeshPreview.showWireframe != showWireframe ||
         g_gpuMeshPreview.showGrid != showGrid ||
+        g_gpuMeshPreview.hdrViewportEnabled != g_graph.Settings().preview.hdrViewportEnabled ||
+        g_gpuMeshPreview.colorFormat != MeshPreviewColorFormat() ||
         g_gpuMeshPreview.maskPreview != g_graph.Evaluation().previewShowsMask ||
         g_gpuMeshPreview.maskShading != static_cast<int>(g_graph.Settings().preview.maskShading) ||
         g_gpuMeshPreview.terrainBoundaryMode != static_cast<int>(terrainBoundaryMode) ||
         g_gpuMeshPreview.lightingMode != g_graph.Settings().preview.lightingMode ||
+        g_gpuMeshPreview.exposureMode != static_cast<int>(g_graph.Settings().preview.exposureMode) ||
+        g_gpuMeshPreview.exposureEv != g_graph.Settings().preview.exposureEv ||
+        g_gpuMeshPreview.autoExposureBiasEv != g_graph.Settings().preview.autoExposureBiasEv ||
+        g_gpuMeshPreview.autoExposureMinEv != g_graph.Settings().preview.autoExposureMinEv ||
+        g_gpuMeshPreview.autoExposureMaxEv != g_graph.Settings().preview.autoExposureMaxEv ||
+        g_gpuMeshPreview.autoExposureSpeed != g_graph.Settings().preview.autoExposureSpeed ||
         g_gpuMeshPreview.sunAzimuthDegrees != sunPosition.azimuth ||
         g_gpuMeshPreview.sunElevationDegrees != sunPosition.elevation ||
         g_gpuMeshPreview.sunIntensity != g_graph.Settings().preview.sunIntensity ||
@@ -7102,6 +7390,8 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         (showWater && (!g_gpuMeshPreview.waterVertexBuffer || !g_gpuMeshPreview.waterIndexBuffer)) ||
         (showTerrainBoundaryLines && !g_gpuMeshPreview.terrainBoundaryLineVertexBuffer) ||
         g_gpuMeshPreview.colorState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE ||
+        g_gpuMeshPreview.outputState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE ||
+        (g_graph.Settings().preview.hdrViewportEnabled && g_graph.Settings().preview.exposureMode == rock::ExposureMode::Auto) ||
         (useDepthOfField && g_gpuMeshPreview.postState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     auto addDirtyReason = [](std::string& reason, const char* text) {
         if (!reason.empty())
@@ -7122,6 +7412,24 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.showGrid != showGrid)
     {
         addDirtyReason(dirtyReason, "visibility");
+    }
+    if (g_gpuMeshPreview.hdrViewportEnabled != g_graph.Settings().preview.hdrViewportEnabled ||
+        g_gpuMeshPreview.colorFormat != MeshPreviewColorFormat())
+    {
+        addDirtyReason(dirtyReason, "hdr");
+    }
+    if (g_gpuMeshPreview.exposureMode != static_cast<int>(g_graph.Settings().preview.exposureMode) ||
+        g_gpuMeshPreview.exposureEv != g_graph.Settings().preview.exposureEv ||
+        g_gpuMeshPreview.autoExposureBiasEv != g_graph.Settings().preview.autoExposureBiasEv ||
+        g_gpuMeshPreview.autoExposureMinEv != g_graph.Settings().preview.autoExposureMinEv ||
+        g_gpuMeshPreview.autoExposureMaxEv != g_graph.Settings().preview.autoExposureMaxEv ||
+        g_gpuMeshPreview.autoExposureSpeed != g_graph.Settings().preview.autoExposureSpeed)
+    {
+        addDirtyReason(dirtyReason, "exposure");
+    }
+    else if (g_graph.Settings().preview.hdrViewportEnabled && g_graph.Settings().preview.exposureMode == rock::ExposureMode::Auto)
+    {
+        addDirtyReason(dirtyReason, "auto exposure");
     }
     if (g_gpuMeshPreview.skyMode != static_cast<int>(g_graph.Settings().sky.mode) ||
         g_gpuMeshPreview.skyAtmosphereDensity != g_graph.Settings().sky.atmosphereDensity ||
@@ -7179,6 +7487,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         addDirtyReason(dirtyReason, "mesh backend");
     }
     if (g_gpuMeshPreview.colorState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE ||
+        g_gpuMeshPreview.outputState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE ||
         (useDepthOfField && g_gpuMeshPreview.postState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE))
     {
         addDirtyReason(dirtyReason, "resource state");
@@ -7808,6 +8117,17 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             std::string ignoredErr;
             dofReady = EnsureDepthOfFieldPipeline(&ignoredErr);
         }
+        bool tonemapReady = false;
+        if (g_graph.Settings().preview.hdrViewportEnabled)
+        {
+            std::string tonemapErr;
+            tonemapReady = EnsureTonemapPipeline(&tonemapErr);
+            if (!tonemapReady)
+            {
+                if (error) *error = tonemapErr;
+                return false;
+            }
+        }
         const std::array<float, 3> sectionColor = colorTextureReady
             ? EstimateSectionColor(g_graph.Evaluation().previewColorGrid, g_graph.Settings().preview.pbrAlbedo)
             : EstimateSectionColor(rock::ColorGrid{}, g_graph.Settings().preview.pbrAlbedo);
@@ -8377,6 +8697,143 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             g_gpuMeshPreview.postState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         }
 
+        if (g_graph.Settings().preview.hdrViewportEnabled && tonemapReady && g_gpuMeshPreview.outputTarget)
+        {
+            const bool useDofSource =
+                useDepthOfField &&
+                dofReady &&
+                g_gpuMeshPreview.postSrvAllocated &&
+                g_gpuMeshPreview.postState == D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            const D3D12_GPU_DESCRIPTOR_HANDLE tonemapSource = useDofSource ? g_gpuMeshPreview.postSrvGpu : g_gpuMeshPreview.srvGpu;
+
+            if (!g_gpuMeshPreview.exposureInitialized &&
+                g_gpuMeshPreview.exposureTargets[0] &&
+                g_gpuMeshPreview.exposureTargets[1])
+            {
+                const float clearExposure[] = {0.0f, 0.0f, 0.0f, 1.0f};
+                for (int i = 0; i < 2; ++i)
+                {
+                    if (g_gpuMeshPreview.exposureStates[static_cast<size_t>(i)] != D3D12_RESOURCE_STATE_RENDER_TARGET)
+                    {
+                        D3D12_RESOURCE_BARRIER b{};
+                        b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                        b.Transition.pResource = g_gpuMeshPreview.exposureTargets[static_cast<size_t>(i)].Get();
+                        b.Transition.StateBefore = g_gpuMeshPreview.exposureStates[static_cast<size_t>(i)];
+                        b.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+                        b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                        commandList->ResourceBarrier(1, &b);
+                        g_gpuMeshPreview.exposureStates[static_cast<size_t>(i)] = D3D12_RESOURCE_STATE_RENDER_TARGET;
+                    }
+                    commandList->ClearRenderTargetView(g_gpuMeshPreview.exposureRtvCpu[static_cast<size_t>(i)], clearExposure, 0, nullptr);
+                }
+                D3D12_RESOURCE_BARRIER historyToSrv{};
+                historyToSrv.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                historyToSrv.Transition.pResource = g_gpuMeshPreview.exposureTargets[0].Get();
+                historyToSrv.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+                historyToSrv.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+                historyToSrv.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                commandList->ResourceBarrier(1, &historyToSrv);
+                g_gpuMeshPreview.exposureStates[0] = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+                g_gpuMeshPreview.exposureStates[1] = D3D12_RESOURCE_STATE_RENDER_TARGET;
+                g_gpuMeshPreview.exposureHistoryIndex = 0;
+                g_gpuMeshPreview.exposureInitialized = true;
+            }
+
+            const int previousExposureIndex = std::clamp(g_gpuMeshPreview.exposureHistoryIndex, 0, 1);
+            const int currentExposureIndex = 1 - previousExposureIndex;
+            if (g_gpuMeshPreview.exposureTargets[static_cast<size_t>(currentExposureIndex)] &&
+                g_gpuMeshPreview.exposureStates[static_cast<size_t>(currentExposureIndex)] != D3D12_RESOURCE_STATE_RENDER_TARGET)
+            {
+                D3D12_RESOURCE_BARRIER exposureToRt{};
+                exposureToRt.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                exposureToRt.Transition.pResource = g_gpuMeshPreview.exposureTargets[static_cast<size_t>(currentExposureIndex)].Get();
+                exposureToRt.Transition.StateBefore = g_gpuMeshPreview.exposureStates[static_cast<size_t>(currentExposureIndex)];
+                exposureToRt.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+                exposureToRt.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                commandList->ResourceBarrier(1, &exposureToRt);
+                g_gpuMeshPreview.exposureStates[static_cast<size_t>(currentExposureIndex)] = D3D12_RESOURCE_STATE_RENDER_TARGET;
+            }
+
+            TonemapShaderConstants tonemap{};
+            tonemap.exposureMode = g_graph.Settings().preview.exposureMode == rock::ExposureMode::Auto ? 1.0f : 0.0f;
+            tonemap.exposureEv = std::clamp(g_graph.Settings().preview.exposureEv, -8.0f, 8.0f);
+            tonemap.autoExposureBiasEv = std::clamp(g_graph.Settings().preview.autoExposureBiasEv, -4.0f, 4.0f);
+            tonemap.autoExposureMinEv = std::clamp(g_graph.Settings().preview.autoExposureMinEv, -8.0f, 8.0f);
+            tonemap.autoExposureMaxEv = std::clamp(g_graph.Settings().preview.autoExposureMaxEv, tonemap.autoExposureMinEv, 8.0f);
+            tonemap.adaptationRate = std::clamp(g_graph.Settings().preview.autoExposureSpeed, 0.05f, 8.0f);
+            tonemap.deltaTimeSeconds = exposureDeltaSeconds;
+
+            ID3D12DescriptorHeap* heaps[] = {g_srvHeap.Get()};
+            commandList->SetDescriptorHeaps(1, heaps);
+
+            if (g_gpuMeshPreview.exposureInitialized)
+            {
+                commandList->OMSetRenderTargets(1, &g_gpuMeshPreview.exposureRtvCpu[static_cast<size_t>(currentExposureIndex)], FALSE, nullptr);
+                D3D12_VIEWPORT exposureVp{0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f};
+                D3D12_RECT exposureScissor{0, 0, 1, 1};
+                commandList->RSSetViewports(1, &exposureVp);
+                commandList->RSSetScissorRects(1, &exposureScissor);
+                commandList->SetGraphicsRootSignature(g_tonemapRootSignature.Get());
+                commandList->SetPipelineState(g_exposurePso.Get());
+                commandList->SetGraphicsRoot32BitConstants(0, sizeof(tonemap) / 4, &tonemap, 0);
+                commandList->SetGraphicsRootDescriptorTable(1, tonemapSource);
+                commandList->SetGraphicsRootDescriptorTable(2, g_gpuMeshPreview.exposureSrvGpu[static_cast<size_t>(previousExposureIndex)]);
+                commandList->IASetVertexBuffers(0, 0, nullptr);
+                commandList->IASetIndexBuffer(nullptr);
+                commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+                commandList->DrawInstanced(3, 1, 0, 0);
+                recordDraw(3, true);
+
+                D3D12_RESOURCE_BARRIER exposureToSrv{};
+                exposureToSrv.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                exposureToSrv.Transition.pResource = g_gpuMeshPreview.exposureTargets[static_cast<size_t>(currentExposureIndex)].Get();
+                exposureToSrv.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+                exposureToSrv.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+                exposureToSrv.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                commandList->ResourceBarrier(1, &exposureToSrv);
+                g_gpuMeshPreview.exposureStates[static_cast<size_t>(currentExposureIndex)] = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+                g_gpuMeshPreview.exposureHistoryIndex = currentExposureIndex;
+            }
+
+            if (g_gpuMeshPreview.outputState != D3D12_RESOURCE_STATE_RENDER_TARGET)
+            {
+                D3D12_RESOURCE_BARRIER outputToRt{};
+                outputToRt.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                outputToRt.Transition.pResource = g_gpuMeshPreview.outputTarget.Get();
+                outputToRt.Transition.StateBefore = g_gpuMeshPreview.outputState;
+                outputToRt.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+                outputToRt.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                commandList->ResourceBarrier(1, &outputToRt);
+                g_gpuMeshPreview.outputState = D3D12_RESOURCE_STATE_RENDER_TARGET;
+            }
+
+            const float clearOutput[] = {0.0f, 0.0f, 0.0f, 1.0f};
+            commandList->ClearRenderTargetView(g_gpuMeshPreview.outputRtvCpu, clearOutput, 0, nullptr);
+            commandList->OMSetRenderTargets(1, &g_gpuMeshPreview.outputRtvCpu, FALSE, nullptr);
+            commandList->RSSetViewports(1, &vp);
+            commandList->RSSetScissorRects(1, &scissor);
+
+            commandList->SetGraphicsRootSignature(g_tonemapRootSignature.Get());
+            commandList->SetPipelineState(g_tonemapPso.Get());
+            commandList->SetGraphicsRoot32BitConstants(0, sizeof(tonemap) / 4, &tonemap, 0);
+            commandList->SetGraphicsRootDescriptorTable(1, tonemapSource);
+            commandList->SetGraphicsRootDescriptorTable(2, g_gpuMeshPreview.exposureSrvGpu[static_cast<size_t>(g_gpuMeshPreview.exposureHistoryIndex)]);
+            commandList->IASetVertexBuffers(0, 0, nullptr);
+            commandList->IASetIndexBuffer(nullptr);
+            commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            commandList->DrawInstanced(3, 1, 0, 0);
+            recordDraw(3, true);
+
+            D3D12_RESOURCE_BARRIER outputToSrv{};
+            outputToSrv.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            outputToSrv.Transition.pResource = g_gpuMeshPreview.outputTarget.Get();
+            outputToSrv.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+            outputToSrv.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            outputToSrv.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            commandList->ResourceBarrier(1, &outputToSrv);
+            g_gpuMeshPreview.outputState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        }
+
         ThrowIfFailed(commandList->Close(), "Close mesh preview CL failed");
         ID3D12CommandList* cls[] = {commandList.Get()};
         g_commandQueue->ExecuteCommandLists(1, cls);
@@ -8393,10 +8850,18 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.showSurface   = showSurface;
         g_gpuMeshPreview.showWireframe = showWireframe;
         g_gpuMeshPreview.showGrid      = showGrid;
+        g_gpuMeshPreview.hdrViewportEnabled = g_graph.Settings().preview.hdrViewportEnabled;
+        g_gpuMeshPreview.colorFormat = MeshPreviewColorFormat();
         g_gpuMeshPreview.maskPreview   = g_graph.Evaluation().previewShowsMask;
         g_gpuMeshPreview.maskShading   = static_cast<int>(g_graph.Settings().preview.maskShading);
         g_gpuMeshPreview.terrainBoundaryMode = static_cast<int>(terrainBoundaryMode);
         g_gpuMeshPreview.lightingMode  = g_graph.Settings().preview.lightingMode;
+        g_gpuMeshPreview.exposureMode = static_cast<int>(g_graph.Settings().preview.exposureMode);
+        g_gpuMeshPreview.exposureEv = g_graph.Settings().preview.exposureEv;
+        g_gpuMeshPreview.autoExposureBiasEv = g_graph.Settings().preview.autoExposureBiasEv;
+        g_gpuMeshPreview.autoExposureMinEv = g_graph.Settings().preview.autoExposureMinEv;
+        g_gpuMeshPreview.autoExposureMaxEv = g_graph.Settings().preview.autoExposureMaxEv;
+        g_gpuMeshPreview.autoExposureSpeed = g_graph.Settings().preview.autoExposureSpeed;
         g_gpuMeshPreview.sunAzimuthDegrees = sunPosition.azimuth;
         g_gpuMeshPreview.sunElevationDegrees = sunPosition.elevation;
         g_gpuMeshPreview.sunIntensity = g_graph.Settings().preview.sunIntensity;
@@ -8489,13 +8954,20 @@ void DrawGpuMeshPreview(ImDrawList* drawList, const ImVec2& min, const ImVec2& m
         g_frameTiming.gpuPreviewMs += std::chrono::duration<double, std::milli>(previewEnd - previewStart).count();
         return;
     }
+    const bool useOutputImage =
+        g_gpuMeshPreview.hdrViewportEnabled &&
+        g_tonemapPipelineReady &&
+        g_gpuMeshPreview.outputSrvAllocated &&
+        g_gpuMeshPreview.outputState == D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     const bool usePostImage =
+        !g_gpuMeshPreview.hdrViewportEnabled &&
         g_gpuMeshPreview.depthOfFieldEnabled &&
         g_dofPipelineReady &&
         g_gpuMeshPreview.postSrvAllocated &&
         g_gpuMeshPreview.postState == D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-    const D3D12_GPU_DESCRIPTOR_HANDLE imageSrv = usePostImage ? g_gpuMeshPreview.postSrvGpu : g_gpuMeshPreview.srvGpu;
-    if (g_gpuMeshPreview.srvAllocated && g_gpuMeshPreview.colorState == D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)
+    const D3D12_GPU_DESCRIPTOR_HANDLE imageSrv =
+        useOutputImage ? g_gpuMeshPreview.outputSrvGpu : (usePostImage ? g_gpuMeshPreview.postSrvGpu : g_gpuMeshPreview.srvGpu);
+    if ((useOutputImage || usePostImage || g_gpuMeshPreview.srvAllocated) && g_gpuMeshPreview.colorState == D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)
     {
         // Snap the destination rect to integer pixel boundaries so the
         // offscreen texture grid aligns 1:1 with screen pixels. Without
@@ -10537,6 +11009,7 @@ void CaptureDebugStatusLogs()
     static std::string previousSkyStatus;
     static std::string previousCloudStatus;
     static std::string previousDofStatus;
+    static std::string previousTonemapStatus;
     static std::string previousMseStatus;
     static std::string previousMaskNoiseStatus;
     static std::string previousMaskUtilityStatus;
@@ -10556,6 +11029,7 @@ void CaptureDebugStatusLogs()
     AppendDebugLogIfChanged("Sky", g_skyPipelineStatus, previousSkyStatus);
     AppendDebugLogIfChanged("Cloud", g_cloudPipelineStatus, previousCloudStatus);
     AppendDebugLogIfChanged("Depth of Field", g_dofPipelineStatus, previousDofStatus);
+    AppendDebugLogIfChanged("Tonemap", g_tonemapPipelineStatus, previousTonemapStatus);
     AppendDebugLogIfChanged("MSE GPU", MseComputeStatus(), previousMseStatus);
     AppendDebugLogIfChanged("Mask Noise GPU", MaskNoiseComputeStatus(), previousMaskNoiseStatus);
     AppendDebugLogIfChanged("Mask Utility GPU", MaskUtilityComputeStatus(), previousMaskUtilityStatus);

@@ -75,6 +75,13 @@ nlohmann::json MakeProjectSettingsJson(const rock::GraphSettings& graphSettings,
             {"terrainSizeMeters", preview.terrainSizeMeters},
             {"simulationResolution", preview.simulationResolution},
             {"lightingMode", preview.lightingMode},
+            {"hdrViewportEnabled", preview.hdrViewportEnabled},
+            {"exposureMode", static_cast<int>(preview.exposureMode)},
+            {"exposureEv", preview.exposureEv},
+            {"autoExposureBiasEv", preview.autoExposureBiasEv},
+            {"autoExposureMinEv", preview.autoExposureMinEv},
+            {"autoExposureMaxEv", preview.autoExposureMaxEv},
+            {"autoExposureSpeed", preview.autoExposureSpeed},
             {"meshBackend", static_cast<int>(preview.meshBackend)},
             {"terrainBoundaryMode", static_cast<int>(preview.terrainBoundaryMode)},
             {"frameRateLimitFps", preview.frameRateLimitFps},
@@ -261,6 +268,18 @@ void ReadPreviewSettingsJson(const nlohmann::json& settingsJson, rock::PreviewSe
     preview.simulationResolution = NearestResolutionPreset(previewJson.value("simulationResolution", preview.simulationResolution));
     hadSimulationResolution = previewJson.contains("simulationResolution");
     preview.lightingMode = std::clamp(previewJson.value("lightingMode", preview.lightingMode), 0, 1);
+    preview.hdrViewportEnabled = previewJson.value("hdrViewportEnabled", preview.hdrViewportEnabled);
+    {
+        const int exposureModeInt = std::clamp(previewJson.value("exposureMode", static_cast<int>(preview.exposureMode)),
+            static_cast<int>(rock::ExposureMode::Manual),
+            static_cast<int>(rock::ExposureMode::Auto));
+        preview.exposureMode = static_cast<rock::ExposureMode>(exposureModeInt);
+    }
+    preview.exposureEv = std::clamp(previewJson.value("exposureEv", preview.exposureEv), -8.0f, 8.0f);
+    preview.autoExposureBiasEv = std::clamp(previewJson.value("autoExposureBiasEv", preview.autoExposureBiasEv), -4.0f, 4.0f);
+    preview.autoExposureMinEv = std::clamp(previewJson.value("autoExposureMinEv", preview.autoExposureMinEv), -8.0f, 8.0f);
+    preview.autoExposureMaxEv = std::clamp(previewJson.value("autoExposureMaxEv", preview.autoExposureMaxEv), preview.autoExposureMinEv, 8.0f);
+    preview.autoExposureSpeed = std::clamp(previewJson.value("autoExposureSpeed", preview.autoExposureSpeed), 0.05f, 8.0f);
     const int backendInt = std::clamp(previewJson.value("meshBackend", static_cast<int>(preview.meshBackend)),
                                       static_cast<int>(rock::MeshPreviewBackend::CpuMesh),
                                       static_cast<int>(rock::MeshPreviewBackend::GpuDisplacement));
