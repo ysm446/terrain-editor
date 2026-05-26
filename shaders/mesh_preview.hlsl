@@ -573,17 +573,17 @@ float4 PSSurface(VSOut i) : SV_TARGET
             float cloudShadowFactor = lerp(1.0, cloudVisibility, cloudShadowStrength);
             float directVisibility = lerp(1.0 - shadowStrength, 1.0, visibility);
             float castShadowAmount = (1.0 - visibility) * shadowStrength;
+            float cloudShadowAmount = 1.0 - cloudShadowFactor;
 
             float3 skyAmbient = n.y >= 0.0
                 ? lerp(skyHorizonColor.rgb, skyZenithColor.rgb, n.y)
                 : lerp(skyHorizonColor.rgb, skyGroundColor.rgb, -n.y);
             skyAmbient *= ambientStrength;
             float3 shadowAmbient = skyHorizonColor.rgb * ambientStrength;
-            skyAmbient = lerp(skyAmbient, shadowAmbient, castShadowAmount);
+            skyAmbient = lerp(skyAmbient, shadowAmbient, saturate(max(castShadowAmount, cloudShadowAmount)));
 
-            float ambientCloudMix = lerp(1.0, cloudVisibility, cloudShadowStrength * 0.4);
             float3 sunTint = skySunColor.rgb * ndl * sunIntensity * directVisibility * cloudShadowFactor;
-            col = sectionBaseColor * (skyAmbient * ambientCloudMix + sunTint);
+            col = sectionBaseColor * (skyAmbient + sunTint);
         }
         if (atmosphereDensity > 0.001 && maskPreview < 0.5)
         {
@@ -623,6 +623,7 @@ float4 PSSurface(VSOut i) : SV_TARGET
         float viewFacing = pow(saturate(dot(n, V) * 0.5 + 0.5), 0.35);
         float directVisibility = lerp(1.0 - shadowStrength, 1.0, visibility);
         float castShadowAmount = (1.0 - visibility) * shadowStrength;
+        float cloudShadowAmount = 1.0 - cloudShadowFactor;
 
         // Hemisphere ambient driven by sky settings: surfaces facing up
         // sample the zenith colour, surfaces facing the horizon sample the
@@ -640,15 +641,11 @@ float4 PSSurface(VSOut i) : SV_TARGET
         skyAmbient *= ambientStrength;
         skyAmbient *= aoFactor;
         float3 shadowAmbient = skyHorizonColor.rgb * ambientStrength * aoFactor;
-        skyAmbient = lerp(skyAmbient, shadowAmbient, castShadowAmount);
-
-        // Cloud shadow attenuates the sun (direct light) fully but only
-        // partially attenuates ambient sky light, since clouds scatter light
-        // back down and the sky term is dominated by skylight not sun.
-        float ambientCloudMix = lerp(1.0, cloudVisibility, cloudShadowStrength * 0.4);
+        skyAmbient = lerp(skyAmbient, shadowAmbient, saturate(max(castShadowAmount, cloudShadowAmount)));
 
         // Direct sun: uses the sky's sun colour so a warm sky tints the
         // direct light too. Shadow maps attenuate only this direct term;
+        // cloud shadows use the same direct-light attenuation path, and
         // ambient remains shared by self-shaded and cast-shadow regions.
         float3 sunTint = skySunColor.rgb * ndl * sunIntensity * directVisibility * cloudShadowFactor;
 
@@ -656,7 +653,7 @@ float4 PSSurface(VSOut i) : SV_TARGET
         float3 effectiveAlbedo = UseColorTexture()
             ? colorTexture.Sample(linearSampler, TerrainTextureUv(i.worldPos)).rgb
             : albedoColor.rgb;
-        col = effectiveAlbedo * (skyAmbient * ambientCloudMix + sunTint) * slopeMicroShade;
+        col = effectiveAlbedo * (skyAmbient + sunTint) * slopeMicroShade;
         col += pow(saturate(ndl), 24.0) * sunIntensity * visibility * cloudShadowFactor * 0.045;
     }
     if (maskPreview > 0.5)
