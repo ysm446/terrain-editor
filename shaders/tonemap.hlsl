@@ -7,7 +7,7 @@ cbuffer TonemapConstants : register(b0)
     float autoExposureMaxEv;
     float adaptationRate;
     float deltaTimeSeconds;
-    float pad1;
+    float colorTemperatureKelvin;
 };
 
 Texture2D<float4> HdrColor : register(t0);
@@ -42,6 +42,18 @@ float3 AcesFitted(float3 color)
     const float d = 0.59;
     const float e = 0.14;
     return saturate((color * (a * color + b)) / (color * (c * color + d) + e));
+}
+
+float3 ColorTemperatureRgb(float kelvin)
+{
+    float temp = clamp(kelvin, 1000.0, 40000.0) / 100.0;
+    float warmDelta = max(temp - 60.0, 1.0e-3);
+    float r = temp <= 66.0 ? 1.0 : saturate(1.292936186 * pow(warmDelta, -0.1332047592));
+    float g = temp <= 66.0
+        ? saturate(0.3900815788 * log(temp) - 0.6318414438)
+        : saturate(1.129890861 * pow(warmDelta, -0.0755148492));
+    float b = temp >= 66.0 ? 1.0 : (temp <= 19.0 ? 0.0 : saturate(0.5432067891 * log(temp - 10.0) - 1.1962540891));
+    return float3(r, g, b);
 }
 
 float AutoExposureEv()
@@ -79,6 +91,8 @@ float4 TonemapPS(VsOut input) : SV_Target
     float3 hdr = max(HdrColor.SampleLevel(LinearSampler, input.uv, 0).rgb, 0.0);
     float ev = exposureMode > 0.5 ? ExposureHistory.SampleLevel(LinearSampler, float2(0.5, 0.5), 0) : exposureEv;
     float3 exposed = hdr * exp2(ev);
+    float3 whiteBalance = ColorTemperatureRgb(colorTemperatureKelvin) / max(ColorTemperatureRgb(6500.0), float3(1.0e-3, 1.0e-3, 1.0e-3));
+    exposed *= whiteBalance;
     float3 mapped = AcesFitted(exposed);
     return float4(mapped, 1.0);
 }

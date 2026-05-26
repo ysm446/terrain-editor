@@ -82,6 +82,7 @@ nlohmann::json MakeProjectSettingsJson(const rock::GraphSettings& graphSettings,
             {"autoExposureMinEv", preview.autoExposureMinEv},
             {"autoExposureMaxEv", preview.autoExposureMaxEv},
             {"autoExposureSpeed", preview.autoExposureSpeed},
+            {"colorTemperatureKelvin", preview.colorTemperatureKelvin},
             {"meshBackend", static_cast<int>(preview.meshBackend)},
             {"terrainBoundaryMode", static_cast<int>(preview.terrainBoundaryMode)},
             {"frameRateLimitFps", preview.frameRateLimitFps},
@@ -280,6 +281,7 @@ void ReadPreviewSettingsJson(const nlohmann::json& settingsJson, rock::PreviewSe
     preview.autoExposureMinEv = std::clamp(previewJson.value("autoExposureMinEv", preview.autoExposureMinEv), -8.0f, 8.0f);
     preview.autoExposureMaxEv = std::clamp(previewJson.value("autoExposureMaxEv", preview.autoExposureMaxEv), preview.autoExposureMinEv, 8.0f);
     preview.autoExposureSpeed = std::clamp(previewJson.value("autoExposureSpeed", preview.autoExposureSpeed), 0.05f, 8.0f);
+    preview.colorTemperatureKelvin = std::clamp(previewJson.value("colorTemperatureKelvin", preview.colorTemperatureKelvin), 2000.0f, 12000.0f);
     const int backendInt = std::clamp(previewJson.value("meshBackend", static_cast<int>(preview.meshBackend)),
                                       static_cast<int>(rock::MeshPreviewBackend::CpuMesh),
                                       static_cast<int>(rock::MeshPreviewBackend::GpuDisplacement));

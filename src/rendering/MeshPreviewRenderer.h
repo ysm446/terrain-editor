@@ -199,6 +199,7 @@ struct GpuMeshPreview
     float autoExposureMinEv = 0.0f;
     float autoExposureMaxEv = 0.0f;
     float autoExposureSpeed = 0.0f;
+    float colorTemperatureKelvin = 0.0f;
     float dofFStop = 0.0f;
     float dofFocusDistanceMeters = 0.0f;
     float dofSensorHeightMm = 0.0f;

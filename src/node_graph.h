@@ -701,6 +701,7 @@ struct PreviewSettings
     float autoExposureMinEv = -4.0f;
     float autoExposureMaxEv = 4.0f;
     float autoExposureSpeed = 1.0f;
+    float colorTemperatureKelvin = 6500.0f;
     MeshPreviewBackend meshBackend = MeshPreviewBackend::CpuMesh;
     TerrainBoundaryMode terrainBoundaryMode = TerrainBoundaryMode::SectionPolygon;
     bool viewportTessellation = false;

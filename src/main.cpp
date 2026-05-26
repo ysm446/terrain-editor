@@ -3202,7 +3202,7 @@ struct TonemapShaderConstants
     float autoExposureMaxEv;
     float adaptationRate;
     float deltaTimeSeconds;
-    float pad1;
+    float colorTemperatureKelvin;
 };
 static_assert(sizeof(TonemapShaderConstants) == 8 * sizeof(UINT));
 
@@ -7315,6 +7315,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.autoExposureMinEv != g_graph.Settings().preview.autoExposureMinEv ||
         g_gpuMeshPreview.autoExposureMaxEv != g_graph.Settings().preview.autoExposureMaxEv ||
         g_gpuMeshPreview.autoExposureSpeed != g_graph.Settings().preview.autoExposureSpeed ||
+        g_gpuMeshPreview.colorTemperatureKelvin != g_graph.Settings().preview.colorTemperatureKelvin ||
         g_gpuMeshPreview.sunAzimuthDegrees != sunPosition.azimuth ||
         g_gpuMeshPreview.sunElevationDegrees != sunPosition.elevation ||
         g_gpuMeshPreview.sunIntensity != g_graph.Settings().preview.sunIntensity ||
@@ -7423,7 +7424,8 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.autoExposureBiasEv != g_graph.Settings().preview.autoExposureBiasEv ||
         g_gpuMeshPreview.autoExposureMinEv != g_graph.Settings().preview.autoExposureMinEv ||
         g_gpuMeshPreview.autoExposureMaxEv != g_graph.Settings().preview.autoExposureMaxEv ||
-        g_gpuMeshPreview.autoExposureSpeed != g_graph.Settings().preview.autoExposureSpeed)
+        g_gpuMeshPreview.autoExposureSpeed != g_graph.Settings().preview.autoExposureSpeed ||
+        g_gpuMeshPreview.colorTemperatureKelvin != g_graph.Settings().preview.colorTemperatureKelvin)
     {
         addDirtyReason(dirtyReason, "exposure");
     }
@@ -8762,6 +8764,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
             tonemap.autoExposureMaxEv = std::clamp(g_graph.Settings().preview.autoExposureMaxEv, tonemap.autoExposureMinEv, 8.0f);
             tonemap.adaptationRate = std::clamp(g_graph.Settings().preview.autoExposureSpeed, 0.05f, 8.0f);
             tonemap.deltaTimeSeconds = exposureDeltaSeconds;
+            tonemap.colorTemperatureKelvin = std::clamp(g_graph.Settings().preview.colorTemperatureKelvin, 2000.0f, 12000.0f);
 
             ID3D12DescriptorHeap* heaps[] = {g_srvHeap.Get()};
             commandList->SetDescriptorHeaps(1, heaps);
@@ -8862,6 +8865,7 @@ bool RenderGpuMeshPreview(const ImVec2& min, const ImVec2& max, bool showSurface
         g_gpuMeshPreview.autoExposureMinEv = g_graph.Settings().preview.autoExposureMinEv;
         g_gpuMeshPreview.autoExposureMaxEv = g_graph.Settings().preview.autoExposureMaxEv;
         g_gpuMeshPreview.autoExposureSpeed = g_graph.Settings().preview.autoExposureSpeed;
+        g_gpuMeshPreview.colorTemperatureKelvin = g_graph.Settings().preview.colorTemperatureKelvin;
         g_gpuMeshPreview.sunAzimuthDegrees = sunPosition.azimuth;
         g_gpuMeshPreview.sunElevationDegrees = sunPosition.elevation;
         g_gpuMeshPreview.sunIntensity = g_graph.Settings().preview.sunIntensity;

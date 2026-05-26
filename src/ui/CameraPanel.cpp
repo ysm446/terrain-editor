@@ -108,7 +108,7 @@ void DrawCameraPanel(CameraPanelState state)
                 "16-bit float の HDR ビューポートバッファを使い、トーンマップと露出調整を有効にします。オフにすると HDR 以前の 8-bit ビューポート経路を使います。"),
             rock::PreviewSettings{}.hdrViewportEnabled, true);
 
-        if (preview.hdrViewportEnabled)
+        ImGui::BeginDisabled(!preview.hdrViewportEnabled);
         {
             int exposureModeInt = static_cast<int>(preview.exposureMode);
             if (DrawPropertyComboRow(Tr("Exposure Mode", "露出モード"), "CameraExposureMode", &exposureModeInt, Tr("Manual\0Auto\0\0", "Manual\0Auto\0\0"),
@@ -148,7 +148,13 @@ void DrawCameraPanel(CameraPanelState state)
                     preview.autoExposureSpeed = std::clamp(preview.autoExposureSpeed, 0.05f, 8.0f);
                 }
             }
+            DrawPropertyFloatRow(Tr("Color Temperature (K)", "色温度 (K)"), "CameraColorTemperatureKelvin", &preview.colorTemperatureKelvin,
+                2000.0f, 12000.0f, rock::PreviewSettings{}.colorTemperatureKelvin, "Color temperature changed", false,
+                Tr("Viewport white balance. Lower values warm the image; higher values cool it.",
+                    "ビューポートのホワイトバランスです。低い値で暖色、高い値で寒色へ寄せます。"), "%.0f");
+            preview.colorTemperatureKelvin = std::clamp(preview.colorTemperatureKelvin, 2000.0f, 12000.0f);
         }
+        ImGui::EndDisabled();
         ImGui::EndTable();
     }
 
