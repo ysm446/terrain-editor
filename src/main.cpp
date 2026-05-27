@@ -11665,6 +11665,12 @@ void DrawUi()
         }
         MarkGraphChanged("Depth of Field toggled");
     }
+    if (!io.WantTextInput && !io.KeyCtrl && !io.KeyShift && !io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_C, false))
+    {
+        rock::CloudSettings& clouds = g_graph.Settings().clouds;
+        clouds.enabled = !clouds.enabled;
+        MarkGraphChanged("Clouds toggled");
+    }
     if (!io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F12, false))
     {
         std::filesystem::path screenshotPath;
