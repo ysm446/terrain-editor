@@ -2,6 +2,14 @@
 
 ## 未リリース
 
+## 0.19.126 - 2026-05-28 14:28
+
+- 専用 GPU メモリが少ない環境では、起動時とプロジェクト読み込み時にビューポートを安全寄りの設定へ自動調整するようにしました。`GPU Displacement`、`Tessellation`、HDR、Depth of Field、水面 SSR、高めの影/雲品質を抑え、Surface Pro などの内蔵 GPU で `DXGI_ERROR_DEVICE_HUNG` が起きにくい設定から開始します。
+
+## 0.19.125 - 2026-05-28 14:24
+
+- D3D12 の `Present` 失敗時に、HRESULT と `GetDeviceRemovedReason()` の結果をエラーメッセージとデバッグログへ出すようにしました。Surface Pro などで GPU デバイスロストが起きた場合に、`DXGI_ERROR_DEVICE_HUNG` / `DXGI_ERROR_DEVICE_REMOVED` / `E_OUTOFMEMORY` などの原因を確認しやすくしました。
+
 ## 0.19.124 - 2026-05-27 23:34
 
 - `C` キーでボリューム雲の描画オン / オフを切り替えられるようにしました。

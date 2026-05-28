@@ -241,6 +241,10 @@ UINT g_srvDescriptorSize = 0;
 std::array<FrameContext, kFrameCount> g_frameContexts;
 std::array<ComPtr<ID3D12Resource>, kFrameCount> g_renderTargets;
 std::array<bool, kSrvDescriptorCount> g_srvDescriptorUsed{};
+bool g_lowDedicatedMemoryAdapter = false;
+SIZE_T g_adapterDedicatedVideoMemory = 0;
+SIZE_T g_adapterSharedSystemMemory = 0;
+std::wstring g_adapterDescription;
 ed::EditorContext* g_nodeEditor = nullptr;
 bool g_nodeEditorFrameActive = false;
 bool g_skipNodeMoveUndoThisFrame = false;
@@ -971,6 +975,11 @@ void InitD3D(HWND hwnd)
         }
         if (SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&g_device))))
         {
+            g_adapterDedicatedVideoMemory = desc.DedicatedVideoMemory;
+            g_adapterSharedSystemMemory = desc.SharedSystemMemory;
+            g_adapterDescription = desc.Description;
+            constexpr SIZE_T kLowDedicatedMemoryThreshold = 512ull * 1024ull * 1024ull;
+            g_lowDedicatedMemoryAdapter = desc.DedicatedVideoMemory < kLowDedicatedMemoryThreshold;
             break;
         }
     }
@@ -978,6 +987,7 @@ void InitD3D(HWND hwnd)
     if (!g_device)
     {
         ThrowIfFailed(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&g_device)), "D3D12CreateDevice failed");
+        g_lowDedicatedMemoryAdapter = true;
     }
 
     D3D12_COMMAND_QUEUE_DESC queueDesc{};
@@ -1609,6 +1619,55 @@ ComPtr<ID3D12Resource> CreateUploadBuffer(const void* data, UINT64 byteSize, con
         buffer->Unmap(0, nullptr);
     }
     return buffer;
+}
+
+bool ApplyLowDedicatedMemoryViewportSafety()
+{
+    if (!g_lowDedicatedMemoryAdapter)
+    {
+        return false;
+    }
+
+    bool changed = false;
+    rock::GraphSettings& settings = g_graph.Settings();
+    rock::PreviewSettings& preview = settings.preview;
+
+    const auto setBool = [&](bool& value, bool safeValue) {
+        if (value != safeValue)
+        {
+            value = safeValue;
+            changed = true;
+        }
+    };
+    const auto clampIntMax = [&](int& value, int safeMax) {
+        if (value > safeMax)
+        {
+            value = safeMax;
+            changed = true;
+        }
+    };
+
+    if (preview.meshBackend != rock::MeshPreviewBackend::CpuMesh)
+    {
+        preview.meshBackend = rock::MeshPreviewBackend::CpuMesh;
+        changed = true;
+    }
+    setBool(preview.viewportTessellation, false);
+    setBool(preview.hdrViewportEnabled, false);
+    setBool(preview.depthOfFieldEnabled, false);
+    setBool(preview.waterSsrEnabled, false);
+    clampIntMax(preview.resolution, 512);
+    clampIntMax(preview.shadowMapResolution, 1024);
+    clampIntMax(settings.clouds.qualitySamples, 16);
+    clampIntMax(settings.clouds.shadowResolution, 512);
+    clampIntMax(settings.clouds.shadowSamples, 8);
+    clampIntMax(settings.clouds.lightSamples, 4);
+
+    if (changed)
+    {
+        SetTransientProjectStatus("Low-memory GPU: safe viewport settings applied");
+    }
+    return changed;
 }
 
 bool LoadAppSettings(std::string* error = nullptr)
@@ -2408,6 +2467,7 @@ bool LoadProjectFromFile(const std::filesystem::path& path, std::string* error)
         ReadSelectedNodesJson(root);
         ReadPreviewSelectionJson(root);
         ReadNodePositionsJson(root);
+        ApplyLowDedicatedMemoryViewportSafety();
 
         g_projectPath = path;
         SetProjectDirty(false);
@@ -11166,6 +11226,53 @@ void AppendDebugLogIfChanged(const char* label, const std::string& value, std::s
     }
 }
 
+const char* HResultName(HRESULT hr)
+{
+    switch (hr)
+    {
+    case S_OK: return "S_OK";
+    case DXGI_ERROR_DEVICE_HUNG: return "DXGI_ERROR_DEVICE_HUNG";
+    case DXGI_ERROR_DEVICE_REMOVED: return "DXGI_ERROR_DEVICE_REMOVED";
+    case DXGI_ERROR_DEVICE_RESET: return "DXGI_ERROR_DEVICE_RESET";
+    case DXGI_ERROR_DRIVER_INTERNAL_ERROR: return "DXGI_ERROR_DRIVER_INTERNAL_ERROR";
+    case DXGI_ERROR_INVALID_CALL: return "DXGI_ERROR_INVALID_CALL";
+    case DXGI_ERROR_NOT_CURRENTLY_AVAILABLE: return "DXGI_ERROR_NOT_CURRENTLY_AVAILABLE";
+    case DXGI_ERROR_WAS_STILL_DRAWING: return "DXGI_ERROR_WAS_STILL_DRAWING";
+    case E_OUTOFMEMORY: return "E_OUTOFMEMORY";
+    case E_INVALIDARG: return "E_INVALIDARG";
+    case E_FAIL: return "E_FAIL";
+    default: return nullptr;
+    }
+}
+
+std::string FormatHResult(HRESULT hr)
+{
+    char buffer[32]{};
+    std::snprintf(buffer, sizeof(buffer), "0x%08lX", static_cast<unsigned long>(static_cast<uint32_t>(hr)));
+    std::string result = buffer;
+    if (const char* name = HResultName(hr))
+    {
+        result += " ";
+        result += name;
+    }
+    return result;
+}
+
+std::string D3D12FailureMessage(const char* operation, HRESULT hr)
+{
+    std::string message = std::string(operation) + " (" + FormatHResult(hr) + ")";
+    if (g_device)
+    {
+        const HRESULT reason = g_device->GetDeviceRemovedReason();
+        if (reason != S_OK || hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET || hr == DXGI_ERROR_DEVICE_HUNG)
+        {
+            message += "; device removed reason: ";
+            message += FormatHResult(reason);
+        }
+    }
+    return message;
+}
+
 void CaptureDebugStatusLogs()
 {
     static std::string previousProjectStatus;
@@ -12100,7 +12207,13 @@ void RenderFrame()
     ID3D12CommandList* commandLists[] = {g_commandList.Get()};
     g_commandQueue->ExecuteCommandLists(1, commandLists);
     const auto presentStart = std::chrono::steady_clock::now();
-    ThrowIfFailed(g_swapChain->Present(0, 0), "Present failed");
+    const HRESULT presentHr = g_swapChain->Present(0, 0);
+    if (FAILED(presentHr))
+    {
+        const std::string message = D3D12FailureMessage("Present failed", presentHr);
+        AppendDebugLog(message);
+        throw std::runtime_error(message);
+    }
     const auto presentEnd = std::chrono::steady_clock::now();
     g_frameTiming.presentMs = std::chrono::duration<double, std::milli>(presentEnd - presentStart).count();
 
@@ -12472,6 +12585,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         {
             SetProjectStatus("App settings load failed: " + appSettingsError);
         }
+        ApplyLowDedicatedMemoryViewportSafety();
         EvaluateGraph();
 
         ImGui_ImplWin32_Init(g_hwnd);
