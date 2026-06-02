@@ -4852,6 +4852,8 @@ bool IsTerrainNodeKind(rock::NodeKind kind)
         kind == rock::NodeKind::HeightmapFromMask ||
         kind == rock::NodeKind::HeightmapBlur ||
         kind == rock::NodeKind::MultiScaleErosion ||
+        kind == rock::NodeKind::FluvialErosion ||
+        kind == rock::NodeKind::DropletErosion ||
         kind == rock::NodeKind::MaskNoise ||
         kind == rock::NodeKind::MaskBlend ||
         kind == rock::NodeKind::MaskLevels ||
@@ -9936,6 +9938,10 @@ ImVec2 InitialNodePosition(rock::NodeKind kind)
         return ImVec2(600.0f, 240.0f);
     case rock::NodeKind::MultiScaleErosion:
         return ImVec2(320.0f, 380.0f);
+    case rock::NodeKind::FluvialErosion:
+        return ImVec2(320.0f, 480.0f);
+    case rock::NodeKind::DropletErosion:
+        return ImVec2(320.0f, 580.0f);
     case rock::NodeKind::MaskNoise:
         return ImVec2(40.0f, 520.0f);
     case rock::NodeKind::MaskBlend:
@@ -10410,6 +10416,8 @@ void PasteNodesFromClipboard(const ImVec2& pasteCenter)
             newMutableNode->shape = clipboardNode.node.shape;
             newMutableNode->heightmapBlur = clipboardNode.node.heightmapBlur;
             newMutableNode->multiScaleErosion = clipboardNode.node.multiScaleErosion;
+            newMutableNode->fluvialErosion = clipboardNode.node.fluvialErosion;
+            newMutableNode->dropletErosion = clipboardNode.node.dropletErosion;
             newMutableNode->maskNoise = clipboardNode.node.maskNoise;
             newMutableNode->maskBlend = clipboardNode.node.maskBlend;
             newMutableNode->maskCurvature = clipboardNode.node.maskCurvature;
@@ -10683,6 +10691,8 @@ void DrawNodeGraph()
             addNodeMenuItem(rock::NodeKind::HeightmapFromMask);
             addNodeMenuItem(rock::NodeKind::HeightmapBlur);
             addNodeMenuItem(rock::NodeKind::MultiScaleErosion);
+            addNodeMenuItem(rock::NodeKind::FluvialErosion);
+            addNodeMenuItem(rock::NodeKind::DropletErosion);
             addNodeMenuItem(rock::NodeKind::Crumbling);
             addNodeMenuItem(rock::NodeKind::Rock);
             addNodeMenuItem(rock::NodeKind::Scatter);

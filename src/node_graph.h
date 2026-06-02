@@ -37,6 +37,8 @@ enum class NodeKind
     MaskPath = 23,
     HeightmapFromMask = 24,
     MaskBlur = 25,
+    FluvialErosion = 26,
+    DropletErosion = 27,
 };
 
 enum class PinKind
@@ -244,6 +246,8 @@ enum class PreviewStage
     MaskPath = 21,
     HeightmapFromMask = 22,
     MaskBlur = 23,
+    FluvialErosion = 24,
+    DropletErosion = 25,
 };
 
 enum class NodeCategory
@@ -610,6 +614,59 @@ struct MaskFluvialSettings
     MaskFluvialBackend backend = MaskFluvialBackend::GpuCompute; // CPU 厳密 (sort + topological walk) vs GPU 反復 (Jacobi gather, ~2*resolution iters; 視覚的に同等だが数値は完全一致せず). 既定 GPU. シェーダー / ディスパッチ失敗時は CPU に自動フォールバック.
 };
 
+// Heightfield -> heightfield + Flows + Deposits. Industry-standard hydraulic
+// droplet erosion: water droplets follow the gradient (with inertia), pick up
+// sediment up to a slope/speed-driven carrying capacity, and drop it again when
+// oversaturated or climbing. Path visitation accumulates into Flows; dropped
+// sediment into Deposits. Reuses the multi-grid philosophy (coarse valleys
+// first, finer levels refine) for near-resolution-invariant channels.
+struct DropletErosionSettings
+{
+    int particleCount = 60000;        // Droplets traced per level.
+    int maxLifetime = 64;             // Max steps a droplet travels before it dies.
+    float erosionStrength = 0.30f;    // Carving rate per step.
+    float depositionStrength = 0.30f; // Sediment drop rate when oversaturated.
+    float inertia = 0.05f;            // 0 = follow slope exactly, 1 = keep previous direction.
+    float minSlope = 0.01f;           // Slope floor so near-flat cells still transport.
+    bool useMultigrid = true;
+    int seed = 1337;
+    float sedimentCapacity = 4.0f;    // Carrying-capacity multiplier.
+    float evaporation = 0.02f;        // Per-step water loss (0..1).
+    float gravity = 4.0f;             // Downhill acceleration.
+    float erosionRadius = 2.0f;       // Erosion brush radius in cells (smooths carving).
+};
+
+// Heightfield -> heightfield + Flows + Deposits. KTT-style force-field particle
+// transport: a gradient + wear-feedback force field drives scattered particles;
+// the height is nudged toward the average of the cells ahead/behind to incise
+// channels, and `channeling` cancels deposition so river beds stay cut. Path
+// visitation accumulates into Flows; dropped sediment into Deposits. Parameters
+// follow the KTT Fluvial Erosion HDA (see docs/nodes/heightfield/fluvial_erosion).
+struct FluvialErosionSettings
+{
+    // Basic simulation
+    float featureSize = 8.0f;          // m. Largest feature scale; drives the coarsest multigrid level.
+    float geologicalAge = 20.0f;       // 0-20. Overall erosion gain (how long the terrain has eroded).
+    int simulationIterations = 25;     // 0-100. Force-field + transport passes per resolution level.
+    float channelLength = 128.0f;      // m. How far a particle travels (converted to steps by cell size).
+    // Sedimentation
+    float erosionStrength = 1.0f;      // 0-1. How hard the height is pulled toward the ahead/behind average.
+    float channeling = 0.25f;          // 0-1. Cancels deposition so channels stay incised.
+    // Sediment transport
+    float friction = 0.10f;            // 0-1. Velocity damping per step.
+    float wearAngleDeg = 15.0f;        // 0-90. Min slope angle before a particle erodes.
+    float depositAngleDeg = 0.0f;      // 0-90. Below this slope a particle stops eroding.
+    float maxErosionAngleDeg = 30.0f;  // 0-90. Above this slope erosion stops (too steep).
+    // Sediment shaping
+    float erosionGranularity = 10.0f;  // 0-100. Particle density (% of cells seeded per pass).
+    float flowVolume = 0.0f;           // 0-1. Feeds accumulated wear back into the force field.
+    float smallChannelInfluence = 0.0f;// 0-1. Boosts particle density at finer levels for more small channels.
+    float sedimentVelocity = 1.0f;     // 0-2. Particle speed multiplier.
+
+    bool useMultigrid = true;
+    int seed = 1337;                   // Internal; not exposed (KTT keeps the seed hidden for reproducibility).
+};
+
 struct MultiScaleErosionSettings
 {
     int iterations = 50;
@@ -657,6 +714,8 @@ struct Node
     ShapeSettings shape;
     HeightmapBlurSettings heightmapBlur;
     MultiScaleErosionSettings multiScaleErosion;
+    FluvialErosionSettings fluvialErosion;
+    DropletErosionSettings dropletErosion;
     MaskNoiseSettings maskNoise;
     MaskBlendSettings maskBlend;
     MaskCurvatureSettings maskCurvature;
@@ -893,6 +952,8 @@ struct HeightfieldPipeline
         {
             HeightmapBlur,
             MultiScaleErosion,
+            FluvialErosion,
+            DropletErosion,
             MaskCurvature,
             MaskSlope,
             MaskHeight,
@@ -908,6 +969,8 @@ struct HeightfieldPipeline
         GraphId nodeId = 0;
         HeightmapBlurSettings heightmapBlur;
         MultiScaleErosionSettings multiScaleErosion;
+        FluvialErosionSettings fluvialErosion;
+        DropletErosionSettings dropletErosion;
         MaskCurvatureSettings maskCurvature;
         MaskSlopeSettings maskSlope;
         MaskHeightSettings maskHeight;

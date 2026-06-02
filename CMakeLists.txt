@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(TerrainEditor VERSION 0.19.126 LANGUAGES CXX RC)
+project(TerrainEditor VERSION 0.20.0 LANGUAGES CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -20,6 +20,8 @@ add_executable(terrain_editor WIN32
     src/terrain_editor.rc
     src/D3D12Utils.cpp
     src/evaluation/Colorize.cpp
+    src/evaluation/DropletErosion.cpp
+    src/evaluation/FluvialErosion.cpp
     src/evaluation/HeightfieldOps.cpp
     src/evaluation/HeightmapSource.cpp
     src/evaluation/MaskNoise.cpp

@@ -78,6 +78,49 @@ nlohmann::json MakeMultiScaleErosionSettingsJson(const rock::Node& node)
     };
 }
 
+nlohmann::json MakeDropletErosionSettingsJson(const rock::Node& node)
+{
+    return {
+        {"dropletErosion", {
+            {"particleCount", node.dropletErosion.particleCount},
+            {"maxLifetime", node.dropletErosion.maxLifetime},
+            {"erosionStrength", node.dropletErosion.erosionStrength},
+            {"depositionStrength", node.dropletErosion.depositionStrength},
+            {"inertia", node.dropletErosion.inertia},
+            {"minSlope", node.dropletErosion.minSlope},
+            {"useMultigrid", node.dropletErosion.useMultigrid},
+            {"seed", node.dropletErosion.seed},
+            {"sedimentCapacity", node.dropletErosion.sedimentCapacity},
+            {"evaporation", node.dropletErosion.evaporation},
+            {"gravity", node.dropletErosion.gravity},
+            {"erosionRadius", node.dropletErosion.erosionRadius},
+        }},
+    };
+}
+
+nlohmann::json MakeFluvialErosionSettingsJson(const rock::Node& node)
+{
+    return {
+        {"fluvialErosion", {
+            {"featureSize", node.fluvialErosion.featureSize},
+            {"geologicalAge", node.fluvialErosion.geologicalAge},
+            {"simulationIterations", node.fluvialErosion.simulationIterations},
+            {"channelLength", node.fluvialErosion.channelLength},
+            {"erosionStrength", node.fluvialErosion.erosionStrength},
+            {"channeling", node.fluvialErosion.channeling},
+            {"friction", node.fluvialErosion.friction},
+            {"wearAngleDeg", node.fluvialErosion.wearAngleDeg},
+            {"depositAngleDeg", node.fluvialErosion.depositAngleDeg},
+            {"maxErosionAngleDeg", node.fluvialErosion.maxErosionAngleDeg},
+            {"erosionGranularity", node.fluvialErosion.erosionGranularity},
+            {"flowVolume", node.fluvialErosion.flowVolume},
+            {"smallChannelInfluence", node.fluvialErosion.smallChannelInfluence},
+            {"sedimentVelocity", node.fluvialErosion.sedimentVelocity},
+            {"useMultigrid", node.fluvialErosion.useMultigrid},
+        }},
+    };
+}
+
 nlohmann::json MakeMaskSettingsJson(const rock::Node& node)
 {
     return {
@@ -324,6 +367,8 @@ nlohmann::json MakeNodeSettingsJson(const rock::Node& node, const AssetPathForJs
     nlohmann::json nodeJson;
     nodeJson.update(MakeBasicHeightfieldSettingsJson(node, assetPathForJson));
     nodeJson.update(MakeMultiScaleErosionSettingsJson(node));
+    nodeJson.update(MakeFluvialErosionSettingsJson(node));
+    nodeJson.update(MakeDropletErosionSettingsJson(node));
     nodeJson.update(MakeMaskSettingsJson(node));
     nodeJson.update(MakeCrumblingSettingsJson(node));
     nodeJson.update(MakeRockSettingsJson(node));
@@ -410,6 +455,8 @@ std::optional<rock::PreviewStage> ReadSerializedPreviewStage(const nlohmann::jso
     case rock::PreviewStage::HeightmapBlur:
     case rock::PreviewStage::Shape:
     case rock::PreviewStage::MultiScaleErosion:
+    case rock::PreviewStage::FluvialErosion:
+    case rock::PreviewStage::DropletErosion:
     case rock::PreviewStage::MaskNoise:
     case rock::PreviewStage::MaskBlend:
     case rock::PreviewStage::MaskLevels:
@@ -480,6 +527,45 @@ void ReadMultiScaleErosionSettingsJson(const nlohmann::json& nodeJson, rock::Nod
                                            static_cast<int>(rock::MultiScaleErosionBackend::GpuCompute));
         node.multiScaleErosion.backend = static_cast<rock::MultiScaleErosionBackend>(backendInt);
     }
+}
+
+void ReadDropletErosionSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
+{
+    const nlohmann::json de = nodeJson.value("dropletErosion", nlohmann::json::object());
+
+    node.dropletErosion.particleCount = std::clamp(de.value("particleCount", node.dropletErosion.particleCount), 1000, 200000);
+    node.dropletErosion.maxLifetime = std::clamp(de.value("maxLifetime", node.dropletErosion.maxLifetime), 1, 512);
+    node.dropletErosion.erosionStrength = std::clamp(de.value("erosionStrength", node.dropletErosion.erosionStrength), 0.0f, 1.0f);
+    node.dropletErosion.depositionStrength = std::clamp(de.value("depositionStrength", node.dropletErosion.depositionStrength), 0.0f, 1.0f);
+    node.dropletErosion.inertia = std::clamp(de.value("inertia", node.dropletErosion.inertia), 0.0f, 0.99f);
+    node.dropletErosion.minSlope = std::clamp(de.value("minSlope", node.dropletErosion.minSlope), 0.0f, 1.0f);
+    node.dropletErosion.useMultigrid = de.value("useMultigrid", node.dropletErosion.useMultigrid);
+    node.dropletErosion.seed = std::clamp(de.value("seed", node.dropletErosion.seed), 0, 1000000);
+    node.dropletErosion.sedimentCapacity = std::clamp(de.value("sedimentCapacity", node.dropletErosion.sedimentCapacity), 0.1f, 16.0f);
+    node.dropletErosion.evaporation = std::clamp(de.value("evaporation", node.dropletErosion.evaporation), 0.0f, 0.2f);
+    node.dropletErosion.gravity = std::clamp(de.value("gravity", node.dropletErosion.gravity), 0.0f, 20.0f);
+    node.dropletErosion.erosionRadius = std::clamp(de.value("erosionRadius", node.dropletErosion.erosionRadius), 0.5f, 8.0f);
+}
+
+void ReadFluvialErosionSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
+{
+    const nlohmann::json fe = nodeJson.value("fluvialErosion", nlohmann::json::object());
+
+    node.fluvialErosion.featureSize = std::clamp(fe.value("featureSize", node.fluvialErosion.featureSize), 1.0f, 256.0f);
+    node.fluvialErosion.geologicalAge = std::clamp(fe.value("geologicalAge", node.fluvialErosion.geologicalAge), 0.0f, 20.0f);
+    node.fluvialErosion.simulationIterations = std::clamp(fe.value("simulationIterations", node.fluvialErosion.simulationIterations), 0, 100);
+    node.fluvialErosion.channelLength = std::clamp(fe.value("channelLength", node.fluvialErosion.channelLength), 0.0f, 512.0f);
+    node.fluvialErosion.erosionStrength = std::clamp(fe.value("erosionStrength", node.fluvialErosion.erosionStrength), 0.0f, 1.0f);
+    node.fluvialErosion.channeling = std::clamp(fe.value("channeling", node.fluvialErosion.channeling), 0.0f, 1.0f);
+    node.fluvialErosion.friction = std::clamp(fe.value("friction", node.fluvialErosion.friction), 0.0f, 0.99f);
+    node.fluvialErosion.wearAngleDeg = std::clamp(fe.value("wearAngleDeg", node.fluvialErosion.wearAngleDeg), 0.0f, 90.0f);
+    node.fluvialErosion.depositAngleDeg = std::clamp(fe.value("depositAngleDeg", node.fluvialErosion.depositAngleDeg), 0.0f, 90.0f);
+    node.fluvialErosion.maxErosionAngleDeg = std::clamp(fe.value("maxErosionAngleDeg", node.fluvialErosion.maxErosionAngleDeg), 0.0f, 90.0f);
+    node.fluvialErosion.erosionGranularity = std::clamp(fe.value("erosionGranularity", node.fluvialErosion.erosionGranularity), 0.0f, 100.0f);
+    node.fluvialErosion.flowVolume = std::clamp(fe.value("flowVolume", node.fluvialErosion.flowVolume), 0.0f, 1.0f);
+    node.fluvialErosion.smallChannelInfluence = std::clamp(fe.value("smallChannelInfluence", node.fluvialErosion.smallChannelInfluence), 0.0f, 1.0f);
+    node.fluvialErosion.sedimentVelocity = std::clamp(fe.value("sedimentVelocity", node.fluvialErosion.sedimentVelocity), 0.0f, 2.0f);
+    node.fluvialErosion.useMultigrid = fe.value("useMultigrid", node.fluvialErosion.useMultigrid);
 }
 
 void ReadMaskSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
@@ -881,6 +967,8 @@ void ReadNodeSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
 {
     ReadBasicHeightfieldSettingsJson(nodeJson, node);
     ReadMultiScaleErosionSettingsJson(nodeJson, node);
+    ReadFluvialErosionSettingsJson(nodeJson, node);
+    ReadDropletErosionSettingsJson(nodeJson, node);
     ReadMaskSettingsJson(nodeJson, node);
     ReadCrumblingSettingsJson(nodeJson, node);
     ReadRockSettingsJson(nodeJson, node);

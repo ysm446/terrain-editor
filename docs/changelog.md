@@ -2,6 +2,10 @@
 
 ## 未リリース
 
+- 粒子ベースの河川浸食ノードを 2 種類追加しました。いずれも `Heightmap` 入力から `Heightmap` / `Flows` / `Deposits` を出力し、`Use Multigrid` で粗→細のピラミッド処理を行って解像度に安定した水路を作ります。旧 KTT Fluvial Erosion ノード (削除済み) の OpenCL 完全移植とは異なり、現行アーキテクチャに合わせてクリーンに再実装したものです。
+    - `Droplet Erosion`: 業界標準の液滴浸食。水滴を勾配＋慣性で流し、容量ベースで土砂を運搬・堆積します。
+    - `Fluvial Erosion`: KTT 風の力場粒子輸送。勾配＋wear フィードバックの力場で粒子を流し、進行方向の前後平均へ高さを寄せて水路を刻み、`Channeling` で堆積を打ち消します。パラメータは KTT Fluvial Erosion HDA に合わせ、`Feature Size` / `Geological Age` / `Simulation Iterations` / `Channel Length` / `Erosion Strength` / `Channeling` / `Friction` / `Wear Angle` / `Deposit Angle` / `Max Erosion Angle` / `Erosion Granularity` / `Flow Volume` / `Small Channel Influence` / `Sediment Velocity` / `Use Multigrid` を備えます。力場の勾配をセルサイズで正規化し、角度しきい値が正しく効く（パラメータ変更が結果に反映される）ように修正しました。粒子トレースを反復ごとにマルチスレッド並列化（各反復で高さをスナップショット固定し全粒子を並列実行、KTT の GPU モデルに準拠）し、計算時間を大幅に短縮しました。
+
 ## 0.19.126 - 2026-05-28 14:28
 
 - 専用 GPU メモリが少ない環境では、起動時とプロジェクト読み込み時にビューポートを安全寄りの設定へ自動調整するようにしました。`GPU Displacement`、`Tessellation`、HDR、Depth of Field、水面 SSR、高めの影/雲品質を抑え、Surface Pro などの内蔵 GPU で `DXGI_ERROR_DEVICE_HUNG` が起きにくい設定から開始します。

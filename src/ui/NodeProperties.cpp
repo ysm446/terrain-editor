@@ -266,6 +266,12 @@ void DrawNodePropertiesPanel(rock::NodeGraph& graph, rock::GraphId selectedNodeI
     case rock::NodeKind::MultiScaleErosion:
         DrawMultiScaleErosionProperties(*editableNode);
         return;
+    case rock::NodeKind::FluvialErosion:
+        DrawFluvialErosionProperties(*editableNode);
+        return;
+    case rock::NodeKind::DropletErosion:
+        DrawDropletErosionProperties(*editableNode);
+        return;
     case rock::NodeKind::MaskNoise:
         DrawMaskNoiseProperties(*editableNode);
         return;
@@ -1603,6 +1609,171 @@ bool DrawMultiScaleErosionProperties(rock::Node& editableNode)
         EvaluateGraph();
     }
     if (DrawPropertyFloatRow("Rain", "MseRain", &mse.rain, 0.0f, 10.0f, rock::MultiScaleErosionSettings{}.rain, "Multi-scale erosion rain changed", true, Tr("Water amount falling per cell. Larger values increase flow and make deposition more active.", "セルあたりに降る水量。大きいほど流量が増え、堆積も活発になります。")))
+    {
+        EvaluateGraph();
+    }
+
+    ImGui::EndTable();
+    return true;
+}
+
+bool DrawDropletErosionProperties(rock::Node& editableNode)
+{
+    if (!ImGui::BeginTable("DropletErosionRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        return false;
+    }
+
+    ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 210.0f);
+    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+    rock::DropletErosionSettings& de = editableNode.dropletErosion;
+    const rock::DropletErosionSettings defaults{};
+
+    de.particleCount = std::clamp(de.particleCount, 1000, 200000);
+    de.maxLifetime = std::clamp(de.maxLifetime, 1, 512);
+    de.seed = std::clamp(de.seed, 0, 1000000);
+
+    if (DrawPropertyIntRow("Particle Count", "DeParticleCount", &de.particleCount, 1000, 200000, defaults.particleCount, "Droplet erosion particle count changed", true, Tr("Number of droplets traced. With Multigrid on, coarse levels use proportionally fewer to keep density constant. More droplets give denser, smoother channels at higher cost.", "流す水滴の数です。Multigrid 有効時は粗いレベルほど比例して少なくし密度を一定に保ちます。多いほど水路が密で滑らかになりますが計算は重くなります。")))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyIntRow("Max Lifetime", "DeMaxLifetime", &de.maxLifetime, 1, 512, defaults.maxLifetime, "Droplet erosion lifetime changed", true, Tr("Maximum number of steps a droplet travels before it dies. Longer lifetimes carve longer channels.", "1 水滴が消えるまでに移動する最大ステップ数。長いほど水路が長く伸びます。")))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Erosion Strength", "DeErosionStrength", &de.erosionStrength, 0.0f, 1.0f, defaults.erosionStrength, "Droplet erosion strength changed", true, Tr("Carving rate per step. Larger values cut channels faster.", "1 ステップあたりの削り率。大きいほど水路が速く刻まれます。")))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Inertia", "DeInertia", &de.inertia, 0.0f, 0.99f, defaults.inertia, "Droplet erosion inertia changed", true, Tr("0 = follow the slope exactly, higher = keep the previous direction. Higher inertia makes straighter, less meandering channels.", "0 = 勾配に正確に従う、大きいほど直前の方向を保ちます。大きいほど直線的で蛇行の少ない水路になります。")))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Min Slope", "DeMinSlope", &de.minSlope, 0.0f, 1.0f, defaults.minSlope, "Droplet erosion min slope changed", true, Tr("Slope floor so near-flat cells still transport sediment instead of stalling.", "勾配の下限。ほぼ平坦なセルでも停止せず土砂を運べるようにします。"), "%.4f"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyBoolRow("Use Multigrid", "DeUseMultigrid", &de.useMultigrid, "Droplet erosion multigrid toggled", Tr("Runs erosion from a coarse pyramid level up to the target resolution, so large valleys form first and finer levels only refine. Gives more resolution-stable channels. OFF runs a single stage at input resolution.", "粗いピラミッドレベルから目標解像度へ段階的に侵食します。大きな谷が先に形成され、細かいレベルは細部を加えるだけになり、解像度に対して安定した水路が得られます。OFF は入力解像度で 1 段階のみ。"), defaults.useMultigrid))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyIntRow("Seed", "DeSeed", &de.seed, 0, 1000000, defaults.seed, "Droplet erosion seed changed", true, Tr("Random seed for droplet scatter. Same seed reproduces the same result.", "水滴散布の乱数シード。同じ値なら同じ結果を再現します。")))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Sediment Capacity", "DeSedimentCapacity", &de.sedimentCapacity, 0.1f, 16.0f, defaults.sedimentCapacity, "Droplet erosion sediment capacity changed", true, Tr("How much sediment a droplet can carry (scaled by slope, speed and water). Higher values let droplets erode further before depositing.", "1 水滴が運べる土砂量 (勾配・速度・水量でスケール)。大きいほど堆積する前に遠くまで削れます。")))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Deposition Strength", "DeDepositionStrength", &de.depositionStrength, 0.0f, 1.0f, defaults.depositionStrength, "Droplet erosion deposition strength changed", true, Tr("Rate at which an oversaturated droplet drops sediment. Larger values build deltas and valley fills faster.", "過飽和の水滴が土砂を落とす率。大きいほど三角州や谷埋めが早く形成されます。")))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Evaporation", "DeEvaporation", &de.evaporation, 0.0f, 0.2f, defaults.evaporation, "Droplet erosion evaporation changed", true, Tr("Per-step water loss. Higher values shorten how far a droplet stays active.", "1 ステップあたりの水の損失。大きいほど水滴が早く尽きます。"), "%.4f"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Gravity", "DeGravity", &de.gravity, 0.0f, 20.0f, defaults.gravity, "Droplet erosion gravity changed", true, Tr("Downhill acceleration. Higher values speed droplets up on slopes, increasing capacity.", "下り坂での加速度。大きいほど斜面で水滴が加速し運搬量が増えます。")))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Erosion Radius", "DeErosionRadius", &de.erosionRadius, 0.5f, 8.0f, defaults.erosionRadius, "Droplet erosion radius changed", true, Tr("Brush radius (cells) over which carving is spread, so channels stay smooth instead of drilling single-cell pits.", "削りを広げるブラシ半径 (セル)。1 セルだけ穴を掘るのを防ぎ水路を滑らかに保ちます。")))
+    {
+        EvaluateGraph();
+    }
+
+    ImGui::EndTable();
+    return true;
+}
+
+bool DrawFluvialErosionProperties(rock::Node& editableNode)
+{
+    if (!ImGui::BeginTable("FluvialErosionRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        return false;
+    }
+
+    ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 210.0f);
+    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+    rock::FluvialErosionSettings& fe = editableNode.fluvialErosion;
+    const rock::FluvialErosionSettings defaults{};
+
+    fe.simulationIterations = std::clamp(fe.simulationIterations, 0, 100);
+
+    const auto sectionHeader = [](const char* label) {
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextDisabled("%s", label);
+        ImGui::TableSetColumnIndex(1);
+        ImGui::SeparatorText(label);
+    };
+
+    sectionHeader("Basic Simulation");
+    if (DrawPropertyFloatRow("Feature Size (m)", "FeFeatureSize", &fe.featureSize, 1.0f, 64.0f, defaults.featureSize, "Fluvial erosion feature size changed", true, Tr("Largest terrain feature scale. With Multigrid on, larger values start the pyramid at a coarser level so broader valleys form first.", "扱う最大地形特徴のスケール。Multigrid 有効時は大きいほど粗いレベルから処理を始め、より広い谷が先に形成されます。")))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Geological Age", "FeGeologicalAge", &fe.geologicalAge, 0.0f, 20.0f, defaults.geologicalAge, "Fluvial erosion geological age changed", true, Tr("How long the terrain has eroded. Acts as an overall erosion gain (0 = no erosion, 20 = full).", "地形が侵食されてきた長さ。全体的な侵食ゲインとして働きます (0 = 侵食なし、20 = 最大)。")))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyIntRow("Simulation Iterations", "FeIterations", &fe.simulationIterations, 0, 100, defaults.simulationIterations, "Fluvial erosion iterations changed", true, Tr("Number of force-field + transport passes per resolution level. More iterations let channels deepen and branch further.", "解像度レベルごとの 力場更新+粒子輸送 パスの回数。多いほど水路が深く・枝分かれします。")))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Channel Length (m)", "FeChannelLength", &fe.channelLength, 0.0f, 512.0f, defaults.channelLength, "Fluvial erosion channel length changed", true, Tr("How far a particle travels along the flow, in metres (converted to steps by cell size). Longer lengths carve longer channels.", "粒子が流れに沿って進む距離 (メートル、セルサイズでステップ数に換算)。長いほど水路が長く伸びます。")))
+    {
+        EvaluateGraph();
+    }
+
+    sectionHeader("Sedimentation");
+    if (DrawPropertyFloatRow("Erosion Strength", "FeErosionStrength", &fe.erosionStrength, 0.0f, 1.0f, defaults.erosionStrength, "Fluvial erosion strength changed", true, Tr("How hard the height is pulled toward the ahead/behind average each step. Higher cuts channels faster.", "1 ステップで前後平均へ高さをどれだけ寄せるか。大きいほど水路が速く刻まれます。")))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Channeling", "FeChanneling", &fe.channeling, 0.0f, 1.0f, defaults.channeling, "Fluvial erosion channeling changed", true, Tr("Cancels part of the deposition each step so river beds stay incised instead of filling back in.", "各ステップの堆積分を一部打ち消し、川床が埋め戻らず刻まれたまま残るようにします。")))
+    {
+        EvaluateGraph();
+    }
+
+    sectionHeader("Sediment Transport");
+    if (DrawPropertyFloatRow("Friction", "FeFriction", &fe.friction, 0.0f, 0.99f, defaults.friction, "Fluvial erosion friction changed", true, Tr("Velocity damping per step. Higher values slow particles down sooner.", "1 ステップあたりの速度減衰。大きいほど粒子が早く減速します。")))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Wear Angle (deg)", "FeWearAngle", &fe.wearAngleDeg, 0.0f, 90.0f, defaults.wearAngleDeg, "Fluvial erosion wear angle changed", true, Tr("Minimum slope angle before a particle starts eroding. Below this, particles flow without cutting.", "粒子が削り始める最小の斜面角度。これ未満では削らずに流れるだけです。")))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Deposit Angle (deg)", "FeDepositAngle", &fe.depositAngleDeg, 0.0f, 90.0f, defaults.depositAngleDeg, "Fluvial erosion deposit angle changed", true, Tr("Below this slope angle a particle stops eroding (gentle ground favours deposition).", "この斜面角度を下回ると削りを止めます (緩斜面は堆積側になりやすい)。")))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Max Erosion Angle (deg)", "FeMaxErosionAngle", &fe.maxErosionAngleDeg, 0.0f, 90.0f, defaults.maxErosionAngleDeg, "Fluvial erosion max angle changed", true, Tr("Above this slope angle erosion stops (too steep, e.g. cliffs are left alone).", "この斜面角度を超えると削りを止めます (急すぎる崖などは削りません)。")))
+    {
+        EvaluateGraph();
+    }
+
+    sectionHeader("Sediment Shaping");
+    if (DrawPropertyFloatRow("Erosion Granularity", "FeGranularity", &fe.erosionGranularity, 0.0f, 100.0f, defaults.erosionGranularity, "Fluvial erosion granularity changed", true, Tr("Particle density: the percentage of cells seeded with a particle each pass. Higher gives denser, more detailed channels at higher cost.", "粒子密度: 1 パスで粒子を置くセルの割合 (%)。大きいほど水路が密で詳細になりますが計算は重くなります。")))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Flow Volume", "FeFlowVolume", &fe.flowVolume, 0.0f, 1.0f, defaults.flowVolume, "Fluvial erosion flow volume changed", true, Tr("Feeds accumulated erosion (wear) back into the force field so existing channels attract more flow and self-reinforce.", "蓄積した侵食痕 (wear) を力場へ戻し、既存の水路がより多くの流れを引き寄せて自己強化するようにします。")))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Small Channel Influence", "FeSmallChannel", &fe.smallChannelInfluence, 0.0f, 1.0f, defaults.smallChannelInfluence, "Fluvial erosion small channel influence changed", true, Tr("Boosts particle density on finer pyramid levels so more small tributaries appear.", "細かいピラミッドレベルでの粒子密度を上げ、小さな支流が出やすくなります。")))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Sediment Velocity", "FeSedimentVelocity", &fe.sedimentVelocity, 0.0f, 2.0f, defaults.sedimentVelocity, "Fluvial erosion sediment velocity changed", true, Tr("Particle speed multiplier. Higher values let the force field push particles further per step.", "粒子の速度倍率。大きいほど力場が 1 ステップで粒子を遠くへ動かします。")))
+    {
+        EvaluateGraph();
+    }
+
+    sectionHeader("Advanced");
+    if (DrawPropertyBoolRow("Use Multigrid", "FeUseMultigrid", &fe.useMultigrid, "Fluvial erosion multigrid toggled", Tr("Runs erosion from a coarse pyramid level (set by Feature Size) up to the target resolution, so large valleys form first and finer levels only refine. OFF runs a single stage at input resolution.", "Feature Size で決まる粗いレベルから目標解像度へ段階的に侵食します。大きな谷が先に形成され、細かいレベルは細部を加えるだけになります。OFF は入力解像度で 1 段階のみ。"), defaults.useMultigrid))
     {
         EvaluateGraph();
     }

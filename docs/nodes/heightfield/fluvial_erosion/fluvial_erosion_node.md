@@ -1,263 +1,94 @@
-# Fluvial Erosion ノード設計メモ
+# Droplet Erosion / Fluvial Erosion ノード
 
-このメモは Terrain Editor の `Fluvial Erosion` ノードについて、現在の実装と、KTT 風の自然な水侵食へ近づけるために今後追加したい処理を分けて整理したものです。
+粒子ベースの河川浸食ノードです。入力ハイトフィールドに対して、水が流れた谷・細い
+水路・削れた場所・堆積した場所を加えます。方式の異なる **2 つの独立ノード**として
+提供します。どちらも入力 `Heightmap`、出力 `Heightmap` / `Flows` / `Deposits`。
 
-## 更新履歴
+> これらは 0.20.0 で、現行アーキテクチャ（`src/evaluation/` 分離・Multi-Scale
+> Erosion と同じ配線）に合わせて**クリーンに作り直したもの**です。かつて存在した
+> KTT OpenCL カーネルの完全移植版（削除済み）とは別実装です。KTT の考え方の参考資料は
+> 同フォルダの [ktt_fluvial_erosion_algorithm_guide.md](ktt_fluvial_erosion_algorithm_guide.md) /
+> [fluvial_erosion_hda_notes.md](fluvial_erosion_hda_notes.md) に残しています。
 
-| バージョン | 内容 |
+## 入出力（両ノード共通）
+
+| 種類 | 内容 |
 | --- | --- |
-| 0.4.0 | KTT を参考にした CPU 版 `Fluvial Erosion` ノードを追加しました。Heightfield を入力し、簡易的な粒子移動と channeling で侵食筋を作る MVP です。 |
-| 0.5.0 | ノードプロパティへツールチップと単位表示を追加しました。 |
-| 0.5.1 | 本設計メモを追加し、現状プロセスと今後必要なアルゴリズムを整理しました。 |
-| 0.6.0 | flow accumulation / drainage area を追加し、流量が多い場所ほど侵食が強くなるようにしました。粗い谷形成パスと細かいチャンネル形成パスのマルチスケール処理も追加しました。 |
-| 0.7.0 | Terrain Editor のノード構成を地形用ノードへ整理し、旧 Rock Generator 由来のノードを追加メニューと読み込み対象から外しました。 |
-| 0.7.1 | 本メモへ更新履歴と現状アップデートを追記しました。 |
-| 0.8.0 | sediment capacity と deposit field を追加し、粒子が削った土砂を保持して谷底や緩斜面へ堆積できるようにしました。 |
-| 0.9.0 | `Fluvial Erosion` に `Heightmap` と `Fluvial Mask` の 2 出力を追加し、出力ピンをクリックして地形プレビューとマスクプレビューを切り替えられるようにしました。 |
-| 0.15.0 | `Level Strength` を追加し、低解像度から高解像度へスケール別に浸食差分を重ねるマルチレベル処理を導入しました。 |
-| 0.15.1 | Basic / Advanced を分け、通常操作では `Large Scale` / `Medium Scale` / `Detail Scale` を中心に調整できるようにしました。 |
-| 0.15.2 | 将来の GPU Compute 実装に向けて、`Backend` と CPU/GPU 一致方針を追加しました。 |
-| 0.15.3 | GPU Compute へ移行しやすい、決定的なグリッド同期更新パスを CPU 側へ追加しました。 |
-| 0.15.4 | D3D12 compute shader と compute pipeline state の初期化を追加し、GPU Compute の準備状態を UI に表示するようにしました。 |
-| 0.15.5 | 小さなハイトフィールドを GPU バッファへ転送し、compute shader を dispatch して読み戻す自己診断を追加しました。 |
-| 0.15.6 | `GPU Compute` を本番のハイトフィールド評価へ接続し、GPUで高さとマスクを更新して読み戻せるようにしました。 |
-| 0.15.7 | GPU Compute の侵食量計算へセルサイズ、角度ゲート、Sediment Capacity、Channeling を反映し、CPUグリッドパスに近づけました。 |
-| 0.15.8 | 非同期評価スレッドから本番GPU評価を実行しない安全柵を追加し、メインスレッドスケジューラ実装までCPUへフォールバックするようにしました。 |
-| 0.15.9 | バックグラウンド評価スレッドからGPUジョブをキューへ積み、メインスレッドでD3D12実行して結果を返すスケジューラを追加しました。 |
-| 0.15.10 | GPU Compute がマルチレベル処理を迂回していた問題を修正し、LevelごとにGPU計算するようにしました。 |
-| 0.15.11 | GPU Compute にD8近似の flow accumulation パスを追加し、水が集まる筋ほど侵食が強くなるようにしました。 |
-| 0.15.20 | CPU粒子輸送に flow / deposit / erosion / loose sediment の内部フィールドを追加し、KTT の粒子輸送構成へ少し近づけました。 |
-| 0.15.21 | CPU粒子輸送で、粒子位置の周囲4セルへ bilinear に侵食と堆積を散布するようにしました。 |
-| 0.15.22 | CPU粒子輸送で各レベル開始時の最低高さを bedrock floor として扱い、削り込みが下へ抜けすぎないようにしました。 |
-| 0.15.23 | `Deposits` と `Flows` の出力ピンを追加し、KTT の補助フィールドに近い情報を2Dビューで確認できるようにしました。 |
-| 0.15.24 | `Flows` を粒子通過の累積、`Deposits` を堆積土砂の蓄積として分け、両方の出力が同じ流路模様に寄りすぎないようにしました。 |
-| 0.15.26 | 初期値とCPU侵食係数を穏やかにし、低流量斜面での粒子発生と detail パスの削り込みを抑えました。 |
-| 0.15.27 | 出力ピンを `Heightmap` / `Deposits` / `Flows` に整理し、混合表示用だった `Fluvial Mask` 出力を外しました。 |
-| 0.15.28 | 丸くなりすぎたデフォルトを調整し、浅い micro pass で斜面の細いリルを出しやすくしました。 |
-| 0.15.29 | KTT UI に合わせて `Geological Age`、`Flow Volume`、`Small Channel Influence` を追加し、Basic / Advanced の表示を整理しました。 |
-| 0.15.30 | CPU flow accumulation とグリッド侵食を、単一下流セルではなく複数下流セルへ分配する multi-flow 風の処理へ変更しました。 |
-| 0.15.32 | KTT の `Transport_Particles` カーネルに近づけ、前後サンプル平均、`carry`、`Channeling`、前後高さクランプをCPU粒子輸送へ反映しました。 |
-| 0.15.33 | CPU粒子輸送の重複防止が粒子移動を止めていた問題を修正し、KTT式に寄せた粒子が継続して流れるようにしました。 |
-| 0.15.34 | KTT の `Smooth_Flows` / `Add_Detail_Pass` に近い元地形ディテール差分の復元パスをCPU処理へ追加しました。 |
-| 0.15.35 | ディテール復元を最終段の一回だけに変更し、平坦部に元地形ノイズが重なりすぎないようにしました。 |
-| 0.15.36 | KTT のUIに存在しない補助パラメータをプロパティ表示から外し、KTTパラメータだけで調整する形へ整理しました。 |
-| 0.15.37 | KTT のUIに存在しない補助パラメータを保存データと設定構造からも外し、内部固定係数として扱うようにしました。 |
-| 0.15.38 | 初期状態で地形が均されすぎないよう、独自のグリッド侵食パスを外し、粗いスケールの内部強度を下げました。 |
-| 0.15.39 | KTT の `Update_Forces` に近い wear フィードバック付き力場更新と、KTT風の粒子散布/重複マスクをCPU処理へ追加しました。 |
-| 0.15.40 | KTT の `VoxelScale` ベースの反復数スケーリングと、`Channel_Length / (dx / Detail_Scale)` に近い粒子追跡距離をCPU処理へ反映しました。 |
+| 入力 | `Heightmap` |
+| 出力 | `Heightmap`（侵食後の高さ） |
+| 出力 | `Flows`（流れの通過量。マスク。log 圧縮して正規化） |
+| 出力 | `Deposits`（堆積量。マスク） |
 
-## 現在のアップデート
+`Flows` / `Deposits` 出力ピンをクリックすると 2D / 3D プレビューの可視化チャンネルが
+切り替わります。両出力はマスクとして下流の `Mask Blend` などへ接続できます。
 
-現在の `Fluvial Erosion` は、初期の単純な斜面方向の粒子侵食から一段進み、内部に flow accumulation を持つようになりました。
+## Droplet Erosion
 
-大きな変更点は次の通りです。
-
-- 下がっている複数近傍へ勾配重みで流れを分配し、各セルがどの下流セル群へ流れるかを決めます。
-- KTT の `Update_Forces` に近い形で、削れた量を力場へ戻し、既存の流路へ次の粒子が集まりやすくします。
-- 標高順に flow を下流へ足し込み、multi-flow 風の drainage area を作ります。
-- 細かいスケールほど KTT の `VoxelScale` 式に近い反復数で粒子輸送を増やします。
-- `log(flow)` で正規化した流量を、粒子発生率、侵食強度、channeling の重みに使います。
-- 粗いスケールは弱めに使い、主に粒子輸送と wear フィードバックで谷筋と支流が出る構成にしています。
-- 粒子ごとに `sediment` を持ち、流速、斜面、流量から求めた capacity と比較して、削剥と堆積を切り替えます。
-- `depositField` を内部に持ち、土砂がどこに堆積したかを蓄積します。
-- `Deposits` / `Flows` 出力ピンを選ぶと、堆積と粒子通過量を地形メッシュ上へ色付きで表示します。
-- 内部のスケール強度はKTTの表示パラメータから自動的に決めます。
-- 高解像度側では浅い micro pass も使い、深く削りすぎずに細い斜面リルを足します。
-- 最終段で平滑化した元地形との差分を侵食後に戻し、KTT の `Add_Detail_Pass` に近い形で元地形の細部を保ちます。
-- UI はKTTの表示パラメータに寄せ、Terrain Editor独自の補助パラメータは内部値として扱います。
-- ただし hardness mask、flow line input、マスクの外部テクスチャ書き出しはまだ未実装です。
-
-そのため、現状は「水が集まる場所ほど削れる」だけでなく、「削った土砂を運び、谷底や緩斜面へ堆積させる」初期段階まで入りました。`Deposits` と `Flows` プレビューで、どこに土砂が残り、どこを粒子が通過したか確認できます。次の大きな改善点は、D-infinity flow、hardness / erodibility、必要に応じた `Erosion` 出力です。
-
-## 目的
-
-`Fluvial Erosion` は、ハイトフィールド地形に水流による侵食跡を加えるノードです。
-
-理想は、単に斜面へ均一な縦筋を入れることではなく、尾根から谷へ水が集まり、支流が合流し、削剥と堆積が場所によって変わるような地形を作ることです。
-
-## 現状の位置づけ
-
-現在のノードは、KTT の HDA をそのまま移植したものではありません。
-
-KTT の考え方を参考にしつつ、Terrain Editor 上でまず動くことを優先した CPU 版の簡易 MVP です。KTT のような OpenCL ベースの粒子輸送、補助フィールド出力、タイル処理、マルチグリッド処理はまだ入っていません。
-
-## 現状のプロセス
-
-現在の実装は、おおまかに次の流れです。
-
-1. 入力ハイトフィールドを作業用グリッドへコピーする。
-2. 近傍セルの高さ差から勾配を計算する。
-3. 勾配の逆方向を流れ方向として `forceX / forceZ` を作る。
-4. D8 風に各セルの流出先を選び、標高順に drainage area / flow accumulation を蓄積する。
-5. `log(flow)` で正規化した流量フィールドを作る。
-6. 粗いパスで大きな谷筋を作る。
-7. 細かいパスで支流や表面チャンネルを足す。
-8. 流量が多い場所ほど粒子発生率、侵食強度、`Channeling` の効果を強める。
-9. 粒子を流れ方向へ移動させる。
-10. 現在地点、前方、後方の高さを比較して、斜面を削る。
-11. `Friction` と `Sediment Velocity` で粒子の移動を調整する。
-12. 一定間隔で流れ方向と flow accumulation を再計算する。
-
-## 現状の主なパラメータ
+業界標準の液滴（droplet）水力浸食です。水滴を勾配に沿って `Inertia` 付きで流し、
+勾配・速度・水量から決まる運搬容量（capacity）まで土砂を拾い、過飽和になったり
+登り坂になったら落とします。樹状の水路を刻み、谷底へ土砂を堆積させます。
 
 | パラメータ | 役割 |
 | --- | --- |
-| Feature Size | 侵食で扱う地形特徴の大きさ |
-| Geological Age | 地形が水で削られてきた時間の目安 |
-| Simulation Iterations | 粒子処理の反復回数 |
-| Channel Length | 粒子が進む距離の目安 |
-| Erosion Strength (%) | 削り込みの強さ |
-| Channeling (%) | 筋状の水路を強める度合い |
-| Friction (%) | 粒子速度の減衰 |
-| Wear Angle (deg) | 侵食が始まる斜面角度 |
-| Deposit Angle (deg) | 堆積の目安になる斜面角度 |
-| Max Erosion Angle (deg) | 侵食を許可する最大斜面角度 |
-| Erosion Granularity | 粒子密度や細かさの制御 |
-| Flow Volume | 水量の追加係数 |
-| Small Channel Influence (%) | 浅い細リルの出やすさ |
-| Sediment Velocity | 粒子の移動速度 |
+| Particle Count | 流す水滴の数（多いほど密で滑らか、計算は重い） |
+| Max Lifetime | 1 水滴が移動する最大ステップ数 |
+| Erosion Strength | 1 ステップあたりの削り率 |
+| Inertia | 0 = 勾配に正確に従う、大 = 直前の方向を保つ |
+| Min Slope | ほぼ平坦でも土砂を運べるようにする勾配の下限 |
+| Use Multigrid | 粗→細のピラミッド処理（大きな谷を先に形成し解像度に安定） |
+| Seed | 水滴散布の乱数シード（再現性） |
+| Sediment Capacity | 1 水滴が運べる土砂量（勾配・速度・水量でスケール） |
+| Deposition Strength | 過飽和の水滴が土砂を落とす率 |
+| Evaporation | 1 ステップあたりの水の損失 |
+| Gravity | 下り坂での加速度（速いほど運搬量が増える） |
+| Erosion Radius | 削りを広げるブラシ半径（セル）。単セルの穴掘りを防ぐ |
 
-## 現状で出やすい見た目
+## Fluvial Erosion（KTT 風）
 
-現在の処理では、斜面方向に沿った侵食筋は出せます。
+勾配＋ wear フィードバックの力場で粒子を流し、進行方向の前後セルの平均へ高さを
+寄せて水路を刻みます。`Channeling` が堆積を打ち消し、川床が埋め戻らず残ります。
+パラメータは KTT Fluvial Erosion HDA の体系に合わせています。
 
-一方で、粒子発生が比較的規則的で、流量の蓄積を見ていないため、筋が等間隔に見えたり、斜面全体に均質な削り跡が出やすくなります。
+| グループ | パラメータ | 既定 | 範囲 | 役割 |
+| --- | --- | ---: | ---: | --- |
+| Basic | Feature Size (m) | 8 | 1-64 | 扱う最大特徴スケール。マルチグリッドの開始（粗）レベルを決める |
+| Basic | Geological Age | 20 | 0-20 | 侵食されてきた長さ。全体的な侵食ゲイン |
+| Basic | Simulation Iterations | 25 | 0-100 | レベルごとの 力場+輸送 パス回数 |
+| Basic | Channel Length (m) | 128 | 0-512 | 粒子が流れに沿って進む距離（セルサイズでステップ数に換算） |
+| Sedimentation | Erosion Strength | 1 | 0-1 | 前後平均へ高さを寄せる強さ |
+| Sedimentation | Channeling | 0.25 | 0-1 | 堆積分を一部打ち消し、水路を刻んだまま保つ |
+| Transport | Friction | 0.1 | 0-1 | 1 ステップあたりの速度減衰 |
+| Transport | Wear Angle (deg) | 15 | 0-90 | 粒子が削り始める最小斜面角度 |
+| Transport | Deposit Angle (deg) | 0 | 0-90 | これ未満の斜面では削りを止める |
+| Transport | Max Erosion Angle (deg) | 30 | 0-90 | これを超える急斜面は削らない |
+| Shaping | Erosion Granularity | 10 | 0-100 | 粒子密度（1 パスで粒子を置くセルの割合 %） |
+| Shaping | Flow Volume | 0 | 0-1 | 侵食痕（wear）を力場へ戻し水路を自己強化 |
+| Shaping | Small Channel Influence | 0 | 0-1 | 細かいレベルでの粒子密度を上げ小支流を増やす |
+| Shaping | Sediment Velocity | 1 | 0-2 | 粒子の速度倍率 |
+| Advanced | Use Multigrid | ON | - | 粗→細のピラミッド処理 |
 
-## 理想に対して足りないもの
+> 角度しきい値（Wear / Deposit / Max Erosion Angle）は、力場の勾配をセルサイズで
+> 割って rise/run（tan）として比較します。これを割らずに比較すると、実地形では
+> 1 セルの高さ差が tan 値を容易に超えて判定が常に外れ、侵食がほぼ発動しません。
+> Reference Detail Size / Source Terrain Detail Smoothing / Directionality は KTT UI に
+> ありますが、本ノードでは内部係数として扱い表に出していません。
 
-### Flow Accumulation
+## アルゴリズムの要点
 
-`0.6.0` で最初の flow accumulation を追加しました。
+- 粒子ループは高さを直接書き換えるため逐次実行（決定論的）。粒子の散布は `Seed`
+  から生成した疑似乱数で地形全体へ均等に配置します。
+- `Use Multigrid` 有効時は `kCoarsestPyramidLevel`(64) から目標解像度まで bilinear
+  アップサンプルしながら各レベルで浸食します。粗いレベルほど粒子数を面積比で減らし、
+  密度を一定に保ちます。Multi-Scale Erosion と同じ思想です。
+- `Flows` は流量集積が長い裾を持つため `log(1 + flow)` で圧縮してから [0,1] 正規化し、
+  樹状ドレナージが見やすくなるようにしています。
+- 実装は `src/evaluation/DropletErosion.{h,cpp}` と `src/evaluation/FluvialErosion.{h,cpp}`。
+  両者の共有ヘルパ（bilinear サンプリング・splat・マルチグリッド駆動）は
+  `src/evaluation/ParticleErosionCommon.h` に切り出しています。`node_graph.cpp` は
+  dispatch のみ。
 
-現在は、各セルから最も低い近傍セルへ流す D8 風の receiver を作り、標高の高いセルから低いセルへ流量を積み上げています。流量は `log(flow)` で正規化し、粒子発生率、侵食強度、channeling の重みとして使います。
+## 今後の候補
 
-今後は D-infinity や複数方向分配にすると、格子方向の癖をさらに減らせます。
-
-### Drainage Network
-
-2 枚目のような見た目には、谷筋へ向かう枝状の流路ネットワークが必要です。
-
-単純な斜面方向の粒子移動だけではなく、D8 / D-infinity のような流向計算や、流量に応じた支流生成が必要になります。
-
-### Sediment Transport
-
-`0.8.0` で最初の sediment transport を追加しました。
-
-現在は、粒子が `sediment` を持ち、速度、斜面、流量から計算した capacity と比較します。capacity より sediment が少ない場合は削り、capacity を超えた場合は堆積します。
-
-今後は、より物理寄りの capacity 式、粒子の水量、地質硬度、堆積物の粒径などを足すと制御しやすくなります。
-
-現在使っている主な状態:
-
-- water / flow
-- sediment
-- capacity
-- wear
-- deposit
-
-### Deposit Field
-
-`0.8.0` で内部的な deposit field を追加しました。
-
-現状は堆積量を内部で蓄積するだけで、まだノード出力やビュー表示はありません。今後は deposit field をマスクや可視化レイヤーとして扱えるようにすると、調整しやすくなります。
-
-### Particle Distribution
-
-現在はグリッド間隔をベースに粒子を発生させています。
-
-そのため、規則的な筋が出やすくなります。粒子発生をランダム、ブルーノイズ、斜面依存、流量依存に変えると自然さが増します。
-
-### Multi Scale Pass
-
-`0.6.0` で最初のマルチスケール処理を追加しました。
-
-現在は、`Iterations` を粗い谷形成パスと細かいチャンネル形成パスに分けています。粗いパスでは Feature Size と Channel Length を大きめに扱い、大きな谷筋を作ります。細かいパスでは Feature Size と Channel Length を小さめに扱い、支流や表面ディテールを足します。
-
-今後は解像度を変えた専用の coarse grid / detail grid を持つと、より安定した大地形と細部を両立できます。
-
-### Internal Transport Fields
-
-`0.15.20` から、CPU粒子輸送の内部に次のフィールドを持つようにしました。
-
-| フィールド | 役割 |
-| --- | --- |
-| `flow` | 高さから求めた集水量を正規化し、粒子の発生量と輸送力に使います。 |
-| `depositField` | 粒子が堆積した土砂量を記録します。 |
-| `erosionField` | 粒子が削った量を記録します。 |
-| `looseSediment` | いったん堆積したあと、後続粒子が再輸送できる土砂として扱います。 |
-
-`deposits` / `flows` は出力ピンとして確認できます。`flows` は粒子が実際に通過した累積量、`deposits` は移動中の堆積に加えて、粒子が減速・停止・出口で残した土砂も記録します。`age` はまだ出力していませんが、内部状態を保持することで、単発の削り込みよりも土砂輸送らしい挙動へ寄せています。
-
-粒子輸送中の侵食、堆積、移動可能な土砂、マスクは、粒子がいるセルだけではなく周囲4セルへ bilinear に散布します。これにより、粒子がセル境界をまたいだときの段差や格子感を抑えます。
-
-各レベルの処理開始時点の最低高さは、簡易的な bedrock floor として保持します。これは、bilinear 散布で複数粒子の削りが重なったときに、ハイトフィールドの既存レンジより下へ抜けすぎるのを抑えるためです。
-
-`0.15.23` から、`Deposits` と `Flows` を `Fluvial Erosion` の出力ピンとして表示できます。`0.15.24` では `Flows` を粒子通過の累積、`Deposits` を実際に残った土砂の蓄積として分けました。`0.15.27` では混合表示用だった `Fluvial Mask` 出力を外し、出力を必要な補助フィールドへ絞りました。現時点では `age` はまだありません。
-
-### Hardness / Erosion Mask
-
-地質の硬さや侵食されにくさがないため、地形全体が均質に削れます。
-
-硬さフィールドやマスクがあると、削れやすい場所、削れにくい場所を作れます。
-
-### Flow Lines Input
-
-KTT には Flow Lines 入力があります。
-
-Terrain Editor でも将来的に `Flow Lines` ノードや `River Guide` ノードを追加すると、任意の水路や谷筋をユーザーが誘導できます。
-
-### Detail Pass
-
-最後に細かいチャンネルやノイズ状の侵食を足す処理が必要です。
-
-ただし、単なるノイズではなく、流向や流量に沿って細部を足すことが重要です。
-
-## 今後の実装順
-
-1. D-infinity などの複数方向 flow accumulation へ改善する。
-2. 粒子発生をさらにランダム / ブルーノイズ / 流量依存へ変更する。
-3. deposit / flow / wear などの補助フィールドを可視化・出力できるようにする。
-4. capacity 式を水量、速度、斜面、粒子量に分けて調整しやすくする。
-5. coarse grid / detail grid を分けたマルチスケール処理へ発展させる。
-6. Hardness / Erosion Mask 入力を追加する。
-7. Flow Lines 入力ノードを追加する。
-8. CPU 実装で見た目を固めたあと、GPU compute へ移行する。
-
-## 近い目標
-
-次の改善としては、deposit / flow / wear フィールドを可視化するのが効果的です。
-
-削る場所と堆積する場所を見ながら調整できるようになると、capacity や deposition rate の係数を安定して詰められます。その次に D-infinity flow や hardness / erodibility を足すと、より汎用的な侵食ノードへ近づきます。
-
-## GPU 化について
-
-KTT は OpenCL を使っており、粒子輸送や流れ場更新は GPU 向きです。
-
-Terrain Editor では D3D12 を使っているため、将来的には compute shader で以下を処理するのがよさそうです。
-
-- flow direction の更新
-- flow accumulation
-- particle transport
-- sediment capacity
-- wear / deposit の蓄積
-- smoothing / detail pass
-
-### CPU / GPU 一致方針
-
-最終的なゴールは、`Backend` で `CPU Reference` と `GPU Compute` を切り替えられ、同じ入力、同じパラメータ、同じ Seed ならできるだけ同じ結果になることです。
-
-そのため、GPU 版だけを別物として作るのではなく、まず CPU/GPU の両方で実装しやすいグリッドベースのパス構成へ寄せます。
-
-方針:
-
-1. `CPU Reference` を正しさ確認用として残す。
-2. `GPU Compute` は D3D12 compute shader で追加する。
-3. 並列実行順序で結果が変わりやすい粒子のランダム加算は減らし、固定順序のグリッド更新、ping-pong バッファ、決定的な乱数を優先する。
-4. CPU 版にも GPU と同じパス構成を持たせ、比較できるようにする。
-5. 将来的に `CPU vs GPU Difference Mask` を追加し、差分を視覚的に確認できるようにする。
-
-現時点の `GPU Compute` は compute shader と pipeline state の初期化に加えて、本番の `HeightfieldGrid` を GPU バッファへ転送し、compute shader を複数回 dispatch して CPU 側へ読み戻すところまで実装済みです。失敗した場合は `CPU Reference` へフォールバックします。
-
-ただし、GPU 版はまだ CPU Reference と同じ完全なアルゴリズムではありません。現段階では、GPU実行の配線、バッファ往復、ping-pong 更新、マスク読み戻しを確認するための最初の実装です。`0.15.7` でセルサイズ、角度ゲート、Sediment Capacity、Channeling は反映し、`0.15.10` でマルチレベル処理にも接続しました。`0.15.11` ではD8近似の flow accumulation を追加しましたが、CPU版と同じ順序付きの集水計算や堆積の散布はまだ一致していません。
-
-また、ノード評価はバックグラウンドスレッドで走るため、D3D12の本番GPU評価をそのまま非同期評価スレッドから実行すると描画側と競合する可能性があります。`0.15.9` では、バックグラウンド評価スレッドがGPUジョブをキューへ積み、メインスレッドがD3D12上で実行して結果を返す形にしました。これで描画キューの所有をメインスレッド側へ寄せたまま、非同期評価からGPU計算を要求できます。
+- GPU compute（D3D12）バックエンド。現状は CPU 参照のみ。
+- Erosion Mask / Hardness Mask 入力、`age` / `wear` 出力。
+- 粒子処理の並列化（空間タイル分割など）。

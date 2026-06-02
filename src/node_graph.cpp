@@ -1,6 +1,8 @@
 #include "node_graph.h"
 
 #include "evaluation/Colorize.h"
+#include "evaluation/DropletErosion.h"
+#include "evaluation/FluvialErosion.h"
 #include "evaluation/HeightfieldOps.h"
 #include "evaluation/HeightmapSource.h"
 #include "evaluation/MaskNoise.h"
@@ -42,6 +44,13 @@ constexpr std::array<PinDefinition, 2> kHeightFilterPins = {{
 }};
 
 constexpr std::array<PinDefinition, 4> kMultiScaleErosionPins = {{
+    {PinKind::Input, ValueType::HeightField, "Heightmap"},
+    {PinKind::Output, ValueType::HeightField, "Heightmap"},
+    {PinKind::Output, ValueType::Mask, "Flows"},
+    {PinKind::Output, ValueType::Mask, "Deposits"},
+}};
+
+constexpr std::array<PinDefinition, 4> kFluvialErosionPins = {{
     {PinKind::Input, ValueType::HeightField, "Heightmap"},
     {PinKind::Output, ValueType::HeightField, "Heightmap"},
     {PinKind::Output, ValueType::Mask, "Flows"},
@@ -118,11 +127,13 @@ constexpr std::array<PinDefinition, 1> kPathPins = {{
     {PinKind::Output, ValueType::Path, "Path"},
 }};
 
-constexpr std::array<NodeDefinition, 21> kNodeDefinitions = {{
+constexpr std::array<NodeDefinition, 23> kNodeDefinitions = {{
     {NodeKind::HeightmapLoad, "Import Heightmap", NodeCategory::Heightfield, PreviewStage::Graph, false, false, kHeightSourcePins},
     {NodeKind::HeightmapBlur, "Heightmap Blur", NodeCategory::Heightfield, PreviewStage::HeightmapBlur, false, false, kHeightFilterPins},
     {NodeKind::Shape, "Shape", NodeCategory::Heightfield, PreviewStage::Shape, false, false, kHeightSourcePins},
     {NodeKind::MultiScaleErosion, "Multi-Scale Erosion", NodeCategory::Heightfield, PreviewStage::MultiScaleErosion, false, false, kMultiScaleErosionPins},
+    {NodeKind::FluvialErosion, "Fluvial Erosion", NodeCategory::Heightfield, PreviewStage::FluvialErosion, false, false, kFluvialErosionPins},
+    {NodeKind::DropletErosion, "Droplet Erosion", NodeCategory::Heightfield, PreviewStage::DropletErosion, false, false, kFluvialErosionPins},
     {NodeKind::MaskNoise, "Mask Noise", NodeCategory::Mask, PreviewStage::MaskNoise, true, false, kMaskSourcePins},
     {NodeKind::MaskBlend, "Mask Blend", NodeCategory::Mask, PreviewStage::MaskBlend, true, false, kMaskBlendPins},
     {NodeKind::MaskFluvial, "Mask Fluvial", NodeCategory::Mask, PreviewStage::MaskFluvial, false, false, kHeightToMaskPins},
@@ -541,6 +552,48 @@ uint64_t HashMultiScaleErosionSettings(const MultiScaleErosionSettings& settings
     HashCombine(hash, HashFloat(settings.rain));
     HashCombine(hash, static_cast<uint64_t>(settings.useMultigrid ? 1 : 0));
     HashCombine(hash, static_cast<uint64_t>(settings.backend));
+    HashCombine(hash, static_cast<uint64_t>(resolution));
+    return hash;
+}
+
+uint64_t HashDropletErosionSettings(const DropletErosionSettings& settings, int resolution)
+{
+    uint64_t hash = 11400714819323198485ull;
+    HashCombine(hash, static_cast<uint64_t>(settings.particleCount));
+    HashCombine(hash, static_cast<uint64_t>(settings.maxLifetime));
+    HashCombine(hash, HashFloat(settings.erosionStrength));
+    HashCombine(hash, HashFloat(settings.depositionStrength));
+    HashCombine(hash, HashFloat(settings.inertia));
+    HashCombine(hash, HashFloat(settings.minSlope));
+    HashCombine(hash, static_cast<uint64_t>(settings.useMultigrid ? 1 : 0));
+    HashCombine(hash, static_cast<uint64_t>(settings.seed));
+    HashCombine(hash, HashFloat(settings.sedimentCapacity));
+    HashCombine(hash, HashFloat(settings.evaporation));
+    HashCombine(hash, HashFloat(settings.gravity));
+    HashCombine(hash, HashFloat(settings.erosionRadius));
+    HashCombine(hash, static_cast<uint64_t>(resolution));
+    return hash;
+}
+
+uint64_t HashFluvialErosionSettings(const FluvialErosionSettings& settings, int resolution)
+{
+    uint64_t hash = 11400714819323198485ull;
+    HashCombine(hash, HashFloat(settings.featureSize));
+    HashCombine(hash, HashFloat(settings.geologicalAge));
+    HashCombine(hash, static_cast<uint64_t>(settings.simulationIterations));
+    HashCombine(hash, HashFloat(settings.channelLength));
+    HashCombine(hash, HashFloat(settings.erosionStrength));
+    HashCombine(hash, HashFloat(settings.channeling));
+    HashCombine(hash, HashFloat(settings.friction));
+    HashCombine(hash, HashFloat(settings.wearAngleDeg));
+    HashCombine(hash, HashFloat(settings.depositAngleDeg));
+    HashCombine(hash, HashFloat(settings.maxErosionAngleDeg));
+    HashCombine(hash, HashFloat(settings.erosionGranularity));
+    HashCombine(hash, HashFloat(settings.flowVolume));
+    HashCombine(hash, HashFloat(settings.smallChannelInfluence));
+    HashCombine(hash, HashFloat(settings.sedimentVelocity));
+    HashCombine(hash, static_cast<uint64_t>(settings.useMultigrid ? 1 : 0));
+    HashCombine(hash, static_cast<uint64_t>(settings.seed));
     HashCombine(hash, static_cast<uint64_t>(resolution));
     return hash;
 }
@@ -2261,6 +2314,12 @@ void ApplyHeightfieldOperation(HeightfieldGrid& grid, const HeightfieldPipeline:
     case HeightfieldPipeline::HeightfieldOperation::Kind::MultiScaleErosion:
         ApplyMultiScaleErosion(grid, operation.multiScaleErosion);
         break;
+    case HeightfieldPipeline::HeightfieldOperation::Kind::FluvialErosion:
+        ApplyFluvialErosion(grid, operation.fluvialErosion);
+        break;
+    case HeightfieldPipeline::HeightfieldOperation::Kind::DropletErosion:
+        ApplyDropletErosion(grid, operation.dropletErosion);
+        break;
     case HeightfieldPipeline::HeightfieldOperation::Kind::MaskCurvature:
         ApplyMaskCurvature(grid, operation.maskCurvature);
         break;
@@ -2299,6 +2358,10 @@ uint64_t HashHeightfieldOperation(const HeightfieldPipeline::HeightfieldOperatio
         return HashHeightmapBlurSettings(operation.heightmapBlur, resolution);
     case HeightfieldPipeline::HeightfieldOperation::Kind::MultiScaleErosion:
         return HashMultiScaleErosionSettings(operation.multiScaleErosion, resolution);
+    case HeightfieldPipeline::HeightfieldOperation::Kind::FluvialErosion:
+        return HashFluvialErosionSettings(operation.fluvialErosion, resolution);
+    case HeightfieldPipeline::HeightfieldOperation::Kind::DropletErosion:
+        return HashDropletErosionSettings(operation.dropletErosion, resolution);
     case HeightfieldPipeline::HeightfieldOperation::Kind::MaskCurvature:
         return HashMaskCurvatureSettings(operation.maskCurvature, resolution);
     case HeightfieldPipeline::HeightfieldOperation::Kind::MaskSlope:
@@ -2334,6 +2397,14 @@ HeightfieldPipeline::HeightfieldOperation MakeHeightfieldOperation(const Node& n
     case NodeKind::MultiScaleErosion:
         operation.kind = HeightfieldPipeline::HeightfieldOperation::Kind::MultiScaleErosion;
         operation.multiScaleErosion = node.multiScaleErosion;
+        break;
+    case NodeKind::FluvialErosion:
+        operation.kind = HeightfieldPipeline::HeightfieldOperation::Kind::FluvialErosion;
+        operation.fluvialErosion = node.fluvialErosion;
+        break;
+    case NodeKind::DropletErosion:
+        operation.kind = HeightfieldPipeline::HeightfieldOperation::Kind::DropletErosion;
+        operation.dropletErosion = node.dropletErosion;
         break;
     case NodeKind::MaskCurvature:
         operation.kind = HeightfieldPipeline::HeightfieldOperation::Kind::MaskCurvature;
@@ -2384,6 +2455,8 @@ bool IsHeightfieldOperationNode(NodeKind kind)
     {
     case NodeKind::HeightmapBlur:
     case NodeKind::MultiScaleErosion:
+    case NodeKind::FluvialErosion:
+    case NodeKind::DropletErosion:
     case NodeKind::MaskCurvature:
     case NodeKind::MaskSlope:
     case NodeKind::MaskHeight:
@@ -2530,7 +2603,9 @@ HeightfieldGrid NodeGraph::EvaluateHeightPipelineCached(const HeightfieldPipelin
                         kind == NodeKind::Crumbling ||
                         kind == NodeKind::Sediment ||
                         kind == NodeKind::Snow ||
-                        kind == NodeKind::MultiScaleErosion;
+                        kind == NodeKind::MultiScaleErosion ||
+                        kind == NodeKind::FluvialErosion ||
+                        kind == NodeKind::DropletErosion;
                 };
                 if (upstream.node != nullptr && isMaskProducer(upstream.node->kind))
                 {
@@ -3007,6 +3082,10 @@ HeightfieldPipeline NodeGraph::PipelineFor(PreviewStage stage) const
         return PipelineTo(NodeKind::Shape);
     case PreviewStage::MultiScaleErosion:
         return PipelineTo(NodeKind::MultiScaleErosion);
+    case PreviewStage::FluvialErosion:
+        return PipelineTo(NodeKind::FluvialErosion);
+    case PreviewStage::DropletErosion:
+        return PipelineTo(NodeKind::DropletErosion);
     case PreviewStage::MaskCurvature:
         return PipelineTo(NodeKind::MaskCurvature);
     case PreviewStage::MaskSlope:
@@ -3039,6 +3118,8 @@ HeightfieldPipeline NodeGraph::PipelineFor(PreviewStage stage) const
         if (const Node* node = FindFirstNode(NodeKind::MaskSlope)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::MaskCurvature)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::MaskFluvial)) { return PipelineToNode(*node); }
+        if (const Node* node = FindFirstNode(NodeKind::DropletErosion)) { return PipelineToNode(*node); }
+        if (const Node* node = FindFirstNode(NodeKind::FluvialErosion)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::MultiScaleErosion)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::HeightmapBlur)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::Shape)) { return PipelineToNode(*node); }
@@ -3180,7 +3261,9 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
         node.kind == NodeKind::Scatter ||
         node.kind == NodeKind::Sediment ||
         node.kind == NodeKind::Snow ||
-        node.kind == NodeKind::MultiScaleErosion)
+        node.kind == NodeKind::MultiScaleErosion ||
+        node.kind == NodeKind::FluvialErosion ||
+        node.kind == NodeKind::DropletErosion)
     {
         // Heightfield-derived mask nodes read a heightfield, so they can't be
         // evaluated through the mask-graph path on their own. Build the
@@ -3268,7 +3351,9 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
                 kind == NodeKind::Scatter ||
                 kind == NodeKind::Sediment ||
                 kind == NodeKind::Snow ||
-                kind == NodeKind::MultiScaleErosion;
+                kind == NodeKind::MultiScaleErosion ||
+                kind == NodeKind::FluvialErosion ||
+                kind == NodeKind::DropletErosion;
         };
         uint64_t aHash = 0;
         uint64_t bHash = 0;
@@ -3332,7 +3417,9 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
                     kind == NodeKind::Scatter ||
                     kind == NodeKind::Sediment ||
                     kind == NodeKind::Snow ||
-                    kind == NodeKind::MultiScaleErosion;
+                    kind == NodeKind::MultiScaleErosion ||
+                    kind == NodeKind::FluvialErosion ||
+                    kind == NodeKind::DropletErosion;
             };
             const UpstreamConnection upstreamConnection = FindUpstreamConnectionForPin(node.inputs[0].id);
             if (upstreamConnection.node != nullptr && isMaskProducer(upstreamConnection.node->kind))
@@ -3374,7 +3461,9 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
                     kind == NodeKind::Scatter ||
                     kind == NodeKind::Sediment ||
                     kind == NodeKind::Snow ||
-                    kind == NodeKind::MultiScaleErosion;
+                    kind == NodeKind::MultiScaleErosion ||
+                    kind == NodeKind::FluvialErosion ||
+                    kind == NodeKind::DropletErosion;
             };
             const UpstreamConnection upstreamConnection = FindUpstreamConnectionForPin(node.inputs[0].id);
             if (upstreamConnection.node != nullptr && isMaskProducer(upstreamConnection.node->kind))
@@ -3909,6 +3998,10 @@ std::string_view ToString(PreviewStage stage)
         return "Shape";
     case PreviewStage::MultiScaleErosion:
         return "Multi-Scale Erosion";
+    case PreviewStage::FluvialErosion:
+        return "Fluvial Erosion";
+    case PreviewStage::DropletErosion:
+        return "Droplet Erosion";
     case PreviewStage::MaskNoise:
         return "Mask Noise";
     case PreviewStage::MaskBlend:
