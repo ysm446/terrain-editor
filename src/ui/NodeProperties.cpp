@@ -1708,6 +1708,17 @@ bool DrawFluvialErosionProperties(rock::Node& editableNode)
         ImGui::SeparatorText(label);
     };
 
+    {
+        int backendInt = static_cast<int>(fe.backend);
+        if (DrawPropertyComboRow("Backend", "FluvialErosionBackend", &backendInt, "CPU\0GPU\0\0", Tr("Execution backend. Both run the same particle-transport algorithm. GPU accumulates splats as fixed-point atomics, which makes it fully deterministic and typically 10x+ faster; results are visually identical to CPU but not bit-exact. Shader compile or dispatch failures automatically fall back to CPU.", "実行バックエンド。どちらも同じ粒子輸送アルゴリズムです。GPU はスプラットを固定小数点アトミックで集積するため完全決定的で、通常 10 倍以上高速。結果は CPU と視覚的に同等ですがビット単位では一致しません。シェーダーコンパイル/ディスパッチ失敗時は CPU に自動フォールバック。"), static_cast<int>(rock::FluvialErosionSettings{}.backend)))
+        {
+            fe.backend = static_cast<rock::FluvialErosionBackend>(std::clamp(backendInt,
+                static_cast<int>(rock::FluvialErosionBackend::CpuReference),
+                static_cast<int>(rock::FluvialErosionBackend::GpuCompute)));
+            EvaluateGraph();
+        }
+    }
+
     sectionHeader("Basic Simulation");
     if (DrawPropertyFloatRow("Feature Size (m)", "FeFeatureSize", &fe.featureSize, 1.0f, 64.0f, defaults.featureSize, "Fluvial erosion feature size changed", true, Tr("Largest terrain feature scale. With Multigrid on, larger values start the pyramid at a coarser level so broader valleys form first.", "扱う最大地形特徴のスケール。Multigrid 有効時は大きいほど粗いレベルから処理を始め、より広い谷が先に形成されます。")))
     {

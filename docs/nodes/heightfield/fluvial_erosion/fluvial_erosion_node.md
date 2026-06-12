@@ -62,7 +62,7 @@
 | Basic | Geological Age | 20 | 0-20 | 侵食されてきた長さ。全体的な侵食ゲイン |
 | Basic | Simulation Iterations | 25 | 0-100 | レベルごとの 力場+輸送 パス回数 |
 | Basic | Channel Length (m) | 512 | 0-1024 | 粒子が流れに沿って進む距離（セルサイズでステップ数に換算）。尾根→谷底の距離が目安 |
-| Sedimentation | Erosion Strength | 1 | 0-1 | 勾配比例の削り量のスケール |
+| Sedimentation | Erosion Strength | 0.5 | 0-1 | 勾配比例の削り量のスケール |
 | Sedimentation | Channeling | 0.25 | 0-1 | 堆積分を一部破棄し、水路を刻んだまま保つ |
 | Transport | Friction | 0.1 | 0-1 | 1 ステップあたりの速度減衰 |
 | Transport | Wear Angle (deg) | 3 | 0-90 | 粒子が削り始める最小の実効勾配角度 |
@@ -73,6 +73,7 @@
 | Shaping | Small Channel Influence | 0 | 0-1 | 細かいレベルでの粒子密度を上げ小支流を増やす |
 | Shaping | Sediment Velocity | 1 | 0-2 | 粒子の速度倍率 |
 | Advanced | Use Multigrid | ON | - | 粗→細のピラミッド処理 |
+| - | Backend | GPU | CPU/GPU | 実行バックエンド。GPU (D3D12 compute) は固定小数点アトミック集積で完全決定的、通常 10 倍以上高速。失敗時は CPU に自動フォールバック |
 
 > 角度しきい値（Wear / Deposit / Max Erosion Angle）は、力場の勾配をセルサイズで
 > 割って rise/run（tan）として比較します。これを割らずに比較すると、実地形では
@@ -97,8 +98,19 @@
   `src/evaluation/ParticleErosionCommon.h` に切り出しています。`node_graph.cpp` は
   dispatch のみ。
 
+## GPU バックエンド (Fluvial)
+
+`shaders/fluvial_erosion_compute.hlsl` + `src/gpu/FluvialErosionCompute.cpp`。
+CPU 版と同じ「スナップショット凍結 → 全粒子並列トレース → 集積 → 適用」構造を
+そのままディスパッチに写しています (1 スレッド = 1 粒子)。HLSL に float アトミック
+がないため、スプラットは固定小数点 (1/4096 m) の `InterlockedAdd` で集積します。
+加算順序に依存しないので GPU 版は完全決定的です (CPU 版の float アトミックは
+順序非決定のため微小に揺れる)。マルチグリッドのレベル間 bilinear アップサンプルも
+GPU 上で実行し、CPU との転送は最初のアップロードと最後のリードバック
+(heights / flows / deposits) のみ。flows の log 圧縮と各フィールドの正規化は
+リードバック後に CPU の `FinalizeLevel` を共用します。
+
 ## 今後の候補
 
-- GPU compute（D3D12）バックエンド。現状は CPU 参照のみ。
+- Droplet Erosion の GPU バックエンド (Fluvial と同じ基盤を流用可能)。
 - Erosion Mask / Hardness Mask 入力、`age` / `wear` 出力。
-- 粒子処理の並列化（空間タイル分割など）。

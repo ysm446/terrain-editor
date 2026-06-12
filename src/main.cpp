@@ -39,6 +39,7 @@
 #include "D3D12Utils.h"
 #include "gpu/ColorizeCompute.h"
 #include "gpu/MaskFluvialCompute.h"
+#include "gpu/FluvialErosionCompute.h"
 #include "gpu/MaskNoiseCompute.h"
 #include "gpu/MaskUtilityCompute.h"
 #include "gpu/MseCompute.h"
@@ -100,6 +101,8 @@ using terrain::gpu::RunColorizeCompute;
 using terrain::gpu::MaskFluvialComputeStatus;
 using terrain::gpu::ProcessPendingMaskFluvialGpuRequests;
 using terrain::gpu::RunMaskFluvialCompute;
+using terrain::gpu::ProcessPendingFluvialErosionGpuRequests;
+using terrain::gpu::RunFluvialErosionCompute;
 using terrain::gpu::MaskNoiseComputeStatus;
 using terrain::gpu::ProcessPendingMaskNoiseGpuRequests;
 using terrain::gpu::RunMaskNoiseCompute;
@@ -1104,6 +1107,7 @@ void CleanupD3D()
     terrain::gpu::ResetRockComputeResources();
     terrain::gpu::ResetScatterComputeResources();
     terrain::gpu::ResetMaskFluvialComputeResources();
+    terrain::gpu::ResetFluvialErosionComputeResources();
     terrain::gpu::ResetSnowComputeResources();
     terrain::gpu::ResetColorizeComputeResources();
     g_aoComputePso.Reset();
@@ -5012,6 +5016,7 @@ void WaitForAsyncEvaluationForShutdown()
         ProcessPendingSedimentGpuRequests();
         ProcessPendingRockGpuRequests();
         ProcessPendingMaskFluvialGpuRequests();
+        ProcessPendingFluvialErosionGpuRequests();
         ProcessPendingSnowGpuRequests();
         ProcessPendingColorizeGpuRequests();
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -12288,6 +12293,7 @@ void ProcessMainThreadEvaluationWork()
     ProcessPendingRockGpuRequests();
     ProcessPendingScatterGpuRequests();
     ProcessPendingMaskFluvialGpuRequests();
+    ProcessPendingFluvialErosionGpuRequests();
     ProcessPendingSnowGpuRequests();
     ProcessPendingColorizeGpuRequests();
     PollAsyncEvaluation();
@@ -12517,6 +12523,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
             gpuComputeContext,
             ShaderPath("mask_fluvial_compute.hlsl"),
         });
+        terrain::gpu::SetFluvialErosionComputeContext({
+            gpuComputeContext,
+            ShaderPath("fluvial_erosion_compute.hlsl"),
+        });
         terrain::gpu::SetSnowComputeContext({
             gpuComputeContext,
             ShaderPath("snow_compute.hlsl"),
@@ -12534,6 +12544,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         rock::SetRockGpuEvaluator(RunRockCompute);
         rock::SetScatterGpuEvaluator(RunScatterCompute);
         rock::SetMaskFluvialGpuEvaluator(RunMaskFluvialCompute);
+        rock::SetFluvialErosionGpuEvaluator(RunFluvialErosionCompute);
         rock::SetSnowGpuEvaluator(RunSnowCompute);
         rock::SetColorizeGpuEvaluator(RunColorizeCompute);
         rock::SetAssetPathResolver(ResolveProjectAssetPath);
@@ -12708,6 +12719,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         rock::SetRockGpuEvaluator(nullptr);
         rock::SetScatterGpuEvaluator(nullptr);
         rock::SetMaskFluvialGpuEvaluator(nullptr);
+        rock::SetFluvialErosionGpuEvaluator(nullptr);
         rock::SetSnowGpuEvaluator(nullptr);
         rock::SetColorizeGpuEvaluator(nullptr);
         rock::SetAssetPathResolver(nullptr);

@@ -117,6 +117,7 @@ nlohmann::json MakeFluvialErosionSettingsJson(const rock::Node& node)
             {"smallChannelInfluence", node.fluvialErosion.smallChannelInfluence},
             {"sedimentVelocity", node.fluvialErosion.sedimentVelocity},
             {"useMultigrid", node.fluvialErosion.useMultigrid},
+            {"backend", static_cast<int>(node.fluvialErosion.backend)},
         }},
     };
 }
@@ -554,7 +555,7 @@ void ReadFluvialErosionSettingsJson(const nlohmann::json& nodeJson, rock::Node& 
     node.fluvialErosion.featureSize = std::clamp(fe.value("featureSize", node.fluvialErosion.featureSize), 1.0f, 256.0f);
     node.fluvialErosion.geologicalAge = std::clamp(fe.value("geologicalAge", node.fluvialErosion.geologicalAge), 0.0f, 20.0f);
     node.fluvialErosion.simulationIterations = std::clamp(fe.value("simulationIterations", node.fluvialErosion.simulationIterations), 0, 100);
-    node.fluvialErosion.channelLength = std::clamp(fe.value("channelLength", node.fluvialErosion.channelLength), 0.0f, 512.0f);
+    node.fluvialErosion.channelLength = std::clamp(fe.value("channelLength", node.fluvialErosion.channelLength), 0.0f, 1024.0f);
     node.fluvialErosion.erosionStrength = std::clamp(fe.value("erosionStrength", node.fluvialErosion.erosionStrength), 0.0f, 1.0f);
     node.fluvialErosion.channeling = std::clamp(fe.value("channeling", node.fluvialErosion.channeling), 0.0f, 1.0f);
     node.fluvialErosion.friction = std::clamp(fe.value("friction", node.fluvialErosion.friction), 0.0f, 0.99f);
@@ -566,6 +567,10 @@ void ReadFluvialErosionSettingsJson(const nlohmann::json& nodeJson, rock::Node& 
     node.fluvialErosion.smallChannelInfluence = std::clamp(fe.value("smallChannelInfluence", node.fluvialErosion.smallChannelInfluence), 0.0f, 1.0f);
     node.fluvialErosion.sedimentVelocity = std::clamp(fe.value("sedimentVelocity", node.fluvialErosion.sedimentVelocity), 0.0f, 2.0f);
     node.fluvialErosion.useMultigrid = fe.value("useMultigrid", node.fluvialErosion.useMultigrid);
+    const int feBackendInt = std::clamp(fe.value("backend", static_cast<int>(node.fluvialErosion.backend)),
+                                        static_cast<int>(rock::FluvialErosionBackend::CpuReference),
+                                        static_cast<int>(rock::FluvialErosionBackend::GpuCompute));
+    node.fluvialErosion.backend = static_cast<rock::FluvialErosionBackend>(feBackendInt);
 }
 
 void ReadMaskSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)

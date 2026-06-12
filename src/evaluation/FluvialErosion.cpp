@@ -16,6 +16,8 @@ using namespace particle_erosion;
 
 namespace
 {
+FluvialErosionGpuEvaluator g_fluvialErosionGpuEvaluator = nullptr;
+
 // Cheap, stateless per-particle PRNG (so scatter is deterministic and
 // independent of thread scheduling). Advances `s` and returns a float in [0,1).
 inline float Hash01(uint32_t& s)
@@ -112,10 +114,12 @@ void RunFluvialLevel(HeightfieldGrid& grid, const FluvialErosionSettings& settin
     // Carve rate per particle visit (fraction of the slope-proportional relief
     // removed) and the per-cell saturation cap for one iteration's applied
     // delta. The cap scales with cell size so coarse pyramid levels carve the
-    // broad valleys and fine levels only refine.
+    // broad valleys and fine levels only refine; it is also what bounds how
+    // deep the busiest (valley-floor) cells can sink per iteration, so it is
+    // the main lever against over-deepened valleys.
     constexpr float kWearRate = 0.05f;
     constexpr float kDepositRate = 0.25f;
-    const float deltaCap = 0.25f * cellSize;
+    const float deltaCap = 0.12f * cellSize;
 
     // Per-iteration height/wear deltas plus cumulative flow/deposit, all atomic
     // so the parallel particle pass can accumulate without races.
@@ -182,6 +186,15 @@ void RunFluvialLevel(HeightfieldGrid& grid, const FluvialErosionSettings& settin
                 flowAcc[static_cast<size_t>(Index1D(static_cast<int>(px), static_cast<int>(pz), n))]
                     .fetch_add(1.0f, std::memory_order_relaxed);
 
+                // Fade all terrain edits out near the map border. Every
+                // particle path that drains off the map terminates there, so
+                // without the fade the border cells receive the maximum carve
+                // each iteration and turn into needle-like notches (the
+                // outermost row is never splatted at all and stays up).
+                const float edgeDist = std::min(std::min(px, pz),
+                                                std::min(static_cast<float>(n - 1) - px, static_cast<float>(n - 1) - pz));
+                const float edgeFade = std::clamp((edgeDist - 1.0f) / 3.0f, 0.0f, 1.0f);
+
                 // Effective slope blends the terrain slope with the slope the
                 // particle's momentum corresponds to (velLen * friction /
                 // sedimentVelocity is the slope whose equilibrium speed equals
@@ -203,7 +216,10 @@ void RunFluvialLevel(HeightfieldGrid& grid, const FluvialErosionSettings& settin
                     // snapshot neighbours — a planar hillside incises too,
                     // which is what lets channels cut below the surrounding
                     // surface.
-                    const float erode = erodeStrength * effSlope * cellSize * kWearRate;
+                    // Clamped to deltaCap so a single visit can never exceed the
+                    // per-iteration cell cap (also keeps the GPU backend's
+                    // fixed-point accumulators well inside int32 range).
+                    const float erode = std::min(erodeStrength * effSlope * cellSize * kWearRate * edgeFade, deltaCap);
                     if (erode > 0.0f)
                     {
                         SplatAtomic(dH, n, px, pz, -erode);
@@ -218,7 +234,7 @@ void RunFluvialLevel(HeightfieldGrid& grid, const FluvialErosionSettings& settin
                     // beds and outlets stay incised instead of filling back in.
                     const float released = sediment * kDepositRate;
                     sediment -= released;
-                    const float dep = released * (1.0f - channeling);
+                    const float dep = released * (1.0f - channeling) * edgeFade;
                     if (dep > 0.0f)
                     {
                         SplatAtomic(dH, n, px, pz, dep);
@@ -267,10 +283,25 @@ void RunFluvialLevel(HeightfieldGrid& grid, const FluvialErosionSettings& settin
 
 void ApplyFluvialErosion(HeightfieldGrid& grid, const FluvialErosionSettings& settings)
 {
+    if (settings.backend == FluvialErosionBackend::GpuCompute && g_fluvialErosionGpuEvaluator != nullptr)
+    {
+        std::string ignoredError;
+        if (g_fluvialErosionGpuEvaluator(grid, settings, &ignoredError))
+        {
+            return;
+        }
+        // Falls through to the CPU implementation on shader / dispatch failure.
+    }
+
     // Feature Size (m) sets how coarse the multi-grid pyramid starts: larger
     // features begin at a lower resolution so broad valleys form first.
     const float feature = std::clamp(settings.featureSize, 1.0f, 256.0f);
     const int coarsest = std::clamp(static_cast<int>(std::lround(grid.terrainSizeMeters / feature)), 16, grid.resolution);
     RunErosion(grid, settings, coarsest, RunFluvialLevel);
+}
+
+void SetFluvialErosionGpuEvaluator(FluvialErosionGpuEvaluator evaluator)
+{
+    g_fluvialErosionGpuEvaluator = evaluator;
 }
 } // namespace rock

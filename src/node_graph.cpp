@@ -594,6 +594,7 @@ uint64_t HashFluvialErosionSettings(const FluvialErosionSettings& settings, int 
     HashCombine(hash, HashFloat(settings.sedimentVelocity));
     HashCombine(hash, static_cast<uint64_t>(settings.useMultigrid ? 1 : 0));
     HashCombine(hash, static_cast<uint64_t>(settings.seed));
+    HashCombine(hash, static_cast<uint64_t>(settings.backend));
     HashCombine(hash, static_cast<uint64_t>(resolution));
     return hash;
 }

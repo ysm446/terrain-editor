@@ -106,6 +106,12 @@ enum class MaskFluvialBackend
     GpuCompute,
 };
 
+enum class FluvialErosionBackend
+{
+    CpuReference,
+    GpuCompute,
+};
+
 enum class MaskFluvialSimulationMode
 {
     FlowAccumulation,
@@ -651,7 +657,7 @@ struct FluvialErosionSettings
     int simulationIterations = 25;     // 0-100. Force-field + transport passes per resolution level.
     float channelLength = 512.0f;      // m. How far a particle travels (converted to steps by cell size).
     // Sedimentation
-    float erosionStrength = 1.0f;      // 0-1. Scales the slope-proportional carve per particle step.
+    float erosionStrength = 0.5f;      // 0-1. Scales the slope-proportional carve per particle step.
     float channeling = 0.25f;          // 0-1. Discards part of the deposited sediment so channels stay incised.
     // Sediment transport
     float friction = 0.10f;            // 0-1. Velocity damping per step.
@@ -666,6 +672,9 @@ struct FluvialErosionSettings
 
     bool useMultigrid = true;
     int seed = 1337;                   // Internal; not exposed (KTT keeps the seed hidden for reproducibility).
+    // CPU 並列リファレンス vs GPU compute (D3D12, 固定小数点アトミック集積で決定論的).
+    // 既定 GPU。シェーダー / ディスパッチ失敗時は CPU に自動フォールバック。
+    FluvialErosionBackend backend = FluvialErosionBackend::GpuCompute;
 };
 
 struct MultiScaleErosionSettings
@@ -938,6 +947,7 @@ using SedimentGpuEvaluator = bool (*)(HeightfieldGrid& grid, const SedimentSetti
 using RockGpuEvaluator = bool (*)(HeightfieldGrid& grid, const RockSettings& settings, std::string* error);
 using ScatterGpuEvaluator = bool (*)(HeightfieldGrid& grid, const ScatterSettings& settings, std::string* error);
 using MaskFluvialGpuEvaluator = bool (*)(HeightfieldGrid& grid, const MaskFluvialSettings& settings, std::string* error);
+using FluvialErosionGpuEvaluator = bool (*)(HeightfieldGrid& grid, const FluvialErosionSettings& settings, std::string* error);
 using SnowGpuEvaluator = bool (*)(HeightfieldGrid& grid, const SnowSettings& settings, std::string* error);
 using ColorizeGpuEvaluator = bool (*)(ColorGrid& grid, const ColorizeSettings& settings, const MaskGrid& gradientMask, const MaskGrid* mask, const ColorGrid* baseColor, std::string* error);
 using MaskPathGpuEvaluator = bool (*)(MaskGrid& grid, const PathSettings& path, const MaskPathSettings& settings, float terrainSizeMeters, std::string* error);
@@ -1144,6 +1154,7 @@ void SetSedimentGpuEvaluator(SedimentGpuEvaluator evaluator);
 void SetRockGpuEvaluator(RockGpuEvaluator evaluator);
 void SetScatterGpuEvaluator(ScatterGpuEvaluator evaluator);
 void SetMaskFluvialGpuEvaluator(MaskFluvialGpuEvaluator evaluator);
+void SetFluvialErosionGpuEvaluator(FluvialErosionGpuEvaluator evaluator);
 void SetSnowGpuEvaluator(SnowGpuEvaluator evaluator);
 void SetColorizeGpuEvaluator(ColorizeGpuEvaluator evaluator);
 void SetMaskPathGpuEvaluator(MaskPathGpuEvaluator evaluator);
