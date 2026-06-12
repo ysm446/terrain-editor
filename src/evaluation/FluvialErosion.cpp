@@ -63,6 +63,15 @@ inline void SplatAtomic(std::vector<std::atomic<float>>& field, int n, float px,
 // The gradient is divided by cell size so `slope` is a true rise/run ratio and
 // can be compared against tan(angle) thresholds; without this the angle gates
 // never fire on real terrain and the node appears inert.
+//
+// Erosion model: particles carve material proportional to the local slope
+// (stream-power-like, no clamp to the neighbour heights — a planar hillside
+// erodes too), carry it as sediment, and drop it where the slope falls below
+// the deposit angle. Per-cell deltas are applied as a soft-saturated *sum*,
+// not an average: cells crossed by many particles deepen faster (the flow →
+// incision → flow feedback that forms dendritic networks) while the
+// saturation cap keeps overlapping particles from spiking the terrain in a
+// single iteration.
 void RunFluvialLevel(HeightfieldGrid& grid, const FluvialErosionSettings& settings, int levelSeed, int targetN)
 {
     const int n = grid.resolution;
@@ -90,7 +99,6 @@ void RunFluvialLevel(HeightfieldGrid& grid, const FluvialErosionSettings& settin
     const float tanWear = std::tan(std::clamp(settings.wearAngleDeg, 0.0f, 89.0f) * kPi / 180.0f);
     const float tanDeposit = std::tan(std::clamp(settings.depositAngleDeg, 0.0f, 89.0f) * kPi / 180.0f);
     const float tanMax = std::tan(std::clamp(settings.maxErosionAngleDeg, 0.0f, 89.0f) * kPi / 180.0f);
-    const float tanLow = std::max(tanWear, tanDeposit);
 
     // Particle density: fraction of cells seeded per pass. Small Channel
     // Influence raises the density on finer pyramid levels so small tributaries
@@ -101,11 +109,18 @@ void RunFluvialLevel(HeightfieldGrid& grid, const FluvialErosionSettings& settin
                                      0.0f, 1.0f);
     const int particlesPerIter = std::clamp(static_cast<int>(static_cast<float>(cellCount) * density), 500, 60000);
 
+    // Carve rate per particle visit (fraction of the slope-proportional relief
+    // removed) and the per-cell saturation cap for one iteration's applied
+    // delta. The cap scales with cell size so coarse pyramid levels carve the
+    // broad valleys and fine levels only refine.
+    constexpr float kWearRate = 0.05f;
+    constexpr float kDepositRate = 0.25f;
+    const float deltaCap = 0.25f * cellSize;
+
     // Per-iteration height/wear deltas plus cumulative flow/deposit, all atomic
     // so the parallel particle pass can accumulate without races.
-    std::vector<std::atomic<float>> dH(cellCount);       // per-iteration height delta sum (weighted)
-    std::vector<std::atomic<float>> dHWeight(cellCount); // per-iteration contribution weight per cell
-    std::vector<std::atomic<float>> dW(cellCount);       // per-iteration wear delta sum (weighted)
+    std::vector<std::atomic<float>> dH(cellCount); // per-iteration height delta sum
+    std::vector<std::atomic<float>> dW(cellCount); // per-iteration wear delta sum
     std::vector<std::atomic<float>> flowAcc(cellCount);
     std::vector<std::atomic<float>> depAcc(cellCount);
     for (size_t i = 0; i < cellCount; ++i)
@@ -130,7 +145,6 @@ void RunFluvialLevel(HeightfieldGrid& grid, const FluvialErosionSettings& settin
         for (size_t i = 0; i < cellCount; ++i)
         {
             dH[i].store(0.0f, std::memory_order_relaxed);
-            dHWeight[i].store(0.0f, std::memory_order_relaxed);
             dW[i].store(0.0f, std::memory_order_relaxed);
         }
 
@@ -140,6 +154,7 @@ void RunFluvialLevel(HeightfieldGrid& grid, const FluvialErosionSettings& settin
             float pz = 1.0f + Hash01(rng) * spawnRange;
             float velX = 0.0f;
             float velZ = 0.0f;
+            float sediment = 0.0f; // carved material carried by this particle (m)
 
             for (int step = 0; step < steps; ++step)
             {
@@ -167,28 +182,47 @@ void RunFluvialLevel(HeightfieldGrid& grid, const FluvialErosionSettings& settin
                 flowAcc[static_cast<size_t>(Index1D(static_cast<int>(px), static_cast<int>(pz), n))]
                     .fetch_add(1.0f, std::memory_order_relaxed);
 
-                if (slope >= tanLow && slope <= tanMax)
+                // Effective slope blends the terrain slope with the slope the
+                // particle's momentum corresponds to (velLen * friction /
+                // sedimentVelocity is the slope whose equilibrium speed equals
+                // velLen). Momentum carries erosion onto the gentler lower
+                // slopes, so channels run from the ridges all the way down
+                // instead of fading out where the hillside flattens.
+                const float velSlope = velLen * friction / sedimentVelocity;
+                const float effSlope = std::max(slope, velSlope);
+                // Erode only while actually moving downhill: a particle trapped
+                // in a pit oscillates against the force and would otherwise
+                // keep grinding the pit deeper (the pock-mark artifacts).
+                const bool movingDownhill = (velX * fx + velZ * fz) > 0.0f;
+
+                if (movingDownhill && effSlope >= tanWear && slope <= tanMax)
                 {
-                    const float h1 = hg.height;
-                    const float h2 = SampleField(hSnap, n, px + sx, pz + sz);
-                    const float h3 = SampleField(hSnap, n, px - sx, pz - sz);
-                    const float lo = std::min(h2, h3);
-                    const float hi = std::max(h2, h3);
-                    // Pull toward the ahead/behind average, but never past the
-                    // neighbour range. This incises channels and also erodes any
-                    // stray spike back down (KTT clamps the height the same way).
-                    const float newH1 = std::clamp(std::lerp(h1, 0.5f * (h2 + h3), erodeStrength), lo, hi);
-                    float delta = newH1 - h1;
-                    if (delta > 0.0f) { delta -= channeling * delta; } // cancel part of deposition
-                    SplatAtomic(dH, n, px, pz, delta);
-                    SplatAtomic(dHWeight, n, px, pz, 1.0f);
-                    if (delta < 0.0f)
+                    // Stream-power-like carve: remove material in proportion to
+                    // the effective slope (slope * cellSize is the rise over
+                    // one step) and carry it as sediment. No clamp to the
+                    // snapshot neighbours — a planar hillside incises too,
+                    // which is what lets channels cut below the surrounding
+                    // surface.
+                    const float erode = erodeStrength * effSlope * cellSize * kWearRate;
+                    if (erode > 0.0f)
                     {
-                        SplatAtomic(dW, n, px, pz, -delta);
+                        SplatAtomic(dH, n, px, pz, -erode);
+                        SplatAtomic(dW, n, px, pz, erode);
+                        sediment += erode;
                     }
-                    else
+                }
+                else if (effSlope < tanDeposit && sediment > 0.0f)
+                {
+                    // Gentle ground with the momentum spent: drop part of the
+                    // carried sediment. Channeling discards a share of it so
+                    // beds and outlets stay incised instead of filling back in.
+                    const float released = sediment * kDepositRate;
+                    sediment -= released;
+                    const float dep = released * (1.0f - channeling);
+                    if (dep > 0.0f)
                     {
-                        SplatAtomic(depAcc, n, px, pz, delta);
+                        SplatAtomic(dH, n, px, pz, dep);
+                        SplatAtomic(depAcc, n, px, pz, dep);
                     }
                 }
 
@@ -205,15 +239,19 @@ void RunFluvialLevel(HeightfieldGrid& grid, const FluvialErosionSettings& settin
 
         for (size_t i = 0; i < cellCount; ++i)
         {
-            const float w = dHWeight[i].load(std::memory_order_relaxed);
-            if (w > 1e-6f)
+            // Soft-saturated sum: cells crossed by many particles move further
+            // than cells crossed by one (the feedback that grows dendritic
+            // networks), but never by more than ~deltaCap in one iteration, so
+            // overlapping particles cannot spike the terrain.
+            const float sum = dH[i].load(std::memory_order_relaxed);
+            if (sum != 0.0f)
             {
-                // Apply the average per-cell delta this iteration. Summing every
-                // overlapping particle's desired move would multiply the change
-                // by the particle count and spike the terrain upward.
-                const float inv = 1.0f / w;
-                heights[i] += dH[i].load(std::memory_order_relaxed) * inv;
-                wear[i] += dW[i].load(std::memory_order_relaxed) * inv;
+                heights[i] += sum / (1.0f + std::abs(sum) / deltaCap);
+            }
+            const float w = dW[i].load(std::memory_order_relaxed);
+            if (w > 0.0f)
+            {
+                wear[i] += w / (1.0f + w / deltaCap);
             }
         }
     }

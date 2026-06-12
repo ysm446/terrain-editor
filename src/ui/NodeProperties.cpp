@@ -1721,13 +1721,13 @@ bool DrawFluvialErosionProperties(rock::Node& editableNode)
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Channel Length (m)", "FeChannelLength", &fe.channelLength, 0.0f, 512.0f, defaults.channelLength, "Fluvial erosion channel length changed", true, Tr("How far a particle travels along the flow, in metres (converted to steps by cell size). Longer lengths carve longer channels.", "粒子が流れに沿って進む距離 (メートル、セルサイズでステップ数に換算)。長いほど水路が長く伸びます。")))
+    if (DrawPropertyFloatRow("Channel Length (m)", "FeChannelLength", &fe.channelLength, 0.0f, 1024.0f, defaults.channelLength, "Fluvial erosion channel length changed", true, Tr("How far a particle travels along the flow, in metres (converted to steps by cell size). Set it near the ridge-to-valley distance so channels reach the bottom.", "粒子が流れに沿って進む距離 (メートル、セルサイズでステップ数に換算)。尾根から谷底までの距離に近い値にすると水路が下まで届きます。")))
     {
         EvaluateGraph();
     }
 
     sectionHeader("Sedimentation");
-    if (DrawPropertyFloatRow("Erosion Strength", "FeErosionStrength", &fe.erosionStrength, 0.0f, 1.0f, defaults.erosionStrength, "Fluvial erosion strength changed", true, Tr("How hard the height is pulled toward the ahead/behind average each step. Higher cuts channels faster.", "1 ステップで前後平均へ高さをどれだけ寄せるか。大きいほど水路が速く刻まれます。")))
+    if (DrawPropertyFloatRow("Erosion Strength", "FeErosionStrength", &fe.erosionStrength, 0.0f, 1.0f, defaults.erosionStrength, "Fluvial erosion strength changed", true, Tr("Scales how much material a particle carves per step (proportional to the local slope). Higher cuts channels faster.", "粒子が 1 ステップで削る量のスケール (局所勾配に比例)。大きいほど水路が速く刻まれます。")))
     {
         EvaluateGraph();
     }
@@ -1745,7 +1745,7 @@ bool DrawFluvialErosionProperties(rock::Node& editableNode)
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Deposit Angle (deg)", "FeDepositAngle", &fe.depositAngleDeg, 0.0f, 90.0f, defaults.depositAngleDeg, "Fluvial erosion deposit angle changed", true, Tr("Below this slope angle a particle stops eroding (gentle ground favours deposition).", "この斜面角度を下回ると削りを止めます (緩斜面は堆積側になりやすい)。")))
+    if (DrawPropertyFloatRow("Deposit Angle (deg)", "FeDepositAngle", &fe.depositAngleDeg, 0.0f, 90.0f, defaults.depositAngleDeg, "Fluvial erosion deposit angle changed", true, Tr("Below this slope angle the particle drops part of its carried sediment (gentle ground becomes a deposition zone).", "この斜面角度を下回ると粒子が運搬中の土砂の一部を堆積させます (緩斜面が堆積域になります)。")))
     {
         EvaluateGraph();
     }

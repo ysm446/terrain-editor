@@ -638,28 +638,29 @@ struct DropletErosionSettings
 
 // Heightfield -> heightfield + Flows + Deposits. KTT-style force-field particle
 // transport: a gradient + wear-feedback force field drives scattered particles;
-// the height is nudged toward the average of the cells ahead/behind to incise
-// channels, and `channeling` cancels deposition so river beds stay cut. Path
-// visitation accumulates into Flows; dropped sediment into Deposits. Parameters
-// follow the KTT Fluvial Erosion HDA (see docs/nodes/heightfield/fluvial_erosion).
+// each particle carves material in proportion to the local slope, carries it as
+// sediment, and drops it on gentle ground (`channeling` discards part of the
+// deposit so river beds stay cut). Path visitation accumulates into Flows;
+// dropped sediment into Deposits. Parameters follow the KTT Fluvial Erosion HDA
+// (see docs/nodes/heightfield/fluvial_erosion).
 struct FluvialErosionSettings
 {
     // Basic simulation
-    float featureSize = 8.0f;          // m. Largest feature scale; drives the coarsest multigrid level.
+    float featureSize = 16.0f;         // m. Largest feature scale; drives the coarsest multigrid level.
     float geologicalAge = 20.0f;       // 0-20. Overall erosion gain (how long the terrain has eroded).
     int simulationIterations = 25;     // 0-100. Force-field + transport passes per resolution level.
-    float channelLength = 128.0f;      // m. How far a particle travels (converted to steps by cell size).
+    float channelLength = 512.0f;      // m. How far a particle travels (converted to steps by cell size).
     // Sedimentation
-    float erosionStrength = 1.0f;      // 0-1. How hard the height is pulled toward the ahead/behind average.
-    float channeling = 0.25f;          // 0-1. Cancels deposition so channels stay incised.
+    float erosionStrength = 1.0f;      // 0-1. Scales the slope-proportional carve per particle step.
+    float channeling = 0.25f;          // 0-1. Discards part of the deposited sediment so channels stay incised.
     // Sediment transport
     float friction = 0.10f;            // 0-1. Velocity damping per step.
-    float wearAngleDeg = 15.0f;        // 0-90. Min slope angle before a particle erodes.
-    float depositAngleDeg = 0.0f;      // 0-90. Below this slope a particle stops eroding.
-    float maxErosionAngleDeg = 30.0f;  // 0-90. Above this slope erosion stops (too steep).
+    float wearAngleDeg = 3.0f;         // 0-90. Min slope angle before a particle erodes.
+    float depositAngleDeg = 2.0f;      // 0-90. Below this slope the particle deposits carried sediment.
+    float maxErosionAngleDeg = 45.0f;  // 0-90. Above this slope erosion stops (too steep).
     // Sediment shaping
     float erosionGranularity = 10.0f;  // 0-100. Particle density (% of cells seeded per pass).
-    float flowVolume = 0.0f;           // 0-1. Feeds accumulated wear back into the force field.
+    float flowVolume = 0.35f;          // 0-1. Feeds accumulated wear back into the force field.
     float smallChannelInfluence = 0.0f;// 0-1. Boosts particle density at finer levels for more small channels.
     float sedimentVelocity = 1.0f;     // 0-2. Particle speed multiplier.
 
