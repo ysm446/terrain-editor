@@ -1677,7 +1677,7 @@ bool DrawDropletErosionProperties(rock::Node& editableNode)
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Erosion Radius", "DeErosionRadius", &de.erosionRadius, 0.5f, 8.0f, defaults.erosionRadius, "Droplet erosion radius changed", true, Tr("Brush radius (cells) over which carving is spread, so channels stay smooth instead of drilling single-cell pits.", "削りを広げるブラシ半径 (セル)。1 セルだけ穴を掘るのを防ぎ水路を滑らかに保ちます。")))
+    if (DrawPropertyFloatRow("Erosion Radius", "DeErosionRadius", &de.erosionRadius, 0.5f, 8.0f, defaults.erosionRadius, "Droplet erosion radius changed", true, Tr("Brush radius (cells) over which carving and oversaturation deposits are spread, so channels stay smooth and dumped sediment forms banks instead of single-cell bumps.", "削りと容量超過時の堆積を広げるブラシ半径 (セル)。水路を滑らかに保ち、堆積も 1 セルの瘤ではなく滑らかな土手になります。")))
     {
         EvaluateGraph();
     }

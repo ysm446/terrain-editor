@@ -13,13 +13,16 @@ using namespace particle_erosion;
 
 namespace
 {
-// Lower the terrain by `amount`, spread over a radial brush so droplet carving
-// stays smooth instead of drilling single-cell pits.
-void ErodeBrush(std::vector<float>& heights, int n, float px, float pz, float amount, float radius)
+// Add `delta` to the terrain, spread over a radial brush. Used for carving
+// (negative delta, so droplets do not drill single-cell pits) and for
+// oversaturation deposits (positive delta, so dumped sediment forms smooth
+// banks instead of single-cell pimples — especially visible after the coarse
+// pyramid levels are upsampled).
+void ApplyBrush(std::vector<float>& heights, int n, float px, float pz, float delta, float radius)
 {
     if (radius <= 1.0f)
     {
-        SplatBilinear(heights, n, px, pz, -amount);
+        SplatBilinear(heights, n, px, pz, delta);
         return;
     }
     const int r = static_cast<int>(std::ceil(radius));
@@ -39,7 +42,7 @@ void ErodeBrush(std::vector<float>& heights, int n, float px, float pz, float am
     }
     if (weightSum <= 0.0f)
     {
-        SplatBilinear(heights, n, px, pz, -amount);
+        SplatBilinear(heights, n, px, pz, delta);
         return;
     }
     for (int j = -r; j <= r; ++j)
@@ -52,7 +55,7 @@ void ErodeBrush(std::vector<float>& heights, int n, float px, float pz, float am
             const float d = std::sqrt(static_cast<float>(i * i + j * j));
             const float w = std::max(0.0f, radius - d);
             if (w <= 0.0f) { continue; }
-            heights[static_cast<size_t>(Index1D(qx, qz, n))] -= amount * (w / weightSum);
+            heights[static_cast<size_t>(Index1D(qx, qz, n))] += delta * (w / weightSum);
         }
     }
 }
@@ -71,6 +74,7 @@ void RunDropletLevel(HeightfieldGrid& grid, const DropletErosionSettings& settin
     grid.deposits.assign(cellCount, 0.0f);
     std::vector<float>& heights = grid.heights;
 
+    const float cellSize = grid.terrainSizeMeters / static_cast<float>(std::max(1, n - 1));
     const int particles = ParticlesForLevel(settings.particleCount, n, targetN);
     const int lifetime = std::clamp(settings.maxLifetime, 1, 2048);
     const float inertia = std::clamp(settings.inertia, 0.0f, 0.99f);
@@ -118,21 +122,35 @@ void RunDropletLevel(HeightfieldGrid& grid, const DropletErosionSettings& settin
 
             grid.flows[static_cast<size_t>(Index1D(static_cast<int>(px), static_cast<int>(pz), n))] += water;
 
-            const float capacity = std::max(-dH, minSlope) * speed * water * capacityFactor;
+            // Capacity scales with the true slope (rise/run), not the raw
+            // per-cell height drop, so coarse pyramid levels do not carry and
+            // dump 8x more sediment than fine ones for the same terrain.
+            const float slope = -dH / cellSize;
+            const float capacity = std::max(slope, minSlope) * speed * water * capacityFactor;
 
-            if (sediment > capacity || dH > 0.0f)
+            if (dH > 0.0f)
             {
-                const float deposit = (dH > 0.0f)
-                    ? std::min(dH, sediment)
-                    : (sediment - capacity) * depositRate;
+                // Moved uphill: fill the pit at the current position so the
+                // droplet can continue. Kept single-cell on purpose — the fill
+                // must land in the pit itself.
+                const float deposit = std::min(dH, sediment);
                 sediment -= deposit;
                 SplatBilinear(heights, n, px, pz, deposit);
                 SplatBilinear(grid.deposits, n, px, pz, deposit);
             }
+            else if (sediment > capacity)
+            {
+                // Oversaturated: drop the surplus with the same radial brush
+                // as carving, so banks stay smooth instead of pimpling.
+                const float deposit = (sediment - capacity) * depositRate;
+                sediment -= deposit;
+                ApplyBrush(heights, n, px, pz, deposit, radius);
+                ApplyBrush(grid.deposits, n, px, pz, deposit, radius);
+            }
             else
             {
                 const float erode = std::min((capacity - sediment) * erodeRate, -dH);
-                ErodeBrush(heights, n, px, pz, erode, radius);
+                ApplyBrush(heights, n, px, pz, -erode, radius);
                 sediment += erode;
             }
 

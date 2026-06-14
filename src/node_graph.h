@@ -629,7 +629,7 @@ struct MaskFluvialSettings
 struct DropletErosionSettings
 {
     int particleCount = 60000;        // Droplets traced per level.
-    int maxLifetime = 64;             // Max steps a droplet travels before it dies.
+    int maxLifetime = 256;            // Max steps a droplet travels before it dies.
     float erosionStrength = 0.30f;    // Carving rate per step.
     float depositionStrength = 0.30f; // Sediment drop rate when oversaturated.
     float inertia = 0.05f;            // 0 = follow slope exactly, 1 = keep previous direction.
@@ -637,7 +637,7 @@ struct DropletErosionSettings
     bool useMultigrid = true;
     int seed = 1337;
     float sedimentCapacity = 4.0f;    // Carrying-capacity multiplier.
-    float evaporation = 0.02f;        // Per-step water loss (0..1).
+    float evaporation = 0.005f;       // Per-step water loss (0..1).
     float gravity = 4.0f;             // Downhill acceleration.
     float erosionRadius = 2.0f;       // Erosion brush radius in cells (smooths carving).
 };
