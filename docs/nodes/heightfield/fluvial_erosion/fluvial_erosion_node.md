@@ -1,16 +1,18 @@
-# Droplet Erosion / Fluvial Erosion ノード
+# Fluvial Erosion ノード
 
-粒子ベースの河川浸食ノードです。入力ハイトフィールドに対して、水が流れた谷・細い
-水路・削れた場所・堆積した場所を加えます。方式の異なる **2 つの独立ノード**として
-提供します。どちらも入力 `Heightmap`、出力 `Heightmap` / `Flows` / `Deposits`。
+KTT 風の力場粒子輸送による河川浸食ノードです。入力ハイトフィールドに対して、水が
+流れた谷・細い水路・削れた場所・堆積した場所を加えます。入力 `Heightmap`、出力
+`Heightmap` / `Flows` / `Deposits`。
 
-> これらは 0.20.0 で、現行アーキテクチャ（`src/evaluation/` 分離・Multi-Scale
+> このノードは 0.20.0 で、現行アーキテクチャ（`src/evaluation/` 分離・Multi-Scale
 > Erosion と同じ配線）に合わせて**クリーンに作り直したもの**です。かつて存在した
 > KTT OpenCL カーネルの完全移植版（削除済み）とは別実装です。KTT の考え方の参考資料は
 > 同フォルダの [ktt_fluvial_erosion_algorithm_guide.md](ktt_fluvial_erosion_algorithm_guide.md) /
-> [fluvial_erosion_hda_notes.md](fluvial_erosion_hda_notes.md) に残しています。
+> [fluvial_erosion_hda_notes.md](fluvial_erosion_hda_notes.md) に残しています。容量ベースの
+> 液滴浸食ノード `Droplet Erosion` は
+> [../droplet_erosion/droplet_erosion_node.md](../droplet_erosion/droplet_erosion_node.md) を参照してください。
 
-## 入出力（両ノード共通）
+## 入出力
 
 | 種類 | 内容 |
 | --- | --- |
@@ -22,28 +24,7 @@
 `Flows` / `Deposits` 出力ピンをクリックすると 2D / 3D プレビューの可視化チャンネルが
 切り替わります。両出力はマスクとして下流の `Mask Blend` などへ接続できます。
 
-## Droplet Erosion
-
-業界標準の液滴（droplet）水力浸食です。水滴を勾配に沿って `Inertia` 付きで流し、
-勾配・速度・水量から決まる運搬容量（capacity）まで土砂を拾い、過飽和になったり
-登り坂になったら落とします。樹状の水路を刻み、谷底へ土砂を堆積させます。
-
-| パラメータ | 役割 |
-| --- | --- |
-| Particle Count | 流す水滴の数（多いほど密で滑らか、計算は重い） |
-| Max Lifetime | 1 水滴が移動する最大ステップ数 (既定 256。短いと水路が中腹で途切れる) |
-| Erosion Strength | 1 ステップあたりの削り率 |
-| Inertia | 0 = 勾配に正確に従う、大 = 直前の方向を保つ |
-| Min Slope | ほぼ平坦でも土砂を運べるようにする勾配の下限 |
-| Use Multigrid | 粗→細のピラミッド処理（大きな谷を先に形成し解像度に安定） |
-| Seed | 水滴散布の乱数シード（再現性） |
-| Sediment Capacity | 1 水滴が運べる土砂量（勾配・速度・水量でスケール） |
-| Deposition Strength | 過飽和の水滴が土砂を落とす率 |
-| Evaporation | 1 ステップあたりの水の損失 (既定 0.005。容量 ∝ 水量なので大きいと末端で堆積が集中する) |
-| Gravity | 下り坂での加速度（速いほど運搬量が増える） |
-| Erosion Radius | 削りと容量超過堆積を広げるブラシ半径（セル）。単セルの穴・瘤を防ぐ |
-
-## Fluvial Erosion（KTT 風）
+## 概要
 
 勾配＋ wear フィードバックの力場で粒子を流し、実効勾配（地形勾配と、粒子の運動量を
 等価勾配に換算した値の大きい方）に比例して地形を削って (stream power 方式)、削った
@@ -55,6 +36,8 @@
 ソフト飽和付きの合計で適用するため、粒子が集中するセルほど深く掘れて樹枝状の
 水路網が自己強化されます（1 反復あたりの変化はセルサイズ比例の上限でクランプし、
 スパイクを防止）。パラメータは KTT Fluvial Erosion HDA の体系に合わせています。
+
+## パラメータ
 
 | グループ | パラメータ | 既定 | 範囲 | 役割 |
 | --- | --- | ---: | ---: | --- |
@@ -83,22 +66,21 @@
 
 ## アルゴリズムの要点
 
-- Droplet の粒子ループは高さを直接書き換えるため逐次実行（決定論的）。Fluvial は
-  反復ごとに高さ・wear をスナップショット固定し、全粒子をスナップショットに対して
+- 反復ごとに高さ・wear をスナップショット固定し、全粒子をスナップショットに対して
   並列トレースして原子的に集積、反復末尾でまとめて適用します（KTT の GPU モデルと
-  同じ構造で、こちらも決定論的）。粒子の散布は `Seed` から生成した疑似乱数で地形
-  全体へ均等に配置します。
+  同じ構造で、決定論的）。粒子の散布は `Seed` から生成した疑似乱数で地形全体へ
+  均等に配置します。
 - `Use Multigrid` 有効時は `kCoarsestPyramidLevel`(64) から目標解像度まで bilinear
   アップサンプルしながら各レベルで浸食します。粗いレベルほど粒子数を面積比で減らし、
   密度を一定に保ちます。Multi-Scale Erosion と同じ思想です。
 - `Flows` は流量集積が長い裾を持つため `log(1 + flow)` で圧縮してから [0,1] 正規化し、
   樹状ドレナージが見やすくなるようにしています。
-- 実装は `src/evaluation/DropletErosion.{h,cpp}` と `src/evaluation/FluvialErosion.{h,cpp}`。
-  両者の共有ヘルパ（bilinear サンプリング・splat・マルチグリッド駆動）は
+- 実装は `src/evaluation/FluvialErosion.{h,cpp}`。容量ベースの液滴浸食ノード
+  `Droplet Erosion` との共有ヘルパ（bilinear サンプリング・splat・マルチグリッド駆動）は
   `src/evaluation/ParticleErosionCommon.h` に切り出しています。`node_graph.cpp` は
   dispatch のみ。
 
-## GPU バックエンド (Fluvial)
+## GPU バックエンド
 
 `shaders/fluvial_erosion_compute.hlsl` + `src/gpu/FluvialErosionCompute.cpp`。
 CPU 版と同じ「スナップショット凍結 → 全粒子並列トレース → 集積 → 適用」構造を
@@ -112,5 +94,4 @@ GPU 上で実行し、CPU との転送は最初のアップロードと最後の
 
 ## 今後の候補
 
-- Droplet Erosion の GPU バックエンド (Fluvial と同じ基盤を流用可能)。
 - Erosion Mask / Hardness Mask 入力、`age` / `wear` 出力。
