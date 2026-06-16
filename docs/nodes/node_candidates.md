@@ -76,6 +76,7 @@
 | River Network | 河川ネットワークを生成する | Heightfield/Water Sources | Curve/Mask | Source Count、Drainage Threshold、Width | `Mask Fluvial` はマスク生成済み。Curve/水路生成は未実装。 |
 | Hydrologic Conditioning | 水が流れるように地形を補正する | Heightfield | Heightfield | Fill Sinks、Breach、Flow Direction | 河川生成前の前処理。 |
 | Meandering Rivers | 河川カーブを蛇行させる | Curve + Heightfield | Curve/Heightfield | Meander Strength、Iterations、Width | River Network 後の形状改善。 |
+| Glacial Erosion | 氷河侵食で U 字谷・カール・アレート/ホルンを作る | Heightfield + Snow/Ice Mask optional | Heightfield/Mask | Ice Source(積雪・標高)、Flow Iterations、U字化(谷底平滑・拡幅)、Overdeepening、Cirque Headward、Talus | アルプス的地形の差別化要因。Droplet/Fluvial(水=V字谷・樹枝状)では原理的に作れない形。物理完全解ではなく「氷厚場→厚み依存侵食→谷を U字へ整形」の近似で実装する想定。`Snow`(氷の供給源)/`Mask Height`(雪線)/`Multi-Scale Erosion` の thermal(フロスト破砕)と組み合わせる。 |
 
 ## 優先度 B: ディテール生成
 
@@ -140,3 +141,10 @@
 - `Colorize` は既にあるが、今後は `Mask` / `Gradient Mask` / `Color Ramp` の関係を整理して、色作りをノードグラフ内で完結しやすくする。
 - KTT は 1024 x 1024 m を標準想定しているため、Terrain Editor の初期 Scale 1024 m と整合する。
 - 大きな地形では 2048、4096、8192 解像度を想定し、プレビュー解像度と最終解像度を分ける。
+- 山地の地域差(例: 日本の山 vs スイスアルプス)は単一の侵食ノードでは出し切れない。
+  Droplet / Fluvial(水力侵食)が担うのは V 字谷・樹枝状ドレナージで「湿潤・河川」レジーム
+  (日本寄り)。U 字谷・カール・アレート/ホルンといったアルプス的な形は氷河侵食固有で、
+  `Glacial Erosion`(未実装、上記候補)が最大の差別化要因になる。差別化の効きは
+  氷河侵食 > thermal/talus の強弱 > ベース形状(褶曲 vs 火山錐)の順。典型ワークフローは
+  日本=「Shape → Droplet/Fluvial 強め → Thermal 弱め」、アルプス=「Shape → Glacial →
+  Thermal/Talus 強め → Droplet 軽く仕上げ」。
