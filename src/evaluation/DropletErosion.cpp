@@ -65,7 +65,7 @@ void RunDropletLevel(HeightfieldGrid& grid, const DropletErosionSettings& settin
 {
     const int n = grid.resolution;
     const size_t cellCount = static_cast<size_t>(n) * static_cast<size_t>(n);
-    if (n < 3 || grid.heights.size() < cellCount || settings.particleCount <= 0)
+    if (n < 3 || grid.heights.size() < cellCount || settings.dropletDensity <= 0.0f)
     {
         return;
     }
@@ -75,16 +75,31 @@ void RunDropletLevel(HeightfieldGrid& grid, const DropletErosionSettings& settin
     std::vector<float>& heights = grid.heights;
 
     const float cellSize = grid.terrainSizeMeters / static_cast<float>(std::max(1, n - 1));
-    const int particles = ParticlesForLevel(settings.particleCount, n, targetN);
-    const int lifetime = std::clamp(settings.maxLifetime, 1, 2048);
+    // Droplet count is a per-cell density, so the same density (and result) holds
+    // at any resolution; ParticlesForLevel then scales it by area per level.
+    const int targetParticleCount = std::clamp(
+        static_cast<int>(std::lround(static_cast<double>(std::max(0.0f, settings.dropletDensity)) *
+                                     static_cast<double>(targetN) * static_cast<double>(targetN))),
+        1, 2000000);
+    const int particles = ParticlesForLevel(targetParticleCount, n, targetN);
+    // Lifetime comes from a travel distance in metres, so a droplet reaches the
+    // same physical point regardless of how many cells that distance spans.
+    const int lifetime = std::clamp(
+        static_cast<int>(std::lround(settings.maxTravelDistance / std::max(cellSize, 1e-3f))), 1, 8192);
     const float inertia = std::clamp(settings.inertia, 0.0f, 0.99f);
     const float capacityFactor = std::max(0.01f, settings.sedimentCapacity);
     const float minSlope = std::max(0.0001f, settings.minSlope);
     const float erodeRate = std::clamp(settings.erosionStrength, 0.0f, 1.0f);
     const float depositRate = std::clamp(settings.depositionStrength, 0.0f, 1.0f);
-    const float evaporation = std::clamp(settings.evaporation, 0.0f, 1.0f);
+    // Per-metre evaporation compounded over one cell-sized step. A finer grid
+    // takes more steps to cross the same distance, so without this the water (and
+    // thus capacity) would decay faster and channels would die mid-slope.
+    const float evapPerMeter = std::clamp(settings.evaporation, 0.0f, 1.0f);
+    const float stepEvapFactor = std::pow(std::max(0.0f, 1.0f - evapPerMeter), cellSize);
     const float gravity = std::max(0.0f, settings.gravity);
-    const float radius = std::clamp(settings.erosionRadius, 0.5f, 8.0f);
+    // Brush radius given in metres; convert to cells. Upper-clamped so the O(r^2)
+    // brush stays bounded on very fine grids.
+    const float radius = std::clamp(settings.erosionRadiusMeters / std::max(cellSize, 1e-3f), 0.5f, 16.0f);
 
     std::mt19937 rng(static_cast<uint32_t>(settings.seed) ^ static_cast<uint32_t>(levelSeed * 2654435761u));
     std::uniform_real_distribution<float> pos(1.0f, static_cast<float>(n - 2));
@@ -122,6 +137,15 @@ void RunDropletLevel(HeightfieldGrid& grid, const DropletErosionSettings& settin
 
             grid.flows[static_cast<size_t>(Index1D(static_cast<int>(px), static_cast<int>(pz), n))] += water;
 
+            // Fade carving/deposition out near the map border. Every droplet
+            // that drains off the map terminates at the edge, so without this the
+            // outlet cells get carved each pass and turn into deep notches — the
+            // mesh skirt then hangs far below the front edge (visible as vertical
+            // "curtains", worst at high resolution where more droplets converge).
+            const float edgeDist = std::min(std::min(px, pz),
+                                            std::min(static_cast<float>(n - 1) - px, static_cast<float>(n - 1) - pz));
+            const float edgeFade = std::clamp((edgeDist - 1.0f) / 3.0f, 0.0f, 1.0f);
+
             // Capacity scales with the true slope (rise/run), not the raw
             // per-cell height drop, so coarse pyramid levels do not carry and
             // dump 8x more sediment than fine ones for the same terrain.
@@ -142,20 +166,20 @@ void RunDropletLevel(HeightfieldGrid& grid, const DropletErosionSettings& settin
             {
                 // Oversaturated: drop the surplus with the same radial brush
                 // as carving, so banks stay smooth instead of pimpling.
-                const float deposit = (sediment - capacity) * depositRate;
+                const float deposit = (sediment - capacity) * depositRate * edgeFade;
                 sediment -= deposit;
                 ApplyBrush(heights, n, px, pz, deposit, radius);
                 ApplyBrush(grid.deposits, n, px, pz, deposit, radius);
             }
             else
             {
-                const float erode = std::min((capacity - sediment) * erodeRate, -dH);
+                const float erode = std::min((capacity - sediment) * erodeRate, -dH) * edgeFade;
                 ApplyBrush(heights, n, px, pz, -erode, radius);
                 sediment += erode;
             }
 
             speed = std::sqrt(std::max(0.0f, speed * speed + (-dH) * gravity));
-            water *= (1.0f - evaporation);
+            water *= stepEvapFactor;
             if (water < 1e-4f) { break; }
 
             px = npx;

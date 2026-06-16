@@ -1629,15 +1629,13 @@ bool DrawDropletErosionProperties(rock::Node& editableNode)
     rock::DropletErosionSettings& de = editableNode.dropletErosion;
     const rock::DropletErosionSettings defaults{};
 
-    de.particleCount = std::clamp(de.particleCount, 1000, 200000);
-    de.maxLifetime = std::clamp(de.maxLifetime, 1, 512);
     de.seed = std::clamp(de.seed, 0, 1000000);
 
-    if (DrawPropertyIntRow("Particle Count", "DeParticleCount", &de.particleCount, 1000, 200000, defaults.particleCount, "Droplet erosion particle count changed", true, Tr("Number of droplets traced. With Multigrid on, coarse levels use proportionally fewer to keep density constant. More droplets give denser, smoother channels at higher cost.", "流す水滴の数です。Multigrid 有効時は粗いレベルほど比例して少なくし密度を一定に保ちます。多いほど水路が密で滑らかになりますが計算は重くなります。")))
+    if (DrawPropertyFloatRow("Droplet Density", "DeDropletDensity", &de.dropletDensity, 0.01f, 4.0f, defaults.dropletDensity, "Droplet erosion density changed", true, Tr("Droplets seeded per cell (not an absolute count), so the result stays consistent when the simulation resolution changes. Higher density gives denser, smoother channels at higher cost.", "1 セルあたりに流す水滴数 (絶対数ではありません)。シミュレーション解像度を変えても結果が一貫します。大きいほど水路が密で滑らかになりますが計算は重くなります。"), "%.2f"))
     {
         EvaluateGraph();
     }
-    if (DrawPropertyIntRow("Max Lifetime", "DeMaxLifetime", &de.maxLifetime, 1, 512, defaults.maxLifetime, "Droplet erosion lifetime changed", true, Tr("Maximum number of steps a droplet travels before it dies. Longer lifetimes carve longer channels.", "1 水滴が消えるまでに移動する最大ステップ数。長いほど水路が長く伸びます。")))
+    if (DrawPropertyFloatRow("Travel Distance (m)", "DeTravelDistance", &de.maxTravelDistance, 1.0f, 8192.0f, defaults.maxTravelDistance, "Droplet erosion travel distance changed", true, Tr("How far a droplet travels before it dies, in metres (converted to steps by cell size). Specified in metres so the reach is the same at any resolution. Longer distances carve longer channels.", "1 水滴が消えるまでに進む距離 (メートル。セルサイズでステップ数に換算)。メートル指定なので到達距離は解像度によらず一定です。長いほど水路が長く伸びます。"), "%.0f"))
     {
         EvaluateGraph();
     }
@@ -1669,7 +1667,7 @@ bool DrawDropletErosionProperties(rock::Node& editableNode)
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Evaporation", "DeEvaporation", &de.evaporation, 0.0f, 0.2f, defaults.evaporation, "Droplet erosion evaporation changed", true, Tr("Per-step water loss. Higher values shorten how far a droplet stays active.", "1 ステップあたりの水の損失。大きいほど水滴が早く尽きます。"), "%.4f"))
+    if (DrawPropertyFloatRow("Evaporation (/m)", "DeEvaporation", &de.evaporation, 0.0f, 0.05f, defaults.evaporation, "Droplet erosion evaporation changed", true, Tr("Water lost per metre travelled (compounded per step by cell size, so the reach in metres is resolution-independent). Higher values shorten how far a droplet stays active.", "1 メートル進むごとの水の損失 (セルサイズでステップごとに複利。到達距離はメートル基準で解像度非依存)。大きいほど水滴が早く尽きます。"), "%.4f"))
     {
         EvaluateGraph();
     }
@@ -1677,7 +1675,7 @@ bool DrawDropletErosionProperties(rock::Node& editableNode)
     {
         EvaluateGraph();
     }
-    if (DrawPropertyFloatRow("Erosion Radius", "DeErosionRadius", &de.erosionRadius, 0.5f, 8.0f, defaults.erosionRadius, "Droplet erosion radius changed", true, Tr("Brush radius (cells) over which carving and oversaturation deposits are spread, so channels stay smooth and dumped sediment forms banks instead of single-cell bumps.", "削りと容量超過時の堆積を広げるブラシ半径 (セル)。水路を滑らかに保ち、堆積も 1 セルの瘤ではなく滑らかな土手になります。")))
+    if (DrawPropertyFloatRow("Erosion Radius (m)", "DeErosionRadius", &de.erosionRadiusMeters, 0.5f, 64.0f, defaults.erosionRadiusMeters, "Droplet erosion radius changed", true, Tr("Brush radius in metres (converted to cells by cell size) over which carving and oversaturation deposits are spread, so channels stay smooth and dumped sediment forms banks instead of single-cell bumps. Metres rather than cells so the channel/bank width is resolution-independent.", "削りと容量超過時の堆積を広げるブラシ半径 (メートル。セルサイズでセル数に換算)。水路を滑らかに保ち、堆積も 1 セルの瘤ではなく滑らかな土手になります。メートル指定なので水路・土手の幅が解像度によらず一定です。"), "%.1f"))
     {
         EvaluateGraph();
     }

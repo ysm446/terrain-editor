@@ -82,8 +82,8 @@ nlohmann::json MakeDropletErosionSettingsJson(const rock::Node& node)
 {
     return {
         {"dropletErosion", {
-            {"particleCount", node.dropletErosion.particleCount},
-            {"maxLifetime", node.dropletErosion.maxLifetime},
+            {"dropletDensity", node.dropletErosion.dropletDensity},
+            {"maxTravelDistance", node.dropletErosion.maxTravelDistance},
             {"erosionStrength", node.dropletErosion.erosionStrength},
             {"depositionStrength", node.dropletErosion.depositionStrength},
             {"inertia", node.dropletErosion.inertia},
@@ -91,9 +91,9 @@ nlohmann::json MakeDropletErosionSettingsJson(const rock::Node& node)
             {"useMultigrid", node.dropletErosion.useMultigrid},
             {"seed", node.dropletErosion.seed},
             {"sedimentCapacity", node.dropletErosion.sedimentCapacity},
-            {"evaporation", node.dropletErosion.evaporation},
+            {"evaporationPerMeter", node.dropletErosion.evaporation},
             {"gravity", node.dropletErosion.gravity},
-            {"erosionRadius", node.dropletErosion.erosionRadius},
+            {"erosionRadiusMeters", node.dropletErosion.erosionRadiusMeters},
         }},
     };
 }
@@ -534,8 +534,8 @@ void ReadDropletErosionSettingsJson(const nlohmann::json& nodeJson, rock::Node& 
 {
     const nlohmann::json de = nodeJson.value("dropletErosion", nlohmann::json::object());
 
-    node.dropletErosion.particleCount = std::clamp(de.value("particleCount", node.dropletErosion.particleCount), 1000, 200000);
-    node.dropletErosion.maxLifetime = std::clamp(de.value("maxLifetime", node.dropletErosion.maxLifetime), 1, 512);
+    node.dropletErosion.dropletDensity = std::clamp(de.value("dropletDensity", node.dropletErosion.dropletDensity), 0.01f, 4.0f);
+    node.dropletErosion.maxTravelDistance = std::clamp(de.value("maxTravelDistance", node.dropletErosion.maxTravelDistance), 1.0f, 8192.0f);
     node.dropletErosion.erosionStrength = std::clamp(de.value("erosionStrength", node.dropletErosion.erosionStrength), 0.0f, 1.0f);
     node.dropletErosion.depositionStrength = std::clamp(de.value("depositionStrength", node.dropletErosion.depositionStrength), 0.0f, 1.0f);
     node.dropletErosion.inertia = std::clamp(de.value("inertia", node.dropletErosion.inertia), 0.0f, 0.99f);
@@ -543,9 +543,9 @@ void ReadDropletErosionSettingsJson(const nlohmann::json& nodeJson, rock::Node& 
     node.dropletErosion.useMultigrid = de.value("useMultigrid", node.dropletErosion.useMultigrid);
     node.dropletErosion.seed = std::clamp(de.value("seed", node.dropletErosion.seed), 0, 1000000);
     node.dropletErosion.sedimentCapacity = std::clamp(de.value("sedimentCapacity", node.dropletErosion.sedimentCapacity), 0.1f, 16.0f);
-    node.dropletErosion.evaporation = std::clamp(de.value("evaporation", node.dropletErosion.evaporation), 0.0f, 0.2f);
+    node.dropletErosion.evaporation = std::clamp(de.value("evaporationPerMeter", node.dropletErosion.evaporation), 0.0f, 0.05f);
     node.dropletErosion.gravity = std::clamp(de.value("gravity", node.dropletErosion.gravity), 0.0f, 20.0f);
-    node.dropletErosion.erosionRadius = std::clamp(de.value("erosionRadius", node.dropletErosion.erosionRadius), 0.5f, 8.0f);
+    node.dropletErosion.erosionRadiusMeters = std::clamp(de.value("erosionRadiusMeters", node.dropletErosion.erosionRadiusMeters), 0.5f, 64.0f);
 }
 
 void ReadFluvialErosionSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)

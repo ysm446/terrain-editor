@@ -628,8 +628,14 @@ struct MaskFluvialSettings
 // first, finer levels refine) for near-resolution-invariant channels.
 struct DropletErosionSettings
 {
-    int particleCount = 60000;        // Droplets traced per level.
-    int maxLifetime = 256;            // Max steps a droplet travels before it dies.
+    // Droplets seeded per cell at the target resolution (NOT an absolute count),
+    // so droplet density — and therefore the result — stays consistent when the
+    // simulation resolution changes. Coarse multigrid levels scale by area to
+    // keep the same per-cell density.
+    float dropletDensity = 0.25f;     // Droplets per cell.
+    // How far a droplet travels before it dies, in metres (converted to steps by
+    // cell size). Metres rather than steps so the reach is resolution-independent.
+    float maxTravelDistance = 512.0f; // m.
     float erosionStrength = 0.30f;    // Carving rate per step.
     float depositionStrength = 0.30f; // Sediment drop rate when oversaturated.
     float inertia = 0.05f;            // 0 = follow slope exactly, 1 = keep previous direction.
@@ -637,9 +643,13 @@ struct DropletErosionSettings
     bool useMultigrid = true;
     int seed = 1337;
     float sedimentCapacity = 4.0f;    // Carrying-capacity multiplier.
-    float evaporation = 0.005f;       // Per-step water loss (0..1).
+    // Water lost per metre travelled (compounded per step by cell size), so a
+    // droplet's reach in metres does not change with resolution.
+    float evaporation = 0.002f;       // Per-metre water loss (0..1).
     float gravity = 4.0f;             // Downhill acceleration.
-    float erosionRadius = 2.0f;       // Erosion brush radius in cells (smooths carving).
+    // Erosion brush radius in metres (converted to cells by cell size), so the
+    // carved channel / bank width is resolution-independent.
+    float erosionRadiusMeters = 6.0f; // m.
 };
 
 // Heightfield -> heightfield + Flows + Deposits. KTT-style force-field particle

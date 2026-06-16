@@ -559,8 +559,8 @@ uint64_t HashMultiScaleErosionSettings(const MultiScaleErosionSettings& settings
 uint64_t HashDropletErosionSettings(const DropletErosionSettings& settings, int resolution)
 {
     uint64_t hash = 11400714819323198485ull;
-    HashCombine(hash, static_cast<uint64_t>(settings.particleCount));
-    HashCombine(hash, static_cast<uint64_t>(settings.maxLifetime));
+    HashCombine(hash, HashFloat(settings.dropletDensity));
+    HashCombine(hash, HashFloat(settings.maxTravelDistance));
     HashCombine(hash, HashFloat(settings.erosionStrength));
     HashCombine(hash, HashFloat(settings.depositionStrength));
     HashCombine(hash, HashFloat(settings.inertia));
@@ -570,7 +570,7 @@ uint64_t HashDropletErosionSettings(const DropletErosionSettings& settings, int 
     HashCombine(hash, HashFloat(settings.sedimentCapacity));
     HashCombine(hash, HashFloat(settings.evaporation));
     HashCombine(hash, HashFloat(settings.gravity));
-    HashCombine(hash, HashFloat(settings.erosionRadius));
+    HashCombine(hash, HashFloat(settings.erosionRadiusMeters));
     HashCombine(hash, static_cast<uint64_t>(resolution));
     return hash;
 }
