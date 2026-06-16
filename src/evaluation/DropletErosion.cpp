@@ -13,6 +13,10 @@ using namespace particle_erosion;
 
 namespace
 {
+// Physical width of the border taper over which carving/deposition fades to
+// zero, so channels that drain off the map do not cut a needle at the edge.
+constexpr float kEdgeFadeMeters = 24.0f;
+
 // Add `delta` to the terrain, spread over a radial brush. Used for carving
 // (negative delta, so droplets do not drill single-cell pits) and for
 // oversaturation deposits (positive delta, so dumped sediment forms smooth
@@ -100,6 +104,11 @@ void RunDropletLevel(HeightfieldGrid& grid, const DropletErosionSettings& settin
     // Brush radius given in metres; convert to cells. Upper-clamped so the O(r^2)
     // brush stays bounded on very fine grids.
     const float radius = std::clamp(settings.erosionRadiusMeters / std::max(cellSize, 1e-3f), 0.5f, 16.0f);
+    // Border taper width, in metres converted to cells. A major channel that
+    // exits the map otherwise incises at full depth right up to the faded edge
+    // and leaves a needle-like notch; a fixed physical taper makes that fade out
+    // gradually at every resolution (a cell-based taper is too thin on fine grids).
+    const float edgeFadeCells = std::clamp(kEdgeFadeMeters / std::max(cellSize, 1e-3f), 2.0f, static_cast<float>(n) * 0.25f);
 
     std::mt19937 rng(static_cast<uint32_t>(settings.seed) ^ static_cast<uint32_t>(levelSeed * 2654435761u));
     std::uniform_real_distribution<float> pos(1.0f, static_cast<float>(n - 2));
@@ -144,7 +153,7 @@ void RunDropletLevel(HeightfieldGrid& grid, const DropletErosionSettings& settin
             // "curtains", worst at high resolution where more droplets converge).
             const float edgeDist = std::min(std::min(px, pz),
                                             std::min(static_cast<float>(n - 1) - px, static_cast<float>(n - 1) - pz));
-            const float edgeFade = std::clamp((edgeDist - 1.0f) / 3.0f, 0.0f, 1.0f);
+            const float edgeFade = std::clamp((edgeDist - 1.0f) / edgeFadeCells, 0.0f, 1.0f);
 
             // Capacity scales with the true slope (rise/run), not the raw
             // per-cell height drop, so coarse pyramid levels do not carry and
