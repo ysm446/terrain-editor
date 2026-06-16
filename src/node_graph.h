@@ -112,6 +112,12 @@ enum class FluvialErosionBackend
     GpuCompute,
 };
 
+enum class DropletErosionBackend
+{
+    CpuReference,
+    GpuCompute,
+};
+
 enum class MaskFluvialSimulationMode
 {
     FlowAccumulation,
@@ -650,6 +656,10 @@ struct DropletErosionSettings
     // Erosion brush radius in metres (converted to cells by cell size), so the
     // carved channel / bank width is resolution-independent.
     float erosionRadiusMeters = 6.0f; // m.
+    // CPU 逐次リファレンス vs GPU compute (D3D12). GPU 版は逐次依存をスナップショット
+    // 方式に置き換えるため CPU 版とビット一致しないが視覚的に同等で大幅に高速。
+    // 既定 GPU。シェーダー / ディスパッチ失敗時は CPU に自動フォールバック。
+    DropletErosionBackend backend = DropletErosionBackend::GpuCompute;
 };
 
 // Heightfield -> heightfield + Flows + Deposits. KTT-style force-field particle
@@ -958,6 +968,7 @@ using RockGpuEvaluator = bool (*)(HeightfieldGrid& grid, const RockSettings& set
 using ScatterGpuEvaluator = bool (*)(HeightfieldGrid& grid, const ScatterSettings& settings, std::string* error);
 using MaskFluvialGpuEvaluator = bool (*)(HeightfieldGrid& grid, const MaskFluvialSettings& settings, std::string* error);
 using FluvialErosionGpuEvaluator = bool (*)(HeightfieldGrid& grid, const FluvialErosionSettings& settings, std::string* error);
+using DropletErosionGpuEvaluator = bool (*)(HeightfieldGrid& grid, const DropletErosionSettings& settings, std::string* error);
 using SnowGpuEvaluator = bool (*)(HeightfieldGrid& grid, const SnowSettings& settings, std::string* error);
 using ColorizeGpuEvaluator = bool (*)(ColorGrid& grid, const ColorizeSettings& settings, const MaskGrid& gradientMask, const MaskGrid* mask, const ColorGrid* baseColor, std::string* error);
 using MaskPathGpuEvaluator = bool (*)(MaskGrid& grid, const PathSettings& path, const MaskPathSettings& settings, float terrainSizeMeters, std::string* error);
@@ -1165,6 +1176,7 @@ void SetRockGpuEvaluator(RockGpuEvaluator evaluator);
 void SetScatterGpuEvaluator(ScatterGpuEvaluator evaluator);
 void SetMaskFluvialGpuEvaluator(MaskFluvialGpuEvaluator evaluator);
 void SetFluvialErosionGpuEvaluator(FluvialErosionGpuEvaluator evaluator);
+void SetDropletErosionGpuEvaluator(DropletErosionGpuEvaluator evaluator);
 void SetSnowGpuEvaluator(SnowGpuEvaluator evaluator);
 void SetColorizeGpuEvaluator(ColorizeGpuEvaluator evaluator);
 void SetMaskPathGpuEvaluator(MaskPathGpuEvaluator evaluator);

@@ -94,6 +94,7 @@ nlohmann::json MakeDropletErosionSettingsJson(const rock::Node& node)
             {"evaporationPerMeter", node.dropletErosion.evaporation},
             {"gravity", node.dropletErosion.gravity},
             {"erosionRadiusMeters", node.dropletErosion.erosionRadiusMeters},
+            {"backend", static_cast<int>(node.dropletErosion.backend)},
         }},
     };
 }
@@ -546,6 +547,10 @@ void ReadDropletErosionSettingsJson(const nlohmann::json& nodeJson, rock::Node& 
     node.dropletErosion.evaporation = std::clamp(de.value("evaporationPerMeter", node.dropletErosion.evaporation), 0.0f, 0.05f);
     node.dropletErosion.gravity = std::clamp(de.value("gravity", node.dropletErosion.gravity), 0.0f, 20.0f);
     node.dropletErosion.erosionRadiusMeters = std::clamp(de.value("erosionRadiusMeters", node.dropletErosion.erosionRadiusMeters), 0.5f, 64.0f);
+    const int deBackendInt = std::clamp(de.value("backend", static_cast<int>(node.dropletErosion.backend)),
+                                        static_cast<int>(rock::DropletErosionBackend::CpuReference),
+                                        static_cast<int>(rock::DropletErosionBackend::GpuCompute));
+    node.dropletErosion.backend = static_cast<rock::DropletErosionBackend>(deBackendInt);
 }
 
 void ReadFluvialErosionSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)

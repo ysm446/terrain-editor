@@ -571,6 +571,7 @@ uint64_t HashDropletErosionSettings(const DropletErosionSettings& settings, int 
     HashCombine(hash, HashFloat(settings.evaporation));
     HashCombine(hash, HashFloat(settings.gravity));
     HashCombine(hash, HashFloat(settings.erosionRadiusMeters));
+    HashCombine(hash, static_cast<uint64_t>(settings.backend));
     HashCombine(hash, static_cast<uint64_t>(resolution));
     return hash;
 }

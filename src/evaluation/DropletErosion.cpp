@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <random>
+#include <string>
 #include <vector>
 
 namespace rock
@@ -13,6 +14,8 @@ using namespace particle_erosion;
 
 namespace
 {
+DropletErosionGpuEvaluator g_dropletErosionGpuEvaluator = nullptr;
+
 // Physical width of the border taper over which carving/deposition fades to
 // zero, so channels that drain off the map do not cut a needle at the edge.
 constexpr float kEdgeFadeMeters = 24.0f;
@@ -202,6 +205,21 @@ void RunDropletLevel(HeightfieldGrid& grid, const DropletErosionSettings& settin
 
 void ApplyDropletErosion(HeightfieldGrid& grid, const DropletErosionSettings& settings)
 {
+    if (settings.backend == DropletErosionBackend::GpuCompute && g_dropletErosionGpuEvaluator != nullptr)
+    {
+        std::string ignoredError;
+        if (g_dropletErosionGpuEvaluator(grid, settings, &ignoredError))
+        {
+            return;
+        }
+        // Falls through to the CPU implementation on shader / dispatch failure.
+    }
+
     RunErosion(grid, settings, kCoarsestPyramidLevel, RunDropletLevel);
+}
+
+void SetDropletErosionGpuEvaluator(DropletErosionGpuEvaluator evaluator)
+{
+    g_dropletErosionGpuEvaluator = evaluator;
 }
 } // namespace rock

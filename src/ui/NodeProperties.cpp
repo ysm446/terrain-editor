@@ -1631,6 +1631,17 @@ bool DrawDropletErosionProperties(rock::Node& editableNode)
 
     de.seed = std::clamp(de.seed, 0, 1000000);
 
+    {
+        int backendInt = static_cast<int>(de.backend);
+        if (DrawPropertyComboRow("Backend", "DropletErosionBackend", &backendInt, "CPU\0GPU\0\0", Tr("Execution backend. CPU is the sequential reference (each droplet sees previous droplets' edits). GPU reformulates this as a snapshot scheme — droplets trace a frozen heightfield in parallel and accumulate fixed-point splats, which is deterministic and typically much faster; results are visually equivalent to CPU but not bit-exact. Shader compile or dispatch failures automatically fall back to CPU.", "実行バックエンド。CPU は逐次リファレンス (各水滴が直前までの削り跡を見る)。GPU はこれをスナップショット方式に置き換え、凍結した高さに対し全水滴を並列トレースして固定小数点で集積します。決定的で通常大幅に高速。結果は CPU と視覚的に同等ですがビット単位では一致しません。シェーダーコンパイル/ディスパッチ失敗時は CPU に自動フォールバック。"), static_cast<int>(rock::DropletErosionSettings{}.backend)))
+        {
+            de.backend = static_cast<rock::DropletErosionBackend>(std::clamp(backendInt,
+                static_cast<int>(rock::DropletErosionBackend::CpuReference),
+                static_cast<int>(rock::DropletErosionBackend::GpuCompute)));
+            EvaluateGraph();
+        }
+    }
+
     if (DrawPropertyFloatRow("Droplet Density", "DeDropletDensity", &de.dropletDensity, 0.01f, 4.0f, defaults.dropletDensity, "Droplet erosion density changed", true, Tr("Droplets seeded per cell (not an absolute count), so the result stays consistent when the simulation resolution changes. Higher density gives denser, smoother channels at higher cost.", "1 セルあたりに流す水滴数 (絶対数ではありません)。シミュレーション解像度を変えても結果が一貫します。大きいほど水路が密で滑らかになりますが計算は重くなります。"), "%.2f"))
     {
         EvaluateGraph();
