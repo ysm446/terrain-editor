@@ -77,6 +77,8 @@
 | Hydrologic Conditioning | 水が流れるように地形を補正する | Heightfield | Heightfield | Fill Sinks、Breach、Flow Direction | 河川生成前の前処理。 |
 | Meandering Rivers | 河川カーブを蛇行させる | Curve + Heightfield | Curve/Heightfield | Meander Strength、Iterations、Width | River Network 後の形状改善。 |
 | Glacial Erosion | 氷河侵食で U 字谷・カール・アレート/ホルンを作る | Heightfield + Snow/Ice Mask optional | Heightfield/Mask | Ice Source(積雪・標高)、Flow Iterations、U字化(谷底平滑・拡幅)、Overdeepening、Cirque Headward、Talus | アルプス的地形の差別化要因。Droplet/Fluvial(水=V字谷・樹枝状)では原理的に作れない形。物理完全解ではなく「氷厚場→厚み依存侵食→谷を U字へ整形」の近似で実装する想定。`Snow`(氷の供給源)/`Mask Height`(雪線)/`Multi-Scale Erosion` の thermal(フロスト破砕)と組み合わせる。 |
+| Roches Moutonnées (羊背岩) | 氷流方向に対し非対称な岩盤の瘤(上流側=滑らかな磨食面 / 下流側=急な剥離面)を作る | Heightfield + Flow Direction/Mask optional | Heightfield/Mask | Flow Direction、Density/Scatter、Size、Stoss Smoothness、Lee Steepness、Plucking Roughness、Seed | 氷河侵食のメソ〜小スケールの代表的微地形。`Glacial Erosion` の氷流方向を引き継ぐと自然。単独ノードにするか `Glacial Erosion` の出力ディテールとして組み込むかは設計時に判断する。U 字谷底や圏谷の岩床に散布して氷河地形らしさを補強する。 |
+| Moraine (モレーン/堆石) | 氷河が運んだ岩屑の堆積を筋状の高まりとして盛る(側・中央・末端モレーン) | Heightfield + Ice Flow Direction/Tributary Mask optional (`Glacial Erosion` 由来) | Heightfield/Mask | Moraine Type(Lateral/Medial/Terminal)、Flow Direction、Debris Amount、Ridge Width/Height、Confluence(支流)構造、Seed | 氷河侵食が「削る」のに対しモレーンは「盛る」堆積地形。岩屑は氷の流線に沿って運ばれるため、`Glacial Erosion` の氷流方向に沿って advect すると自然な縞になる。**中央モレーン**は 2 本の支流が合流するたびに内側どうしの側モレーンが 1 本に合体して筋が増える(N 本合流→おおむね N−1 本)ので、合流(支流)トポロジーを参照して生成する。`Roches Moutonnées` と同様、単独ノードにするか `Glacial Erosion` の出力ディテールに組み込むかは設計時に判断する(下記設計メモ参照)。 |
 
 ## 優先度 B: ディテール生成
 
@@ -86,7 +88,7 @@
 | Layered Displacement | 複数層の変位を重ねる | Heightfield | Heightfield | Layers、Scale、Amount、Blend | 岩肌や細部をまとめて追加する。 |
 | Detail Transfer | 別ハイトフィールドから細部だけ転写する | Heightfield A/B | Heightfield | Detail Scale、Strength、Mask | 大形状は維持し、細部だけ借りる。 |
 | Strata Noise | 層状の岩肌ノイズを作る | Heightfield | Heightfield/Mask | Layer Scale、Warp、Strength | 地層、崖、浸食縞向け。 |
-| Cracks | ひび割れや割れ目を追加する | Heightfield | Heightfield/Mask | Seed、Density、Width、Depth | 乾燥地形や岩盤向け。 |
+| Cracks | ひび割れや割れ目を追加する | Heightfield + Mask optional | Heightfield/Mask | Seed、Density、Width、Depth、Pattern(亀甲/直線/節理)、Mask | 乾燥地形(泥のひび)や岩盤(節理・割れ目)向け。単独の汎用ひび割れノードにするか、`Rock` 側にクラック設定を持たせるかは要検討(下記設計メモ参照)。Mask 入力で岩・露頭にだけ適用できるようにする想定。 |
 | Crevasses | 氷河や雪面向けの深い割れ目を作る | Heightfield | Heightfield/Mask | Direction、Depth、Spacing、Noise | Snow と組み合わせる。 |
 
 ## 優先度 C: 砂・雪・特殊地形
@@ -139,6 +141,24 @@
 - まずは CPU 実装で確定し、重い侵食・タイル処理だけ後から GPU または並列化を検討する。
 - `Mask Height`、`Mask Slope`、`Mask Curvature`、`Mask Fluvial` のような条件抽出ノードを先に作り、生成ノードの制御に使う。
 - `Colorize` は既にあるが、今後は `Mask` / `Gradient Mask` / `Color Ramp` の関係を整理して、色作りをノードグラフ内で完結しやすくする。
+- 岩のクラック(割れ目)の持たせ方は未決。以下を検討事項として残す。
+  - クラックを **単体ノード**(汎用 `Cracks`)として作成するか。Mask で岩・露頭に限定適用でき、
+    乾燥地形の泥ひびや岩盤の節理など岩以外にも再利用できる。
+  - 既存 `Rock` ノードにクラック設定(Density / Width / Depth / Pattern)を追加し、岩そのものに割れを刻むか。
+    岩の見た目を 1 ノードで完結できる。
+  - 両立案(単体ノードを基本にしつつ `Rock` 側は簡易プリセット呼び出しに留める)も含めて比較する。
+  どれを採るかは実装時に判断する。
+- 氷河系ノード(`Glacial Erosion` / `Roches Moutonnées` / `Moraine`)は川系(`River` 系)と
+  同じ「侵食・水系」カテゴリに置く。水も氷も「流れ場に沿って削る・運ぶ・盛る」点で原理が共通し、
+  流れ方向フィールドなどの基盤を共有できるため。ただしノードとしての役割は分ける:
+  `Glacial Erosion` = 削る(U字谷・カール)、`Moraine` = 盛る(堆積)、
+  `Roches Moutonnées` = 微地形ディテール。
+- そのため `Moraine` は `Glacial Erosion` に統合せず、`Roches Moutonnées` と同様に独立ノードとし、
+  `Glacial Erosion` が出力する氷流方向と支流(合流)構造を入力に取る構成を基本とする。削りと盛りを
+  別レイヤーで制御・キャッシュでき、中央モレーンの「合流ごとに筋が増える」表現も合流トポロジーを
+  参照して作れる。理想的には `Glacial Erosion` が Heightfield/Mask に加えて Flow Direction と
+  Tributary ID(支流識別)フィールドを出力できると、`Moraine` / `Roches Moutonnées` の双方が
+  同じ流れ場を共有できる。
 - KTT は 1024 x 1024 m を標準想定しているため、Terrain Editor の初期 Scale 1024 m と整合する。
 - 大きな地形では 2048、4096、8192 解像度を想定し、プレビュー解像度と最終解像度を分ける。
 - 山地の地域差(例: 日本の山 vs スイスアルプス)は単一の侵食ノードでは出し切れない。
