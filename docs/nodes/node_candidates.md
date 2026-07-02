@@ -17,6 +17,7 @@
 | 岩・転石を散布する | `Rock` | 実装済み | `Scatter` / `Cliff Synthesizer` の一部 |
 | 堆積物を追加する | `Sediment` | 実装済み | `Scree` / `Deposition` の一部 |
 | 雪を積もらせる | `Snow` | 実装済み | `Snow Base` |
+| 表土を被覆させる | `Soil` | 実装済み | `Soil` (被覆型堆積) |
 | ノイズマスク | `Mask Noise` | 実装済み | 汎用 `Noise Mask` |
 | マスク合成 | `Mask Blend` | 実装済み | `Combine` の Mask 版 |
 | マスク値補正 | `Mask Levels` | 実装済み | `Adjust` の Mask 版 / `Mask Invert` の一部 |
@@ -65,7 +66,6 @@
 | Smooth Talus | 不安定な斜面をならす | Heightfield | Heightfield/Mask | Talus Angle、Iterations、Strength | `Multi-Scale Erosion` より単純で制御しやすい斜面緩和。 |
 | Crumbling | 崖下の崩落・岩屑・堆積物を追加する | Heightfield + Emission Mask | Heightfield/Mask/Unique Mask | Physics Count、Debris Amount、Debris Size、Rock Style、Gravity、Spread、Seed | 初期実装済み。`Rock` / `Sediment` との差分を見ながら発生密度、停止条件、堆積量を調整する。 |
 | Flatten By Proximity | カーブや点の近くを平坦化する | Heightfield + Curve/Points | Heightfield | Radius、Falloff、Target Height | 道路、建物、川岸などの整地に使う。 |
-| Soil (表土被覆) | 岩盤の上面に表土をかぶせ、急斜面・崖では剥がして岩盤を露出させる | Heightfield + Mask optional | Heightfield/Mask | Emission Amount、Soil Motion Slope Limit、Slope-Dependent Emission、Mask Mode (Coverage/Thickness)、Surface Smoothing | 被覆型の堆積ノード。`Sediment`(谷埋め型)では出せない「土が上面にかぶさる」表現を担当し、現在 `Snow` で代用している用途を置き換える。`Snow` の「注入 → settling → マスク化」コアを共有関数化して土向け既定値で呼ぶ薄いノードとして始める(CPU/GPU とも流用)。曲率依存の厚みや `Multi-Scale Erosion` の deposits 連携、植生マスク接続は後続拡張(下記設計メモ参照)。 |
 | Flatten Borders | 外周を平坦化する | Heightfield | Heightfield | Border Width、Falloff、Target Height | タイル端や展示用地形の外周処理。 |
 
 ## 優先度 B: 侵食・水系
@@ -160,16 +160,18 @@
   参照して作れる。理想的には `Glacial Erosion` が Heightfield/Mask に加えて Flow Direction と
   Tributary ID(支流識別)フィールドを出力できると、`Moraine` / `Roches Moutonnées` の双方が
   同じ流れ場を共有できる。
-- 堆積系 3 ノードの役割分担は次のとおり分ける。
+- 堆積系 3 ノードの役割分担は次のとおり分ける (`Soil` は 0.24.0 で実装済み)。
   - `Sediment` = **谷埋め型**。重力輸送で溝・谷底に厚く溜まり尾根が剥き出しになる(樹枝状)。「崩れた岩屑が溜まる」表現。
-  - `Soil`(未実装、上記候補)= **被覆型**。緩斜面・上面に一様にかぶさり、急斜面・崖では剥げて岩盤が露出する表土マントル。
+  - `Soil` = **被覆型**。緩斜面・上面に一様にかぶさり、急斜面・崖では剥げて岩盤が露出する表土マントル。
   - `Snow` = **雪特化**。アルゴリズムは被覆型だが、雪固有の拡張(風ドリフト・雪線・融雪)へ進化させる。
-  現在は `Soil` の代わりに `Snow` を土の堆積に使っているが、今後の拡張が
+  かつては `Soil` の代わりに `Snow` を土の堆積に使っていたが、今後の拡張が
   Snow = 風・雪線・融雪、Soil = 傾斜/曲率依存の厚み・erosion deposits 連携・植生マスクと
-  確実に分岐するため、兼用ノードにはせず分離する。素材ごとの既定値(安息角、表面平滑化)と
+  確実に分岐するため、兼用ノードにはせず分離した。素材ごとの既定値(安息角、表面平滑化)と
   マスク意味論(雪 = coverage で Colorize の白、土 = 厚み/coverage 切り替えで土色・草)も
   ノード名で意図が残るよう別ノードとして守る。実装は `Snow` の settling コア
-  (注入 → 安息角超過分の移動 → 表面平滑化 → マスク化)を共有関数化して両者で使う。
+  (注入 → 安息角超過分の移動 → 表面平滑化 → マスク化)を共有関数化
+  (`GranularSettle`、GPU は `snow_compute.hlsl` を共有)して両者で使っている。
+  `Soil` の後続拡張候補: 曲率依存の厚み、`Multi-Scale Erosion` deposits 連携、植生マスク接続。
 - KTT は 1024 x 1024 m を標準想定しているため、Terrain Editor の初期 Scale 1024 m と整合する。
 - 大きな地形では 2048、4096、8192 解像度を想定し、プレビュー解像度と最終解像度を分ける。
 - 山地の地域差(例: 日本の山 vs スイスアルプス)は単一の侵食ノードでは出し切れない。

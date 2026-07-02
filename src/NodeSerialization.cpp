@@ -364,6 +364,27 @@ nlohmann::json MakeSedimentSettingsJson(const rock::Node& node)
     };
 }
 
+nlohmann::json MakeSoilSettingsJson(const rock::Node& node)
+{
+    return {
+        {"soil", {
+            {"emissionAmount", node.soil.emissionAmount},
+            {"iterationCount", node.soil.iterationCount},
+            {"emissionTime", node.soil.emissionTime},
+            {"settlingPasses", node.soil.settlingPasses},
+            {"motionSlopeLimitDeg", node.soil.motionSlopeLimitDeg},
+            {"transportRate", node.soil.transportRate},
+            {"slopeDependentEmission", node.soil.slopeDependentEmission},
+            {"surfaceSmoothing", node.soil.surfaceSmoothing},
+            {"maskMode", static_cast<int>(node.soil.maskMode)},
+            {"maskThresholdM", node.soil.maskThresholdM},
+            {"maskFeatherM", node.soil.maskFeatherM},
+            {"largestDetailLevelM", node.soil.largestDetailLevelM},
+            {"backend", static_cast<int>(node.soil.backend)},
+        }},
+    };
+}
+
 nlohmann::json MakeNodeSettingsJson(const rock::Node& node, const AssetPathForJson& assetPathForJson)
 {
     nlohmann::json nodeJson;
@@ -377,6 +398,7 @@ nlohmann::json MakeNodeSettingsJson(const rock::Node& node, const AssetPathForJs
     nodeJson.update(MakeScatterSettingsJson(node));
     nodeJson.update(MakeSedimentSettingsJson(node));
     nodeJson.update(MakeSnowSettingsJson(node));
+    nodeJson.update(MakeSoilSettingsJson(node));
     nodeJson.update(MakeColorizeSettingsJson(node));
     nodeJson.update(MakePathSettingsJson(node));
     return nodeJson;
@@ -474,6 +496,7 @@ std::optional<rock::PreviewStage> ReadSerializedPreviewStage(const nlohmann::jso
     case rock::PreviewStage::Scatter:
     case rock::PreviewStage::Sediment:
     case rock::PreviewStage::Snow:
+    case rock::PreviewStage::Soil:
     case rock::PreviewStage::Colorize:
         return stage;
     default:
@@ -879,6 +902,35 @@ void ReadSnowSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     }
 }
 
+void ReadSoilSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
+{
+    const nlohmann::json nodeSoilJson = nodeJson.value("soil", nlohmann::json::object());
+
+    node.soil.emissionAmount = std::clamp(nodeSoilJson.value("emissionAmount", node.soil.emissionAmount), 0.0f, 100.0f);
+    node.soil.iterationCount = std::clamp(nodeSoilJson.value("iterationCount", node.soil.iterationCount), 1, 256);
+    node.soil.emissionTime = std::clamp(nodeSoilJson.value("emissionTime", node.soil.emissionTime), 0.0f, 1.0f);
+    node.soil.settlingPasses = std::clamp(nodeSoilJson.value("settlingPasses", node.soil.settlingPasses), 1, 16);
+    node.soil.motionSlopeLimitDeg = std::clamp(nodeSoilJson.value("motionSlopeLimitDeg", node.soil.motionSlopeLimitDeg), 0.0f, 89.9f);
+    node.soil.transportRate = std::clamp(nodeSoilJson.value("transportRate", node.soil.transportRate), 0.0f, 1.0f);
+    node.soil.slopeDependentEmission = std::clamp(nodeSoilJson.value("slopeDependentEmission", node.soil.slopeDependentEmission), 0.0f, 1.0f);
+    node.soil.surfaceSmoothing = std::clamp(nodeSoilJson.value("surfaceSmoothing", node.soil.surfaceSmoothing), 0.0f, 1.0f);
+    {
+        const int maskModeInt = std::clamp(nodeSoilJson.value("maskMode", static_cast<int>(node.soil.maskMode)),
+                                           static_cast<int>(rock::SoilMaskMode::Coverage),
+                                           static_cast<int>(rock::SoilMaskMode::Thickness));
+        node.soil.maskMode = static_cast<rock::SoilMaskMode>(maskModeInt);
+    }
+    node.soil.maskThresholdM = std::clamp(nodeSoilJson.value("maskThresholdM", node.soil.maskThresholdM), 0.0f, 1000.0f);
+    node.soil.maskFeatherM = std::clamp(nodeSoilJson.value("maskFeatherM", node.soil.maskFeatherM), 0.0f, 1000.0f);
+    node.soil.largestDetailLevelM = std::clamp(nodeSoilJson.value("largestDetailLevelM", node.soil.largestDetailLevelM), 1.0f, 1024.0f);
+    {
+        const int backendInt = std::clamp(nodeSoilJson.value("backend", static_cast<int>(node.soil.backend)),
+                                           static_cast<int>(rock::SoilBackend::CpuReference),
+                                           static_cast<int>(rock::SoilBackend::GpuCompute));
+        node.soil.backend = static_cast<rock::SoilBackend>(backendInt);
+    }
+}
+
 void ReadColorizeSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
 {
     const nlohmann::json colorizeJson = nodeJson.value("colorize", nlohmann::json::object());
@@ -985,6 +1037,7 @@ void ReadNodeSettingsJson(const nlohmann::json& nodeJson, rock::Node& node)
     ReadScatterSettingsJson(nodeJson, node);
     ReadSedimentSettingsJson(nodeJson, node);
     ReadSnowSettingsJson(nodeJson, node);
+    ReadSoilSettingsJson(nodeJson, node);
     ReadColorizeSettingsJson(nodeJson, node);
     ReadPathSettingsJson(nodeJson, node);
 }

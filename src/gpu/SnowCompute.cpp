@@ -57,9 +57,60 @@ struct SnowShaderConstants
     float maskFeatherM;
     float surfaceSmoothing;
     UINT smoothRadius;
-    UINT pad3;
+    float slopeDependentEmission;
 };
 static_assert(sizeof(SnowShaderConstants) == 12 * sizeof(UINT), "SnowShaderConstants must be 12 DWORDs");
+
+// Snow / Soil 共有の GPU 再配分パラメータ。両ノードの設定をここへ写して
+// 同じ compute pipeline を実行する。
+struct SettleGpuParams
+{
+    float emissionAmount = 0.0f;
+    int iterationCount = 1;
+    float emissionTime = 0.0f;
+    int settlingPasses = 1;
+    float motionSlopeLimitDeg = 35.0f;
+    float transportRate = 0.0f;
+    float surfaceSmoothing = 0.0f;
+    float maskThresholdM = 0.0f;
+    float maskFeatherM = 0.0f;
+    float largestDetailLevelM = 8.0f;
+    float slopeDependentEmission = 0.0f;
+};
+
+SettleGpuParams MakeSettleParams(const rock::SnowSettings& settings)
+{
+    SettleGpuParams params;
+    params.emissionAmount = settings.emissionAmount;
+    params.iterationCount = settings.iterationCount;
+    params.emissionTime = settings.emissionTime;
+    params.settlingPasses = settings.smoothingIterations;
+    params.motionSlopeLimitDeg = settings.motionSlopeLimitDeg;
+    params.transportRate = settings.transportRate;
+    params.surfaceSmoothing = settings.surfaceSmoothing;
+    params.maskThresholdM = settings.maskThresholdM;
+    params.maskFeatherM = settings.maskFeatherM;
+    params.largestDetailLevelM = settings.largestDetailLevelM;
+    params.slopeDependentEmission = 0.0f;
+    return params;
+}
+
+SettleGpuParams MakeSettleParams(const rock::SoilSettings& settings)
+{
+    SettleGpuParams params;
+    params.emissionAmount = settings.emissionAmount;
+    params.iterationCount = settings.iterationCount;
+    params.emissionTime = settings.emissionTime;
+    params.settlingPasses = settings.settlingPasses;
+    params.motionSlopeLimitDeg = settings.motionSlopeLimitDeg;
+    params.transportRate = settings.transportRate;
+    params.surfaceSmoothing = settings.surfaceSmoothing;
+    params.maskThresholdM = settings.maskThresholdM;
+    params.maskFeatherM = settings.maskFeatherM;
+    params.largestDetailLevelM = settings.largestDetailLevelM;
+    params.slopeDependentEmission = settings.slopeDependentEmission;
+    return params;
+}
 
 struct SnowGpuRequestResult
 {
@@ -71,7 +122,7 @@ struct SnowGpuRequestResult
 struct SnowGpuRequest
 {
     rock::HeightfieldGrid grid;
-    rock::SnowSettings settings;
+    SettleGpuParams params;
     std::promise<SnowGpuRequestResult> promise;
 };
 
@@ -186,7 +237,7 @@ bool EnsureSnowComputePipeline(std::string* error)
     return true;
 }
 
-bool RunSnowComputeImmediate(rock::HeightfieldGrid& grid, const rock::SnowSettings& settings, std::string* error)
+bool RunSnowComputeImmediate(rock::HeightfieldGrid& grid, const SettleGpuParams& settings, std::string* error)
 {
     std::lock_guard<std::mutex> lock(g_computeMutex);
     if (!EnsureSnowComputePipeline(error))
@@ -323,7 +374,7 @@ bool RunSnowComputeImmediate(rock::HeightfieldGrid& grid, const rock::SnowSettin
     const float largestDetailM = std::clamp(settings.largestDetailLevelM, cellSizeMeters, k.terrainSizeMeters * 0.5f);
     const int maxStride = std::clamp(static_cast<int>(std::round(largestDetailM / cellSizeMeters)), 1, 64);
     k.smoothRadius = static_cast<UINT>(std::clamp(maxStride, 1, 32));
-    k.pad3 = 0u;
+    k.slopeDependentEmission = std::clamp(settings.slopeDependentEmission, 0.0f, 1.0f);
     auto setConstants = [&]() {
         commandList->SetComputeRoot32BitConstants(0, 12, &k, 0);
     };
@@ -341,7 +392,7 @@ bool RunSnowComputeImmediate(rock::HeightfieldGrid& grid, const rock::SnowSettin
         ? 1
         : std::clamp(static_cast<int>(std::ceil(static_cast<float>(iterationCount) * emissionTime)), 1, iterationCount);
     const float emissionPerIteration = totalEmission / static_cast<float>(emissionIterations);
-    const int settlingPasses = std::clamp(settings.smoothingIterations, 1, 16);
+    const int settlingPasses = std::clamp(settings.settlingPasses, 1, 16);
     int strideLevels = 0;
     for (int stride = maxStride; stride > 1; stride = std::max(1, stride / 2))
     {
@@ -462,16 +513,18 @@ const std::string& SnowComputeStatus()
     return g_status;
 }
 
-bool RunSnowCompute(rock::HeightfieldGrid& grid, const rock::SnowSettings& settings, std::string* error)
+namespace
+{
+bool RunSettleCompute(rock::HeightfieldGrid& grid, const SettleGpuParams& params, std::string* error)
 {
     if (std::this_thread::get_id() == g_context.gpu.mainThreadId)
     {
-        return RunSnowComputeImmediate(grid, settings, error);
+        return RunSnowComputeImmediate(grid, params, error);
     }
 
     auto request = std::make_shared<SnowGpuRequest>();
     request->grid = grid;
-    request->settings = settings;
+    request->params = params;
     std::future<SnowGpuRequestResult> future = request->promise.get_future();
     {
         std::lock_guard<std::mutex> lock(g_requestMutex);
@@ -487,6 +540,17 @@ bool RunSnowCompute(rock::HeightfieldGrid& grid, const rock::SnowSettings& setti
     }
     grid = std::move(result.grid);
     return true;
+}
+} // namespace
+
+bool RunSnowCompute(rock::HeightfieldGrid& grid, const rock::SnowSettings& settings, std::string* error)
+{
+    return RunSettleCompute(grid, MakeSettleParams(settings), error);
+}
+
+bool RunSoilCompute(rock::HeightfieldGrid& grid, const rock::SoilSettings& settings, std::string* error)
+{
+    return RunSettleCompute(grid, MakeSettleParams(settings), error);
 }
 
 void ProcessPendingSnowGpuRequests()
@@ -506,7 +570,7 @@ void ProcessPendingSnowGpuRequests()
     {
         SnowGpuRequestResult result;
         result.grid = std::move(request->grid);
-        result.success = RunSnowComputeImmediate(result.grid, request->settings, &result.error);
+        result.success = RunSnowComputeImmediate(result.grid, request->params, &result.error);
         request->promise.set_value(std::move(result));
     }
 }

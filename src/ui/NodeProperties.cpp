@@ -311,6 +311,9 @@ void DrawNodePropertiesPanel(rock::NodeGraph& graph, rock::GraphId selectedNodeI
     case rock::NodeKind::Snow:
         DrawSnowProperties(*editableNode);
         return;
+    case rock::NodeKind::Soil:
+        DrawSoilProperties(*editableNode);
+        return;
     case rock::NodeKind::Colorize:
         DrawColorizeProperties(*editableNode);
         return;
@@ -1477,6 +1480,116 @@ bool DrawSnowProperties(rock::Node& editableNode)
         {
             detailIndex = std::clamp(detailIndex, 0, static_cast<int>(kSnowDetailLevels.size()) - 1);
             sn.largestDetailLevelM = kSnowDetailLevels[static_cast<size_t>(detailIndex)];
+            EvaluateGraph();
+        }
+    }
+
+    ImGui::EndTable();
+    return true;
+}
+
+bool DrawSoilProperties(rock::Node& editableNode)
+{
+    if (!ImGui::BeginTable("SoilRows", 2, ImGuiTableFlags_SizingStretchProp))
+    {
+        return false;
+    }
+
+    ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 210.0f);
+    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+    rock::SoilSettings& so = editableNode.soil;
+    so.emissionAmount = std::clamp(so.emissionAmount, 0.0f, 100.0f);
+    so.iterationCount = std::clamp(so.iterationCount, 1, 256);
+    so.emissionTime = std::clamp(so.emissionTime, 0.0f, 1.0f);
+    so.settlingPasses = std::clamp(so.settlingPasses, 1, 16);
+    so.motionSlopeLimitDeg = std::clamp(so.motionSlopeLimitDeg, 0.0f, 89.9f);
+    so.transportRate = std::clamp(so.transportRate, 0.0f, 1.0f);
+    so.slopeDependentEmission = std::clamp(so.slopeDependentEmission, 0.0f, 1.0f);
+    so.surfaceSmoothing = std::clamp(so.surfaceSmoothing, 0.0f, 1.0f);
+    so.maskThresholdM = std::clamp(so.maskThresholdM, 0.0f, 1000.0f);
+    so.maskFeatherM = std::clamp(so.maskFeatherM, 0.0f, 1000.0f);
+    so.largestDetailLevelM = std::clamp(so.largestDetailLevelM, 1.0f, 1024.0f);
+
+    {
+        int backendInt = static_cast<int>(so.backend);
+        if (DrawPropertyComboRow("Backend", "SoilBackend", &backendInt, "CPU\0GPU\0\0", Tr("Execution backend. GPU runs the shared Snow/Soil redistribution compute shader and falls back to the CPU path on failure.", "実行バックエンドです。GPU は Snow と共有の再配分 compute shader を実行し、失敗時は CPU 経路へフォールバックします。"), static_cast<int>(rock::SoilSettings{}.backend)))
+        {
+            so.backend = static_cast<rock::SoilBackend>(std::clamp(backendInt,
+                static_cast<int>(rock::SoilBackend::CpuReference),
+                static_cast<int>(rock::SoilBackend::GpuCompute)));
+            EvaluateGraph();
+        }
+    }
+    if (DrawPropertyFloatRow("Emission Amount (m)", "SoilEmissionAmount", &so.emissionAmount, 0.0f, 50.0f, rock::SoilSettings{}.emissionAmount, "Soil emission amount changed", true, Tr("Soil thickness injected on flat ground in meters. Steeper cells receive less when Slope-Dependent Emission is above 0.", "平地に注入する表土の厚み (m) です。Slope-Dependent Emission が 0 より大きい場合、急な斜面ほど注入量が減ります。"), "%.2f"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyIntRow("Iterations Count", "SoilIterations", &so.iterationCount, 1, 256, rock::SoilSettings{}.iterationCount, "Soil iterations changed", true, Tr("How many steps are used to accumulate and stabilize soil. Larger values settle the cover more gradually.", "表土を何ステップで積もらせて安定化するかです。大きいほど少しずつ落ち着きます。")))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyPercentRow("Emission Time (%)", "SoilEmissionTime", &so.emissionTime, 0.0f, 1.0f, rock::SoilSettings{}.emissionTime, "Soil emission time changed", Tr("How far into Iterations Count soil keeps being added. 0% places all soil at the start before stabilizing; 100% keeps adding it gradually until the end.", "Iterations Count のうち、どの割合まで表土を追加し続けるかです。0% は最初に全量を置いてから安定化し、100% は最後まで少しずつ追加します。")))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyFloatRow("Soil Motion Slope Limit (deg)", "SoilMotionSlopeLimit", &so.motionSlopeLimitDeg, 0.0f, 89.9f, rock::SoilSettings{}.motionSlopeLimitDeg, "Soil motion slope limit changed", true, Tr("Angle of repose. Soil does not move on surfaces at or below this angle; on steeper surfaces it slides to lower neighboring cells, exposing bedrock on cliffs.", "安息角です。この角度以下の面では表土が動かず、これより急な面では低い隣接セルへ滑り、崖では岩盤が露出します。"), "%.1f"))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyPercentRow("Slope-Dependent Emission (%)", "SoilSlopeDependentEmission", &so.slopeDependentEmission, 0.0f, 1.0f, rock::SoilSettings{}.slopeDependentEmission, "Soil slope-dependent emission changed", Tr("Scales injection by the base-terrain slope. 0% injects uniformly like Snow; 100% injects nothing at or above the Soil Motion Slope Limit, so ridges and cliffs expose bedrock faster.", "基盤地形の傾斜に応じて注入量を減らします。0% は Snow と同じ一様注入、100% は Soil Motion Slope Limit 以上の斜面へ注入しなくなり、尾根・崖の岩盤露出が早く出ます。")))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyPercentRow("Transport Rate (%)", "SoilTransportRate", &so.transportRate, 0.0f, 1.0f, rock::SoilSettings{}.transportRate, "Soil transport rate changed", Tr("Fraction of unstable soil moved downward per settling pass. Higher values strip steep slopes faster.", "不安定な表土のうち、1 回の安定化パスで下へ動かす割合です。高いほど急斜面から表土が早く剥がれます。")))
+    {
+        EvaluateGraph();
+    }
+    if (DrawPropertyPercentRow("Soil Surface Smoothing (%)", "SoilSurfaceSmoothing", &so.surfaceSmoothing, 0.0f, 1.0f, rock::SoilSettings{}.surfaceSmoothing, "Soil surface smoothing changed", Tr("Strength for smoothing only the settled soil surface. The radius uses Largest Detail Level (m).", "積もった表土面だけをならす強さです。半径は Largest Detail Level (m) を使います。")))
+    {
+        EvaluateGraph();
+    }
+    {
+        int maskModeInt = static_cast<int>(so.maskMode);
+        if (DrawPropertyComboRow("Mask Mode", "SoilMaskMode", &maskModeInt, "Coverage\0Thickness\0\0", Tr("Coverage outputs a mostly black/white mask via Mask Threshold / Feather (like Snow). Thickness outputs the soil depth normalized by its maximum (like Sediment), for grading by accumulation.", "Coverage は Mask Threshold / Feather でほぼ白黒のマスクを出します (Snow と同じ)。Thickness は表土の厚みを最大値で正規化して出します (Sediment と同じ) — 堆積量でグラデーションを付けたいときに使います。"), static_cast<int>(rock::SoilSettings{}.maskMode)))
+        {
+            so.maskMode = static_cast<rock::SoilMaskMode>(std::clamp(maskModeInt,
+                static_cast<int>(rock::SoilMaskMode::Coverage),
+                static_cast<int>(rock::SoilMaskMode::Thickness)));
+            EvaluateGraph();
+        }
+    }
+    if (so.maskMode == rock::SoilMaskMode::Coverage)
+    {
+        if (DrawPropertyFloatRow("Mask Threshold (m)", "SoilMaskThreshold", &so.maskThresholdM, 0.0f, 1.0f, rock::SoilSettings{}.maskThresholdM, "Soil mask threshold changed", true, Tr("Soil at or above this thickness approaches white in the coverage mask.", "この厚み以上を被覆域として白に近づけます。"), "%.3f", 0, 0.0f, 1000.0f))
+        {
+            EvaluateGraph();
+        }
+        if (DrawPropertyFloatRow("Mask Feather (m)", "SoilMaskFeather", &so.maskFeatherM, 0.0f, 0.5f, rock::SoilSettings{}.maskFeatherM, "Soil mask feather changed", true, Tr("Width that leaves only the soil boundary slightly gray. 0 creates an almost binary mask.", "被覆境界だけを少しグレーにする幅です。0 にするとほぼ二値のマスクになります。"), "%.3f", 0, 0.0f, 1000.0f))
+        {
+            EvaluateGraph();
+        }
+    }
+    if (DrawPropertyIntRow("Settling Passes", "SoilSettlingPasses", &so.settlingPasses, 1, 16, rock::SoilSettings{}.settlingPasses, "Soil settling passes changed", true, Tr("Number of times soil is redistributed toward lower places within each simulation step.", "各 simulation step の中で表土を低い場所へ再配分する回数です。")))
+    {
+        EvaluateGraph();
+    }
+    {
+        constexpr std::array<float, 8> kSoilDetailLevels = {4.0f, 8.0f, 16.0f, 32.0f, 64.0f, 128.0f, 256.0f, 512.0f};
+        int detailIndex = 1;
+        float bestDistance = FLT_MAX;
+        for (int i = 0; i < static_cast<int>(kSoilDetailLevels.size()); ++i)
+        {
+            const float distance = std::abs(so.largestDetailLevelM - kSoilDetailLevels[static_cast<size_t>(i)]);
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                detailIndex = i;
+            }
+        }
+        if (DrawPropertyComboRow("Largest Detail Level (m)", "SoilLargestDetailLevel", &detailIndex, "4 m\0" "8 m\0" "16 m\0" "32 m\0" "64 m\0" "128 m\0" "256 m\0" "512 m\0" "\0", Tr("Maximum meter scale used when soil searches for a lower resting place. 4 m tracks narrow gaps; 512 m settles broad slopes quickly.", "表土が移動先を探す最大スケールをメートル単位で選びます。4m は細い隙間まで追いやすく、512m は広い斜面を素早く落ち着かせます。"), 1))
+        {
+            detailIndex = std::clamp(detailIndex, 0, static_cast<int>(kSoilDetailLevels.size()) - 1);
+            so.largestDetailLevelM = kSoilDetailLevels[static_cast<size_t>(detailIndex)];
             EvaluateGraph();
         }
     }

@@ -12,6 +12,7 @@
 #include "evaluation/Sediment.h"
 #include "evaluation/ShapeSource.h"
 #include "evaluation/Snow.h"
+#include "evaluation/Soil.h"
 
 #include <algorithm>
 #include <cmath>
@@ -100,6 +101,12 @@ constexpr std::array<PinDefinition, 3> kSnowPins = {{
     {PinKind::Output, ValueType::Mask, "Snow"},
 }};
 
+constexpr std::array<PinDefinition, 3> kSoilPins = {{
+    {PinKind::Input, ValueType::HeightField, "Heightmap"},
+    {PinKind::Output, ValueType::HeightField, "Heightmap"},
+    {PinKind::Output, ValueType::Mask, "Soil"},
+}};
+
 constexpr std::array<PinDefinition, 1> kMaskSourcePins = {{
     {PinKind::Output, ValueType::Mask, "Mask"},
 }};
@@ -127,7 +134,7 @@ constexpr std::array<PinDefinition, 1> kPathPins = {{
     {PinKind::Output, ValueType::Path, "Path"},
 }};
 
-constexpr std::array<NodeDefinition, 23> kNodeDefinitions = {{
+constexpr std::array<NodeDefinition, 24> kNodeDefinitions = {{
     {NodeKind::HeightmapLoad, "Import Heightmap", NodeCategory::Heightfield, PreviewStage::Graph, false, false, kHeightSourcePins},
     {NodeKind::HeightmapBlur, "Heightmap Blur", NodeCategory::Heightfield, PreviewStage::HeightmapBlur, false, false, kHeightFilterPins},
     {NodeKind::Shape, "Shape", NodeCategory::Heightfield, PreviewStage::Shape, false, false, kHeightSourcePins},
@@ -140,6 +147,7 @@ constexpr std::array<NodeDefinition, 23> kNodeDefinitions = {{
     {NodeKind::Rock, "Rock", NodeCategory::Heightfield, PreviewStage::Rock, false, false, kHeightMaskUniquePins},
     {NodeKind::Sediment, "Sediment", NodeCategory::Heightfield, PreviewStage::Sediment, false, false, kSedimentPins},
     {NodeKind::Snow, "Snow", NodeCategory::Heightfield, PreviewStage::Snow, false, false, kSnowPins},
+    {NodeKind::Soil, "Soil", NodeCategory::Heightfield, PreviewStage::Soil, false, false, kSoilPins},
     {NodeKind::Colorize, "Colorize", NodeCategory::Color, PreviewStage::Colorize, false, true, kColorizePins},
     {NodeKind::MaskCurvature, "Mask Curvature", NodeCategory::Mask, PreviewStage::MaskCurvature, false, false, kHeightToMaskPins},
     {NodeKind::MaskLevels, "Mask Levels", NodeCategory::Mask, PreviewStage::MaskLevels, true, false, kMaskFilterPins},
@@ -486,6 +494,26 @@ uint64_t HashSnowSettings(const SnowSettings& settings, int resolution)
     HashCombine(hash, HashFloat(settings.motionSlopeLimitDeg));
     HashCombine(hash, HashFloat(settings.transportRate));
     HashCombine(hash, HashFloat(settings.surfaceSmoothing));
+    HashCombine(hash, HashFloat(settings.maskThresholdM));
+    HashCombine(hash, HashFloat(settings.maskFeatherM));
+    HashCombine(hash, HashFloat(settings.largestDetailLevelM));
+    HashCombine(hash, static_cast<uint64_t>(settings.backend));
+    HashCombine(hash, static_cast<uint64_t>(resolution));
+    return hash;
+}
+
+uint64_t HashSoilSettings(const SoilSettings& settings, int resolution)
+{
+    uint64_t hash = 10650232656628343401ull;
+    HashCombine(hash, HashFloat(settings.emissionAmount));
+    HashCombine(hash, static_cast<uint64_t>(settings.iterationCount));
+    HashCombine(hash, HashFloat(settings.emissionTime));
+    HashCombine(hash, static_cast<uint64_t>(settings.settlingPasses));
+    HashCombine(hash, HashFloat(settings.motionSlopeLimitDeg));
+    HashCombine(hash, HashFloat(settings.transportRate));
+    HashCombine(hash, HashFloat(settings.slopeDependentEmission));
+    HashCombine(hash, HashFloat(settings.surfaceSmoothing));
+    HashCombine(hash, static_cast<uint64_t>(settings.maskMode));
     HashCombine(hash, HashFloat(settings.maskThresholdM));
     HashCombine(hash, HashFloat(settings.maskFeatherM));
     HashCombine(hash, HashFloat(settings.largestDetailLevelM));
@@ -2349,6 +2377,9 @@ void ApplyHeightfieldOperation(HeightfieldGrid& grid, const HeightfieldPipeline:
     case HeightfieldPipeline::HeightfieldOperation::Kind::Snow:
         ApplySnow(grid, operation.snow);
         break;
+    case HeightfieldPipeline::HeightfieldOperation::Kind::Soil:
+        ApplySoil(grid, operation.soil);
+        break;
     }
 }
 
@@ -2382,6 +2413,8 @@ uint64_t HashHeightfieldOperation(const HeightfieldPipeline::HeightfieldOperatio
         return HashSedimentSettings(operation.sediment, resolution);
     case HeightfieldPipeline::HeightfieldOperation::Kind::Snow:
         return HashSnowSettings(operation.snow, resolution);
+    case HeightfieldPipeline::HeightfieldOperation::Kind::Soil:
+        return HashSoilSettings(operation.soil, resolution);
     }
     return 0;
 }
@@ -2444,6 +2477,10 @@ HeightfieldPipeline::HeightfieldOperation MakeHeightfieldOperation(const Node& n
         operation.kind = HeightfieldPipeline::HeightfieldOperation::Kind::Snow;
         operation.snow = node.snow;
         break;
+    case NodeKind::Soil:
+        operation.kind = HeightfieldPipeline::HeightfieldOperation::Kind::Soil;
+        operation.soil = node.soil;
+        break;
     default:
         operation.nodeId = 0;
         break;
@@ -2468,6 +2505,7 @@ bool IsHeightfieldOperationNode(NodeKind kind)
     case NodeKind::Scatter:
     case NodeKind::Sediment:
     case NodeKind::Snow:
+    case NodeKind::Soil:
         return true;
     default:
         return false;
@@ -2604,7 +2642,7 @@ HeightfieldGrid NodeGraph::EvaluateHeightPipelineCached(const HeightfieldPipelin
                         kind == NodeKind::Scatter ||
                         kind == NodeKind::Crumbling ||
                         kind == NodeKind::Sediment ||
-                        kind == NodeKind::Snow ||
+                        kind == NodeKind::Snow || kind == NodeKind::Soil ||
                         kind == NodeKind::MultiScaleErosion ||
                         kind == NodeKind::FluvialErosion ||
                         kind == NodeKind::DropletErosion;
@@ -3108,8 +3146,11 @@ HeightfieldPipeline NodeGraph::PipelineFor(PreviewStage stage) const
         return PipelineTo(NodeKind::Sediment);
     case PreviewStage::Snow:
         return PipelineTo(NodeKind::Snow);
+    case PreviewStage::Soil:
+        return PipelineTo(NodeKind::Soil);
     case PreviewStage::Graph:
     default:
+        if (const Node* node = FindFirstNode(NodeKind::Soil)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::Snow)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::Sediment)) { return PipelineToNode(*node); }
         if (const Node* node = FindFirstNode(NodeKind::Crumbling)) { return PipelineToNode(*node); }
@@ -3262,7 +3303,7 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
         node.kind == NodeKind::Rock ||
         node.kind == NodeKind::Scatter ||
         node.kind == NodeKind::Sediment ||
-        node.kind == NodeKind::Snow ||
+        node.kind == NodeKind::Snow || node.kind == NodeKind::Soil ||
         node.kind == NodeKind::MultiScaleErosion ||
         node.kind == NodeKind::FluvialErosion ||
         node.kind == NodeKind::DropletErosion)
@@ -3352,7 +3393,7 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
                 kind == NodeKind::Rock ||
                 kind == NodeKind::Scatter ||
                 kind == NodeKind::Sediment ||
-                kind == NodeKind::Snow ||
+                kind == NodeKind::Snow || kind == NodeKind::Soil ||
                 kind == NodeKind::MultiScaleErosion ||
                 kind == NodeKind::FluvialErosion ||
                 kind == NodeKind::DropletErosion;
@@ -3418,7 +3459,7 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
                     kind == NodeKind::Rock ||
                     kind == NodeKind::Scatter ||
                     kind == NodeKind::Sediment ||
-                    kind == NodeKind::Snow ||
+                    kind == NodeKind::Snow || kind == NodeKind::Soil ||
                     kind == NodeKind::MultiScaleErosion ||
                     kind == NodeKind::FluvialErosion ||
                     kind == NodeKind::DropletErosion;
@@ -3462,7 +3503,7 @@ MaskGrid NodeGraph::EvaluateMaskGridForNodeCached(const Node& node, int depth, u
                     kind == NodeKind::Rock ||
                     kind == NodeKind::Scatter ||
                     kind == NodeKind::Sediment ||
-                    kind == NodeKind::Snow ||
+                    kind == NodeKind::Snow || kind == NodeKind::Soil ||
                     kind == NodeKind::MultiScaleErosion ||
                     kind == NodeKind::FluvialErosion ||
                     kind == NodeKind::DropletErosion;
@@ -4034,6 +4075,8 @@ std::string_view ToString(PreviewStage stage)
         return "Sediment";
     case PreviewStage::Snow:
         return "Snow";
+    case PreviewStage::Soil:
+        return "Soil";
     case PreviewStage::Colorize:
         return "Colorize";
     default:

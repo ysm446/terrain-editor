@@ -65,6 +65,7 @@ bool DrawScatterProperties(rock::Node& editableNode);
 bool DrawCrumblingProperties(rock::Node& editableNode);
 bool DrawSedimentProperties(rock::Node& editableNode);
 bool DrawSnowProperties(rock::Node& editableNode);
+bool DrawSoilProperties(rock::Node& editableNode);
 bool DrawColorizeProperties(rock::Node& editableNode);
 bool DrawPathProperties(rock::Node& editableNode);
 } // namespace terrain::ui

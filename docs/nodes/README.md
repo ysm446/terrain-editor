@@ -17,6 +17,7 @@ Terrain Editor のノード関連ドキュメントをまとめるフォルダ�
 | Scatter | [scatter_node.md](heightfield/scatter/scatter_node.md) | - |
 | Sediment | [sediment_node.md](heightfield/sediment/sediment_node.md) | [アルゴリズム入門](heightfield/sediment/sediment_algorithm_guide.md) |
 | Snow | [snow_node.md](heightfield/snow/snow_node.md) | [アルゴリズム入門](heightfield/snow/snow_algorithm_guide.md) |
+| Soil | [soil_node.md](heightfield/soil/soil_node.md) | [アルゴリズム入門 (Snow と共通)](heightfield/snow/snow_algorithm_guide.md) |
 
 ## Mask 系ノード
 

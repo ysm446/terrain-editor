@@ -39,6 +39,7 @@ enum class NodeKind
     MaskBlur = 25,
     FluvialErosion = 26,
     DropletErosion = 27,
+    Soil = 28,
 };
 
 enum class PinKind
@@ -128,6 +129,20 @@ enum class SnowBackend
 {
     CpuReference,
     GpuCompute,
+};
+
+enum class SoilBackend
+{
+    CpuReference,
+    GpuCompute,
+};
+
+enum class SoilMaskMode
+{
+    // 被覆マスク: Mask Threshold / Feather でほぼ白黒 + 境界グレー。
+    Coverage,
+    // 厚み分布マスク: 堆積厚を max で 0..1 正規化 (Sediment の Mask と同じ意味論)。
+    Thickness,
 };
 
 enum class MaskNoiseBackend
@@ -260,6 +275,7 @@ enum class PreviewStage
     MaskBlur = 23,
     FluvialErosion = 24,
     DropletErosion = 25,
+    Soil = 26,
 };
 
 enum class NodeCategory
@@ -522,6 +538,27 @@ struct SnowSettings
     SnowBackend backend = SnowBackend::GpuCompute;
 };
 
+// Heightfield -> heightfield + mask. 被覆型の表土ノード。Snow と同じ
+// 「注入 -> 安息角超過分の再配分 -> 表面平滑化」コアを土向け既定値で使い、
+// 緩斜面・上面に土をかぶせて急斜面・崖では岩盤を露出させる。
+// Sediment (谷埋め型) とは役割を分ける (docs/nodes/node_candidates.md の設計メモ参照)。
+struct SoilSettings
+{
+    float emissionAmount = 1.0f;         // m. Total soil depth injected onto flat ground.
+    int iterationCount = 40;             // Number of simulation steps.
+    float emissionTime = 0.0f;           // 0 = all soil up front, 1 = soil during the whole run.
+    int settlingPasses = 4;              // Settling passes per simulation step.
+    float motionSlopeLimitDeg = 32.0f;   // Soil does not flow below this angle (angle of repose).
+    float transportRate = 0.45f;         // Fraction of unstable soil moved per settling pass.
+    float slopeDependentEmission = 0.5f; // 0..1. 0 = uniform injection; 1 = no injection at/above the slope limit.
+    float surfaceSmoothing = 0.1f;       // 0..1. Smooths settled soil surfaces (radius = Largest Detail Level).
+    SoilMaskMode maskMode = SoilMaskMode::Coverage;
+    float maskThresholdM = 0.05f;        // Coverage: soil thickness where the mask turns white.
+    float maskFeatherM = 0.05f;          // Coverage: width of the grey transition band around the soil edge.
+    float largestDetailLevelM = 8.0f;    // m. Controls the widest transport stride.
+    SoilBackend backend = SoilBackend::GpuCompute;
+};
+
 struct ColorStop
 {
     float position = 0.0f;
@@ -761,6 +798,7 @@ struct Node
     ScatterSettings scatter;
     SedimentSettings sediment;
     SnowSettings snow;
+    SoilSettings soil;
     ColorizeSettings colorize;
     PathSettings path;
 };
@@ -970,6 +1008,7 @@ using MaskFluvialGpuEvaluator = bool (*)(HeightfieldGrid& grid, const MaskFluvia
 using FluvialErosionGpuEvaluator = bool (*)(HeightfieldGrid& grid, const FluvialErosionSettings& settings, std::string* error);
 using DropletErosionGpuEvaluator = bool (*)(HeightfieldGrid& grid, const DropletErosionSettings& settings, std::string* error);
 using SnowGpuEvaluator = bool (*)(HeightfieldGrid& grid, const SnowSettings& settings, std::string* error);
+using SoilGpuEvaluator = bool (*)(HeightfieldGrid& grid, const SoilSettings& settings, std::string* error);
 using ColorizeGpuEvaluator = bool (*)(ColorGrid& grid, const ColorizeSettings& settings, const MaskGrid& gradientMask, const MaskGrid* mask, const ColorGrid* baseColor, std::string* error);
 using MaskPathGpuEvaluator = bool (*)(MaskGrid& grid, const PathSettings& path, const MaskPathSettings& settings, float terrainSizeMeters, std::string* error);
 using MaskBlurGpuEvaluator = bool (*)(MaskGrid& grid, const MaskBlurSettings& settings, float terrainSizeMeters, std::string* error);
@@ -995,6 +1034,7 @@ struct HeightfieldPipeline
             Scatter,
             Sediment,
             Snow,
+            Soil,
         };
 
         Kind kind = Kind::HeightmapBlur;
@@ -1012,6 +1052,7 @@ struct HeightfieldPipeline
         ScatterSettings scatter;
         SedimentSettings sediment;
         SnowSettings snow;
+        SoilSettings soil;
     };
 
     bool hasSource = false;
@@ -1178,6 +1219,7 @@ void SetMaskFluvialGpuEvaluator(MaskFluvialGpuEvaluator evaluator);
 void SetFluvialErosionGpuEvaluator(FluvialErosionGpuEvaluator evaluator);
 void SetDropletErosionGpuEvaluator(DropletErosionGpuEvaluator evaluator);
 void SetSnowGpuEvaluator(SnowGpuEvaluator evaluator);
+void SetSoilGpuEvaluator(SoilGpuEvaluator evaluator);
 void SetColorizeGpuEvaluator(ColorizeGpuEvaluator evaluator);
 void SetMaskPathGpuEvaluator(MaskPathGpuEvaluator evaluator);
 void SetMaskBlurGpuEvaluator(MaskBlurGpuEvaluator evaluator);

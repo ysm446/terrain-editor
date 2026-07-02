@@ -128,6 +128,7 @@ using terrain::gpu::RunScatterCompute;
 using terrain::gpu::ScatterComputeStatus;
 using terrain::gpu::ProcessPendingSnowGpuRequests;
 using terrain::gpu::RunSnowCompute;
+using terrain::gpu::RunSoilCompute;
 using terrain::gpu::SnowComputeStatus;
 using terrain::rendering::GpuMeshPreview;
 using terrain::rendering::EnsureMeshPreviewDisplacementPipeline;
@@ -1891,6 +1892,7 @@ void ApplyEnvironmentBackendDefault(rock::Node& node)
         node.scatter.backend = rock::ScatterBackend::GpuCompute;
         node.sediment.backend = rock::SedimentBackend::GpuCompute;
         node.snow.backend = rock::SnowBackend::GpuCompute;
+        node.soil.backend = rock::SoilBackend::GpuCompute;
         node.colorize.backend = rock::ColorizeBackend::GpuCompute;
         return;
     }
@@ -1905,6 +1907,7 @@ void ApplyEnvironmentBackendDefault(rock::Node& node)
     node.scatter.backend = rock::ScatterBackend::CpuReference;
     node.sediment.backend = rock::SedimentBackend::CpuReference;
     node.snow.backend = rock::SnowBackend::CpuReference;
+    node.soil.backend = rock::SoilBackend::CpuReference;
     node.colorize.backend = rock::ColorizeBackend::CpuParallel;
 }
 
@@ -4876,6 +4879,7 @@ bool IsTerrainNodeKind(rock::NodeKind kind)
         kind == rock::NodeKind::Scatter ||
         kind == rock::NodeKind::Sediment ||
         kind == rock::NodeKind::Snow ||
+        kind == rock::NodeKind::Soil ||
         kind == rock::NodeKind::Colorize;
 }
 
@@ -9980,6 +9984,8 @@ ImVec2 InitialNodePosition(rock::NodeKind kind)
         return ImVec2(880.0f, 520.0f);
     case rock::NodeKind::Snow:
         return ImVec2(880.0f, 660.0f);
+    case rock::NodeKind::Soil:
+        return ImVec2(880.0f, 730.0f);
     case rock::NodeKind::Colorize:
         return ImVec2(1160.0f, 380.0f);
     case rock::NodeKind::Path:
@@ -10708,6 +10714,7 @@ void DrawNodeGraph()
             addNodeMenuItem(rock::NodeKind::Scatter);
             addNodeMenuItem(rock::NodeKind::Sediment);
             addNodeMenuItem(rock::NodeKind::Snow);
+            addNodeMenuItem(rock::NodeKind::Soil);
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu(Tr("Mask", "マスク")))
@@ -12557,6 +12564,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         rock::SetFluvialErosionGpuEvaluator(RunFluvialErosionCompute);
         rock::SetDropletErosionGpuEvaluator(RunDropletErosionCompute);
         rock::SetSnowGpuEvaluator(RunSnowCompute);
+        rock::SetSoilGpuEvaluator(RunSoilCompute);
         rock::SetColorizeGpuEvaluator(RunColorizeCompute);
         rock::SetAssetPathResolver(ResolveProjectAssetPath);
         SetPropertyWidgetCallbacks({
@@ -12732,6 +12740,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         rock::SetMaskFluvialGpuEvaluator(nullptr);
         rock::SetFluvialErosionGpuEvaluator(nullptr);
         rock::SetSnowGpuEvaluator(nullptr);
+        rock::SetSoilGpuEvaluator(nullptr);
         rock::SetColorizeGpuEvaluator(nullptr);
         rock::SetAssetPathResolver(nullptr);
         SetPropertyWidgetCallbacks({});

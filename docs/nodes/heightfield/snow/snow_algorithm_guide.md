@@ -2,6 +2,8 @@
 
 `Snow` ノードは、雪を単なる slope mask として作るのではなく、雪厚を持つ素材として地形上に注入し、斜面に沿って再配分する簡易モデルです。
 
+この再配分コアは `src/evaluation/GranularSettle.cpp` (GPU は `shaders/snow_compute.hlsl`) として共有化されており、被覆型の表土ノード [`Soil`](../soil/soil_node.md) も同じコアを土向け既定値 + 傾斜依存注入 (Slope-Dependent Emission) で使います。
+
 ## 基本方針
 
 - `Emission Amount (m)` は地形へ注入される雪の総量です。

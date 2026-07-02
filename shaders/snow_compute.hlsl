@@ -1,9 +1,12 @@
-// Snow compute shader.
+// Snow / Soil compute shader.
 //
-// GPU implementation of the Snow transport model. Each settling pass is a
-// gather step: a cell subtracts its own outgoing snow and adds snow from source
-// neighbours that selected this cell as their steepest lower target. This
-// avoids unordered float atomics when multiple cells flow into the same cell.
+// GPU implementation of the shared granular transport model (Snow and Soil
+// nodes). Each settling pass is a gather step: a cell subtracts its own
+// outgoing material and adds material from source neighbours that selected
+// this cell as their steepest lower target. This avoids unordered float
+// atomics when multiple cells flow into the same cell.
+// slopeDependentEmission > 0 (Soil) scales the injection by the base-terrain
+// slope so ridges and cliffs receive less material.
 
 cbuffer SnowConstants : register(b0)
 {
@@ -20,7 +23,7 @@ cbuffer SnowConstants : register(b0)
     float maskFeatherM;
     float surfaceSmoothing;
     uint  smoothRadius;
-    uint  pad3;
+    float slopeDependentEmission; // 0 = uniform injection (Snow), 0..1 = slope-scaled (Soil)
 };
 
 RWStructuredBuffer<float> InputHeights : register(u0);
@@ -128,6 +131,28 @@ void CSCopyInputHeights(uint3 dt : SV_DispatchThreadID)
     SurfA[i] = 0.0f;
 }
 
+// 基盤傾斜が安息角に近いほど注入を減らすスケール。CPU 実装
+// (GranularSettle.cpp) と同じ、クランプ付き中心差分の式を使う。
+float EmissionScale(uint x, uint z)
+{
+    if (slopeDependentEmission <= 0.0f)
+    {
+        return 1.0f;
+    }
+    float cellSize = max(terrainSizeMeters, 1.0f) / max(1.0f, (float)resolution - 1.0f);
+    int xm = max((int)x - 1, 0);
+    int xp = min((int)x + 1, (int)resolution - 1);
+    int zm = max((int)z - 1, 0);
+    int zp = min((int)z + 1, (int)resolution - 1);
+    float dx = (BaseHeights[CellIndex((uint)xp, z)] - BaseHeights[CellIndex((uint)xm, z)]) /
+        (cellSize * (float)(xp - xm));
+    float dz = (BaseHeights[CellIndex(x, (uint)zp)] - BaseHeights[CellIndex(x, (uint)zm)]) /
+        (cellSize * (float)(zp - zm));
+    float slopeTan = sqrt(dx * dx + dz * dz);
+    float flatFactor = max(0.0f, 1.0f - slopeTan / max(motionLimitTan, 1e-4f));
+    return lerp(1.0f, flatFactor, saturate(slopeDependentEmission));
+}
+
 [numthreads(8, 8, 1)]
 void CSComputeThickness(uint3 dt : SV_DispatchThreadID)
 {
@@ -142,7 +167,7 @@ void CSComputeThickness(uint3 dt : SV_DispatchThreadID)
         return;
     }
 
-    Thickness[i] += max(0.0f, emissionAmount);
+    Thickness[i] += max(0.0f, emissionAmount) * EmissionScale(x, z);
 }
 
 [numthreads(8, 8, 1)]
