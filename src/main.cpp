@@ -303,6 +303,41 @@ void RefreshProjectStatus()
     }
 }
 
+// 画面右下に積み上げて表示する通知トースト。
+// クリックすると revealPath を Explorer で開き、一定時間でフェードアウトして消える。
+struct ToastNotification
+{
+    std::string title;
+    std::string detail;
+    std::filesystem::path revealPath;
+    std::chrono::steady_clock::time_point expiresAt{};
+};
+
+std::vector<ToastNotification> g_toasts;
+
+// F12 が押されたフレームに立ち、RenderFrame でバックバッファを読み戻したら下ろす。
+bool g_screenshotRequested = false;
+
+void PushToast(std::string title,
+               std::string detail,
+               std::filesystem::path revealPath,
+               std::chrono::milliseconds duration = std::chrono::seconds(6))
+{
+    constexpr size_t kMaxToasts = 4;
+    ToastNotification toast;
+    toast.title = std::move(title);
+    toast.detail = std::move(detail);
+    toast.revealPath = std::move(revealPath);
+    toast.expiresAt = std::chrono::steady_clock::now() + duration;
+    g_toasts.push_back(std::move(toast));
+    if (g_toasts.size() > kMaxToasts)
+    {
+        g_toasts.erase(
+            g_toasts.begin(),
+            g_toasts.begin() + static_cast<std::ptrdiff_t>(g_toasts.size() - kMaxToasts));
+    }
+}
+
 struct AsyncEvaluationResult
 {
     uint64_t requestId = 0;
@@ -1584,35 +1619,55 @@ void SetUiLanguage(UiLanguage language)
     SaveAppSettingsSilently();
 }
 
+// クライアント領域 (= 描画されるコンテンツ、スクリーンショットの解像度) を
+// 指定サイズちょうどに合わせる。ウィンドウ枠とタイトルバーの分は外側へ広げる。
+void SetWindowClientSize(UINT clientWidth, UINT clientHeight)
+{
+    if (!g_hwnd)
+    {
+        return;
+    }
+
+    ShowWindow(g_hwnd, SW_RESTORE);
+    RECT rect{0, 0, static_cast<LONG>(clientWidth), static_cast<LONG>(clientHeight)};
+    AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
+    SetWindowPos(
+        g_hwnd,
+        nullptr,
+        0,
+        0,
+        rect.right - rect.left,
+        rect.bottom - rect.top,
+        SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
 void ResetLayoutToDefaults()
 {
     g_ui.rightPaneWidth = 0.0f;
     g_ui.nodePaneHeight = 0.0f;
     g_ui.debugLogHeight = kDefaultDebugLogHeight;
 
-    if (g_hwnd)
-    {
-        ShowWindow(g_hwnd, SW_RESTORE);
-        RECT rect{
-            0,
-            0,
-            static_cast<LONG>(kDefaultWindowClientWidth),
-            static_cast<LONG>(kDefaultWindowClientHeight),
-        };
-        AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
-        SetWindowPos(
-            g_hwnd,
-            nullptr,
-            0,
-            0,
-            rect.right - rect.left,
-            rect.bottom - rect.top,
-            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
-    }
+    SetWindowClientSize(kDefaultWindowClientWidth, kDefaultWindowClientHeight);
     g_width = kDefaultWindowClientWidth;
     g_height = kDefaultWindowClientHeight;
     SaveAppSettingsSilently();
 }
+
+// スクリーンショット用のクライアントサイズプリセット。
+struct WindowSizePreset
+{
+    UINT width;
+    UINT height;
+    const char* label;
+};
+
+constexpr std::array<WindowSizePreset, 5> kWindowSizePresets{{
+    {1280, 720, "1280 x 720 (HD)"},
+    {1600, 900, "1600 x 900"},
+    {1920, 1080, "1920 x 1080 (Full HD)"},
+    {2560, 1440, "2560 x 1440 (WQHD)"},
+    {3840, 2160, "3840 x 2160 (4K)"},
+}};
 
 ComPtr<ID3D12Resource> CreateUploadBuffer(const void* data, UINT64 byteSize, const char* message)
 {
@@ -11733,6 +11788,108 @@ void DrawEnvironmentSettingsPanel()
     }
 }
 
+// 右下のトースト通知を描画する。クリックで保存先を Explorer で開き、
+// 右クリックまたは表示時間の経過で消える (ホバー中は消えない)。
+void DrawToastNotifications()
+{
+    if (g_toasts.empty())
+    {
+        return;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    constexpr float kMargin = 18.0f;
+    constexpr float kSpacing = 8.0f;
+    constexpr float kFadeSeconds = 0.45f;
+
+    std::optional<std::filesystem::path> pendingReveal;
+    float offsetY = 0.0f;
+    for (size_t i = 0; i < g_toasts.size(); ++i)
+    {
+        ToastNotification& toast = g_toasts[i];
+        const float remaining = std::chrono::duration<float>(toast.expiresAt - now).count();
+        const float fade = std::clamp(remaining / kFadeSeconds, 0.0f, 1.0f);
+
+        ImGui::SetNextWindowPos(
+            ImVec2(
+                viewport->WorkPos.x + viewport->WorkSize.x - kMargin,
+                viewport->WorkPos.y + viewport->WorkSize.y - kMargin - offsetY),
+            ImGuiCond_Always,
+            ImVec2(1.0f, 1.0f));
+        ImGui::SetNextWindowBgAlpha(0.96f * fade);
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, fade);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.0f, 12.0f));
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImGui::GetStyleColorVec4(ImGuiCol_PopupBg));
+        ImGui::PushStyleColor(
+            ImGuiCol_Border,
+            g_themeManager.AppColor("accent", ImVec4(0.42f, 0.62f, 0.86f, 1.0f)));
+
+        constexpr ImGuiWindowFlags toastFlags =
+            ImGuiWindowFlags_NoDecoration |
+            ImGuiWindowFlags_AlwaysAutoResize |
+            ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_NoFocusOnAppearing |
+            ImGuiWindowFlags_NoNav |
+            ImGuiWindowFlags_NoMove;
+        const std::string windowId = std::format("##toast{}", i);
+        if (ImGui::Begin(windowId.c_str(), nullptr, toastFlags))
+        {
+            ImGui::TextUnformatted(toast.title.c_str());
+            if (!toast.detail.empty())
+            {
+                ImGui::TextDisabled("%s", toast.detail.c_str());
+            }
+            if (!toast.revealPath.empty())
+            {
+                ImGui::TextDisabled(
+                    "%s",
+                    Tr("Click to open the folder", "クリックで保存先フォルダーを開く"));
+            }
+
+            if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows))
+            {
+                if (!toast.revealPath.empty())
+                {
+                    ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                }
+                // ホバー中は読めるように寿命を延ばす。
+                toast.expiresAt = std::max(toast.expiresAt, now + std::chrono::milliseconds(1500));
+                if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+                {
+                    if (!toast.revealPath.empty())
+                    {
+                        pendingReveal = toast.revealPath;
+                    }
+                    toast.expiresAt = now;
+                }
+                else if (ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+                {
+                    toast.expiresAt = now;
+                }
+            }
+            offsetY += ImGui::GetWindowSize().y + kSpacing;
+        }
+        ImGui::End();
+        ImGui::PopStyleColor(2);
+        ImGui::PopStyleVar(4);
+    }
+
+    g_toasts.erase(
+        std::remove_if(
+            g_toasts.begin(),
+            g_toasts.end(),
+            [&](const ToastNotification& toast) { return toast.expiresAt <= now; }),
+        g_toasts.end());
+
+    if (pendingReveal)
+    {
+        terrain::platform::RevealFileInExplorer(*pendingReveal);
+    }
+}
+
 void DrawUi()
 {
     static const auto start = std::chrono::steady_clock::now();
@@ -11807,16 +11964,9 @@ void DrawUi()
     }
     if (!io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F12, false))
     {
-        std::filesystem::path screenshotPath;
-        std::string error;
-        if (terrain::CaptureWindowScreenshot(g_hwnd, ScreenshotDirectory(), &screenshotPath, &error))
-        {
-            SetProjectStatus("Screenshot saved " + PathToUtf8(screenshotPath));
-        }
-        else
-        {
-            SetProjectStatus("Screenshot failed: " + error);
-        }
+        // 保存は RenderFrame でバックバッファを読み戻して行う (コンテンツ部分だけが対象)。
+        // 要求フレームはトーストを描かないので、直前の通知が写り込まない。
+        g_screenshotRequested = true;
     }
     RefreshProjectStatus();
     CaptureDebugStatusLogs();
@@ -11941,6 +12091,25 @@ void DrawUi()
                 SaveAppSettingsSilently();
             }
             ImGui::Separator();
+            if (ImGui::BeginMenu(Tr("Window Size", "ウィンドウサイズ")))
+            {
+                ImGui::TextDisabled(
+                    "%s: %u x %u",
+                    Tr("Content", "コンテンツ部分"),
+                    g_width,
+                    g_height);
+                ImGui::Separator();
+                for (const WindowSizePreset& preset : kWindowSizePresets)
+                {
+                    const bool selected = (g_width == preset.width && g_height == preset.height);
+                    if (ImGui::MenuItem(preset.label, nullptr, selected))
+                    {
+                        SetWindowClientSize(preset.width, preset.height);
+                        SaveAppSettingsSilently();
+                    }
+                }
+                ImGui::EndMenu();
+            }
             if (ImGui::MenuItem(Tr("Reset Layout", "レイアウトを初期化")))
             {
                 ResetLayoutToDefaults();
@@ -12196,6 +12365,124 @@ void DrawUi()
 
     ImGui::End();
     ImGui::PopStyleVar();
+
+    // スクリーンショット要求フレームでは通知を描かない (撮影結果に写り込ませない)。
+    if (!g_screenshotRequested)
+    {
+        DrawToastNotifications();
+    }
+}
+
+// バックバッファ読み戻し中のスクリーンショット。コマンドリスト実行後に PNG へ書き出す。
+struct PendingScreenshotReadback
+{
+    ComPtr<ID3D12Resource> readback;
+    UINT width = 0;
+    UINT height = 0;
+    UINT rowPitch = 0;
+    UINT64 byteSize = 0;
+};
+
+// バックバッファ (RENDER_TARGET 状態) を READBACK バッファへコピーするコマンドを積む。
+// 戻り値が読み戻しを持つ場合、バックバッファは COPY_SOURCE 状態で戻る。
+PendingScreenshotReadback BeginScreenshotReadback(ID3D12Resource* backBuffer, D3D12_RESOURCE_BARRIER& barrier)
+{
+    PendingScreenshotReadback pending;
+    if (backBuffer == nullptr)
+    {
+        return pending;
+    }
+
+    const D3D12_RESOURCE_DESC desc = backBuffer->GetDesc();
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
+    UINT64 totalBytes = 0;
+    g_device->GetCopyableFootprints(&desc, 0, 1, 0, &footprint, nullptr, nullptr, &totalBytes);
+    if (totalBytes == 0)
+    {
+        return pending;
+    }
+
+    const D3D12_HEAP_PROPERTIES heapProperties = HeapProperties(D3D12_HEAP_TYPE_READBACK);
+    const D3D12_RESOURCE_DESC bufferDesc = BufferResourceDesc(totalBytes);
+    ComPtr<ID3D12Resource> readback;
+    const HRESULT hr = g_device->CreateCommittedResource(
+        &heapProperties,
+        D3D12_HEAP_FLAG_NONE,
+        &bufferDesc,
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        nullptr,
+        IID_PPV_ARGS(&readback));
+    if (FAILED(hr))
+    {
+        AppendDebugLog(D3D12FailureMessage("Screenshot readback allocation failed", hr));
+        return pending;
+    }
+
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    g_commandList->ResourceBarrier(1, &barrier);
+
+    D3D12_TEXTURE_COPY_LOCATION dst{};
+    dst.pResource = readback.Get();
+    dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    dst.PlacedFootprint = footprint;
+    D3D12_TEXTURE_COPY_LOCATION src{};
+    src.pResource = backBuffer;
+    src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    src.SubresourceIndex = 0;
+    g_commandList->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+
+    pending.readback = std::move(readback);
+    pending.width = footprint.Footprint.Width;
+    pending.height = footprint.Footprint.Height;
+    pending.rowPitch = footprint.Footprint.RowPitch;
+    pending.byteSize = totalBytes;
+    return pending;
+}
+
+// 読み戻し済みのピクセルを PNG に保存し、結果を右下のトーストで知らせる。
+void FinishScreenshotReadback(PendingScreenshotReadback& pending)
+{
+    void* mapped = nullptr;
+    const D3D12_RANGE readRange{0, static_cast<SIZE_T>(pending.byteSize)};
+    const HRESULT hr = pending.readback->Map(0, &readRange, &mapped);
+    if (FAILED(hr) || mapped == nullptr)
+    {
+        SetTransientProjectStatus("Screenshot failed: readback map failed");
+        PushToast(Tr("Screenshot failed", "スクリーンショットの保存に失敗しました"), "readback map failed", {});
+        return;
+    }
+
+    std::filesystem::path savedPath;
+    std::string error;
+    const bool saved = terrain::SaveRgbaScreenshot(
+        static_cast<const uint8_t*>(mapped),
+        static_cast<int>(pending.width),
+        static_cast<int>(pending.height),
+        static_cast<int>(pending.rowPitch),
+        ScreenshotDirectory(),
+        &savedPath,
+        &error);
+    const D3D12_RANGE writtenRange{0, 0};
+    pending.readback->Unmap(0, &writtenRange);
+
+    if (saved)
+    {
+        SetTransientProjectStatus("Screenshot saved " + PathToUtf8(savedPath));
+        PushToast(
+            std::format(
+                "{} ({} x {})",
+                Tr("Screenshot saved", "スクリーンショットを保存しました"),
+                pending.width,
+                pending.height),
+            PathToUtf8(savedPath.filename()),
+            savedPath);
+    }
+    else
+    {
+        SetTransientProjectStatus("Screenshot failed: " + error);
+        PushToast(Tr("Screenshot failed", "スクリーンショットの保存に失敗しました"), error, {});
+    }
 }
 
 void RenderFrame()
@@ -12226,7 +12513,18 @@ void RenderFrame()
     g_commandList->SetDescriptorHeaps(1, heaps);
     ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), g_commandList.Get());
 
-    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    // スクリーンショットはバックバッファをそのまま読み戻す。
+    // 画面キャプチャと違いウィンドウ枠・タイトルバー・他ウィンドウの重なりが入らず、
+    // DPI スケーリングにも影響されないので、常にクライアント領域と同じ解像度で保存できる。
+    PendingScreenshotReadback screenshot;
+    if (g_screenshotRequested)
+    {
+        g_screenshotRequested = false;
+        screenshot = BeginScreenshotReadback(g_renderTargets[g_frameIndex].Get(), barrier);
+    }
+
+    barrier.Transition.StateBefore =
+        screenshot.readback ? D3D12_RESOURCE_STATE_COPY_SOURCE : D3D12_RESOURCE_STATE_RENDER_TARGET;
     barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
     g_commandList->ResourceBarrier(1, &barrier);
     ThrowIfFailed(g_commandList->Close(), "CommandList close failed");
@@ -12247,6 +12545,13 @@ void RenderFrame()
     const UINT64 fenceValue = ++g_fenceLastSignaledValue;
     ThrowIfFailed(g_commandQueue->Signal(g_fence.Get(), fenceValue), "Signal failed");
     frameContext.fenceValue = fenceValue;
+
+    if (screenshot.readback)
+    {
+        WaitForFenceValue(fenceValue);
+        FinishScreenshotReadback(screenshot);
+    }
+
     const auto renderEnd = std::chrono::steady_clock::now();
     g_frameTiming.renderFrameMs = std::chrono::duration<double, std::milli>(renderEnd - renderStart).count();
 }

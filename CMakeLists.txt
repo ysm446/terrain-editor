@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(TerrainEditor VERSION 0.24.0 LANGUAGES CXX RC)
+project(TerrainEditor VERSION 0.25.0 LANGUAGES CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -80,7 +80,6 @@ target_link_libraries(terrain_editor PRIVATE
     dxgi
     d3dcompiler
     comdlg32
-    dwmapi
     gdi32
     ole32
     windowscodecs
