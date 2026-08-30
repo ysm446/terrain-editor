@@ -435,6 +435,7 @@ struct UiState
     bool showDrawStats = false;
     bool showFrameStats = false;
     bool debugLogVisible = false;
+    bool helpVisible = false;
     float rightPaneWidth = 0.0f;
     float nodePaneHeight = 0.0f;
     float debugLogHeight = kDefaultDebugLogHeight;
@@ -1483,6 +1484,7 @@ bool SaveAppSettings(std::string* error = nullptr)
             {"drawStats", g_ui.showDrawStats},
             {"frameStats", g_ui.showFrameStats},
             {"debugLog", g_ui.debugLogVisible},
+            {"help", g_ui.helpVisible},
             {"meshSurface", settings.preview.showSurface},
             {"meshWireframe", settings.preview.showWireframe},
             {"terrainSizeMeters", settings.preview.terrainSizeMeters},
@@ -1777,6 +1779,7 @@ bool LoadAppSettings(std::string* error = nullptr)
         g_ui.showDrawStats = visibilityJson.value("drawStats", g_ui.showDrawStats);
         g_ui.showFrameStats = visibilityJson.value("frameStats", g_ui.showFrameStats);
         g_ui.debugLogVisible = visibilityJson.value("debugLog", g_ui.debugLogVisible);
+        g_ui.helpVisible = visibilityJson.value("help", g_ui.helpVisible);
         settings.preview.showSurface = visibilityJson.value("meshSurface", settings.preview.showSurface);
         settings.preview.showWireframe = visibilityJson.value("meshWireframe", settings.preview.showWireframe);
         settings.preview.terrainSizeMeters = static_cast<float>(NearestTerrainSizePreset(visibilityJson.value("terrainSizeMeters", settings.preview.terrainSizeMeters)));
@@ -11788,6 +11791,116 @@ void DrawEnvironmentSettingsPanel()
     }
 }
 
+// ヘルプ (ショートカット一覧) に載せる 1 行分。キー表記も UI 言語に合わせて切り替える。
+struct HelpEntry
+{
+    const char* keysEnglish;
+    const char* keysJapanese;
+    const char* english;
+    const char* japanese;
+};
+
+constexpr std::array<HelpEntry, 4> kHelpFileEntries{{
+    {"Ctrl + S", "Ctrl + S", "Save the project", "プロジェクトを保存"},
+    {"Ctrl + Z", "Ctrl + Z", "Undo", "元に戻す"},
+    {"Ctrl + Shift + Z / Ctrl + Y", "Ctrl + Shift + Z / Ctrl + Y", "Redo", "やり直し"},
+    {"F12", "F12", "Save a screenshot of the content area", "コンテンツ部分のスクリーンショットを保存"},
+}};
+
+constexpr std::array<HelpEntry, 9> kHelpViewportEntries{{
+    {"Alt + Left drag", "Alt + 左ドラッグ", "Orbit the camera", "カメラを回転"},
+    {"Alt + Right / Middle drag", "Alt + 右 / 中ドラッグ", "Pan the camera", "カメラを平行移動"},
+    {"Alt + Wheel", "Alt + ホイール", "Zoom", "ズーム"},
+    {"A", "A", "Reset the camera", "カメラを初期位置に戻す"},
+    {"O", "O", "Toggle auto orbit", "自動回転のオン / オフ"},
+    {"D", "D", "Toggle depth of field", "被写界深度のオン / オフ"},
+    {"C", "C", "Toggle clouds", "雲のオン / オフ"},
+    {"L + Left drag", "L + 左ドラッグ", "Change the sun direction", "太陽の方向を変更"},
+    {"F (hold) + Left click", "F 押しながら左クリック", "Pick the depth-of-field focus point (Esc cancels)", "被写界深度のピント位置をピック (Esc で取り消し)"},
+}};
+
+constexpr std::array<HelpEntry, 3> kHelpMapEntries{{
+    {"Alt + Wheel", "Alt + ホイール", "Zoom", "ズーム"},
+    {"Alt + Drag", "Alt + ドラッグ", "Pan", "平行移動"},
+    {"Alt + Double click", "Alt + ダブルクリック", "Reset the 2D view", "2Dビューを初期化"},
+}};
+
+constexpr std::array<HelpEntry, 3> kHelpNodeEntries{{
+    {"Ctrl + C", "Ctrl + C", "Copy the selected nodes", "選択したノードをコピー"},
+    {"Ctrl + V", "Ctrl + V", "Paste nodes", "ノードを貼り付け"},
+    {"Delete", "Delete", "Delete the selection", "選択を削除"},
+}};
+
+constexpr std::array<HelpEntry, 4> kHelpPathEntries{{
+    {"Left click", "左クリック", "Add or select a path point", "パスの点を追加 / 選択"},
+    {"Ctrl + Left click", "Ctrl + 左クリック", "Insert a point on an edge", "辺の上に点を挿入"},
+    {"W", "W", "Show the move gizmo", "移動ギズモを表示"},
+    {"Enter", "Enter", "Finish the current segment", "セグメントを確定"},
+}};
+
+void DrawHelpSection(const char* english,
+                     const char* japanese,
+                     const char* tableId,
+                     const HelpEntry* entries,
+                     size_t count)
+{
+    ImGui::SeparatorText(Tr(english, japanese));
+    constexpr ImGuiTableFlags tableFlags = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_PadOuterX;
+    if (!ImGui::BeginTable(tableId, 2, tableFlags))
+    {
+        return;
+    }
+    ImGui::TableSetupColumn("keys", ImGuiTableColumnFlags_WidthFixed, 190.0f);
+    ImGui::TableSetupColumn("description", ImGuiTableColumnFlags_WidthStretch);
+    for (size_t i = 0; i < count; ++i)
+    {
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextUnformatted(Tr(entries[i].keysEnglish, entries[i].keysJapanese));
+        ImGui::TableSetColumnIndex(1);
+        ImGui::TextUnformatted(Tr(entries[i].english, entries[i].japanese));
+    }
+    ImGui::EndTable();
+}
+
+// 表示 > ヘルプ で開くショートカット一覧。位置とサイズは imgui.ini に保存される。
+void DrawHelpWindow()
+{
+    if (!g_ui.helpVisible)
+    {
+        return;
+    }
+
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(
+        ImVec2(viewport->WorkPos.x + 24.0f, viewport->WorkPos.y + 72.0f),
+        ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(560.0f, 720.0f), ImGuiCond_FirstUseEver);
+
+    bool open = true;
+    const std::string title = std::format("{}###help", Tr("Help - Shortcuts", "ヘルプ - ショートカット一覧"));
+    if (ImGui::Begin(title.c_str(), &open, ImGuiWindowFlags_NoCollapse))
+    {
+        DrawHelpSection("File and Edit", "ファイル / 編集", "##helpFile", kHelpFileEntries.data(), kHelpFileEntries.size());
+        DrawHelpSection("3D View", "3Dビュー", "##helpViewport", kHelpViewportEntries.data(), kHelpViewportEntries.size());
+        DrawHelpSection("2D View", "2Dビュー", "##helpMap", kHelpMapEntries.data(), kHelpMapEntries.size());
+        DrawHelpSection("Node Network", "ノードネットワーク", "##helpNode", kHelpNodeEntries.data(), kHelpNodeEntries.size());
+        DrawHelpSection("Path Editing", "パス編集", "##helpPath", kHelpPathEntries.data(), kHelpPathEntries.size());
+        ImGui::Spacing();
+        ImGui::TextDisabled(
+            "%s",
+            Tr("Viewport shortcuts work while the mouse is over the view.",
+               "ビューポートのショートカットは、マウスがそのビューの上にあるときに効きます。"));
+    }
+    ImGui::End();
+
+    if (!open)
+    {
+        g_ui.helpVisible = false;
+        SaveAppSettingsSilently();
+    }
+}
+
 // 右下のトースト通知を描画する。クリックで保存先を Explorer で開き、
 // 右クリックまたは表示時間の経過で消える (ホバー中は消えない)。
 void DrawToastNotifications()
@@ -12090,6 +12203,11 @@ void DrawUi()
                 g_ui.debugLogVisible = !g_ui.debugLogVisible;
                 SaveAppSettingsSilently();
             }
+            if (ImGui::MenuItem(Tr("Help", "ヘルプ"), nullptr, g_ui.helpVisible))
+            {
+                g_ui.helpVisible = !g_ui.helpVisible;
+                SaveAppSettingsSilently();
+            }
             ImGui::Separator();
             if (ImGui::BeginMenu(Tr("Window Size", "ウィンドウサイズ")))
             {
@@ -12365,6 +12483,8 @@ void DrawUi()
 
     ImGui::End();
     ImGui::PopStyleVar();
+
+    DrawHelpWindow();
 
     // スクリーンショット要求フレームでは通知を描かない (撮影結果に写り込ませない)。
     if (!g_screenshotRequested)
