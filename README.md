@@ -80,7 +80,8 @@ GPU backend 対応済みの主なノード:
 - 評価中ノードに `計算中` / `計算待ち` バッジを表示
 - `A` キーまたは `Reset View` で現在の `Terrain Size (m)` に合う初期視点へリセット
 - `O` キーでカメラの自動回転をオン / オフ
-- `D` キーで Depth of Field をオン / オフ
+- `D` キーで Depth of Field をオン / オフ、`C` キーでボリューム雲をオン / オフ
+- `Alt` + ドラッグ / ホイールで 3D ビューと 2D ビューを回転・パン・ズーム (一覧は [docs/ui/shortcuts.md](docs/ui/shortcuts.md))
 - マスク出力を近い上流地形に載せて確認する `近い地形でマスク表示`
 - 地形境界を `なし` / `断面ポリゴン` / `ライン` から切り替え
 - Depth of Field と `Miniature` 表現
@@ -99,20 +100,27 @@ GPU backend 対応済みの主なノード:
 
 - 評価済み地形メッシュの OBJ エクスポート
 - OBJ エクスポートでは表示用の断面壁と底面を除外し、上面ポリゴンだけを書き出し
-- F12 キーでコンテンツ部分 (ウィンドウ枠・タイトルバーを除いたクライアント領域) を PNG スクリーンショットとして保存
-- 保存後に右下へ通知を表示し、クリックすると保存先フォルダーを Explorer で開く
-- `表示 > ウィンドウサイズ` でコンテンツ部分を 1920x1080 などのプリセットサイズに合わせられる
-- `表示 > ヘルプ` でショートカットキー一覧を表示
+- `F12` キーでコンテンツ部分 (ウィンドウ枠・タイトルバーを除いたクライアント領域) を PNG スクリーンショットとして保存。保存後は右下に通知が出て、クリックすると保存先フォルダーを Explorer で開きます
+- `表示 > ウィンドウサイズ` でコンテンツ部分を 1920x1080 などのプリセットサイズに合わせられます。保存される PNG はコンテンツ部分と同じ解像度です (詳細は [docs/ui/screenshot.md](docs/ui/screenshot.md))
+- `表示 > ヘルプ` でショートカット一覧をアプリ内に表示 (詳細は [docs/ui/shortcuts.md](docs/ui/shortcuts.md))
+- `表示 > デバッグログ` でアプリ内のログを表示
 
 ## ドキュメント
 
 - 変更履歴: [docs/changelog.md](docs/changelog.md)
+- ショートカット一覧: [docs/ui/shortcuts.md](docs/ui/shortcuts.md)
+- スクリーンショットと通知: [docs/ui/screenshot.md](docs/ui/screenshot.md)
 - 計画: [docs/plan/plan.md](docs/plan/plan.md)
 - 進捗: [docs/plan/progress.md](docs/plan/progress.md)
 - 地形制作フロー: [docs/plan/terrain_workflow.md](docs/plan/terrain_workflow.md)
 - ノードドキュメント索引: [docs/nodes/README.md](docs/nodes/README.md)
 - Multi-Scale Erosion アルゴリズム解説: [docs/nodes/heightfield/multi_scale_erosion/multi_scale_erosion_algorithm_guide.md](docs/nodes/heightfield/multi_scale_erosion/multi_scale_erosion_algorithm_guide.md)
 - 大気・雲システム解説: [docs/sky_and_clouds/sky_and_clouds.md](docs/sky_and_clouds/sky_and_clouds.md)
+- カメラ: [docs/camera/camera.md](docs/camera/camera.md)
+- 被写界深度: [docs/camera/depth_of_field.md](docs/camera/depth_of_field.md)
+- 水面: [docs/display/water_surface.md](docs/display/water_surface.md)
+- アンビエントオクルージョン: [docs/display/ambient_occlusion.md](docs/display/ambient_occlusion.md)
+- マスクテクスチャー描画: [docs/mask_texture/mask_texture.md](docs/mask_texture/mask_texture.md)
 - 今後追加したいノード候補: [docs/nodes/node_candidates.md](docs/nodes/node_candidates.md)
 
 ## ビルド
