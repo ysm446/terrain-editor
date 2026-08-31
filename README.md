@@ -110,6 +110,7 @@ GPU backend 対応済みの主なノード:
 - 変更履歴: [docs/changelog.md](docs/changelog.md)
 - ショートカット一覧: [docs/ui/shortcuts.md](docs/ui/shortcuts.md)
 - スクリーンショットと通知: [docs/ui/screenshot.md](docs/ui/screenshot.md)
+- UI スタイルガイド: [docs/design/style-guide.md](docs/design/style-guide.md)
 - 計画: [docs/plan/plan.md](docs/plan/plan.md)
 - 進捗: [docs/plan/progress.md](docs/plan/progress.md)
 - 地形制作フロー: [docs/plan/terrain_workflow.md](docs/plan/terrain_workflow.md)
